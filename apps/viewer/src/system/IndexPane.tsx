@@ -1,25 +1,34 @@
-// 文件索引页：索引服务的真实状态、建索引进度、重建入口。
+// 文件索引页：两种模式，由用户自己选。
 //
-// 这一页要回答三个问题，每个都得是**真数字**：
-// 1. 索引服务在不在跑？（提权进程，普通"结束进程"对它无效）
-// 2. 每个卷索引了多少条目、占了多少字节、多久没同步了？
-// 3. 现在在建索引的话，到哪一步了？还要多久？
+// ① **MFT 索引模式（需管理员）**：用户点「授权并启动 MFT 索引」→ 系统弹
+//    一次 UAC → 提权 helper 读 NTFS 的 `$MFT` → 全盘索引 + Everything 式
+//    全盘搜索 + USN 增量保鲜。**提权只由这一个按钮触发**，页面其它地方
+//    （搜索、磁盘体积）不会替用户弹 UAC。
+// ② **非管理员扫描模式（默认）**：不授权也能用——按当前权限遍历能读到的
+//    目录，给出文件数、体积与大文件。读不到的地方如实计数，不假装扫全。
 //
-// 「索引缓存复用」是这里最该讲清楚的事：有快照就直接装载（秒级可搜），
-// 之后靠 USN Journal 增量保鲜——只有 Journal 失效才需要全量重建。
+// 「默认是哪种模式」这件事必须写在页面上：用户不点授权，那就是模式 ②。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
   Database,
+  FolderSearch,
   HardDrive,
+  KeyRound,
   Loader2,
-  Play,
   RefreshCw,
+  ShieldCheck,
   Square,
 } from "lucide-react";
-import type { BuildProgress, FilesearchStatus, IndexStatus } from "./types";
+import type {
+  BuildProgress,
+  FilesearchStatus,
+  IndexStatus,
+  LocalScanReport,
+  PrivilegeState,
+} from "./types";
 import { errorText, formatAgo, formatBytes } from "./format";
 
 /** 阶段 → 人话。进度条上的那一句。 */
@@ -33,53 +42,70 @@ const PHASE_TEXT: Record<string, string> = {
 };
 
 export function IndexPane() {
+  const [privilege, setPrivilege] = useState<PrivilegeState | null>(null);
   const [state, setState] = useState<FilesearchStatus | null>(null);
+  const [local, setLocal] = useState<LocalScanReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [scanning, setScanning] = useState(false);
 
-  const load = useCallback(async () => {
+  const loadPrivilege = useCallback(async () => {
     try {
-      const next = await invoke<FilesearchStatus>("viewer_filesearch_status");
-      setState(next);
-      setError(null);
+      setPrivilege(await invoke<PrivilegeState>("viewer_filesearch_privilege"));
+    } catch (cause) {
+      setError(errorText(cause));
+    }
+  }, []);
+
+  const loadStatus = useCallback(async () => {
+    try {
+      setState(await invoke<FilesearchStatus>("viewer_filesearch_status"));
     } catch (cause) {
       setError(errorText(cause));
     }
   }, []);
 
   useEffect(() => {
-    void load();
-    // 有索引在建时轮询更勤一点（进度要跟得上），空闲时 3 秒一次足够。
-    const timer = window.setInterval(() => void load(), 2000);
+    void loadPrivilege();
+    void loadStatus();
+    // MFT 模式下进度要跟得上（建索引时 2 秒一次），非 MFT 模式 5 秒一次足够。
+    const timer = window.setInterval(() => {
+      void loadPrivilege();
+      void loadStatus();
+    }, 2000);
     return () => window.clearInterval(timer);
-  }, [load]);
+  }, [loadPrivilege, loadStatus]);
 
-  const start = useCallback(async () => {
+  /** 授权入口：唯一会弹 UAC 的地方。 */
+  const authorize = useCallback(async () => {
     setBusy(true);
     setNotice(null);
+    setError(null);
     try {
       setNotice(await invoke<string>("viewer_filesearch_start"));
-      await load();
+      await loadPrivilege();
+      await loadStatus();
     } catch (cause) {
       setError(errorText(cause));
     } finally {
       setBusy(false);
     }
-  }, [load]);
+  }, [loadPrivilege, loadStatus]);
 
   const stop = useCallback(async () => {
     setBusy(true);
     setNotice(null);
     try {
       setNotice(await invoke<string>("viewer_filesearch_stop"));
-      await load();
+      await loadPrivilege();
+      await loadStatus();
     } catch (cause) {
       setError(errorText(cause));
     } finally {
       setBusy(false);
     }
-  }, [load]);
+  }, [loadPrivilege, loadStatus]);
 
   const rebuild = useCallback(
     async (volume?: string) => {
@@ -89,16 +115,31 @@ export function IndexPane() {
         setNotice(
           await invoke<string>("viewer_filesearch_rebuild", { volume: volume ?? null }),
         );
-        await load();
+        await loadStatus();
       } catch (cause) {
         setError(errorText(cause));
       } finally {
         setBusy(false);
       }
     },
-    [load],
+    [loadStatus],
   );
 
+  /** 非管理员扫描：不提权，按当前权限遍历。 */
+  const scanLocal = useCallback(async () => {
+    setScanning(true);
+    setNotice(null);
+    setError(null);
+    try {
+      setLocal(await invoke<LocalScanReport>("viewer_filesearch_local_scan"));
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setScanning(false);
+    }
+  }, []);
+
+  const mftMode = privilege?.mode === "mft";
   const volumes = state?.status?.volumes ?? [];
   const skipped = state?.status?.skipped ?? {};
   const building = volumes.filter((volume) => volume.build && !volume.build.done);
@@ -107,50 +148,133 @@ export function IndexPane() {
 
   return (
     <div className="pane">
-      <div className="index-head">
-        <div className="index-head-main">
-          <span className="clean-head-title">文件索引</span>
-          <span className="clean-head-sub">
-            {state?.running
-              ? `服务运行中 · 共 ${totalEntries.toLocaleString()} 条 · 已索引 ${formatBytes(totalBytes)}`
-              : "服务未运行"}
-          </span>
-        </div>
-        <div className="index-head-actions">
-          {state?.running ? (
-            <button type="button" className="pane-btn" onClick={() => void stop()} disabled={busy}>
-              <Square size={13} aria-hidden="true" />
-              停止服务
-            </button>
+      {/* ── 模式卡片：说清现在是哪种模式、另一种怎么切 ─────────────── */}
+      <div className={`mode-card${mftMode ? " is-mft" : ""}`}>
+        <span className="mode-icon">
+          {mftMode ? (
+            <ShieldCheck size={16} aria-hidden="true" />
           ) : (
-            <button type="button" className="pane-btn" onClick={() => void start()} disabled={busy}>
-              <Play size={13} aria-hidden="true" />
-              启动索引服务
-            </button>
+            <FolderSearch size={16} aria-hidden="true" />
           )}
-          <button
-            type="button"
-            className="pane-btn"
-            onClick={() => void rebuild()}
-            disabled={busy || !state?.running}
-            title="按需重建：已有快照的卷直接装载，只有失效的卷才全量重建"
-          >
-            {busy ? (
-              <Loader2 size={13} className="spin" />
-            ) : (
-              <RefreshCw size={13} aria-hidden="true" />
-            )}
-            重建索引
-          </button>
+        </span>
+        <div className="mode-main">
+          <span className="mode-title">
+            {mftMode ? "MFT 索引模式（已授权）" : "非管理员扫描模式（默认）"}
+          </span>
+          <span className="mode-desc">
+            {mftMode
+              ? "索引服务已获授权，能读取 NTFS 的 $MFT：全盘文件名搜索、目录体积秒级出结果、USN 增量保鲜。"
+              : "未授权：只统计您有权限访问的目录，不建立全盘索引，也没有全盘文件名搜索。需要全盘能力请点右侧授权。"}
+          </span>
+          {!mftMode && (
+            <span className="mode-note">
+              <AlertTriangle size={12} aria-hidden="true" />
+              授权会弹一次系统管理员确认——点「授权并启动 MFT 索引」才会弹；不点就一直用扫描模式。
+            </span>
+          )}
+        </div>
+        <div className="mode-actions">
+          {mftMode ? (
+            <>
+              <button
+                type="button"
+                className="pane-btn"
+                onClick={() => void stop()}
+                disabled={busy}
+              >
+                <Square size={13} aria-hidden="true" />
+                停止服务
+              </button>
+              <button
+                type="button"
+                className="pane-btn"
+                onClick={() => void rebuild()}
+                disabled={busy}
+                title="按需重建：已有快照的卷直接装载，只有失效的卷才全量重建"
+              >
+                {busy ? (
+                  <Loader2 size={13} className="spin" />
+                ) : (
+                  <RefreshCw size={13} aria-hidden="true" />
+                )}
+                重建索引
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="pane-btn"
+                onClick={() => void scanLocal()}
+                disabled={scanning}
+                title="按当前权限遍历，不需要管理员"
+              >
+                {scanning ? (
+                  <Loader2 size={13} className="spin" />
+                ) : (
+                  <FolderSearch size={13} aria-hidden="true" />
+                )}
+                {scanning ? "扫描中…" : "按当前权限扫描"}
+              </button>
+              <button
+                type="button"
+                className="pane-btn is-primary"
+                onClick={() => void authorize()}
+                disabled={busy}
+                title="会弹一次系统管理员授权确认"
+              >
+                {busy ? (
+                  <Loader2 size={13} className="spin" />
+                ) : (
+                  <KeyRound size={13} aria-hidden="true" />
+                )}
+                授权并启动 MFT 索引
+              </button>
+            </>
+          )}
         </div>
       </div>
 
       {error && <p className="pane-error">{error}</p>}
       {notice && <p className="pane-notice">{notice}</p>}
-      {!state?.running && state?.reason && (
-        <p className="pane-hint">{state.reason}——启动后需要管理员权限读取 MFT。</p>
-      )}
 
+      {mftMode ? (
+        <MftSection
+          volumes={volumes}
+          building={building}
+          totalEntries={totalEntries}
+          totalBytes={totalBytes}
+          skipped={skipped}
+          busy={busy}
+          onRebuild={(volume) => void rebuild(volume)}
+        />
+      ) : (
+        <ScanSection report={local} scanning={scanning} />
+      )}
+    </div>
+  );
+}
+
+/** MFT 模式：各卷索引状态 + 建索引进度。 */
+function MftSection({
+  volumes,
+  building,
+  totalEntries,
+  totalBytes,
+  skipped,
+  busy,
+  onRebuild,
+}: {
+  volumes: IndexStatus[];
+  building: IndexStatus[];
+  totalEntries: number;
+  totalBytes: number;
+  skipped: Record<string, string>;
+  busy: boolean;
+  onRebuild: (volume?: string) => void;
+}) {
+  return (
+    <>
       {building.map((volume) => (
         <BuildProgressBar key={volume.volume ?? "?"} build={volume.build!} />
       ))}
@@ -174,11 +298,11 @@ export function IndexPane() {
               key={volume.volume ?? "?"}
               volume={volume}
               busy={busy}
-              onRebuild={() => void rebuild(volume.volume ?? undefined)}
+              onRebuild={() => onRebuild(volume.volume ?? undefined)}
             />
           ))}
           {volumes.length === 0 && (
-            <p className="pane-empty">还没有卷的索引——启动服务后会自动建立。</p>
+            <p className="pane-empty">还没有卷的索引——授权后会自动建立。</p>
           )}
         </div>
       </div>
@@ -200,10 +324,107 @@ export function IndexPane() {
 
       <p className="pane-hint index-foot-note">
         <Database size={12} aria-hidden="true" />
-        有快照的卷直接装载（秒级可搜），之后靠 USN Journal 增量保鲜；只有 Journal
-        失效才会全量重建。
+        共 {totalEntries.toLocaleString()} 条 · {formatBytes(totalBytes)}。有快照的卷直接装载
+        （秒级可搜），之后靠 USN Journal 增量保鲜；只有 Journal 失效才会全量重建。
       </p>
-    </div>
+    </>
+  );
+}
+
+/** 非管理员模式：按当前权限扫出来的结果。 */
+function ScanSection({
+  report,
+  scanning,
+}: {
+  report: LocalScanReport | null;
+  scanning: boolean;
+}) {
+  if (!report) {
+    return (
+      <p className="pane-empty">
+        {scanning ? "正在按当前权限遍历磁盘…" : "尚未扫描——点右上角「按当前权限扫描」。"}
+      </p>
+    );
+  }
+  return (
+    <>
+      <div className="scan-summary">
+        <span className="clean-head-title">扫描结果（普通权限）</span>
+        <span className="clean-head-sub">
+          {report.volumes.length} 块盘 · {report.totalFiles.toLocaleString()} 个文件 ·{" "}
+          {formatBytes(report.totalBytes)} · 用时 {(report.elapsedMs / 1000).toFixed(1)} 秒
+        </span>
+      </div>
+
+      {report.deniedDirs > 0 && (
+        <p className="scan-warn">
+          <AlertTriangle size={12} aria-hidden="true" />
+          {report.deniedDirs.toLocaleString()} 个目录读不到（权限不足）——本次统计**不完整**，
+          授权后可覆盖这些位置。
+        </p>
+      )}
+
+      <div className="index-table" role="table" aria-label="各盘扫描结果">
+        <div className="index-row index-head-row" role="row">
+          <span role="columnheader">盘</span>
+          <span role="columnheader" className="is-num">
+            文件数
+          </span>
+          <span role="columnheader" className="is-num">
+            体积
+          </span>
+          <span role="columnheader" className="is-num">
+            目录数
+          </span>
+          <span role="columnheader">用时</span>
+          <span role="columnheader">完整性</span>
+        </div>
+        <div className="index-scroll">
+          {report.volumes.map((volume) => (
+            <div className="index-row" role="row" key={volume.drive}>
+              <span role="cell" className="index-volume">
+                <HardDrive size={12} aria-hidden="true" />
+                {volume.drive}
+              </span>
+              <span role="cell" className="is-num mono">
+                {volume.totalFiles.toLocaleString()}
+              </span>
+              <span role="cell" className="is-num mono">
+                {formatBytes(volume.totalBytes)}
+              </span>
+              <span role="cell" className="is-num mono">
+                {volume.dirsScanned.toLocaleString()}
+              </span>
+              <span role="cell" className="mono dim">
+                {(volume.elapsedMs / 1000).toFixed(1)}s
+              </span>
+              <span role="cell" className="index-state">
+                {volume.truncated ? (
+                  <span className="clean-tag is-warn">超时截断</span>
+                ) : volume.deniedDirs > 0 ? (
+                  <span className="clean-tag is-warn">{volume.deniedDirs} 处读不到</span>
+                ) : (
+                  <span className="clean-tag">完整</span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {report.volumes.some((volume) => volume.truncated) && (
+        <p className="scan-warn">
+          <AlertTriangle size={12} aria-hidden="true" />
+          有盘的扫描触发了 45 秒预算上限，结果**被截断**——数字偏小是正常的。
+          完整覆盖需要 MFT 索引（授权后由内核直读，不受遍历速度限制）。
+        </p>
+      )}
+
+      <p className="pane-hint index-foot-note">
+        <FolderSearch size={12} aria-hidden="true" />
+        扫描模式只做统计，**不建立文件名索引**——全盘搜索需要授权后由 MFT 索引提供。
+      </p>
+    </>
   );
 }
 

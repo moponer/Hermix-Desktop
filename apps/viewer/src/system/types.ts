@@ -94,6 +94,12 @@ export interface DriveScanReport {
   emptyDirCount: number;
   dirs: DirUsage[];
   dirsScanned: number;
+  /** 全盘文件体积之和（跳过系统目录）。 */
+  totalBytes: number;
+  /** 全盘文件数（跳过系统目录）。 */
+  totalFiles: number;
+  /** 读不到的目录数（权限边界）。 */
+  deniedDirs: number;
   elapsedMs: number;
   truncated: boolean;
 }
@@ -173,6 +179,26 @@ export interface FilesearchStatus {
   running: boolean;
   reason?: string;
   status?: ServiceStatus;
+}
+
+/** 索引可用模式（Rust 侧 `viewer_filesearch_privilege`）。 */
+export interface PrivilegeState {
+  /** helper 是否在跑（在跑 = MFT 索引模式可用）。 */
+  mftAvailable: boolean;
+  /** 当前进程自身能否读 MFT（已提权时启动 helper 不必再弹 UAC）。 */
+  canReadMft: boolean;
+  /** `mft` = 全盘索引模式；`scan` = 非管理员扫描模式。 */
+  mode: "mft" | "scan";
+}
+
+/** 非管理员扫描模式的结果（按当前权限统计，不建全盘索引）。 */
+export interface LocalScanReport {
+  volumes: DriveScanReport[];
+  totalBytes: number;
+  totalFiles: number;
+  elapsedMs: number;
+  /** 读不到的目录数（权限边界的量化指标）。 */
+  deniedDirs: number;
 }
 
 // ── 进程 ──────────────────────────────────────────────────────────────

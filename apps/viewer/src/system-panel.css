@@ -323,6 +323,49 @@
 .treemap-crumb:not(:disabled):hover { background: var(--bg-hover); color: var(--text-primary); }
 
 /* ─── 文件索引页 ───────────────────────────────────────────────────── */
+
+/* 模式卡片：说清"现在是哪种模式、另一种怎么切"。层次靠底色差，
+   不靠描边——边框在信息卡片上会喧宾夺主。 */
+.mode-card {
+  flex: none; display: flex; align-items: flex-start; gap: 11px;
+  padding: 11px 13px; border-radius: 11px;
+  background: var(--bg-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+.mode-card.is-mft { background: var(--bg-accent-soft); }
+.mode-icon {
+  flex: none; width: 30px; height: 30px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg-tertiary); color: var(--text-secondary);
+}
+.mode-card.is-mft .mode-icon { background: var(--bg-primary); color: var(--accent); }
+.mode-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mode-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.mode-desc { font-size: 11.5px; color: var(--text-secondary); line-height: 1.6; }
+.mode-note {
+  display: inline-flex; align-items: flex-start; gap: 5px;
+  font-size: 11px; color: var(--text-muted); line-height: 1.6;
+}
+.mode-note svg { flex: none; margin-top: 2px; }
+.mode-actions { flex: none; display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.mode-actions .pane-btn { justify-content: center; }
+.pane-btn.is-primary {
+  background: var(--accent); color: var(--text-on-accent);
+}
+.pane-btn.is-primary:hover:not(:disabled) { background: var(--accent-strong, var(--accent)); }
+
+.scan-summary {
+  flex: none; display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 12px; border-radius: 10px; background: var(--bg-primary);
+}
+.scan-warn {
+  flex: none; display: flex; align-items: flex-start; gap: 6px; margin: 0;
+  padding: 7px 11px; border-radius: 9px;
+  background: var(--warning-soft); color: var(--text-primary);
+  font-size: 11.5px; line-height: 1.6;
+}
+.scan-warn svg { flex: none; margin-top: 2px; color: var(--warning); }
+
 .index-table {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
   background: var(--bg-primary); border-radius: 10px; overflow: hidden;

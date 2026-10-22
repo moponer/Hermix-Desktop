@@ -128,7 +128,10 @@ fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
         .encode_wide()
         .chain(Some(0))
         .collect();
-    let verb_w: Vec<u16> = "runas\0".encode_utf16().collect();
+    // 已经是管理员了就不必用 "runas"（不弹 UAC）：helper 会继承本进程的
+    // 权限，够读 MFT。只有本进程是普通权限时，"runas" 才是必须的。
+    let verb: &str = if can_read_mft() { "open\0" } else { "runas\0" };
+    let verb_w: Vec<u16> = verb.encode_utf16().collect();
 
     let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
     sei.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
@@ -168,15 +171,76 @@ fn spawn_elevated(_exe: &Path, _args: &str) -> Result<(), String> {
     Err("仅支持 Windows（项目边界）".into())
 }
 
-/// 确保 helper 在跑；没跑就提权拉起并轮询 endpoint.json（覆盖 UAC 确认耗时）。
-fn ensure_helper() -> Result<Endpoint, String> {
+/// 当前进程能否读 MFT（读卷的 `$MFT` 需要管理员权限）。
+///
+/// **为什么不查「是不是管理员」**：这个能力直接决定"能不能建 MFT 索引"，
+/// 所以按能力探测更贴题——实测方式就是试着打开一个卷句柄：
+/// 读 MFT 需要 `CreateFileW("\\\\.\\C:")` 成功，普通权限会拿到
+/// ERROR_ACCESS_DENIED。
+#[cfg(windows)]
+fn can_read_mft() -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::null;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_DATA,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let path: Vec<u16> = std::ffi::OsStr::new(r"\\.\C:")
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let handle = unsafe {
+        CreateFileW(
+            path.as_ptr(),
+            FILE_READ_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS,
+            // windows-sys 0.52 的 hTemplateFile 是 isize（不是 HANDLE 指针）。
+            0isize,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+    true
+}
+
+#[cfg(not(windows))]
+fn can_read_mft() -> bool {
+    false
+}
+
+/// 连接**已在运行**的 helper；没在跑就报错，**绝不自动提权**。
+///
+/// 这是这次重构的关键分界：提权只能由用户主动点「授权」按钮触发。
+/// 搜索、磁盘体积这些"顺带用到索引"的功能，helper 没跑就明确告诉用户
+/// 去哪里授权，而不是替用户弹一次 UAC。
+fn connect_helper() -> Result<Endpoint, String> {
     if let Ok(endpoint) = read_endpoint() {
         if process_alive(endpoint.pid) {
             return Ok(endpoint);
         }
     }
-    let _ = std::fs::remove_file(endpoint_path());
+    Err(HELPER_NOT_RUNNING.to_string())
+}
 
+/// helper 没在跑时给用户的统一提示（说清去哪点、点会发生什么）。
+const HELPER_NOT_RUNNING: &str =
+    "索引服务未启动。请到「系统资源管理 → 文件索引」点「授权并启动 MFT 索引」\
+     （需要管理员权限，系统会弹一次授权确认）。不授权也能用「按当前权限扫描」，\
+     但它只统计您有权限访问的目录，不建全盘索引。";
+
+/// 提权启动 helper 并等它就绪。**只由用户显式点击授权按钮时调用。**
+fn start_helper_elevated() -> Result<Endpoint, String> {
+    let _ = std::fs::remove_file(endpoint_path());
     let exe = locate_exe()?;
     let args = format!("--serve --data-dir \"{}\"", data_dir().display());
     spawn_elevated(&exe, &args)?;
@@ -278,7 +342,7 @@ pub fn global_search(query: &str, limit: usize) -> Result<GlobalSearchResult, St
             elapsed_ms: 0,
         });
     }
-    let endpoint = ensure_helper()?;
+    let endpoint = connect_helper()?;
     let result = request(
         &endpoint,
         "search",
@@ -354,7 +418,7 @@ pub fn disk_usage(
     parent_ref: Option<u64>,
     limit: usize,
 ) -> Result<DiskUsageResult, String> {
-    let endpoint = ensure_helper()?;
+    let endpoint = connect_helper()?;
     let result = request(
         &endpoint,
         "diskUsage",
@@ -429,17 +493,94 @@ pub fn stop_service() -> Result<String, String> {
     }
 }
 
-/// Tauri 命令：启动索引服务（没在跑就提权拉起）。
+/// Tauri 命令：授权并启动 MFT 索引服务。
 ///
+/// **这是唯一会提权的入口**，且只由用户在「文件索引」页主动点
+/// 「授权并启动 MFT 索引」时触发——系统会弹一次 UAC，用户不点就不会弹。
 /// 提权会弹一次 UAC——这是读 MFT 的硬性要求，普通权限拿不到 file record。
 #[tauri::command(async)]
 pub async fn viewer_filesearch_start() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let endpoint = ensure_helper()?;
+        let endpoint = start_helper_elevated()?;
         Ok(format!("索引服务已启动（PID {}）", endpoint.pid))
     })
     .await
     .map_err(|error| format!("启动索引服务失败：{error}"))?
+}
+
+/// 索引可用模式（给 UI 决定展示哪一套）。
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivilegeState {
+    /// helper 是否在跑（在跑 = MFT 索引模式可用）。
+    pub mft_available: bool,
+    /// 当前进程自身能否读 MFT（已提权时启动 helper 不必再弹 UAC）。
+    pub can_read_mft: bool,
+    /// `mft` = 全盘索引模式；`scan` = 非管理员扫描模式。
+    pub mode: String,
+}
+
+/// Tauri 命令：报告索引可用模式。
+///
+/// **不产生任何副作用**：不启动 helper、不提权、不弹窗。UI 靠它决定
+/// 「文件索引」页显示 MFT 面板还是非管理员扫描面板。
+#[tauri::command(async)]
+pub async fn viewer_filesearch_privilege() -> Result<PrivilegeState, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mft_available = connect_helper().is_ok();
+        let can_read = can_read_mft();
+        Ok(PrivilegeState {
+            mft_available,
+            can_read_mft: can_read,
+            mode: if mft_available { "mft" } else { "scan" }.to_string(),
+        })
+    })
+    .await
+    .map_err(|error| format!("查询索引权限状态失败：{error}"))?
+}
+
+/// 非管理员扫描模式的结果（按当前权限统计，不建全盘索引）。
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalScanReport {
+    pub volumes: Vec<crate::drive_scan::DriveScanReport>,
+    pub total_bytes: u64,
+    pub total_files: u64,
+    pub elapsed_ms: u64,
+    /// 读不到的目录总数（权限边界的量化指标）。
+    pub denied_dirs: u64,
+}
+
+/// Tauri 命令：按当前权限扫描各盘（**不需要管理员**）。
+///
+/// 这就是"非管理员模式"的数据来源：普通权限下遍历能读到的目录，给出
+/// 文件数、体积与大文件；读不到的地方如实计数，不假装扫全了。
+#[tauri::command(async)]
+pub async fn viewer_filesearch_local_scan(
+    app: tauri::AppHandle,
+) -> Result<LocalScanReport, String> {
+    use tauri::Emitter;
+    let started = std::time::Instant::now();
+    let progress: crate::cleanup::Progress = std::sync::Arc::new(move |payload| {
+        let _ = app.emit("cleanup-progress", payload);
+    });
+    let drives: Vec<String> = crate::sysmon::disks()
+        .into_iter()
+        .map(|disk| disk.drive)
+        .filter(|drive| !drive.is_empty())
+        .collect();
+    tauri::async_runtime::spawn_blocking(move || {
+        let volumes = crate::drive_scan::scan_volumes(&drives, Some(progress));
+        Ok(LocalScanReport {
+            total_bytes: volumes.iter().map(|volume| volume.total_bytes).sum(),
+            total_files: volumes.iter().map(|volume| volume.total_files).sum(),
+            denied_dirs: volumes.iter().map(|volume| volume.denied_dirs).sum(),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            volumes,
+        })
+    })
+    .await
+    .map_err(|error| format!("本地扫描失败：{error}"))?
 }
 
 /// Tauri 命令：停止索引服务（释放它占的内存）。
@@ -457,7 +598,7 @@ pub async fn viewer_filesearch_stop() -> Result<String, String> {
 #[tauri::command(async)]
 pub async fn viewer_filesearch_rebuild(volume: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let endpoint = ensure_helper()?;
+        let endpoint = connect_helper()?;
         let result = request(&endpoint, "rebuild", json!({ "volume": volume }))?;
         let volumes = result
             .get("volumes")
@@ -540,5 +681,30 @@ mod tests {
         let result = global_search("   ", 100).expect("empty query must not fail");
         assert!(result.entries.is_empty());
         assert_eq!(result.total_matches, 0);
+    }
+
+    /// **连接 helper 绝不能有副作用**：没在跑就报错，不启动、不提权。
+    /// 报错文案要告诉用户去哪里授权——这是"不自动弹 UAC"的用户可见保证。
+    #[test]
+    fn connecting_to_a_stopped_helper_only_reports_where_to_authorize() {
+        if let Err(error) = connect_helper() {
+            assert!(
+                error.contains("授权"),
+                "错误信息要给出授权入口，实际是：{error}"
+            );
+            assert!(
+                !error.contains("UAC"),
+                "错误信息不该把 UAC 弹窗说成必然发生：{error}"
+            );
+        }
+    }
+
+    /// 提权能力探测必须是**只读**的：调用它不该启动任何进程。
+    #[test]
+    fn mft_capability_probe_is_side_effect_free() {
+        let before = read_endpoint().ok().map(|endpoint| endpoint.pid);
+        let _ = can_read_mft();
+        let after = read_endpoint().ok().map(|endpoint| endpoint.pid);
+        assert_eq!(before, after, "能力探测不该改变 helper 的存在状态");
     }
 }

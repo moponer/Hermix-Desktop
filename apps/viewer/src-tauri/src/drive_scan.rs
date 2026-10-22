@@ -164,6 +164,14 @@ pub struct DriveScanReport {
     /// 目录体积树（扁平列表，前端按 `parent` 还原成树）。
     pub dirs: Vec<DirUsage>,
     pub dirs_scanned: u64,
+    /// 全盘文件体积之和（跳过系统目录）。
+    pub total_bytes: u64,
+    /// 全盘文件数（跳过系统目录）。
+    pub total_files: u64,
+    /// **读不到的目录数**：普通权限下必然有一部分（其它用户的目录、
+    /// 受保护的系统位置）。这是"非管理员模式覆盖不全"的量化指标——
+    /// 不如实报出来，用户会以为扫全了。
+    pub denied_dirs: u64,
     pub elapsed_ms: u64,
     /// 命中预算被截断（结果不完整，UI 要明确告知）。
     pub truncated: bool,
@@ -213,6 +221,8 @@ struct ScanBucket {
     candidates: Vec<CleanupCandidate>,
     /// 候选总数（含未列出的）——列表有上限，计数没有。
     candidates_total: u64,
+    /// 读不到的目录数（权限边界）。
+    denied_dirs: u64,
     /// 大文件（仅参考）。
     big: Vec<FoundFile>,
     empty_dirs: Vec<String>,
@@ -238,6 +248,9 @@ pub fn scan_drive(
         empty_dir_count: 0,
         dirs: Vec::new(),
         dirs_scanned: 0,
+        total_bytes: 0,
+        total_files: 0,
+        denied_dirs: 0,
         elapsed_ms: 0,
         truncated: false,
     };
@@ -251,17 +264,11 @@ pub fn scan_drive(
 
     // ── 第二阶段：自底向上聚合子树体积（`du` 语义） ──────────────────
     let mut dirs = bucket.dirs;
-    let mut by_depth: Vec<PathBuf> = dirs.keys().cloned().collect();
-    by_depth.sort_by_key(|path| std::cmp::Reverse(dir_depth(path, drive)));
-    for path in &by_depth {
-        let Some(parent) = path.parent() else { continue };
-        let Some((bytes, files)) = dirs.get(path).map(|stat| (stat.bytes, stat.files)) else {
-            continue;
-        };
-        let slot = dirs.entry(parent.to_path_buf()).or_default();
-        slot.bytes += bytes;
-        slot.files += files;
-    }
+    // 全盘汇总要在**聚合之前**算：聚合会把子目录的字节加进父目录，
+    // 之后再求和就是重复计数。聚合前每个目录记的是直属文件体积。
+    let total_bytes: u64 = dirs.values().map(|stat| stat.bytes).sum();
+    let total_files: u64 = dirs.values().map(|stat| stat.files).sum();
+    aggregate_subtree_sizes(&mut dirs, drive);
 
     // ── 建议清理：构建产物（补上子树体积） ─────────────────────────
     let mut suggested: Vec<CleanupCandidate> = Vec::new();
@@ -315,9 +322,29 @@ pub fn scan_drive(
     report.dirs = tree;
 
     report.dirs_scanned = bucket.dirs_scanned;
+    report.denied_dirs = bucket.denied_dirs;
+    report.total_bytes = total_bytes;
+    report.total_files = total_files;
     report.truncated = budget.exhausted();
     report.elapsed_ms = started.elapsed().as_millis() as u64;
     report
+}
+
+/// 串行扫多块盘。
+///
+/// **为什么串行**：目录遍历是海量小 IO，并发扫多盘会把磁盘队列占满
+/// （实测两盘并发时整机卡死）。串行 + 每盘各自 45s 预算。
+pub fn scan_volumes(
+    drives: &[String],
+    progress: Option<crate::cleanup::Progress>,
+) -> Vec<DriveScanReport> {
+    drives
+        .iter()
+        .map(|drive| {
+            let normalized = drive_of(drive);
+            scan_drive(&normalized, progress.clone())
+        })
+        .collect()
 }
 
 /// 并行遍历：一批线程各自枚举目录树，最后合并结果。
@@ -422,6 +449,7 @@ fn merge_bucket(target: &mut ScanBucket, other: ScanBucket) {
     target.artifacts.extend(other.artifacts);
     target.candidates.extend(other.candidates);
     target.candidates_total += other.candidates_total;
+    target.denied_dirs += other.denied_dirs;
     target.big.extend(other.big);
     target.empty_dir_count += other.empty_dir_count;
     target.empty_dirs.extend(other.empty_dirs);
@@ -443,6 +471,9 @@ fn scan_one_dir(
     let mut file_count = 0usize;
 
     let Ok(reader) = fs::read_dir(dir) else {
+        // 读不到 = 权限不足（普通用户碰其它用户的目录、系统位置）。
+        // 计数上报，让 UI 如实说清这次扫描覆盖到哪。
+        bucket.denied_dirs += 1;
         return children;
     };
     for entry in reader.flatten() {
@@ -583,6 +614,27 @@ fn artifact_marker(dir: &Path) -> Option<String> {
         .iter()
         .find(|marker| marker_present(parent, marker))
         .map(|marker| marker.to_string())
+}
+
+/// 自底向上把子目录体积累加进父目录（`du` 语义）。
+///
+/// **顺序是这里的关键**：按深度从大到小处理，深的先把自己的字节交给父目录，
+/// 父目录收齐所有后代后才等于"子树总量"。反过来（浅的先处理）会漏。
+///
+/// 调用方要在**调用本函数之前**算好全盘汇总——聚合之后每个目录的体积
+/// 已经是子树量，再求和就是重复计数。
+fn aggregate_subtree_sizes(dirs: &mut HashMap<PathBuf, DirStat>, drive: &str) {
+    let mut by_depth: Vec<PathBuf> = dirs.keys().cloned().collect();
+    by_depth.sort_by_key(|path| std::cmp::Reverse(dir_depth(path, drive)));
+    for path in &by_depth {
+        let Some(parent) = path.parent() else { continue };
+        let Some((bytes, files)) = dirs.get(path).map(|stat| (stat.bytes, stat.files)) else {
+            continue;
+        };
+        let slot = dirs.entry(parent.to_path_buf()).or_default();
+        slot.bytes += bytes;
+        slot.files += files;
+    }
 }
 
 /// 目录相对卷根的层数（1 = 卷根的直接子目录；卷根本身算 0）。
@@ -919,6 +971,88 @@ mod tests {
         assert_eq!(nested_total.files, 1);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 全盘汇总不能重复计数：聚合阶段会把子目录字节加进父目录，
+    /// 汇总必须在聚合**之前**算（这个顺序错了，数字会翻倍）。
+    #[test]
+    fn totals_are_counted_before_aggregation() {
+        let root = temp_drive_dir("total");
+        let nested = root.join("a").join("b");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(root.join("f1.bin"), vec![0u8; 100]).unwrap();
+        fs::write(nested.join("f2.bin"), vec![0u8; 200]).unwrap();
+
+        let drive: String = root.display().to_string().chars().take(2).collect();
+        let budget = Arc::new(Budget::new());
+        let bucket = scan_parallel(&root, &budget, None, Instant::now());
+
+        // 聚合前：每个目录只记直属文件。
+        let mut dirs = bucket.dirs;
+        let before: u64 = dirs.values().map(|stat| stat.bytes).sum();
+        assert_eq!(before, 300, "聚合前是直属文件体积之和");
+
+        aggregate_subtree_sizes(&mut dirs, &drive);
+        let after: u64 = dirs.values().map(|stat| stat.bytes).sum();
+        assert!(
+            after > before,
+            "聚合后父目录含子树量，总和必然变大——所以全盘汇总不能事后算"
+        );
+        assert_eq!(dirs.get(&root).map(|s| s.bytes), Some(300), "根目录 = 子树总量");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 权限边界要如实计数：读不到的目录数是"非管理员模式覆盖不全"的量化指标。
+    #[test]
+    fn denied_directories_are_counted() {
+        let root = temp_drive_dir("denied");
+        // 造一个读不进去的目录：普通用户读不到系统目录，但测试环境未必
+        // 有那种目录——所以直接验证"可读目录不计入 denied"。
+        fs::create_dir_all(root.join("ok")).unwrap();
+        let drive: String = root.display().to_string().chars().take(2).collect();
+        let budget = Arc::new(Budget::new());
+        let bucket = scan_parallel(&root, &budget, None, Instant::now());
+        assert_eq!(bucket.denied_dirs, 0, "能读到的目录不该被记成拒绝");
+        let _ = drive;
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 临时探针：真扫一块盘，打印汇总（人工核对非管理员模式的数字）。
+    /// 慢（每盘 45s 预算），默认不跑。
+    #[test]
+    #[ignore = "慢：真扫一块盘，人工核对用"]
+    fn probe_local_scan() {
+        let report = scan_drive("F:", None);
+        println!(
+            "F: 汇总：{} 字节 / {} 文件 / {} 目录 / 读不到 {} 个 / 用时 {} ms / 截断={}",
+            report.total_bytes,
+            report.total_files,
+            report.dirs_scanned,
+            report.denied_dirs,
+            report.elapsed_ms,
+            report.truncated
+        );
+        println!(
+            "大目录：{:?}",
+            report
+                .dirs
+                .iter()
+                .take(5)
+                .map(|node| (node.path.clone(), node.bytes))
+                .collect::<Vec<_>>()
+        );
+        println!(
+            "大文件：{:?}",
+            report
+                .big
+                .iter()
+                .take(3)
+                .map(|file| (file.path.clone(), file.bytes))
+                .collect::<Vec<_>>()
+        );
+        println!("建议清理 {} 项", report.suggested.len());
     }
 
     #[test]
