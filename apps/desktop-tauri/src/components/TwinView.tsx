@@ -43,6 +43,9 @@ const STATUS_TEXT: Record<string, string> = {
   running: "运行中",
 };
 
+/** `watch` 工具建的任务名前缀（见 tools/watch.rs 的 default_name）。 */
+const WATCH_NAME_PREFIX = "守望：";
+
 export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
   const [activeRuns, setActiveRuns] = useState(0);
@@ -129,6 +132,28 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
       : Date.now() - checkedAt < 60_000
         ? "刚刚核对"
         : `${Math.round((Date.now() - checkedAt) / 60_000)} 分钟前核对`;
+
+  // 守望任务与普通定时任务的区分（v1 约定）：`watch` 工具建的任务名
+  // 一律以「守望：」开头。等 `AutomationTask` 有 kind 字段后换成结构化
+  // 判定，这里的字符串匹配随之删除。
+  const watchTasks = useMemo(
+    () => enabledTasks.filter((t) => t.name.startsWith(WATCH_NAME_PREFIX)),
+    [enabledTasks],
+  );
+  const plainTasks = useMemo(
+    () => enabledTasks.filter((t) => !t.name.startsWith(WATCH_NAME_PREFIX)),
+    [enabledTasks],
+  );
+
+  const removeWatch = useCallback(
+    async (id: string) => {
+      const ok = await api.deleteAutomationTask(id);
+      if (ok) {
+        void refresh();
+      }
+    },
+    [refresh],
+  );
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -279,7 +304,7 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
               />
             ) : null}
 
-            {enabledTasks.map((t) => {
+            {plainTasks.map((t) => {
               const ratio =
                 t.max_runs && t.max_runs > 0
                   ? Math.min(1, t.run_count / t.max_runs)
@@ -323,6 +348,56 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
                 </article>
               );
             })}
+
+            {/* 守望单独一节：它们不产出东西，只负责「该不该打扰你」的判断，
+                和在跑的任务混在一起会让人以为它们也在干活。 */}
+            {watchTasks.length > 0 ? (
+              <>
+                <div className="twin-subhead">
+                  <span className="twin-col__title">正在盯</span>
+                  <span className="twin-col__meta">{watchTasks.length}</span>
+                </div>
+                {watchTasks.map((t) => (
+                  <article key={t.id} className="twin-task">
+                    <div className="twin-task__row">
+                      <span className="twin-task__name">
+                        {t.name.replace(WATCH_NAME_PREFIX, "")}
+                      </span>
+                      <span className="twin-task__pct">
+                        {t.last_status === "failed" ? "有异常" : "在盯"}
+                      </span>
+                    </div>
+                    <div className="twin-task__sub">
+                      <span
+                        className={`twin-dot${statusDotClass(t.last_status)}`}
+                        aria-hidden
+                      />
+                      <span>
+                        {t.last_status
+                          ? (STATUS_TEXT[t.last_status] ?? t.last_status)
+                          : "还没查过第一轮"}
+                      </span>
+                      <code>{t.schedule_label ?? t.schedule}</code>
+                      {t.next_run_at ? (
+                        <span>下次 {formatRelative(t.next_run_at)}</span>
+                      ) : null}
+                    </div>
+                    <div className="twin-card__foot">
+                      <button
+                        type="button"
+                        className="twin-btn"
+                        onClick={() => void removeWatch(t.id)}
+                      >
+                        不盯了
+                      </button>
+                      <span className="twin-card__note">
+                        撤掉后她就不再检查这件事
+                      </span>
+                    </div>
+                  </article>
+                ))}
+              </>
+            ) : null}
           </div>
         </section>
 

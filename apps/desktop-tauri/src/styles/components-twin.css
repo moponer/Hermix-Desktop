@@ -403,6 +403,16 @@
   color: var(--twin-fg-4);
 }
 
+/* 栏内小节头（如「正在盯」）：比栏头轻，不带分隔线 */
+.twin-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 2px 0;
+  margin-top: 4px;
+}
+
 .twin-col__body {
   display: flex;
   flex: 1;
