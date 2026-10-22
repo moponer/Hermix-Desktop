@@ -21,13 +21,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Sparkles } from "lucide-react";
 
 import * as api from "../api";
-import type { AutomationTask, Session } from "../types";
+import type { AutomationTask, ChatMessage, Session } from "../types";
 import { PageHeader, SkeletonCard } from "./ui";
 import { AliCharacter, type AliState } from "./twin/AliCharacter";
 
 interface TwinViewProps {
-  /** 宿主会话表 —— 「最近活跃」用它，避免额外一次全量拉取。 */
-  sessions: Session[];
   /** 会话通道接通前的降级：把用户送去对话页。 */
   onOpenChat: () => void;
   /** 把阿黎的专属会话登记进宿主表（工作台同款机制）——不登记 ChatView 渲染不出来。 */
@@ -61,7 +59,6 @@ type TwinPhase = "idle" | "sending" | "running" | "done" | "error";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function TwinView({
-  sessions,
   onOpenChat,
   upsertSessions,
   selectSessionOnly,
@@ -87,19 +84,33 @@ export function TwinView({
   const [pendingApprovals, setPendingApprovals] = useState<
     api.PendingApprovalItem[]
   >([]);
+  /** 她的动静（阿黎会话里最近的 assistant / automation 消息）—— 新鲜情报栏。 */
+  const [intel, setIntel] = useState<IntelItem[]>([]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [list, active, days] = await Promise.all([
+      // 先解析阿黎的会话（只找不建 —— 会话在她第一次被托付事情时才出现，
+      // 空会话堆积在侧栏是噪音）。
+      const all = await api.getSessions();
+      const ali = all.find((s) => s.title === ALI_SESSION_TITLE) ?? null;
+      setAliSession(ali);
+
+      const [list, active, days, intelRes] = await Promise.all([
         api.getAutomationTasks(),
         api.getActiveAutomationRuns(),
         api.getDailyMemoryList(14).catch(() => [] as api.DailyMemoryDay[]),
+        ali
+          ? api
+              .getSessionMessages(ali.id, { limit: 30 })
+              .catch(() => null)
+          : Promise.resolve(null),
       ]);
       setTasks(list);
       setActiveRuns(active);
       setWorkDays(days);
+      if (intelRes) setIntel(extractIntel(intelRes.messages));
       setCheckedAt(Date.now());
     } catch (e) {
       setError(String(e));
@@ -141,20 +152,11 @@ export function TwinView({
     });
   }, [tasks]);
 
-  const recentSessions = useMemo(
-    () =>
-      [...sessions]
-        .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))
-        .slice(0, 5),
-    [sessions],
-  );
-
   const stateText =
     activeRuns > 0
       ? `运行中 · ${activeRuns} 个任务在跑`
       : `静默观察 · ${enabledTasks.length} 个任务待触发`;
 
-  // 角色姿态与"她在干什么"是同一件事的两个表达，必须同源。
   // 角色姿态：会话通道的状态优先（她在处理时是"思考"，出错了是警觉）。
   const aliState: AliState = twinPhase === "error"
     ? "alert"
@@ -261,6 +263,8 @@ export function TwinView({
         if ((total > baseTotal || baseTotal === 0) && last?.role === "assistant") {
           setTwinReply(firstLine(last.content) || "（她回了，但内容是空的）");
           setTwinPhase("done");
+          // 回复可能带出新的守望/审批，顺手刷一遍三栏。
+          void refresh();
           return;
         }
       } catch {
@@ -354,42 +358,45 @@ export function TwinView({
         <section className="twin-col">
           <div className="twin-col__head">
             <span className="twin-col__title">新鲜情报</span>
-            <span className="twin-col__meta">待接通</span>
+            <span className="twin-col__meta">
+              {aliSession ? "她的动静" : "还没开始"}
+            </span>
           </div>
           <div className="twin-col__body">
             <Pending
-              title="情报源尚未接通"
-              desc="接通后这里显示她替你盯到的新变化：只收「新」且与你在意的项目相关的，重复内容进笔记不再打扰。"
+              title="订阅源还没接"
+              desc="RSS / 页面 diff 那类「她自己出门找料」还没做。现在这里显示的是守望任务的产出与她主动说过的话——盯出什么，第一时间落在这。"
               items={[
-                "订阅源水位线（RSS 取 last guid、页面取内容指纹）",
-                "每条带一句「为什么给你看」的依据",
+                "说「帮我盯着 X」就能建一条守望，产出自动出现在下面",
+                "订阅源（RSS 取 last guid、页面取内容指纹）在后续版本",
               ]}
             />
 
             <div className="twin-col__head">
-              <span className="twin-col__title">最近活跃</span>
-              <span className="twin-col__meta">{recentSessions.length} 条</span>
+              <span className="twin-col__title">她的动静</span>
+              <span className="twin-col__meta">{intel.length} 条</span>
             </div>
-            {recentSessions.length === 0 ? (
-              <p className="twin-pending__desc">还没有会话记录。</p>
+            {intel.length === 0 ? (
+              <p className="twin-pending__desc">
+                {aliSession
+                  ? "她的会话里还没有产出。给她派一件事，或建一条守望。"
+                  : "还没跟她说过话——在下面输入框里说一句，会话建立后这里就有内容。"}
+              </p>
             ) : (
-              recentSessions.map((s) => (
-                <article key={s.id} className="twin-card">
+              intel.map((item, i) => (
+                <article
+                  key={`${item.timestamp}-${i}`}
+                  className="twin-card"
+                >
                   <div className="twin-card__top">
-                    <span className="twin-card__source">会话</span>
+                    <span className="twin-card__source">
+                      {item.role === "automation" ? "守望回投" : "她说的"}
+                    </span>
                     <span className="twin-card__age">
-                      {formatRelative(s.updated_at)}
+                      {formatRelative(item.timestamp)}
                     </span>
                   </div>
-                  <div className="twin-card__title">{s.title || "未命名会话"}</div>
-                  <div className="twin-card__foot">
-                    {s.project ? (
-                      <span className="twin-tag">{s.project}</span>
-                    ) : null}
-                    {typeof s.message_count === "number" ? (
-                      <span className="twin-tag">{s.message_count} 条消息</span>
-                    ) : null}
-                  </div>
+                  <div className="twin-card__title">{item.content}</div>
                 </article>
               ))
             )}
@@ -664,6 +671,33 @@ function statusDotClass(status: AutomationTask["last_status"]): string {
   if (status === "failed") return " twin-dot--error";
   if (status === "ok" || status === "running") return "";
   return " twin-dot--idle";
+}
+
+/** 新鲜情报栏的一条：她的动静。 */
+interface IntelItem {
+  role: "assistant" | "automation";
+  content: string;
+  timestamp: string;
+}
+
+/** 从阿黎会话里提取她的动静：只要她说的（assistant）与守望回投（automation），
+ *  你的提问与她执行的中间步骤不进情报栏。 */
+function extractIntel(messages: ChatMessage[]): IntelItem[] {
+  return messages
+    .filter((m) => m.role === "assistant" || m.role === "automation")
+    .filter((m) => (m.content ?? "").trim().length > 0)
+    .map((m) => ({
+      role: m.role === "automation" ? ("automation" as const) : ("assistant" as const),
+      content: clipLine(m.content ?? "", 140),
+      timestamp: m.timestamp,
+    }))
+    .slice(0, 8);
+}
+
+/** 压成单行并裁到 max 字。 */
+function clipLine(text: string, max: number): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
 /** 把审批参数压成一行可读摘要（上限 120 字）。 */

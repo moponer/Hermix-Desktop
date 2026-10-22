@@ -333,6 +333,25 @@ Status: proposed — 方案已定稿，阶段一（界面落地）已执行，�
 - 中途 `cargo check -p hermix-server` 连续报错：先是指向 `crates/hermix-agent/src/run_loop/pre_turn.rs` 的两个 E0425（**另一条工作线正在编辑的文件**，我从未碰过 hermix-agent），后是 `dashboard/twin.rs` 的 E0308（这是我自己的：`.into_response()` 加在了元组内部而不是调用处）。前者等对方修好即消失，后者我修。
 - 上一批的教训再次应验：ripgrep 会跳过 gitignored 目录，核对构建产物不能用 `search_content`。
 
+## 执行记录（2026-10-22，新鲜情报栏 + 一个设计转向）
+
+**设计转向：订阅源水位线推迟，情报栏先接守望产出**
+
+原计划做 RSS/页面 diff 的订阅源与水位线。落到实现时发现**情报栏的最小真实数据源已经存在**：`watch` 任务每轮的回投（`MessageRole::Automation`）本来就写在阿黎会话里。情报栏 = 阿黎会话中最近的 assistant / automation 消息，零新后端、零新依赖。
+
+订阅源是「她主动出门找料」（阶段三的主动研究），需要 feed 解析依赖 + 抓取调度 + 水位线管理，而情报栏要先证明有人看。YAGNI 的顺序应该是：先让守望产出可见，再建抓取管线。
+
+**做了什么**
+
+| 交付 | 文件 | 说明 |
+|---|---|---|
+| 情报栏接真实数据 | `components/TwinView.tsx` | `extractIntel`：从阿黎会话取最近 30 条，只留 assistant（她说的）与 automation（守望回投），压成单行裁 140 字，取 8 条。你的提问与中间步骤不进情报栏 |
+| 会话解析上收 | 同上 | `refresh()` 现在负责找到阿黎会话（**只找不建**——会话在她第一次被托付事情时才出现，空会话堆积在侧栏是噪音）；`aliSession` 就绪后审批轮询自动启动（已有 effect 依赖它） |
+| 回复后联动刷新 | 同上 | `pollReply` 收到回复后顺手 `refresh()`，回复可能带出新的守望与审批 |
+| 移除「最近活跃」 | 同上 | 情报栏有了真实内容后，原始会话列表冗余；`sessions` prop 随之移除 |
+
+**验证结果**：`tsc --noEmit` exit 0；`check-design-guard` / `check-design-primitives --strict` / `impeccable detect` exit 0。本轮未触碰 Rust。
+
 ## Alternatives considered
 
 1. **复用 Tailwind 原子类写页面，不建 CSS 文件** — 否决。用户明确要求「独立样式，方便以后单独调整」；且三栏仪表盘的密度控制需要精确的间距与发丝线，原子类会把它写成一屏 className 噪音。
