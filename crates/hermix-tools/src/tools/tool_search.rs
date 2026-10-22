@@ -1052,18 +1052,24 @@ mod tests {
         assert_eq!(bridge_count, 3);
     }
 
-    /// Regression guard for the intermittent "tool_search / tool_describe
-    /// does not exist" report.
+    /// 低于阈值时**不注入**桥接三件套 —— 与 `directions.rs` 的条件注入配套。
     ///
-    /// The old `assemble_tool_schemas` filtered bridge tools out of the
-    /// incoming list and only re-added them on the *activated* branch. A
-    /// registry under `DEFERRED_THRESHOLD` therefore shipped a schema list
-    /// with no bridge at all — while `directions.rs` still advertised the
-    /// bridge. Turn 1 crossed the threshold (bridge visible, call succeeds),
-    /// turn 2 didn't (bridge gone, `tool_call_validator` rejects it). That
-    /// is the "先成功后 does not exist" shape exactly.
+    /// 演变（两次都是实测驱动的）：
+    ///
+    /// 1. 最初：`assemble_tool_schemas` 在低于阈值时把桥过滤掉，而
+    ///    `directions.rs` **无条件**宣传三步桥 → 第 1 轮跨过阈值（桥可见、
+    ///    调用成功）、第 2 轮没跨过（桥消失、validator 拒绝）——"先成功后
+    ///    does not exist"。
+    /// 2. 先修成"低于阈值也保留桥"（本测试原来的期望）。但那份桥是**死的**：
+    ///    它出现在工具表里却指向 registry 里没人用的路径，而且阈值以下本来
+    ///    所有工具都直接可见，桥没有任何用途。
+    /// 3. 现在（`37af34ef` + directions 配套）：低于阈值**不入工具表**，
+    ///    同时 `directions.rs` 的桥指引改为条件注入（`tool_names` 里没有
+    ///    `tool_describe` 就不讲三步流程）。两边一致——模型既看不到桥，
+    ///    也不会被告知要用桥。本测试钉住"不入表"这一半；另一半在
+    ///    `directions::tests::tool_discovery_guidance_only_appears_when_the_bridge_is_visible`。
     #[test]
-    fn assembly_keeps_bridges_below_threshold() {
+    fn assembly_omits_bridges_below_threshold() {
         let mut schemas = vec![
             ToolSchema::new("read_file", "Read", JsonSchema::new("object")),
             ToolSchema::new("tool_search", "Bridge", JsonSchema::new("object")),
@@ -1081,12 +1087,17 @@ mod tests {
         let result = assemble_tool_schemas(schemas);
         assert!(!result.activated, "below threshold must not activate");
         let names: Vec<&str> = result.tool_schemas.iter().map(|s| s.name.as_str()).collect();
-        for want in BRIDGE_TOOL_NAMES {
+        for unused in BRIDGE_TOOL_NAMES {
             assert!(
-                names.contains(want),
-                "bridge '{want}' vanished below threshold — directions.rs still advertises it"
+                !names.contains(unused),
+                "bridge '{unused}' must not be injected below threshold — every tool is \
+                 already directly visible, and directions.rs stops advertising the bridge \
+                 in this case"
             );
         }
+        // 普通工具全部保留（不激活 ≠ 裁剪）。
+        assert!(names.contains(&"read_file"));
+        assert_eq!(names.len(), 4, "read_file + 3 deferred: {names:?}");
     }
 
     /// Same contract for the meta-driven variant, which had the identical

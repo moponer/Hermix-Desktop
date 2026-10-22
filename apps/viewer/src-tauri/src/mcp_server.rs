@@ -279,7 +279,10 @@ fn tool_defs() -> Vec<ToolDef> {
                           就会在那个 iframe 的执行上下文里执行。\
                           **要等一件长事发生完**（比如等视频播完）就用 timeout_ms \
                           加大超时，一次 eval 等完 —— 默认 30s 会逼着你每 25 秒轮询一次，\
-                          而每次轮询都是一次带完整上下文的模型调用。",
+                          而每次轮询都是一次带完整上下文的模型调用。\
+                          **但单次等待有上限**：调用方的 MCP 客户端读超时会先掐断连接\
+                          （实测 urllib 侧报 os error 10060）。等待超过约 90 秒的场景，\
+                          改在客户端侧 sleep + 多次短 eval 轮询「状态」比一次长 await 稳。",
             properties: json!({
                 "expression": {"type": "string", "description": "要执行的 JavaScript 表达式"},
                 "frame": {"type": "string", "description": "目标 iframe 的 URL 片段（可选）"},
@@ -339,7 +342,10 @@ fn tool_defs() -> Vec<ToolDef> {
                           **要读页面上的小字（试题、表格）就用 clip + scale**：\
                           clip 是 {x,y,width,height}（顶层文档 CSS 像素），\
                           scale 是放大倍数（常用 2）。整视口截图会被压到 1024 宽，字会糊。\
-                          坐标用 webview_eval 量元素位置换算（注意是文档坐标，不是视口坐标）。",
+                          坐标用 webview_eval 量元素位置换算（注意是文档坐标，不是视口坐标）。\
+                          走 CDP 的 Page.captureScreenshot——**不要改用 PrintWindow / 系统截屏\
+                          去判断「页面有没有渲染」**：它抓不到 WebView2 的合成层，结果一律空白\
+                          （2026-10-22 实测）。",
             properties: json!({
                 "clip": {
                     "type": "object",

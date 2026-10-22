@@ -111,12 +111,25 @@ static SECRET_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| 
             // written-down literals (`password = hunter2` still blocks) while
             // letting interpolations through. No lookahead: the `regex` crate
             // does not support it.
+            //
+            // `\b` on the key (2026-10-22): without it `myPassword:` /
+            // `getPassword()` were treated as assignments — the pattern matched
+            // the *substring*. Same class of false positive as the token row
+            // below.
             "Password assignment",
-            re(r"(?i)(?:password|passwd|pwd)\s*[:=]\s*[^$\s]\S*"),
+            re(r"(?i)\b(?:password|passwd|pwd)\s*[:=]\s*[^$\s]\S*"),
         ),
         (
+            // `\b` is load-bearing here (2026-10-22 实测误拦): without it,
+            // `token` matched *inside* identifiers, so ordinary JS —
+            // `ktoken: obj`, `accessToken: t`, `getToken = () => …` — was
+            // refused with "content contains detected secret" and the agent
+            // had to route around the guard by rewriting the code. A word
+            // boundary keeps the guard on real assignments (`token: "abc12345"`,
+            // `API_KEY = "…"`) while letting camelCase / prefixed identifiers
+            // through — those name the value, they do not embed one.
             "Generic secret assignment",
-            re(r"(?i)(?:secret|token|api_key|apikey|access_key)\s*[:=]\s*[^$\s]\S{7,}"),
+            re(r"(?i)\b(?:secret|token|api_key|apikey|access_key)\s*[:=]\s*[^$\s]\S{7,}"),
         ),
     ]
 });
@@ -461,6 +474,42 @@ mod tests {
         assert!(detect_secrets("$pw = $env:CSSO_PASS").is_none());
         assert!(detect_secrets("password = $env:CSSO_PASS").is_none());
         assert!(detect_secrets("api_key = ${API_KEY}").is_none());
+    }
+
+    /// 标识符**包含** token/secret 不等于赋值（2026-10-22 实测误拦）。
+    ///
+    /// 无词边界时 `token\s*[:=]` 会命中 `ktoken:` / `accessToken:` 的子串，
+    /// 把普通 JS 判成"含密钥"并整篇拒写——agent 只能绕路改写代码。
+    #[test]
+    fn identifiers_merely_containing_secret_words_are_not_secrets() {
+        for benign in [
+            "ktoken: base >> 4",
+            "const accessToken = t.token;",
+            "getToken = () => props.token;",
+            "mySecret = computeSecret();",
+            "resp.accessToken: null,",
+            "if (ktoken) { q.append(\"k\", k); }",
+            "const tokenizer = new Tokenizer();",
+        ] {
+            assert!(
+                detect_secrets(benign).is_none(),
+                "标识符内的关键字不该判成密钥: {benign}"
+            );
+        }
+
+        // Real assignments must still block — the guard is narrowed, not off.
+        for real in [
+            r#"token: "abcdef1234567890""#,
+            r#"api_key = "AIzaSyB1234567890abcdefghijklmnopqrstu""#,
+            "secret = abcdefgh12345678",
+            "password = hunter2",
+            "access_key = AKIAIOSFODNN7EXAMPLE",
+        ] {
+            assert!(
+                detect_secrets(real).is_some(),
+                "真实赋值必须继续拦截: {real}"
+            );
+        }
     }
 
     #[test]
