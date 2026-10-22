@@ -249,8 +249,18 @@ fn scan_prefixed(
     let mut i = 0;
     while i + pb.len() <= bytes.len() {
         if &bytes[i..i + pb.len()] == pb {
-            // take total_len bytes; clamp at body end.
-            let end = (i + total_len).min(bytes.len());
+            // `total_len` is a *byte* budget, but the span end must land on
+            // a **char boundary**: CJK text (3 bytes/char) made
+            // `i + total_len` land mid-character, and the caller's
+            // `replace_range(s..end, …)` panicked with
+            // `assertion failed: self.is_char_boundary(n)`
+            // (2026-10-22 03:50 / 15:21, 超星长任务——中文正文里命中
+            // sk-/AKIA/ghp_ 前缀时必炸)。回退 end 到最近的字符边界。
+            let raw_end = (i + total_len).min(bytes.len());
+            let mut end = raw_end;
+            while end > i && !body.is_char_boundary(end) {
+                end -= 1;
+            }
             if end - i >= pb.len() + 4 {
                 out.push((i, end, kind));
                 i = end;
@@ -641,6 +651,42 @@ mod tests {
         let m = MaskingStrategy::new(&[MaskKind::OpenaiKey]);
         let (out, _) = m.apply("sk-test1234567890ABCDEFGHIJKLMNOPQRSTUV");
         assert!(!out.contains("sk-test1234567890ABCDEFGHIJKLMNOPQRSTUV"));
+    }
+
+    /// CJK 正文 + 密钥前缀：旧实现按字节预算 `i + 30` 切尾，落在多字节
+    /// 字符中间 → `replace_range` panic `is_char_boundary`。
+    /// 真实崩溃：2026-10-22 03:50 与 15:21（crash.log），超星长任务
+    /// （中文正文）各崩一次，用户表现为「压缩后任务自己中断」。
+    /// 修复后：end 回退到字符边界，掩码正常、字符串保持合法 UTF-8。
+    #[test]
+    fn masking_survives_cjk_right_after_the_prefix() {
+        // "sk-" + 7 字节 ASCII + 中文：i+30 落在第 7 个中文字符的
+        // 中间（非边界）——旧代码在这里必炸。
+        let body = format!("密钥 sk-abc1234{}结尾", "中文内容测试".repeat(5));
+        let m = MaskingStrategy::new(&[MaskKind::OpenaiKey]);
+
+        let (masked, spans) = m.apply(&body);
+
+        assert_eq!(spans.len(), 1, "命中一个密钥 span: {spans:?}");
+        assert!(masked.contains("[REDACTED:openai-key]"), "{masked}");
+        assert!(!masked.contains("sk-abc1234"), "密钥本体必须被掩掉: {masked}");
+        // 掩码后仍是合法 UTF-8：从边界回退的结果不能再切字符。
+        assert!(
+            std::str::from_utf8(masked.as_bytes()).is_ok(),
+            "输出必须是合法 UTF-8"
+        );
+    }
+
+    /// 密钥前缀后面直接是中文（30 字节预算几乎全落在 CJK 区间）。
+    #[test]
+    fn masking_cjk_body_with_minimal_ascii_key() {
+        let body = format!("sk-ab{}", "超星学习通任务进行中。".repeat(10));
+        let m = MaskingStrategy::new(&[MaskKind::OpenaiKey]);
+        let (masked, _) = m.apply(&body);
+        assert!(
+            !masked.contains("sk-ab"),
+            "即使预算全落在 CJK 区间也要完成掩码: {masked}"
+        );
     }
 
     #[test]
