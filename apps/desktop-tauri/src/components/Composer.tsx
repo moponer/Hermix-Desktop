@@ -319,7 +319,7 @@ export function Composer(p: ComposerProps) {
               </div>
             </div>
             {queueOpen && (
-              <ul className="mt-2 max-h-48 space-y-0.5 overflow-y-auto">
+              <ul className="mt-2 max-h-48 space-y-1.5 overflow-y-auto pr-0.5">
                 {p.messageQueue!.map((msg, idx) => (
                   <QueueItemRow
                     key={msg.id}
@@ -622,22 +622,28 @@ export function Composer(p: ComposerProps) {
             // 互斥显示:队列按钮亮起时隐藏 Square,空状态才让停。
             const showStopButton = !!p.isStreaming && !canQueue;
             return (
-              <>
+              /* 2026-10-22 用户要求对齐 CodeBuddy 参考稿：行动按钮独立成右侧
+                 组（ml-auto），与左侧功能 chips 分开——"左功能、右行动"。 */
+              <div className="ml-auto flex items-center gap-1 shrink-0">
                 {showSendButton && (
                   <button
                     onClick={p.handleSubmit}
                     disabled={sendDisabled}
                     aria-label={canQueue ? "加入队列" : "发送"}
-                    /* 墨与纸 v4：发送钮是结构件不是 CTA —— 永不用强调色，
-                       主行动靠位置（右下角）表达（WorkBuddy 规律 4）。 */
-                    className="relative flex items-center justify-center w-8 h-8 rounded-full transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+                    /* 2026-10-22 改版：发送钮恢复强调色圆形 CTA（参考 CodeBuddy
+                       稿）。原"墨与纸 v4 结构件"方案被用户否了——他要的是一眼
+                       能找到的主行动按钮。 */
+                    className="relative flex items-center justify-center w-9 h-9 rounded-full transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:brightness-110 active:scale-95"
                     style={{
                       background: hasContent
-                        ? "var(--color-inverse-surface)"
+                        ? "linear-gradient(135deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 72%, #000))"
                         : "var(--color-bg-quaternary)",
                       color: hasContent
-                        ? "var(--color-inverse-on-surface)"
+                        ? "var(--color-accent-contrast, #fff)"
                         : "var(--color-text-faint)",
+                      boxShadow: hasContent
+                        ? "0 2px 8px color-mix(in srgb, var(--color-accent) 35%, transparent)"
+                        : "none",
                     }}
                     title={canQueue ? "加入队列，等当前回复完成后自动发送 (Enter)" : "发送 (Enter)"}
                   >
@@ -656,8 +662,8 @@ export function Composer(p: ComposerProps) {
                 {showStopButton && (
                   <button
                     onClick={() => p.onStop?.(p.activeComposerSessionId)}
-                    /* R3-2：与发送键同位同尺寸（32px），消除互斥切换时的跳版 */
-                    className="flex items-center justify-center w-8 h-8 rounded-lg transition-opacity hover:opacity-90"
+                    /* 与发送键同位同尺寸（36px），消除互斥切换时的跳版 */
+                    className="flex items-center justify-center w-9 h-9 rounded-full transition-opacity hover:opacity-90"
                     style={{
                       background:
                         "color-mix(in srgb, var(--color-error) 14%, transparent)",
@@ -669,7 +675,7 @@ export function Composer(p: ComposerProps) {
                     <Square fill="currentColor" className="icon-sm" />
                   </button>
                 )}
-              </>
+              </div>
             );
           })()}
         </div>
@@ -811,6 +817,10 @@ export function Composer(p: ComposerProps) {
           </div>
           </div>
         )}
+        {/* 2026-10-22 对齐 CodeBuddy 参考稿：输入框底部免责声明。 */}
+        <div className="px-3 pb-1.5 text-center text-[10px] leading-none text-text-faint select-none">
+          内容由 AI 生成，仅供参考
+        </div>
     </div>
   );
 }

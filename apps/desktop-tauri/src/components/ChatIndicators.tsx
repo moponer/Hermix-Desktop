@@ -8,7 +8,7 @@
  * testable.
  */
 import { useState, useRef, useEffect } from "react";
-import { Loader2, X, Pencil, Send } from "lucide-react";
+import { Loader2, X, Pencil, Send, MessageSquare } from "lucide-react";
 import { DELETE } from "./strings";
 
 /**
@@ -163,9 +163,12 @@ export function QueueItemRow({
 
   return (
     <li
-      className="group flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-bg-tertiary/50"
+      /* 2026-10-22 对齐 CodeBuddy 参考稿：队列项从"hover 高亮的行"升级为
+         独立卡片——每条自带边框与消息图标，操作按钮 hover 浮现。 */
+      className="group flex items-start gap-2 rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-primary)]/60 px-2.5 py-2 transition-colors hover:border-[var(--color-border-secondary)]"
       aria-label={`第 ${index + 1} 条排队消息`}
     >
+      <MessageSquare className="mt-0.5 icon-sm shrink-0 text-text-faint" aria-hidden />
       {/* 只有"正在发送 / 失败"才需要状态点。等待中的每行都点一颗灰点，
           会让列表读起来像调试输出，而不是待发消息。 */}
       {(status === "sending" || status === "failed") && (
