@@ -163,6 +163,27 @@ fn render_skill_index(
     let mut rows: Vec<_> = commands.iter().collect();
     rows.sort_by(|a, b| a.0.cmp(b.0));
 
+    // ── `auto` 类目不进索引（2026-10-22）──
+    //
+    // `auto` 是 **agent 自己生成的** skill（`skill_manage(auto_extract…)` 的
+    // 学习产物）。它们有两个问题：
+    //   1. **会让 system 提示每轮都可能变** —— agent 每建一个 auto skill，
+    //      索引就变一次 → system 提示变一次 → 按实测「改中间 = 整份作废
+    //      （首发命中 2.1%）」，一次学习就把整轮上下文重新计费。
+    //   2. 名字是机器拼的（`probe-01d635152c9a79d3`），对模型的触发判断
+    //      几乎没有帮助。
+    //
+    // 它们**并没有被丢掉**：正文仍会按需注入（自动匹配的正文块 / 任务级
+    // ephemeral 技能），`skills_list` 也照样能列出 —— 只是不再占用「目录页」。
+    // 这正是 Anthropic《Agent Skills》的渐进披露：目录页只放**稳定**的元数据。
+    const AUTO_CATEGORY: &str = "auto";
+    let indexable: Vec<_> = rows
+        .iter()
+        .copied()
+        .filter(|(_, info)| info.category != AUTO_CATEGORY)
+        .collect();
+    let rows = indexable;
+
     let body = detailed(&rows);
     if body.chars().count() <= budget {
         return body;
@@ -1123,6 +1144,38 @@ fn build_context_layer(
 
     let mut builder = SystemPromptBuilder::new();
 
+    // ── 块的顺序 = 缓存代价的顺序（2026-10-22 实测，见
+    // docs/notes/proposed/architecture/2026-10-22-external-baseline-gap.md）──
+    //
+    // provider 的前缀缓存对「**改在哪里**」敏感：
+    //   - 改 system 提示**中间**一处 → 首发命中掉到 **2.1%**（整份作废，
+    //     连改动点之前的字节也一起废）
+    //   - 改 system 提示**尾部**一处 → 命中仍有 **99.7%**（只损失那一小块）
+    //
+    // 而本层里有三块是**每轮都可能变**的：
+    //   - 记忆块（MEMORY/USER）：agent 的自动记忆审查会定期改写它
+    //   - memory_router 的块：同理
+    //   - 技能提示：agent 新建 skill → 索引变
+    //
+    // 把它们放在**本层末尾**（而不是开头），一次记忆改写就只作废「尾部这一小段」，
+    // 前面的稳定字节继续命中 —— 而不是每轮整份重算。
+    //
+    // 副作用是好的：更靠近末尾的内容在模型注意力里更「近」，技能正文与记忆
+    // 本来就该在临场时被读到。
+
+    // 稳定块先走（context files / custom apps index：只有用户改文件才变）。
+    if let Some(context_prompt) = context_files_prompt(config) {
+        builder = builder.with_context_files(&context_prompt);
+    }
+
+    // Custom-apps index: tiny per-app line so the LLM knows what's
+    // installed without a list() round-trip. Cheap enough to live in
+    // every turn; details fetched on demand via `custom_app_manager get`.
+    if let Some(apps_index) = custom_apps_index_prompt(config) {
+        builder = builder.with_block(&apps_index);
+    }
+
+    // ── 易变块放在末尾 ──
     if !config.skip_memory {
         let memory_dir = config.resolved_memory_dir();
         let (memory_block, user_block) = load_builtin_memory_snapshot(
@@ -1147,18 +1200,6 @@ fn build_context_layer(
     if let Some(skills_prompt) = skills_system_prompt(config, tool_names_set) {
         builder = builder.with_skills_prompt(&skills_prompt);
     }
-
-    if let Some(context_prompt) = context_files_prompt(config) {
-        builder = builder.with_context_files(&context_prompt);
-    }
-
-    // Custom-apps index: tiny per-app line so the LLM knows what's
-    // installed without a list() round-trip. Cheap enough to live in
-    // every turn; details fetched on demand via `custom_app_manager get`.
-    if let Some(apps_index) = custom_apps_index_prompt(config) {
-        builder = builder.with_block(&apps_index);
-    }
-
 
     let rendered = builder.build().to_string();
 
@@ -1649,5 +1690,70 @@ mod tests {
             false,
         );
         assert!(!prompt.0.is_empty());
+    }
+
+    // ── D1：索引稳定性（2026-10-22）──
+    //
+    // 不变量：**agent 建/删 auto skill 不能改变索引的任何一个字节**。
+    // 索引在 system 提示里，而实测「改 system 中间一处 → 首发命中掉到 2.1%」
+    // （整份作废）——所以索引一变，这一轮上下文就全部重新计费。
+
+    fn skill_info(name: &str, category: &str, description: &str) -> crate::skill_orchestrator::SkillCommandInfo {
+        use std::path::PathBuf;
+        crate::skill_orchestrator::SkillCommandInfo {
+            name: name.to_string(),
+            description: description.to_string(),
+            skill_md_path: PathBuf::from("/tmp").join(format!("{name}/SKILL.md")),
+            skill_dir: PathBuf::from("/tmp").join(name),
+            category: category.to_string(),
+            tags: Vec::new(),
+            allowed_tools: None,
+        }
+    }
+
+    #[test]
+    fn skill_index_excludes_auto_category() {
+        let mut commands = std::collections::HashMap::new();
+        commands.insert(
+            "chaoxing-learning".to_string(),
+            skill_info("chaoxing-learning", "lifestyle", "超星刷课剧本"),
+        );
+        commands.insert(
+            "probe-01d635152c9a79d3".to_string(),
+            skill_info("probe-01d635152c9a79d3", "auto", "自动学习产物"),
+        );
+        let idx = render_skill_index(&commands, 20_000);
+        assert!(idx.contains("chaoxing-learning"), "用户技能必须在索引里");
+        assert!(
+            !idx.contains("probe-01d635152c9a79d3"),
+            "auto 类目不得进索引（它会让 system 提示每轮都可能变 → 整份缓存作废）\n索引内容：\n{idx}"
+        );
+    }
+
+    #[test]
+    fn skill_index_bytes_stable_when_auto_skills_change() {
+        let mut base = std::collections::HashMap::new();
+        base.insert(
+            "chaoxing-learning".to_string(),
+            skill_info("chaoxing-learning", "lifestyle", "超星刷课剧本"),
+        );
+        let before = render_skill_index(&base, 20_000);
+
+        // agent 新建了两个 auto skill
+        let mut after_map = base.clone();
+        after_map.insert(
+            "probe-abc123".to_string(),
+            skill_info("probe-abc123", "auto", "自动学习产物 A"),
+        );
+        after_map.insert(
+            "probe-def456".to_string(),
+            skill_info("probe-def456", "auto", "自动学习产物 B"),
+        );
+        let after = render_skill_index(&after_map, 20_000);
+
+        assert_eq!(
+            before, after,
+            "索引必须逐字节不变 —— 这是「建 skill 不会打断前缀缓存」的唯一保证"
+        );
     }
 }

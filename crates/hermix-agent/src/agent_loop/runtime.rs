@@ -100,6 +100,21 @@ impl AgentLoop {
     /// Honors `quiet_mode` like `emit_status` so log-replay jobs
     /// don't spam the WS stream with usage chips.
     pub(crate) fn emit_usage_update(&self, usage: &hermix_core::UsageStats) {
+        // **逐请求的缓存命中日志**（2026-10-22）：`token_usage` 表是**按轮**
+        // 累加的，看不见「哪一发」被打成了新鲜 token。而 provider 的前缀缓存
+        // 对「载荷里哪一段变了」极度敏感（实测：改 system 中间一处 → 首发命中
+        // 掉到 2.1%；改尾部 → 仍 99.7%）—— 没有逐请求数据就只能靠推断。
+        //
+        // 这一行让「记忆改写后紧接着的那一发还剩多少命中」当场可见。
+        let prompt = usage.prompt_tokens.max(1) as f64;
+        tracing::info!(
+            target: "hermix_agent::request_probe",
+            "req_usage: prompt={} cache_read={} cache_write={} hit={:.1}%",
+            usage.prompt_tokens,
+            usage.cache_read_tokens,
+            usage.cache_creation_tokens,
+            usage.cache_read_tokens as f64 * 100.0 / prompt
+        );
         if self.config.quiet_mode {
             return;
         }
