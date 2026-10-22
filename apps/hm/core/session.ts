@@ -327,6 +327,21 @@ export class ChatSession {
     })
   }
 
+  /**
+   * 切换默认模型（`provider:model`）。
+   *
+   * 走**和聊天同一条密封上行**，不走 REST：中继是只路由的字节管道，没有
+   * 通往桌面的 HTTP 通道（手机此前那条 `GET /api/model/list` 必然 404，
+   * 选��器因此永远是空的）。
+   *
+   * 只带**一个**模型名，不带整份清单：桌面侧只改默认值，`enabled` 保持它
+   * 自己那份——手机整份回写会把付费厂商的模型挤出可见范围（已发生的事故）。
+   */
+  async selectModel(model: string): Promise<boolean> {
+    if (!model.trim()) return false
+    return this.sendPlain({ type: 'model_select', model })
+  }
+
   /** 封一帧明文上行。`send` 与补发请求共用，密封细节只写一次。 */
   private async sendPlain(obj: unknown): Promise<boolean> {
     if (!this.client || !this.identity || !this.pcPublic || !this.ready) return false

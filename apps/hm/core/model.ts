@@ -1,114 +1,71 @@
 /**
- * 模型选择 API（手机端遥控器视角）。
+ * 模型清单（手机端视角）。
  *
- * 桌面端有完整的模型配置 UI（ModelListTab + ModelAddDialog），手机端只做
- * 两件事：列出可用模型、切换默认模型。
+ * ## 清单从哪来
  *
- * ## 后端端点
- *   GET  /api/model/list  → ModelListResponse
- *   PUT  /api/model/list  → 写入新的 model_selector
+ * 手机端**不存**自己的模型清单：唯一真相源在桌面（config.yaml 的
+ * `model_selector` / `llm_providers`）。桌面在手机连上时把清单作为 WS
+ * 密封帧推过来（`model.list` 事件，见 `core/frames.ts`），手机据此渲染
+ * 选择器——不留第二份必然漂移的副本。
  *
- * ## HTTP 认证（走 relay HTTP 代理）
- *   Authorization: Bearer <deviceToken>   — hermix-server 验证设备身份
- *   X-Hermix-Signature: t=<t>,n=<n>,s=<s> — 请求完整性签名（与 WS 帧同算法）
- *   Authorization: Bearer <relayToken>     — relay 代理层认证
+ * ## 为什么不再走 HTTP
+ *
+ * 手机此前调 `GET {relay}/api/model/list`：但中继是**只路由的字节管道**，
+ * 根本没有通往节点的 HTTP 通道，那条请求必然 404 —— 于是模型选择器永远是
+ * 空的，桌面换了模型手机也看不见。
+ *
+ * 同理「切换默认模型」也不再走 `PUT /api/model/list`：那会把整份 `enabled`
+ * 清单覆盖成手机这份，而手机的清单本来就不全 —— 桌面付费厂商的模型会被
+ * 挤出可见范围（这是记在案的真实事故）。现在改为经 WS 发 `model_select`，
+ * **只改默认值**，`enabled` 保持桌面自己那份。
  */
-import { request } from './http'
-import { relayBaseUrl } from './clock'
-import { signatureHeader } from './signature'
-import { deviceToken, relayToken } from './pairing'
 
 export interface ModelEntry {
   provider_id: string
   model_id: string
+  /** 供应商展示名（自定义 provider 用 display_name，否则就是 id）。 */
+  provider_name?: string
+  /** 上下文窗口（能查到才有）。 */
+  context_window?: number
+  /** 是否支持 reasoning。 */
+  supports_reasoning?: boolean
 }
 
-export interface ModelListResponse {
+/** 清单条目的唯一 id：`provider:model`。 */
+export function modelId(entry: ModelEntry): string {
+  return `${entry.provider_id}:${entry.model_id}`
+}
+
+/** 把 `provider:model` 拆开；格式不对时返回 null。 */
+export function splitModelId(id: string): { provider: string; model: string } | null {
+  const i = id.indexOf(':')
+  if (i <= 0 || i === id.length - 1) return null
+  return { provider: id.slice(0, i), model: id.slice(i + 1) }
+}
+
+/**
+ * 电脑推来的 provider 凭据——手机在**电脑离线**时直连云模型要用。
+ *
+ * `api_key` 缺失 = 该端点无需鉴权（不发 Authorization 头），与桌面侧
+ * `auth_header` 的约定一致。
+ */
+export interface ProviderCredential {
+  provider_id: string
+  base_url?: string
+  api_key?: string
+  /** 端点风格。目前只有 `openai`（OpenAI 兼容的 /chat/completions）。 */
+  api_style: string
+}
+
+/**
+ * 电脑推来的**完整**模型配置，手机持久化它。
+ *
+ * 有了它，电脑关机时手机照样能本地对话——用户全程不用在手机上配模型。
+ */
+export interface ModelConfig {
   models: ModelEntry[]
-  default_model: string | null
-}
-
-export interface ModelInfo {
-  provider: string
-  model: string
-  context_window: number | null
-  supports_reasoning: boolean
-}
-
-function apiBase(): string | null {
-  return relayBaseUrl()
-}
-
-/**
- * 带完整认证头的 HTTP 请求选项。
- * - Authorization: Bearer <deviceToken>  → hermix-server 验设备
- * - X-Hermix-Signature: …               → 防篡改（与 WS 帧同算法）
- * - uni.request 的 header.Authorization → relay 代理层（hrel_*）
- */
-async function authHeaders(method: 'GET' | 'PUT', path: string): Promise<Record<string, string>> {
-  const dt = deviceToken()
-  const rt = relayToken()
-  const sig = await signatureHeader(dt, method, path)
-  const out: Record<string, string> = {
-    'Authorization': `Bearer ${rt || dt}`,
-    'X-Device-Token': dt,
-    'X-Hermix-Signature': sig,
-  }
-  return out
-}
-
-/** GET /api/model/list — 取模型清单。失败返回 null。 */
-export async function getModelList(): Promise<ModelListResponse | null> {
-  const base = apiBase()
-  if (!base) return null
-  const path = '/api/model/list'
-  const headers = await authHeaders('GET', path)
-  const res = await request({
-    url: `${base}${path}`,
-    method: 'GET',
-    header: headers,
-    timeout: 10000,
-  })
-  if (!res.reachable || res.statusCode !== 200) return null
-  return res.data as ModelListResponse
-}
-
-/** GET /api/model/info — 取当前模型信息。失败返回 null。 */
-export async function getModelInfo(): Promise<ModelInfo | null> {
-  const base = apiBase()
-  if (!base) return null
-  const path = '/api/model/info'
-  const headers = await authHeaders('GET', path)
-  const res = await request({
-    url: `${base}${path}`,
-    method: 'GET',
-    header: headers,
-    timeout: 10000,
-  })
-  if (!res.reachable || res.statusCode !== 200) return null
-  return res.data as ModelInfo
-}
-
-/**
- * PUT /api/model/list — 切换默认模型。
- * @param models 完整清单（必须含 default_model）
- * @param defaultModel "provider:model" 格式
- */
-export async function setDefaultModel(
-  models: ModelEntry[],
-  defaultModel: string,
-): Promise<boolean> {
-  const base = apiBase()
-  if (!base) return false
-  const path = '/api/model/list'
-  const headers = await authHeaders('PUT', path)
-  headers['Content-Type'] = 'application/json'
-  const res = await request({
-    url: `${base}${path}`,
-    method: 'PUT',
-    header: headers,
-    data: { models, default_model: defaultModel },
-    timeout: 10000,
-  })
-  return res.reachable && res.statusCode === 200
+  providers: ProviderCredential[]
+  defaultModel: string | null
+  /** 收到推送的时间（毫秒）。 */
+  updatedAt: number
 }

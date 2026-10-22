@@ -9,6 +9,8 @@
  * 纯函数，才知道每类帧到底让界面发生了什么。
  */
 
+import type { ModelEntry, ProviderCredential } from './model'
+
 export type MobileEvent =
   | { kind: 'user.echo'; content: string }
   | { kind: 'assistant.delta'; content: string }
@@ -19,8 +21,13 @@ export type MobileEvent =
   | { kind: 'approval.request'; requestId: string; tool: string; canPersist: boolean }
   | { kind: 'approval.answered'; requestId: string }
   | { kind: 'turn.done' }
-  | { kind: 'turn.error'; content: string }
+  // 错误必须带**原因**：桌面侧 StreamEvent::Error 的字段是 code/message/detail，
+  // 中继映射此前只透传 `content`（而 error 事件根本没有 content 字段）→ 手机
+  // 只能显示兜底文案「出错了」，真实原因（LLM 401 / 参数非法 / 5xx）被吞掉。
+  | { kind: 'turn.error'; content: string; code: string; detail: string }
   | { kind: 'turn.busy' }
+  // 桌面推来的模型清单（手机连上即下发）——手机端唯一的模型来源
+  | { kind: 'model.list'; models: ModelEntry[]; providers: ProviderCredential[]; defaultModel: string | null }
   // 上下文窗口占用（持久条）：used/max/threshold/percent
   | { kind: 'context.usage'; used: number; max: number; threshold: number; percent: number }
   // 单轮 token 用量（cache 命中率等）：prompt/completion/cacheRead/cacheCreation/reasoning
@@ -85,9 +92,21 @@ export function dispatch(raw: string): MobileEvent {
     case 'turn.done':
       return { kind: 'turn.done' }
     case 'turn.error':
-      return { kind: 'turn.error', content: str(f.content) }
+      return {
+        kind: 'turn.error',
+        content: str(f.message) || str(f.content),
+        code: str(f.code),
+        detail: str(f.detail),
+      }
     case 'turn.busy':
       return { kind: 'turn.busy' }
+    case 'model.list':
+      return {
+        kind: 'model.list',
+        models: Array.isArray(f.models) ? f.models.map(toModelEntry) : [],
+        providers: Array.isArray(f.providers) ? f.providers.map(toProvider) : [],
+        defaultModel: f.default_model == null ? null : str(f.default_model),
+      }
     case 'context.usage':
       return {
         kind: 'context.usage',
@@ -145,6 +164,27 @@ function toTodo(raw: any): TodoItem {
 function toTodos(raw: any): TodoItem[] {
   return Array.isArray(raw) ? raw.map(toTodo) : []
 }
+/** 桌面推来的模型条目（与桌面 `/api/model/list` 的 `models` 同形）。 */
+function toModelEntry(raw: any): ModelEntry {
+  return {
+    provider_id: str(raw?.provider_id),
+    model_id: str(raw?.model_id),
+    provider_name: raw?.provider_name == null ? undefined : str(raw.provider_name),
+    context_window:
+      typeof raw?.context_window === 'number' ? raw.context_window : undefined,
+    supports_reasoning:
+      typeof raw?.supports_reasoning === 'boolean' ? raw.supports_reasoning : undefined,
+  }
+}
+/** 桌面推来的 provider 凭据（手机离线时直连云模型用）。 */
+function toProvider(raw: any): ProviderCredential {
+  return {
+    provider_id: str(raw?.provider_id),
+    base_url: raw?.base_url == null ? undefined : str(raw.base_url),
+    api_key: raw?.api_key == null ? undefined : str(raw.api_key),
+    api_style: str(raw?.api_style) || 'openai',
+  }
+}
 /** todo.item_upserted：按 id 合并（已存在则覆盖，否则追加） */
 function mergeTodo(list: TodoItem[], item: TodoItem): TodoItem[] {
   const i = list.findIndex((t) => t.id === item.id)
@@ -183,6 +223,18 @@ export interface ChatState {
   /** 待办列表（对方 To-dos 卡片） */
   todos: TodoItem[]
   /**
+   * 桌面推来的模型清单。手机端**不自己存**清单——唯一真相源在桌面，
+   * 手机连上时由桌面经 WS 推下来（`model.list` 事件）。
+   */
+  models: ModelEntry[]
+  /** 桌面当前的默认模型（`provider:model`）。 */
+  defaultModel: string | null
+  /**
+   * 电脑推来的 provider 凭据（手机离线时直连云模型用）。
+   * 电脑关机后，这份就是唯一能用的凭据——所以会被持久化到本地。
+   */
+  providers: ProviderCredential[]
+  /**
    * 正在等的工具审批。审批是**对话里的一条消息**：PC 发 `approval.request`
    * 停在这里等人点，点了发 `approval_response` 回 PC，agent 才继续。
    *
@@ -213,6 +265,9 @@ export function initialChatState(): ChatState {
     context: null,
     usage: null,
     todos: [],
+    models: [],
+    defaultModel: null,
+    providers: [],
     pendingApproval: null,
   }
 }
@@ -279,10 +334,18 @@ export function reduce(state: ChatState, ev: MobileEvent): ChatState {
         ...state,
         turnActive: false,
         busy: false,
-        lastError: ev.content || '出错了',
+        // 真实原因优先；都没有才退到兜底文案。
+        lastError: ev.content || ev.code || '出错了',
         thinking: '',
         // 这一轮已经结束，还挂着的审批没有人会等它了
         pendingApproval: null,
+      }
+    case 'model.list':
+      return {
+        ...state,
+        models: ev.models,
+        providers: ev.providers,
+        defaultModel: ev.defaultModel,
       }
     case 'turn.busy':
       return { ...state, busy: true }

@@ -132,6 +132,51 @@ test('turn.error 记下原因并收尾', () => {
   assert.equal(s.lastError, '后端 503')
 })
 
+test('turn.error 优先显示桌面给的真实原因，而不是兜底文案', () => {
+  // 桌面侧 StreamEvent::Error 的字段是 code/message/detail（没有 content）。
+  // 映射不透传它们时，手机端只能显示"出错了"，真实原因被整个吞掉。
+  const s = feed(
+    initialChatState(),
+    '{"type":"turn.error","code":"llm_error","message":"401 invalid api_key"}',
+  )
+  assert.equal(s.lastError, '401 invalid api_key')
+})
+
+test('turn.error 没有 message 时退回 code', () => {
+  const s = feed(initialChatState(), '{"type":"turn.error","code":"model_not_found"}')
+  assert.equal(s.lastError, 'model_not_found')
+})
+
+// ------------------------------------------------------------- 模型清单
+
+test('model.list 把桌面推来的清单装进会话状态', () => {
+  const s = feed(
+    initialChatState(),
+    '{"type":"model.list","models":[{"provider_id":"deepseek","model_id":"chat","provider_name":"DeepSeek"}],"default_model":"deepseek:chat"}',
+  )
+  assert.equal(s.models.length, 1)
+  assert.equal(s.models[0].provider_id, 'deepseek')
+  assert.equal(s.models[0].model_id, 'chat')
+  assert.equal(s.defaultModel, 'deepseek:chat')
+})
+
+test('model.list 空清单也合法（桌面没配模型时）', () => {
+  const s = feed(initialChatState(), '{"type":"model.list","models":[],"default_model":null}')
+  assert.deepEqual(s.models, [])
+  assert.equal(s.defaultModel, null)
+})
+
+test('model.list 带上 provider 凭据（电脑离线时手机直连云模型要用）', () => {
+  const s = feed(
+    initialChatState(),
+    '{"type":"model.list","models":[{"provider_id":"deepseek","model_id":"chat"}],"providers":[{"provider_id":"deepseek","base_url":"https://api.deepseek.com/v1","api_key":"sk-x","api_style":"openai"}],"default_model":"deepseek:chat"}',
+  )
+  assert.equal(s.providers.length, 1)
+  assert.equal(s.providers[0].provider_id, 'deepseek')
+  assert.equal(s.providers[0].base_url, 'https://api.deepseek.com/v1')
+  assert.equal(s.providers[0].api_key, 'sk-x')
+})
+
 test('空增量不新建气泡', () => {
   const s = feed(initialChatState(), '{"type":"assistant.message","content":""}')
   assert.equal(s.streamingId, null, '空内容不该凭空开一个气泡')
