@@ -98,6 +98,17 @@
   --color-text-error: #e06b52;     /* 5.61 / 4.88 */
   --color-text-info: #8a9aa8;      /* 6.38 / 5.21 */
 
+  /* 分类色板（暗底提亮档）—— 与亮色同一套色相，只是整体提到暗底上可见。
+     图标身份色，不外借作文字色。 */
+  --color-tone-slate: #9aa4b2;
+  --color-tone-blue: #6aa9f0;
+  --color-tone-cyan: #4fc3d9;
+  --color-tone-green: #6cc08a;
+  --color-tone-amber: #e0b054;
+  --color-tone-orange: #f09a5c;
+  --color-tone-rose: #ef8ba0;
+  --color-tone-violet: #a992ee;
+
   /* Tailwind 原生色槽 → 语义令牌重定向（保持，跟随本主题四色组） */
   --color-red-200:      color-mix(in srgb, var(--color-error) 65%, transparent);
   --color-red-300:      color-mix(in srgb, var(--color-error) 82%, transparent);
@@ -165,6 +176,9 @@
   --shadow-paper: 0 1px 4px rgba(0, 0, 0, 0.35);
   /* 弹层投影：底部单向（同亮色纪律），暗色加深 */
   --shadow-modal: 0 32px 72px -16px rgba(0, 0, 0, 0.6), 0 12px 28px -14px rgba(0, 0, 0, 0.5);
+  /* 扁平化焦点淡晕（无描边）：暗底上把扩散半径加到 5px 才看得见，
+     浓度同比下调，避免变成一圈亮环。 */
+  --shadow-focus-flat: 0 0 0 5px color-mix(in srgb, var(--color-accent) 26%, transparent);
 
   /* Scene surfaces — 画布最深、外壳反提（WorkBuddy 暗色同向） */
   --theme-bg-app: #1a1a1a;

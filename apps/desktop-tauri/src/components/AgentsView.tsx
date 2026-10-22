@@ -150,15 +150,13 @@ export function AgentsView({
               <>
                 <button
                   onClick={() => { setEditingId(null); setMode("create"); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
-                  style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
+                  className="btn-flat btn-flat--secondary btn-flat--sm"
                 >
                   <Plus className="icon-md" /> 手动创建
                 </button>
                 <button
                   onClick={() => setMode("generate")}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
-                  style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
+                  className="btn-flat btn-flat--primary btn-flat--sm"
                 >
                   <Sparkles className="icon-md" /> AI 生成
                 </button>
@@ -167,8 +165,7 @@ export function AgentsView({
             {tab === "my" && mode !== "list" && (
               <button
                 onClick={() => { setMode("list"); setEditingId(null); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
-                style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
+                className="btn-flat btn-flat--secondary btn-flat--sm"
               >
                 <ArrowLeft className="icon-md" /> 返回列表
               </button>
@@ -217,15 +214,13 @@ export function AgentsView({
                         <div className="flex gap-2">
                           <button
                             onClick={() => { setEditingId(null); setMode("create"); }}
-                            className="px-4 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
-                            style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
+                            className="btn-flat btn-flat--secondary"
                           >
                             手动创建
                           </button>
                           <button
                             onClick={() => setMode("generate")}
-                            className="px-4 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
-                            style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
+                            className="btn-flat btn-flat--primary"
                           >
                             AI 生成
                           </button>

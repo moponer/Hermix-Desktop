@@ -68,10 +68,9 @@ function ScreenshotPreview({ output }: { output?: string }) {
       <img
         src={src}
         alt={label}
-        className="w-full h-auto max-h-[480px] object-contain bg-black/40"
+        className="w-full h-auto max-h-[480px] cursor-pointer object-contain bg-black/40"
         draggable={false}
         onClick={() => openImageViewer({ src, name: label })}
-        style={{ cursor: "pointer" }}
       />
       <div className="flex items-center justify-between gap-2 px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40">
         <span className="font-mono truncate">

@@ -1,6 +1,6 @@
 import {
   useCallback, useEffect, useMemo, useRef, useState,
-  type CSSProperties, type ReactNode,
+  type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { cx } from "../../lib/cx";
+import { toneClass, type IconTone } from "../../lib/categoryTone";
 import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import { Switch, SettingsGroup, SettingsRow, SegmentedControl, Input } from "../ui";
@@ -61,6 +62,9 @@ interface PageDef {
   /** 侧栏搜索命中用；同时作为内容区页头的说明文案。 */
   hint: string;
   icon: React.ElementType;
+  /** 图标色调：按类目给图标上色，色相本身承担「这是什么」的第一线索。
+      值来自 lib/categoryTone，颜色由 --color-tone-* 供给（主题自动跟随）。 */
+  tone: IconTone;
   /** 搜索命中用；不写就只能靠标题字面匹配。 */
   keywords?: string;
 }
@@ -74,39 +78,39 @@ const GROUPS: GroupDef[] = [
   {
     label: "偏好",
     items: [
-      { id: "general", label: "通用", hint: "工作模式、输入快捷键、系统能力与数据位置", icon: SlidersHorizontal, keywords: "mode domain 编程 办公 通知 自启 索引" },
-      { id: "appearance", label: "外观", hint: "主题、强调色与壁纸，立即生效并持久保存", icon: Palette, keywords: "theme 主题 深色 浅色 跟随系统 强调色 accent 对比度" },
-      { id: "model", label: "模型", hint: "统一管理内置与自定义模型；内置供应商只需填 API Key", icon: Cpu, keywords: "model llm provider api key 供应商" },
-      { id: "image", label: "截图", hint: "系统截图热键与开关", icon: ImageIcon, keywords: "image 截图 screenshot 热键 hotkey 快捷键" },
+      { id: "general", label: "通用", hint: "工作模式、输入快捷键、系统能力与数据位置", icon: SlidersHorizontal, tone: "slate", keywords: "mode domain 编程 办公 通知 自启 索引" },
+      { id: "appearance", label: "外观", hint: "主题、强调色与壁纸，立即生效并持久保存", icon: Palette, tone: "rose", keywords: "theme 主题 深色 浅色 跟随系统 强调色 accent 对比度" },
+      { id: "model", label: "模型", hint: "统一管理内置与自定义模型；内置供应商只需填 API Key", icon: Cpu, tone: "violet", keywords: "model llm provider api key 供应商" },
+      { id: "image", label: "截图", hint: "系统截图热键与开关", icon: ImageIcon, tone: "orange", keywords: "image 截图 screenshot 热键 hotkey 快捷键" },
     ],
   },
   {
     label: "插件",
     items: [
-      { id: "plugins", label: "插件", hint: "内置插件开关", icon: Plug, keywords: "plugin 插件" },
-      { id: "skills", label: "技能", hint: "技能库与启停", icon: Sparkles, keywords: "skill 技能" },
-      { id: "connectors", label: "连接器", hint: "MCP 服务端接入与社区目录", icon: Network, keywords: "mcp connector 连接器 服务器" },
-      { id: "toolsets", label: "工具集", hint: "工具白名单", icon: Boxes, keywords: "toolset 工具 工具集" },
+      { id: "plugins", label: "插件", hint: "内置插件开关", icon: Plug, tone: "slate", keywords: "plugin 插件" },
+      { id: "skills", label: "技能", hint: "技能库与启停", icon: Sparkles, tone: "violet", keywords: "skill 技能" },
+      { id: "connectors", label: "连接器", hint: "MCP 服务端接入与社区目录", icon: Network, tone: "blue", keywords: "mcp connector 连接器 服务器" },
+      { id: "toolsets", label: "工具集", hint: "工具白名单", icon: Boxes, tone: "cyan", keywords: "toolset 工具 工具集" },
     ],
   },
   {
     label: "管理",
     items: [
-      { id: "backend", label: "后端服务", hint: "本地服务与健康状态", icon: Server, keywords: "backend server 服务 端口 健康" },
-      { id: "runtimes", label: "内置运行时", hint: "Node / Python / Git 便携内置，优先于系统 PATH", icon: Boxes, keywords: "runtime node python git 运行时" },
-      { id: "devices", label: "设备管理", hint: "IM 机器人与桌面配对两条通道；高危工具一律在桌面端强制确认", icon: Smartphone, keywords: "device 设备 配对 权限" },
-      { id: "voice", label: "手机语音识别", hint: "配置云端语音识别 provider，手机端长按说话直发该 provider；未开启则手机仅支持文字", icon: Mic, keywords: "voice 语音 识别 asr stt minimax 转文字 手机" },
-      { id: "security", label: "安全", hint: "覆盖写入前先备份旧版本，误改可回滚", icon: Shield, keywords: "security 安全 备份 backup" },
-      { id: "fileassoc", label: "文件关联", hint: "勾选后由 Hermix 文件查看器接管对应扩展名；取消即恢复原程序", icon: AppWindow, keywords: "file association 关联 打开方式 viewer 查看器 md pdf png" },
-      { id: "archive", label: "已归档", hint: "归档只是从侧栏收起，数据仍在本机，取消归档即可恢复", icon: Archive, keywords: "archive 归档 已归档" },
-      { id: "memory", label: "记忆管理", hint: "记忆图谱、角色提示词、全局记忆文本与每日记忆的查看与编辑", icon: Brain, keywords: "memory 记忆 图谱 记忆库 persona 角色 soul 长期记忆 每日记忆 遗忘" },
+      { id: "backend", label: "后端服务", hint: "本地服务与健康状态", icon: Server, tone: "blue", keywords: "backend server 服务 端口 健康" },
+      { id: "runtimes", label: "内置运行时", hint: "Node / Python / Git 便携内置，优先于系统 PATH", icon: Boxes, tone: "cyan", keywords: "runtime node python git 运行时" },
+      { id: "devices", label: "设备管理", hint: "IM 机器人与桌面配对两条通道；高危工具一律在桌面端强制确认", icon: Smartphone, tone: "slate", keywords: "device 设备 配对 权限" },
+      { id: "voice", label: "手机语音识别", hint: "配置云端语音识别 provider，手机端长按说话直发该 provider；未开启则手机仅支持文字", icon: Mic, tone: "orange", keywords: "voice 语音 识别 asr stt minimax 转文字 手机" },
+      { id: "security", label: "安全", hint: "覆盖写入前先备份旧版本，误改可回滚", icon: Shield, tone: "amber", keywords: "security 安全 备份 backup" },
+      { id: "fileassoc", label: "文件关联", hint: "勾选后由 Hermix 文件查看器接管对应扩展名；取消即恢复原程序", icon: AppWindow, tone: "green", keywords: "file association 关联 打开方式 viewer 查看器 md pdf png" },
+      { id: "archive", label: "已归档", hint: "归档只是从侧栏收起，数据仍在本机，取消归档即可恢复", icon: Archive, tone: "slate", keywords: "archive 归档 已归档" },
+      { id: "memory", label: "记忆管理", hint: "记忆图谱、角色提示词、全局记忆文本与每日记忆的查看与编辑", icon: Brain, tone: "rose", keywords: "memory 记忆 图谱 记忆库 persona 角色 soul 长期记忆 每日记忆 遗忘" },
     ],
   },
   {
     label: "诊断",
     items: [
-      { id: "diagnostics", label: "诊断", hint: "日志、审计与网络出口；后端日志写入 hermix_home/logs/", icon: Activity, keywords: "diagnostics 日志 log 审计 出网" },
-      { id: "advanced", label: "高级", hint: "压缩、子 Agent 等内部参数；修改后需重启生效", icon: SlidersHorizontal, keywords: "advanced 高级 实验 config yaml" },
+      { id: "diagnostics", label: "诊断", hint: "日志、审计与网络出口；后端日志写入 hermix_home/logs/", icon: Activity, tone: "cyan", keywords: "diagnostics 日志 log 审计 出网" },
+      { id: "advanced", label: "高级", hint: "压缩、子 Agent 等内部参数；修改后需重启生效", icon: SlidersHorizontal, tone: "slate", keywords: "advanced 高级 实验 config yaml" },
     ],
   },
 ];
@@ -215,13 +219,13 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
               <div className="px-3 pb-1 pt-4 text-[length:var(--text-meta)] font-medium text-[var(--color-text-faint)]">
                 {g.label}
               </div>
-              {g.items.map(({ id, label, icon: Icon }) => (
+              {g.items.map(({ id, label, icon: Icon, tone }) => (
                 <button
                   key={id}
                   onClick={() => go(id)}
                   aria-current={page === id ? "page" : undefined}
                   className={cx(
-                    "flex w-full items-center gap-2.5 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors",
+                    "m-tint m-press flex w-full items-center gap-2.5 rounded-[var(--radius-md)] px-3 py-2 text-left",
                     /* 选中态用「深一档的底 + 满墨文字」，强调色只留给开关和
                        主按钮——导航是位置，不是行动。把强调色铺在导航上，
                        整块侧栏会抢走内容的注意力。 */
@@ -230,12 +234,13 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
                       : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]",
                   )}
                 >
-                  <Icon
-                    className={cx(
-                      "icon-lg shrink-0",
-                      page === id ? "opacity-100" : "opacity-55",
-                    )}
-                  />
+                  {/* 图标按类目上色：色相是「这是什么」的第一线索。
+                      旧版用 opacity-55 把图标压成灰 —— 那等于关掉扫视通道，
+                      17 项只能逐行读文字。底块是 14% 淡染，不是实色块
+                      （实色块在列表里堆叠会发脏）。 */}
+                  <span className={cx("cat-icon cat-icon--sm", toneClass(tone))}>
+                    <Icon className="icon-md" />
+                  </span>
                   <span className="min-w-0 flex-1 truncate text-[length:var(--text-body)]">{label}</span>
                 </button>
               ))}
@@ -251,10 +256,13 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
      描边撑存在感；反过来（灰案 + 白卡 + 极淡投影）一眼就是「信息块」，
      也不需要边框。`--color-bg-card` 在这里被重写成 elevated，
      所有子页面里的 bg-card 自动变成白卡，无需逐页改类名。 */
+  /* key={current.id}：切页时整块重挂，配合 .settings-page-fade 做一次淡入。
+     没有它，17 个页面之间切换是硬切 —— 内容完全替换而外框不动，视觉上
+     像「闪了一下」。淡入 160ms 足够表达「换了一页」，又不会拖慢连点。 */
   const contentNode = (
     <div
-      className="min-w-0 flex-1 overflow-y-auto bg-[var(--color-bg-secondary)]"
-      style={{ "--color-bg-card": "var(--color-bg-elevated)" } as CSSProperties}
+      key={current.id}
+      className="settings-page-fade min-w-0 flex-1 overflow-y-auto bg-[var(--color-bg-secondary)]"
     >
       <PageBody def={current} toolQuery={toolQuery} onToolQuery={setToolQuery} />
     </div>
@@ -315,10 +323,18 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
 /** 内容区页头：页名 + 一句说明。每个 tab 的自带页级标题已并入这里
  *  （原描述文案迁入 PageDef.hint，侧栏搜索与页头共用一份）。 */
 function PageHeading({ def }: { def: PageDef }) {
+  const { icon: Icon } = def;
   return (
-    <header className="mb-6">
-      <h2 className="text-[length:var(--text-title)] font-semibold text-[var(--color-text-primary)]">{def.label}</h2>
-      <p className="mt-1 text-[length:var(--text-ui)] text-[var(--color-text-muted)]">{def.hint}</p>
+    <header className="mb-6 flex items-start gap-3">
+      {/* 页头图标与侧栏项同色同形 —— 侧栏选中项与内容页头是同一件事的
+          两个位置，色相不一致就会让人怀疑点错了页。 */}
+      <span className={cx("cat-icon cat-icon--md mt-0.5", toneClass(def.tone))}>
+        <Icon className="icon-lg" />
+      </span>
+      <div className="min-w-0">
+        <h2 className="text-[length:var(--text-title)] font-semibold text-[var(--color-text-primary)]">{def.label}</h2>
+        <p className="mt-1 text-[length:var(--text-ui)] text-[var(--color-text-muted)]">{def.hint}</p>
+      </div>
     </header>
   );
 }

@@ -64,9 +64,14 @@ export function SkillCard({ skill, catLabel, onToggle }: {
 
   return (
     <>
-      <div className="group rounded-xl bg-bg-card hover:bg-bg-card-hover transition-colors">
+      <div className="m-lift group rounded-xl bg-bg-card hover:bg-bg-card-hover">
         <div className="flex items-center gap-3 px-3 py-2.5">
-          <ToolCardIcon onClick={openContent} title="查看技能内容" aria-label="查看技能内容">
+          <ToolCardIcon
+            onClick={openContent}
+            title="查看技能内容"
+            aria-label="查看技能内容"
+            category={skill.category}
+          >
             <Wand2 className="icon-md" />
           </ToolCardIcon>
           <div className="min-w-0 flex-1 cursor-pointer" onClick={openContent}>
@@ -140,7 +145,7 @@ export function SkillContentModal({ skill, catLabel, content, loading, onClose }
           {/* 图标与列表卡共用 ToolCardIcon —— 此前这里用的是 .modal-icon-info
               的灰色块，与卡片里的主色图标对不上，"图标没有颜色"。那个组件存在的
               全部意义就是让四页图标必然一致，弹窗没走它就又漂了一处。 */}
-          <ToolCardIcon>
+          <ToolCardIcon category={skill.category}>
             <Sparkles className="icon-lg" />
           </ToolCardIcon>
           <span className="flex min-w-0 flex-col gap-0.5">

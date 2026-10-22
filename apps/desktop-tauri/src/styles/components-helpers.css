@@ -2,11 +2,18 @@
    § 19.  ANIMATION HELPERS
    ════════════════════════════════════════════════════════════════════ */
 
+/* 2026-10-23：位移从 2px 提到 6px、时长从 fast(120ms) 提到 base(160ms)。
+   2px 的位移在 14px 正文里根本感知不到 —— 「有动画但看不出来」正是
+   「界面死板」的来源之一。6px + 160ms 是能看出「这一条是新来的」的
+   最小值，再大就会在流式输出里显得晃。
+
+   注意：同一个 keyframe 被 25 处复用（消息气泡、工具卡、列表项），
+   改这里等于全站入场统一 —— 这是有意的，不要为单个组件另开一套。 */
 @keyframes h-fade-up {
-  from { opacity: 0; transform: translateY(2px); }
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.h-enter { animation: h-fade-up var(--duration-fast) var(--ease-out) both; }
+.h-enter { animation: h-fade-up var(--duration-base) var(--ease-out) both; }
 
 @keyframes h-modal-in {
   from { opacity: 0; transform: scale(0.96) translateY(8px); }

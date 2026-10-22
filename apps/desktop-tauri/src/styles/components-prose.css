@@ -16,8 +16,13 @@
   text-wrap: pretty;
   line-break: strict;
 }
-.prose p { margin: 0 0 0.95em; }
+/* 段间距从 0.95em 提到 1.05em：LLM 输出的特点是段落多、标题多，
+   段与段之间只差 0.95em 时，长回复会糊成一整块灰（用户描述「像日志」）。
+   1.05em + 标题上方的 1.7em 形成「段内紧、段间松、节间更松」三级节奏。 */
+.prose p { margin: 0 0 1.05em; }
 .prose p:last-child { margin-bottom: 0; }
+/* 段落首行不缩进（中文网页排版惯例），靠段间距分界。 */
+.prose p + p { margin-top: -0.15em; }
 /* 2026-09-30：540 是为可变字体设的中间档，Microsoft YaHei UI / Segoe UI
    非可变时会跳档，渲染成忽粗忽细。归到 500/600 两档 + 中文不加负字距。 */
 .prose strong { color: var(--color-text-primary); font-weight: 600; letter-spacing: 0; }
@@ -35,17 +40,42 @@
   text-decoration: underline;
   border-bottom-color: transparent;
 }
-/* 标题：与正文拉开一档尺度。此前 h2 只比正文大 4px，层级全靠字重撑着。 */
+/* 标题：三档尺度 + 三级间距，让长回复能被「扫」而不是被「读」。
+   之前 h1–h4 共用一套 margin，标题与标题之间、标题与段落之间距离相同，
+   层级只能靠字号 —— 而字号只有 16/14 两档（差 2px），等于没有层级。
+
+   现在的梯度（字号只取七档里的三档，不开新档位）：
+     h1 20px（--text-display）· 600 · 满墨 · 上 1.9em
+     h2 16px（--text-title）  · 600 · 满墨 · 上 1.6em
+     h3 14px（--text-body）   · 600 · 满墨 · 上 1.35em
+     h4 14px                 · 500 · 次级墨 · 上 1.15em
+   h3 与正文同号，靠 600 字重区分；h4 再降一档字重与墨色。三层标题在
+   字号上只差两档，但**字重 + 墨色 + 间距**三条通道同时拉开，层次足够。
+
+   为什么不开 17px / 15px 这样的中间档：全站字号只有七档，正文之外的
+   任意值会让「一屏内字号 ≤3 档」这条纪律失效，且 check-theme-tokens
+   的 css-type-debt 会持续报警。 */
 .prose h1,
 .prose h2,
 .prose h3,
-.prose h4 {
-  color: var(--color-text-primary);
-  font-weight: 600;
-  margin: 1.6em 0 0.5em;
+.prose h4,
+.prose h5,
+.prose h6 {
   line-height: var(--leading-heading);
   letter-spacing: 0;
+  /* 标题不被段间距「吃掉」：下边距恒小于上边距，标题必须属于它下面那段。 */
+  margin: 1.6em 0 0.55em;
 }
+.prose h1 { font-size: var(--text-display); font-weight: 600; color: var(--color-text-primary); margin-top: 1.9em; }
+.prose h2 { font-size: var(--text-title); font-weight: 600; color: var(--color-text-primary); margin-top: 1.6em; }
+.prose h3,
+.prose h5 { font-size: var(--text-body); font-weight: 600; color: var(--color-text-primary); margin-top: 1.35em; }
+.prose h4,
+.prose h6 { font-size: var(--text-body); font-weight: 500; color: var(--color-text-secondary); margin-top: 1.15em; }
+/* 标题紧跟标题（LLM 爱写「## 标题 \n ### 子标题」）时收紧，不要堆成楼梯。 */
+.prose h1 + h2,
+.prose h2 + h3,
+.prose h3 + h4 { margin-top: 0.5em; }
 .prose > :first-child { margin-top: 0; }
 
 /* Mermaid 图表块 */
@@ -127,6 +157,20 @@
 .prose .md-diff-line--hunk { color: var(--color-text-secondary); }
 .prose .md-diff-line--meta { color: var(--color-text-faint); }
 
+/* 代码块外壳（components/MarkdownBody.tsx 的 CodeBlock）—— 三层底色承担
+   全部层次，无描边：
+     纸面 --color-bg-primary（最亮）
+       └ 头部 --color-bg-code-header（中）
+       └ 代码体 --color-bg-code（最暗，代码区压在底部）
+   头/体之间也不用分隔线，靠这一档底色差就能看出「上面是语言名、下面是代码」。 */
+.md-codeblock {
+  background: var(--color-bg-code);
+}
+.md-codeblock__head {
+  background: var(--color-bg-code-header);
+  color: var(--color-text-muted);
+}
+
 /* 小节包装（复制本节 / 折叠）：按钮只在 hover 或键盘聚焦时出现，
    不常驻、不抢标题的层级。 */
 .prose .md-section,
@@ -207,17 +251,19 @@
 
 /* 引用：中文斜体是浏览器合成倾斜（歪且脏），改为中性色 + 实底。
    2026-10-21：原来的 `border-left: 3px solid` 命中仓库自己的头号反模式
-   （impeccable-design.md:36「side-tab：卡片单侧 3px 实色彩条」）。改为
-   「淡底 + 左侧 2px 中性轨 + 缩进」：轨是中性色不是语义色，宽度 2px
-   不是 3px，且层次由底色承担 —— 引用块不再像一张贴了色条的卡片。 */
+   （impeccable-design.md:36「side-tab：卡片单侧 3px 实色彩条」），先降到
+   2px 中性轨。
+   2026-10-23：扁平化收口 —— **轨也去掉**。引用与正文的区别交给三件事：
+   ① 底色（淡一档的案面）② 左内缩进（比 padding 多 4px，形成起排差）
+   ③ 墨色降一档。三者叠加在无描边界面上足够可读，且不再出现任何竖线。 */
 .prose blockquote {
-  padding: 0.55em 0.85em 0.55em 1em;
-  margin: 0.8em 0;
+  padding: 0.6em 0.9em 0.6em 1.15em;
+  margin: 0.9em 0;
   color: var(--color-text-secondary);
   font-style: normal;
   background: var(--color-bg-secondary);
-  border-radius: var(--radius-sm);
-  border-left: 2px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  border-left: 0;
 }
 .prose blockquote p:last-child { margin-bottom: 0; }
 

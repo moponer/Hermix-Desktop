@@ -109,12 +109,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
           <button
             onClick={() => setCatFilter(null)}
             aria-pressed={catFilter === null}
-            className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] font-semibold transition-colors ${
-              catFilter === null
-                ? "text-[var(--color-btn-primary-text)]"
-                : "bg-[color-mix(in_srgb,var(--color-text-primary)_5%,transparent)] text-text-muted hover:text-text-primary"
-            }`}
-            style={catFilter === null ? { background: "var(--color-btn-primary-bg)" } : undefined}
+            className={`chip-flat${catFilter === null ? " chip-flat--on" : ""}`}
           >
             {ALL} <span className="ml-0.5 tabular-nums opacity-65">{byQuery.length}</span>
           </button>
@@ -123,12 +118,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
               key={c}
               onClick={() => setCatFilter(catFilter === c ? null : c)}
               aria-pressed={catFilter === c}
-              className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] font-semibold transition-colors ${
-                catFilter === c
-                  ? "text-[var(--color-btn-primary-text)]"
-                  : "bg-[color-mix(in_srgb,var(--color-text-primary)_5%,transparent)] text-text-muted hover:text-text-primary"
-              }`}
-              style={catFilter === c ? { background: "var(--color-btn-primary-bg)" } : undefined}
+              className={`chip-flat${catFilter === c ? " chip-flat--on" : ""}`}
             >
               {catLabel(c)} <span className="ml-0.5 tabular-nums opacity-65">{countsByCat[c] ?? 0}</span>
             </button>

@@ -50,6 +50,32 @@
 .menubar-kbd { color: var(--text-muted); font-size: 11px; font-family: var(--font-mono); }
 .menubar-sep { height: 1px; margin: 5px 4px; background: var(--border-subtle); }
 
+/* ─── 菜单项图标按菜单上色（2026-10-23）───────────────────────────
+   此前所有菜单项图标都是 --text-muted 一档灰，展开一列后图标不参与辨识，
+   只能逐行读文字。按顶层菜单给一组色：文件=绿（文档）、视图=蓝（外观）、
+   工具=琥珀（动作）、帮助=无彩灰。
+
+   用 data-menu 属性选择器而不是在 tsx 里传 className：菜单数据是纯数据
+   （App.tsx 的 menus 数组），把视觉类混进数据会让「菜单项有什么」和
+   「菜单项长什么样」两件事绑死。 */
+.menubar-slot[data-menu="file"] .menubar-icon { color: var(--color-tone-green); }
+.menubar-slot[data-menu="view"] .menubar-icon { color: var(--color-tone-blue); }
+.menubar-slot[data-menu="tools"] .menubar-icon { color: var(--color-tone-amber); }
+.menubar-slot[data-menu="help"] .menubar-icon { color: var(--color-tone-slate); }
+/* 危险项（退出）单独走语义红：它是「会丢东西」的动作，不该被归类色稀释。 */
+.menubar-item.is-danger .menubar-icon { color: var(--danger); }
+
+/* 菜单弹出加一个入场：从上方轻微下移 + 淡入（只动 transform/opacity）。
+   此前是瞬间出现，在 460px 高的长菜单上会显得"闪一下"。 */
+.menubar-pop { animation: menubar-pop-in 120ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes menubar-pop-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .menubar-pop { animation: none; }
+}
+
 /* ─── 弹窗外壳 ────────────────────────────────────────────────────── */
 .syspanel-overlay {
   position: fixed; inset: 0; z-index: 200;
@@ -479,3 +505,55 @@
 }
 .pane-banner svg { color: var(--warning, #b45309); flex: none; }
 .pane-banner .pane-btn { margin-left: auto; flex: none; }
+
+/* ─── 文件索引页 ──────────────────────────────────────────────────────
+   层次靠底色差 + 阴影 + 间距，不描边（与全局风格一致）。 */
+.idx-cards {
+  flex: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
+}
+.idx-card {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 9px 11px; border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+.idx-card-label { font-size: 11px; color: var(--text-muted); }
+.idx-card-value {
+  font-size: 15px; font-weight: 600; color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+.idx-list {
+  flex: 1; min-height: 0; overflow: auto;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.idx-row {
+  display: grid;
+  grid-template-columns: 44px 88px 84px minmax(150px, 1.2fr) minmax(120px, 1fr) 78px;
+  gap: 10px; align-items: center;
+  padding: 8px 11px; border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  font-size: 12px; color: var(--text-secondary);
+}
+.idx-vol { font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); }
+.idx-meta { font-family: var(--font-mono); color: var(--text-secondary); }
+.idx-phase {
+  justify-self: end; padding: 2px 8px; border-radius: 999px;
+  background: var(--bg-tertiary); color: var(--text-secondary);
+  font-size: 11px; font-family: var(--font-sans);
+}
+.idx-phase.is-ready { background: var(--bg-accent-soft); color: var(--accent); }
+.idx-phase.is-failed { background: rgba(199, 68, 54, 0.12); color: var(--danger); }
+.idx-phase.is-enumerating,
+.idx-phase.is-readingSizes,
+.idx-phase.is-writing,
+.idx-phase.is-saving { background: var(--bg-accent-soft); color: var(--accent); }
+.idx-progress {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: 8px;
+}
+.idx-progress .meter { flex: 1; height: 4px; }
+.idx-progress-text {
+  font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);
+  white-space: nowrap;
+}

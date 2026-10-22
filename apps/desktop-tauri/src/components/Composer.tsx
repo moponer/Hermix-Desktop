@@ -283,7 +283,7 @@ export function Composer(p: ComposerProps) {
       {p.messageQueue && p.messageQueue.length > 0 && (() => {
         const failedCount = p.messageQueue!.filter((m) => m.status === "failed").length;
         return (
-          <div className="px-4 pt-2 pb-1.5 border-t border-border-subtle">
+          <div className="px-4 pt-2 pb-1.5">
             {/* 默认折叠成一行：队列常驻展开会和输入区争夺垂直空间。 */}
             <div className="flex items-center justify-between">
               <button
@@ -534,7 +534,9 @@ export function Composer(p: ComposerProps) {
                   const showThinkingToggle = p.supportsReasoning === true;
                   const selectedInfo = p.models.find((m) => m.id === currentModelId)?.info;
                   return (
-                    <div className="mt-1 border-t border-border-primary px-2.5 py-1.5">
+                    /* 无描边：这一行改成淡染底（--color-bg-tertiary）的独立块，
+                       靠面差而不是边线与上面的列表分开。 */
+                    <div className="mt-1 rounded-md bg-bg-tertiary px-2.5 py-1.5">
                       <div className="flex items-center gap-3 text-[length:var(--text-meta)]">
                         <span className="shrink-0 whitespace-nowrap text-text-muted">
                           上下文 <span className="font-mono text-text-secondary">{ctxLabel}</span>
@@ -569,7 +571,7 @@ export function Composer(p: ComposerProps) {
                 })()}
 
                 {/* 底部常驻操作：固定在列表下方，不随列表滚动。 */}
-                <div className="mt-1 border-t border-border-primary pt-1">
+                <div className="mt-1.5 pt-0.5">
                   <button
                     type="button"
                     className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary"
@@ -723,8 +725,9 @@ export function Composer(p: ComposerProps) {
                 </button>
                 {p.workspaces.length > 0 && (
                   <>
-                    <div className="my-1 border-t border-border-primary" />
-                    <div className="px-2.5 py-1 text-meta text-text-secondary font-medium">工作目录</div>
+                    {/* 无描边：紧随其后的「工作目录」小节标题已经承担了分界
+                        作用，再画一条线是同一件事说两遍。 */}
+                    <div className="mt-1.5 px-2.5 py-1 text-meta text-text-secondary font-medium">工作目录</div>
                     <PopoverBody maxHeight="max-h-48">
                       {p.workspaces.map((ws) => (
                         <button
@@ -744,7 +747,7 @@ export function Composer(p: ComposerProps) {
                         </button>
                       ))}
                     </PopoverBody>
-                    <div className="border-t border-border-primary" />
+                    <div className="h-1" />
                     <button
                       onClick={() => { p.onSelectWorkspace(null); setProjOpen(false); }}
                       className="flex items-center justify-center w-full px-2.5 py-2 text-tiny text-text-muted hover:bg-bg-hover rounded-lg transition-colors"

@@ -26,6 +26,8 @@ import type { CatalogEntry } from "../../api/types";
 import { toastError, toastSuccess } from "../../hooks/useToast";
 import { Button, ConfirmDialog, Modal } from "../ui";
 import { LOADING } from "../strings";
+import { ToolCardIcon } from "./ToolCardIcon";
+import type { IconTone } from "../../lib/categoryTone";
 
 const CATEGORY_ICON: Record<string, React.ReactNode> = {
   办公: <Blocks className="icon-md" />,
@@ -35,6 +37,19 @@ const CATEGORY_ICON: Record<string, React.ReactNode> = {
   数据: <Database className="icon-md" />,
   通用: <Package className="icon-md" />,
   其它: <Terminal className="icon-md" />,
+};
+
+/** 目录类目 → 图标色调。此前这一页走「实色主按钮块 + 主按钮阴影」，
+ *  与插件 / 技能 / 工具集三页的淡染块对不上（一处已知漂移），且实色块在
+ *  网格里堆叠会发脏。现在与那三页共用 ToolCardIcon，只多带一个色调。 */
+const CATEGORY_TONE: Record<string, IconTone> = {
+  办公: "green",
+  开发: "violet",
+  检索: "cyan",
+  通讯: "rose",
+  数据: "cyan",
+  通用: "slate",
+  其它: "slate",
 };
 
 type EnvMap = Record<string, string>;
@@ -164,12 +179,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
           <button
             onClick={() => setCategory(null)}
             aria-pressed={category === null}
-            className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] font-semibold transition-colors ${
-              category === null
-                ? "text-[var(--color-btn-primary-text)]"
-                : "bg-bg-tertiary text-text-muted hover:text-text-primary"
-            }`}
-            style={category === null ? { background: "var(--color-btn-primary-bg)" } : undefined}
+            className={`chip-flat${category === null ? " chip-flat--on" : ""}`}
           >
             全部
           </button>
@@ -178,12 +188,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
               key={c}
               onClick={() => setCategory(category === c ? null : c)}
               aria-pressed={category === c}
-              className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] font-semibold transition-colors ${
-                category === c
-                  ? "text-[var(--color-btn-primary-text)]"
-                  : "bg-bg-tertiary text-text-muted hover:text-text-primary"
-              }`}
-              style={category === c ? { background: "var(--color-btn-primary-bg)" } : undefined}
+              className={`chip-flat${category === c ? " chip-flat--on" : ""}`}
             >
               {c}
             </button>
@@ -204,17 +209,11 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
               }`}
             >
               <div className="flex items-start gap-2.5">
-                {/* 图标块走主按钮色（与插件/技能/工具集四页一致），不再用灰色线性图标。 */}
-                <span
-                  className="mt-0.5 shrink-0 flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)]"
-                  style={{
-                    background: "var(--color-btn-primary-bg)",
-                    color: "var(--color-btn-primary-text)",
-                    boxShadow: "var(--shadow-button-primary)",
-                  }}
-                >
+                {/* 与插件 / 技能 / 工具集三页共用 ToolCardIcon（此前这里自写一套
+                    实色块 + 阴影，是四页里唯一漂出去的一处）。 */}
+                <ToolCardIcon tone={CATEGORY_TONE[item.category] ?? "slate"}>
                   {CATEGORY_ICON[item.category] ?? CATEGORY_ICON["其它"]}
-                </span>
+                </ToolCardIcon>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="text-[length:var(--text-ui)] font-medium text-text-primary truncate">

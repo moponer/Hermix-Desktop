@@ -19,6 +19,11 @@
 @import "./inline-thinking-dot.css";
 @import "./code-view.css";
 @import "@hermix/preview/styles/preview-doc.css";
+/* 分类彩色图标住在共享包：查看器是独立进程且没有 Tailwind，
+   两个 app 共用一份才不会分叉。 */
+@import "@hermix/preview/styles/icon-tone.css";
+@import "./flat-ui.css";
+@import "./motion.css";
 @import "./utilities.css";
 
 /* Tailwind dark: 变体已废除 —— .dark 类不再挂载（useTheme 只设 data-theme），

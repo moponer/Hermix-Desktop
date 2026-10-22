@@ -125,7 +125,10 @@ export function MenuBar({ menus, onCommand, onOpenChange }: MenuBarProps) {
       {menus.map((menu) => {
         const expanded = open === menu.id;
         return (
-          <div className="menubar-slot" key={menu.id}>
+          /* data-menu 供 CSS 按菜单给图标上色（见 styles.css 的
+             .menubar-slot[data-menu=…] 规则）—— 菜单项图标此前全是灰的，
+             在展开的那一列里完全不参与辨识。 */
+          <div className="menubar-slot" key={menu.id} data-menu={menu.id}>
             <button
               type="button"
               role="menuitem"

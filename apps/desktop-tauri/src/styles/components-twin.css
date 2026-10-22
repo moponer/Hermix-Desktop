@@ -873,3 +873,243 @@
     border-bottom: 1px solid var(--twin-line);
   }
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   扁平化收口 + 层次重排（2026-10-23）
+   ──────────────────────────────────────────────────────────────────
+   这一页此前是「仪表盘语言」：1px 描边 + 发丝线 + radius 2px。放在
+   全站统一的扁平体系里，它有三个具体问题：
+
+   1. **描边密度最高。** 栏线、卡线、按钮线、chip 线、输入口线叠在一起，
+      一屏里有五种框 —— 正是「又脏又乱」的观感来源。
+   2. **层次靠线不靠面。** 卡片与栏底几乎同色，只能靠那圈线证明自己存在；
+      去掉线之后必须有**面差**顶上，否则整页会塌成一块。
+   3. **图标全灰。** 栏头、卡片、在场位都没有图标，信息只能逐行读。
+
+   修法按顺序：先给面差（三级底色），再撤线，再补彩色图标，最后加动效。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 三级面：纸 / 卡 / 深一档 ──────────────────────────────────────
+   画布（纸）→ 栏内卡片（--twin-panel）→ 选中 / 悬停（panel-3）。
+   相邻差 ≥4% 明度，去掉描边后仍能一眼看出「这是一张卡」。 */
+.twin-view {
+  --twin-panel: var(--color-bg-card);
+  --twin-panel-2: var(--color-bg-secondary);
+  --twin-panel-3: var(--color-bg-tertiary);
+}
+
+/* ── 撤线：栏线 / 卡线 / 按钮线 / chip 线 ─────────────────────────
+   栏与栏之间改用**画布缝隙**：栏体两侧各留 10px，缝隙露出的是画布色，
+   比一条 1px 灰线更清楚地表达「这是两栏」。 */
+.twin-col {
+  border-right: 0;
+  padding: 0 10px;
+}
+.twin-col__head {
+  border-bottom: 0;
+  padding: 12px 4px 8px;
+}
+/* 旧版用一个 3×3 刻度方块 ::before 当装饰。现在栏头有真图标（见
+   TwinView 的 ColHead），那个伪元素就是纯噪音 —— 关掉。 */
+.twin-col__title::before { display: none; }
+.twin-col__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 卡片 / 任务卡 / 待定夺卡：统一到「无描边 + 面差 + 圆角」 */
+.twin-card,
+.twin-task,
+.twin-ask,
+.twin-pending {
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--twin-panel);
+  padding: 10px 12px;
+  box-shadow: var(--shadow-card);
+}
+.twin-card:hover,
+.twin-task:hover {
+  background: var(--twin-panel-3);
+  box-shadow: var(--shadow-paper);
+}
+/* 卡内节奏：标题与元信息之间差一档，标题用满墨 */
+.twin-card__title {
+  font-size: var(--text-ui);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: var(--leading-ui);
+}
+.twin-card__top { margin-bottom: 6px; }
+.twin-card__source {
+  font-size: var(--text-meta);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+/* 任务卡：名称是主角（满墨 + 500），进度是读数（等宽 + 强调色） */
+.twin-task__name {
+  font-size: var(--text-ui);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.twin-task__pct {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-accent);
+}
+.twin-task__sub {
+  color: var(--color-text-secondary);
+  font-size: var(--text-meta);
+}
+.twin-task__sub code {
+  background: var(--twin-panel-3);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+}
+
+/* 进度轨：2px 高、无描边，填充用 accent。轨底比卡片再深一档，
+   这样「轨道」和「卡片」在没线的情况下也能分开。 */
+.twin-bar {
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--twin-panel-3);
+  overflow: hidden;
+}
+.twin-bar__fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  transform-origin: left center;
+}
+
+/* 按钮 / chip / 权限钮：全部去描边，改底色 + 墨色差 */
+.twin-btn,
+.twin-chip,
+.twin-perm {
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--twin-panel-3);
+  color: var(--color-text-secondary);
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+.twin-btn:hover,
+.twin-chip:hover {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+}
+.twin-btn:active,
+.twin-chip:active { transform: scale(0.98); }
+.twin-btn--primary {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+.twin-btn--primary:hover {
+  background: var(--color-accent-hover);
+  color: var(--color-on-accent);
+}
+.twin-chip[aria-pressed="true"] {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+.twin-perm[data-level="full"] {
+  background: var(--color-accent-on-text);
+  color: var(--color-accent);
+}
+.twin-send {
+  border: 0;
+  border-radius: var(--radius-md);
+}
+
+/* 标签 chip：淡染底 + 语义文字安全档（不是原始语义色 —— 12px 小字
+   用原始语义色会掉到 4.5:1 以下） */
+.twin-tag {
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--twin-panel-3);
+  color: var(--color-text-secondary);
+  padding: 1px 8px;
+}
+
+/* 输入口：外壳去描边，输入行是一块比外壳亮的面 —— 焦点时提亮一档 */
+.twin-dock {
+  border-top: 0;
+  background: var(--color-bg-primary);
+  padding: 12px 20px 14px;
+}
+.twin-dock__row {
+  border: 0;
+  border-radius: var(--radius-2xl);
+  background: var(--twin-panel);
+  box-shadow: var(--shadow-paper);
+  padding: 4px 6px 4px 14px;
+}
+.twin-dock__row:focus-within {
+  background: var(--color-bg-primary);
+  box-shadow: var(--shadow-focus-flat), var(--shadow-pop);
+}
+.twin-dock__hint {
+  color: var(--color-text-faint);
+  font-size: var(--text-meta);
+}
+.twin-dock__hint kbd {
+  border: 0;
+  background: var(--twin-panel-3);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  padding: 0 5px;
+}
+
+/* 在场位：形象 + 名字（满墨 600）+ 姿态（次级墨）+ 核对时间（等宽微字） */
+.twin-presence {
+  border-bottom: 0;
+  background: var(--twin-panel-2);
+  border-radius: var(--radius-xl);
+  margin: 0 14px 12px;
+  padding: 12px 16px;
+}
+.twin-presence__name {
+  font-size: var(--text-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  letter-spacing: 0;
+}
+.twin-presence__line {
+  font-size: var(--text-ui);
+  color: var(--color-text-secondary);
+}
+.twin-presence__checked {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+}
+
+/* ── 动效 ─────────────────────────────────────────────────────────
+   三处，都是一次性入场（不是装饰性循环）：
+     · 栏内卡片错峰上浮（m-stagger）
+     · 在场位形象已在 AliCharacter 里自带动效，这里不重复
+     · 运行中的状态点呼吸（m-breathe）—— 这是**状态**不是装饰：
+       静止的圆点无法表达「还在跑」。 */
+.twin-col__body { animation: none; }
+.twin-col__body > * {
+  animation: m-rise var(--duration-base) var(--ease-out) both;
+}
+.twin-col__body > *:nth-child(2) { animation-delay: 45ms; }
+.twin-col__body > *:nth-child(3) { animation-delay: 90ms; }
+.twin-col__body > *:nth-child(4) { animation-delay: 135ms; }
+.twin-col__body > *:nth-child(5) { animation-delay: 180ms; }
+.twin-dot:not(.twin-dot--idle):not(.twin-dot--warn):not(.twin-dot--error) {
+  animation: m-breathe 1.6s var(--ease-out) infinite;
+}
+
+/* 栏体滚动区与栏头之间不要硬切，留一点呼吸 */
+.twin-col__body { padding: 4px 4px 16px; gap: 10px; }

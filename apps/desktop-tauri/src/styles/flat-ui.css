@@ -1,0 +1,126 @@
+/* ════════════════════════════════════════════════════════════════════
+   flat-ui.css — 扁平控件层（btn-flat / chip-flat / row-flat）
+   ──────────────────────────────────────────────────────────────────
+   2026-10-23 建立，直接回答「禁止内联样式、硬编码的组件或样式」。
+
+   此前有一批按钮把配色**写死在 JSX 里**：
+     style={{ background: "var(--color-btn-primary-bg)",
+              color:      "var(--color-btn-primary-text)" }}
+   同一对值在 agents / 向导 / 设置里重复了 10 余次。问题不是重复本身，
+   而是：
+     1. 改主按钮配色要改 10 个文件，改漏一处就是两个产品；
+     2. hover 态无处可放 —— 内联样式没有 :hover，这些按钮按下和悬停
+        完全没有反馈（这是「界面死板」最具体的一处）；
+     3. 圆角 / 高度 / 字重在每个调用点各自写一遍，同屏出现 3 种按钮。
+
+   本文件把它们收成三个类族。纪律：
+     · 颜色只引 --color-btn-* / --color-bg-* 令牌，不写字面值；
+     · 高度走 --control-h-* 三档，不写裸 px；
+     · hover / active 一律有反馈，缓动走 --ease-out。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 按钮 ────────────────────────────────────────────────────────── */
+.btn-flat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--control-h-md);
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-ui);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--leading-ui);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+.btn-flat:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 按下只「缩」不「弹」：overshoot 在工具类界面里显得廉价。 */
+.btn-flat:active:not(:disabled) { transform: scale(0.985); }
+
+.btn-flat--primary {
+  background: var(--color-btn-primary-bg);
+  color: var(--color-btn-primary-text);
+}
+.btn-flat--primary:hover:not(:disabled) { background: var(--color-btn-primary-hover); }
+
+.btn-flat--secondary {
+  background: var(--color-btn-secondary-bg);
+  color: var(--color-btn-secondary-text);
+}
+.btn-flat--secondary:hover:not(:disabled) { background: var(--color-btn-secondary-hover); }
+
+.btn-flat--ghost {
+  background: var(--color-btn-ghost-bg);
+  color: var(--color-btn-ghost-text);
+}
+.btn-flat--ghost:hover:not(:disabled) { background: var(--color-btn-ghost-hover); }
+
+/* 小号：密集表单与卡片内操作（高 24 = --control-h-sm） */
+.btn-flat--sm { height: var(--control-h-sm); padding: 0 10px; font-size: var(--text-meta); }
+
+/* ── 药丸 / 过滤片 ────────────────────────────────────────────────
+   用于「全部 / 已启用 / 未启用」这类筛选组。选中态用**实底主色**，
+   未选中用淡底 —— 两者差一档明度 + 一个色相，扫视即可分辨。 */
+.chip-flat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--control-h-sm);
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.chip-flat:hover { background: var(--color-bg-active); color: var(--color-text-primary); }
+.chip-flat--on,
+.chip-flat[aria-pressed="true"] {
+  background: var(--color-btn-primary-bg);
+  color: var(--color-btn-primary-text);
+}
+.chip-flat--on:hover { background: var(--color-btn-primary-hover); }
+
+/* ── 列表行（无描边、hover 靠底色）───────────────────────────────── */
+.row-flat {
+  border: 0;
+  border-radius: var(--radius-lg);
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+.row-flat:hover { background: var(--color-bg-hover); }
+.row-flat--on { background: var(--color-bg-active); }
+
+/* ── 面板（卡片）：无描边，层次靠面差 + 极淡投影 ────────────────── */
+.panel-flat {
+  border: 0;
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-card);
+}
+
+/* ── 设置内容区 ────────────────────────────────────────────────────
+   两条职责合一：
+     ① 把 --color-bg-card 重写成 elevated（子页面里的 bg-card 自动变白卡，
+        无需逐页改类名；此前这是写在 tsx 的 style 属性里的）；
+     ② 切页时整块重挂做一次淡入（见 SettingsShell 的 key={current.id}）。
+   放进 CSS 而不是内联样式，是因为它同时是「主题覆盖」和「动效」两件事，
+   内联样式表达不了动画。 */
+.settings-page-fade {
+  --color-bg-card: var(--color-bg-elevated);
+  animation: m-fade var(--duration-base) var(--ease-out) both;
+}

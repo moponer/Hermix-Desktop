@@ -156,8 +156,9 @@ export function VoiceTab() {
           </Button>
           {msg && (
             <span
-              className="text-sm"
-              style={{ color: msg.ok ? "var(--color-success)" : "var(--color-error)" }}
+              /* 文字用语义四色的**文字安全档**（--color-text-*），不是原始
+                 语义色 —— 原始档是给图标和填充用的，作小字会掉到 4.5:1 以下。 */
+              className={`text-sm ${msg.ok ? "text-text-success" : "text-text-error"}`}
             >
               {msg.text}
             </span>

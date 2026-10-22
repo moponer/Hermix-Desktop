@@ -1,38 +1,46 @@
 import type { ReactNode } from "react";
 
+import { toneClass, toneForCategory, type IconTone } from "../../lib/categoryTone";
+
 /**
  * 工具类列表卡的图标色块（插件 / 技能 / 工具集 / MCP 四页共用）。
  *
  * 抽出来的唯一目的是让四页**必然**一致：改一次，四处同时生效，不会再漂移。
- * 早先四页各写一遍 `bg-bg-tertiary … text-text-secondary`，结果图标全是灰的，
- * 两档灰压在一起不起视觉锚点作用——「没有层次、图标没有颜色」说的正是这里。
  *
- * ## 为什么只有一种色调（2026-10-05）
+ * ## 为什么从「单一主色」改成「按类目上色」（2026-10-23）
  *
- * 本组件此前有 accent / info / success / warning 四档语义色，由 `toneForCategory`
- * 按「MCP / 技能 / 文件」分派。**已删除**，改为统一主色，理由三条：
+ * 2026-10-05 曾把四档语义色删掉、统一成主色，当时的三条理由里，前两条
+ * 今天依然成立、且必须继续遵守：
  *
- * 1. **色相在项目里是受管控的。** themes/dark.css 把 Tailwind 原生色槽全部
- *    重定向到语义色（`red-400`→`--color-error`、`emerald-400`→`--color-success`
- *    …），所谓「给每个分类发一个颜色」在项目体系里没有立足点。
- * 2. **四档语义色与分类不对应。** `toneForCategory` 按分类名匹配
- *    「mcp / 技能 / file」，但同一个分类在不同页面含义会变；而 info/success/
- *    warning 在本项目里已经被状态语义占用（安全扫描结果、启停状态），
- *    再拿来当分类色会造成语义串台。
- * 3. **分类辨识靠位置不靠颜色。** 三个 tab 各自只展示一个维度，分类由分组
- *    标题承担；卡片颜色若按分类变化，只会在同一屏引入无意义差异。
+ *   1. **语义四色不能当分类色用。** info/success/warning 在本项目里已经被
+ *      状态语义占用（安全扫描结果、启停状态），拿去做分类会语义串台。
+ *   2. **色相必须走 token。** tsx 里写字面色值会被 check-design-guard 拦下，
+ *      且换主题时不跟随。
  *
- * 统一到主按钮那一对 token 后，图标色 = 全站主按钮色，亮色松墨绿、夜墨青绿，
- * 天然与主题一致，不需要在此处做任何主题分支。
+ * 但第 3 条「分类辨识靠位置不靠颜色」在四页共用网格的场景下不成立：
+ * 插件页里 MCP / Tools 两类卡片是**混排**的，技能页里 7 个分类也是混排的，
+ * 位置不承载分类信息 —— 于是所有图标都是同一个绿，色相通道完全闲置。
+ *
+ * 解法是**新增一套与语义四色物理隔离的身份色**（--color-tone-*，8 档），
+ * 只用于图标。它不与状态语义抢名字，也不参与文字着色，两条旧纪律都保住了。
+ *
+ * 底色一律 14% 淡染，不用实色：一格格实心色块在网格里堆叠会发脏、显廉价
+ * （这是 2026-10-05 就已经确认过的结论，不要倒退回去）。
  */
 export function ToolCardIcon({
   children,
+  tone,
+  category,
   interactive = false,
   onClick,
   title,
   "aria-label": ariaLabel,
 }: {
   children: ReactNode;
+  /** 显式指定色调；不给则按 category 推导，再不给则 slate。 */
+  tone?: IconTone;
+  /** 类目名（自由文本），用于推导色调。 */
+  category?: string | null;
   /** hover 放大（卡片图标可点时的轻反馈）。 */
   interactive?: boolean;
   /** 传入则在按钮语义下渲染（图标点开即打开技能 / 详情）。 */
@@ -40,16 +48,12 @@ export function ToolCardIcon({
   title?: string;
   "aria-label"?: string;
 }) {
-  const cls = `flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-transform ${
-    onClick || interactive ? "cursor-pointer hover:scale-[1.04]" : ""
-  }`;
-  // 旧版是「实底主色 + 主按钮阴影」：一格一格的实心绿块在网格里堆叠会发"重"、
-  // 显廉价，正是"又脏又乱"的元凶之一。改为 accent-on-text 淡染底 + accent 字色，
-  // 轻、呼吸感、仍是锚点；去掉重阴影。明暗两套主题都走 color-mix，自动适配。
-  const style: React.CSSProperties = {
-    background: "var(--color-accent-on-text)",
-    color: "var(--color-accent)",
-  };
+  const resolved = tone ?? toneForCategory(category);
+  const cls = [
+    "cat-icon cat-icon--md",
+    toneClass(resolved),
+    onClick || interactive ? "m-icon-hover cursor-pointer" : "",
+  ].join(" ");
   if (onClick) {
     return (
       <button
@@ -58,14 +62,13 @@ export function ToolCardIcon({
         title={title}
         aria-label={ariaLabel}
         className={cls}
-        style={style}
       >
         {children}
       </button>
     );
   }
   return (
-    <span aria-hidden className={cls} style={style}>
+    <span aria-hidden className={cls}>
       {children}
     </span>
   );

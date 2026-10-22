@@ -337,8 +337,8 @@ function ConnectorRow({
 }) {
   const Icon = pickIconByName(server.name);
   return (
-    <div className="h-enter group flex items-start gap-3 px-3 py-2.5 rounded-xl bg-bg-card hover:bg-bg-card-hover transition-colors">
-      <ToolCardIcon>
+    <div className="h-enter m-lift group flex items-start gap-3 px-3 py-2.5 rounded-xl bg-bg-card hover:bg-bg-card-hover">
+      <ToolCardIcon category="mcp">
         <Icon className="icon-lg" />
       </ToolCardIcon>
       <div className="min-w-0 flex-1">

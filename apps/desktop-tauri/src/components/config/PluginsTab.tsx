@@ -73,6 +73,7 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
                 name={plugin.name}
                 description={plugin.description}
                 badge={plugin.category}
+                category={plugin.category}
                 enabled={enabled}
                 saving={savingId === plugin.id}
                 disabled={loading}
@@ -96,6 +97,7 @@ export function PluginCard({
   name,
   description,
   badge,
+  category,
   enabled,
   saving,
   disabled,
@@ -108,6 +110,8 @@ export function PluginCard({
   name: string;
   description: string;
   badge: string;
+  /** 类目名，用于推导图标色调（见 lib/categoryTone）。 */
+  category?: string | null;
   enabled: boolean;
   saving: boolean;
   disabled: boolean;
@@ -126,11 +130,11 @@ export function PluginCard({
   // 反应。已删除该 prop，插件卡片与其余所有卡片走同一条实色分支。
   return (
     <div
-      className={`h-enter group flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors ${
+      className={`h-enter group flex items-center gap-3 px-3 py-2.5 rounded-xl m-lift ${
         highlight ? "bg-bg-card-hover" : "bg-bg-card hover:bg-bg-card-hover"
       }`}
     >
-      <ToolCardIcon>
+      <ToolCardIcon category={category}>
         {icon}
       </ToolCardIcon>
       <div className="min-w-0 flex-1">

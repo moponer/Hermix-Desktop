@@ -670,7 +670,7 @@ function TaskEditor({
                 className={`px-2 py-0.5 text-[length:var(--text-ui)] rounded ${
                   draft.schedule === expr
                     ? "bg-bg-active text-text-primary font-medium"
-                    : "bg-bg-secondary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                    : "bg-bg-secondary text-text-secondary hover:bg-bg-hover"
                 }`}
                 title={desc}
               >
@@ -762,10 +762,12 @@ function TaskEditor({
                     type="button"
                     onClick={() => toggleSkill(sk.name)}
                     title={sk.description}
-                    className={`px-2 py-1 text-[length:var(--text-ui)] rounded border transition-colors ${
+                    /* 无描边：选中/未选中已经由 bg-active 与 bg-secondary 两档
+                       底色区分，再加一圈边线是同一件事说两遍。 */
+                    className={`px-2 py-1 text-[length:var(--text-ui)] rounded transition-colors ${
                       selected
-                        ? "bg-bg-active text-text-primary border-border-secondary font-medium"
-                        : "bg-bg-secondary text-text-secondary border-border-primary hover:bg-bg-hover"
+                        ? "bg-bg-active text-text-primary font-medium"
+                        : "bg-bg-secondary text-text-secondary hover:bg-bg-hover"
                     }`}
                   >
                     {sk.name}

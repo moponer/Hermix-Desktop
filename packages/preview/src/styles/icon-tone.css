@@ -1,0 +1,82 @@
+/* ════════════════════════════════════════════════════════════════════
+   icon-tone.css — 分类彩色图标（cat- 前缀 · 共享层）
+   ──────────────────────────────────────────────────────────────────
+   2026-10-23 建立。放在共享包而不是某个 app 里，是因为**主程序与文件
+   查看器是两个进程、两套构建**（viewer 刻意不装 Tailwind），图标彩色化
+   若各写一份，两周内必然分叉 —— 这正是这个仓库反复出现的事故模式
+   （同一件事两个出处，改一处、另一处静默失效）。
+
+   维系成本只有一条：两侧都必须在 :root 定义下面用到的 --color-tone-*
+   8 档（主程序在 tokens.css + themes/*.css，查看器在 styles.css）。
+   var() 解析失败会让整条声明被丢弃 —— 表现是「图标突然全灰但不报错」。
+
+   为什么底色由使用点现算而不是再发一套 token：
+     底色 = 图标色 14% 混当前纸面。亮色混白、暗色混暗，一条式子两套主题
+     都成立。若把 8 档 soft 也进契约，每套主题要多维护 8 条且必然漂移。
+
+   使用：
+     <span className="cat-icon cat-icon--md cat-icon--blue"><Network /></span>
+     裸图标（不要底块）用 cat-ink--blue。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 图标色块（有底）───────────────────────────────────────────── */
+.cat-icon {
+  --cat-tone: var(--color-tone-slate);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--cat-tone) 14%, var(--color-bg-primary));
+  color: var(--cat-tone);
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+/* 三档尺寸：sm=28（行内 / 列表行）· md=36（卡片）· lg=48（页头 / 空态） */
+.cat-icon--sm { width: 28px; height: 28px; border-radius: var(--radius-sm); }
+.cat-icon--md { width: 36px; height: 36px; }
+.cat-icon--lg { width: 48px; height: 48px; border-radius: var(--radius-lg); }
+
+/* ── 裸图标（只染色，不加底）───────────────────────────────────── */
+.cat-ink { --cat-tone: var(--color-tone-slate); color: var(--cat-tone); }
+
+/* ── 8 档色相 ──────────────────────────────────────────────────── */
+.cat-icon--slate,
+.cat-ink--slate  { --cat-tone: var(--color-tone-slate); }
+.cat-icon--blue,
+.cat-ink--blue   { --cat-tone: var(--color-tone-blue); }
+.cat-icon--cyan,
+.cat-ink--cyan   { --cat-tone: var(--color-tone-cyan); }
+.cat-icon--green,
+.cat-ink--green  { --cat-tone: var(--color-tone-green); }
+.cat-icon--amber,
+.cat-ink--amber  { --cat-tone: var(--color-tone-amber); }
+.cat-icon--orange,
+.cat-ink--orange { --cat-tone: var(--color-tone-orange); }
+.cat-icon--rose,
+.cat-ink--rose   { --cat-tone: var(--color-tone-rose); }
+.cat-icon--violet,
+.cat-ink--violet { --cat-tone: var(--color-tone-violet); }
+
+/* 强调色档：给「当前主推 / 默认推荐」的选项用，与 8 档分类色不冲突
+   （accent 是全站唯一的主行动色，不表示类目）。 */
+.cat-icon--accent,
+.cat-ink--accent { --cat-tone: var(--color-accent); }
+
+/* ── 语义四色的图标档 ──────────────────────────────────────────
+   与上面 8 档「分类身份色」是**两套东西**，不要混用：
+     cat-icon--blue   = 这是「网络/连接器」类（是什么）
+     cat-icon--info   = 这是「提示/信息」状态（怎么样）
+   ChoiceCard 这类「选项带状态」的场景用后者。
+
+   它们只在图标块上出现，不参与文字着色 —— 文字另有 --color-text-* 安全档。 */
+.cat-icon--success,
+.cat-ink--success { --cat-tone: var(--color-success); }
+.cat-icon--warning,
+.cat-ink--warning { --cat-tone: var(--color-warning); }
+.cat-icon--error,
+.cat-ink--error   { --cat-tone: var(--color-error); }
+.cat-icon--info,
+.cat-ink--info    { --cat-tone: var(--color-info); }

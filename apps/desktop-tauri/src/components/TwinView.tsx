@@ -15,12 +15,15 @@
  *   - 最近会话（宿主 sessions prop）→ 新鲜情报栏的补充，标明是替代源
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Sparkles } from "lucide-react";
+import {
+  AlertTriangle, BookOpen, Brain, Clock3, ListChecks, Radio, Sparkles,
+} from "lucide-react";
 
 import * as api from "../api";
 import type { AutomationTask, Session } from "../types";
 import { PageHeader, SkeletonCard } from "./ui";
 import { AliCharacter, type AliState } from "./twin/AliCharacter";
+import { toneClass, type IconTone } from "../lib/categoryTone";
 
 interface TwinViewProps {
   /** 宿主会话表 —— 「最近活跃」用它，避免额外一次全量拉取。 */
@@ -42,6 +45,35 @@ const STATUS_TEXT: Record<string, string> = {
   failed: "上次失败",
   running: "运行中",
 };
+
+/**
+ * 栏头：图标 + 标题 + 计数。
+ *
+ * 为什么必须带图标（2026-10-23）：三栏并排时，栏与栏之间只有一条发丝线，
+ * 扫视全靠读文字。给每栏一个**按职能上色**的图标后，色相成为第一线索 ——
+ * 「蓝色是情报（外部输入）、琥珀是执行（在跑的事）、玫瑰是定夺（要你决策）」
+ * 这套对应关系在整页里保持一致。
+ */
+function ColHead({
+  icon: Icon, tone, title, meta,
+}: {
+  icon: React.ElementType;
+  tone: IconTone;
+  title: string;
+  meta?: React.ReactNode;
+}) {
+  return (
+    <div className="twin-col__head">
+      <span className="twin-col__label">
+        <span className={["cat-icon cat-icon--sm", toneClass(tone)].join(" ")}>
+          <Icon className="icon-sm" />
+        </span>
+        <span className="twin-col__title">{title}</span>
+      </span>
+      {meta != null ? <span className="twin-col__meta">{meta}</span> : null}
+    </div>
+  );
+}
 
 export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
@@ -193,22 +225,25 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
       />
 
       {/* 在场位：角色姿态与文案同源，异常/思考/在跑三种状态各自有表情 */}
+      {/* 在场位：形象 + 名字 + 当前姿态 + 上次核对时间。
+          姿态文案（presenceLine）与形象状态（aliState）同源派生，不会出现
+          「表情在笑、文案报错」。 */}
       <div className="twin-presence">
         <AliCharacter state={aliState} size={48} />
         <div className="twin-presence__text">
           <span className="twin-presence__name">阿黎</span>
           <span className="twin-presence__line">{presenceLine}</span>
         </div>
-        <span className="twin-presence__checked">{checkedText}</span>
+        <span className="twin-presence__checked">
+          <Brain className="cat-ink cat-ink--violet icon-sm" aria-hidden />
+          {checkedText}
+        </span>
       </div>
 
       <div className="twin-board">
         {/* ── 一、新鲜情报 ── */}
         <section className="twin-col">
-          <div className="twin-col__head">
-            <span className="twin-col__title">新鲜情报</span>
-            <span className="twin-col__meta">待接通</span>
-          </div>
+          <ColHead icon={Radio} tone="blue" title="新鲜情报" meta="待接通" />
           <div className="twin-col__body">
             <Pending
               title="情报源尚未接通"
@@ -219,10 +254,12 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
               ]}
             />
 
-            <div className="twin-col__head">
-              <span className="twin-col__title">最近活跃</span>
-              <span className="twin-col__meta">{recentSessions.length} 条</span>
-            </div>
+            <ColHead
+              icon={Clock3}
+              tone="cyan"
+              title="最近活跃"
+              meta={`${recentSessions.length} 条`}
+            />
             {recentSessions.length === 0 ? (
               <p className="twin-pending__desc">还没有会话记录。</p>
             ) : (
@@ -251,12 +288,12 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
 
         {/* ── 二、正在执行 ── */}
         <section className="twin-col">
-          <div className="twin-col__head">
-            <span className="twin-col__title">正在执行</span>
-            <span className="twin-col__meta">
-              {activeRuns} 跑 · {enabledTasks.length} 启用
-            </span>
-          </div>
+          <ColHead
+            icon={ListChecks}
+            tone="amber"
+            title="正在执行"
+            meta={`${activeRuns} 跑 · ${enabledTasks.length} 启用`}
+          />
           <div className="twin-col__body">
             {error ? (
               <p className="twin-error">
@@ -328,10 +365,7 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
 
         {/* ── 三、待你定夺 ── */}
         <section className="twin-col twin-col--third">
-          <div className="twin-col__head">
-            <span className="twin-col__title">待你定夺</span>
-            <span className="twin-col__meta">待接通</span>
-          </div>
+          <ColHead icon={Sparkles} tone="rose" title="待你定夺" meta="待接通" />
           <div className="twin-col__body">
             <Pending
               title="决策队列尚未接通"
@@ -342,10 +376,12 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
               ]}
             />
 
-            <div className="twin-col__head">
-              <span className="twin-col__title">最近工作日志</span>
-              <span className="twin-col__meta">{workDays.length} 天</span>
-            </div>
+            <ColHead
+              icon={BookOpen}
+              tone="green"
+              title="最近工作日志"
+              meta={`${workDays.length} 天`}
+            />
             {workDays.length === 0 ? (
               <Pending
                 title="还没有工作日志"

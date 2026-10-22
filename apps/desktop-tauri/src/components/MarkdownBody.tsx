@@ -259,21 +259,11 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
     }
   };
   return (
-    <div
-      className="not-prose my-2.5 overflow-hidden rounded-md"
-      style={{
-        background: "var(--color-bg-code)",
-        border: "1px solid var(--color-bg-code-border)",
-      }}
-    >
-      <div
-        className="flex items-center justify-between px-4 py-2 text-[length:var(--text-meta)] border-b"
-        style={{
-          background: "var(--color-bg-code-header)",
-          color: "var(--color-text-muted)",
-          borderColor: "var(--color-border-subtle)",
-        }}
-      >
+    /* 无描边：代码块靠「代码底 vs 头部底」两档底色区分外壳与内容，
+       整块再压在纸面上形成第三档。旧版一圈 1px 描边在这里的作用其实是
+       补「代码块与正文分界」—— 底色能承担，描边就多余。 */
+    <div className="md-codeblock not-prose my-2.5 overflow-hidden rounded-md">
+      <div className="md-codeblock__head flex items-center justify-between px-4 py-2 text-[length:var(--text-meta)]">
         <div className="flex items-center gap-2">
           <span className="font-mono">
             {LANG_LABEL[language] ?? "Code"}
@@ -296,8 +286,7 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
           <button
             type="button"
             onClick={handleCopy}
-            className="flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-bg-hover"
-            style={{ color: "var(--color-text-muted)" }}
+            className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary"
           >
             {copied ? <Check className="icon-sm" /> : failed ? <X className="icon-sm" /> : <Copy className="icon-sm" />}
             <span className="font-medium">{copied ? COPIED : failed ? COPY_FAILED : "复制"}</span>

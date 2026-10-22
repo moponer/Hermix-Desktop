@@ -73,23 +73,33 @@ code ::selection,
   color: var(--color-text-primary);
 }
 
-/* ── Focus (reset outline, per-element focus-visible handled separately) ──── */
-:focus {
+/* ── Focus —— 扁平化：不用描边 ──────────────────────────────────
+   2026-10-23 改。旧版给每个可聚焦元素套一圈 2px 实线 outline —— 在扁平
+   界面上那等于给每个控件再加一层边框，正是「又要扁平又有描边」的根源。
+
+   新方案两层：
+     1) 鼠标点击不出现任何焦点外观（:focus 全清）—— 焦点反馈只服务键盘。
+     2) 键盘焦点用**无边界的强调色淡晕**（--shadow-focus-flat）。它是
+        color-mix 到透明的软光晕，没有硬边线，不构成长出一圈框；同时满足
+        WCAG 2.4.7（焦点可见）。
+
+   为什么必须是光晕而不是「什么都不做」：键盘用户靠焦点定位，去掉全部焦点
+   指示会让整站无法用键盘操作。光晕是「可见」与「无描边」的唯一交点。 */
+:focus,
+:focus-visible {
   outline: none;
 }
-/* Global focus-visible fallback: visible ring for keyboard nav.
-   Individual components override with their own ring colour. */
 :focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm, 4px);
+  box-shadow: var(--shadow-focus-flat);
+  border-radius: var(--radius-sm);
 }
-/* 文本输入类退出全局 2px outline —— 输入框自身已有边框，粗 outline 叠上去
-   显得笨重。焦点反馈改由 1px 边框着色承担（见 components.css .input:focus）。 */
+/* 输入框：光晕换成「底色调亮 + 光晕」—— 输入区本来就是一块面，焦点时把
+   这块面提亮一档比加边框更贴合扁平语言。 */
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
   outline: none;
+  box-shadow: var(--shadow-focus-flat);
 }
 
 /* ── Reduced motion ─────────────────────────────────────────────── */

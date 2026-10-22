@@ -101,7 +101,8 @@ export function UpdatePanel({ updater }: { updater: Updater }) {
               {status.pub_date ? ` · 发布于 ${status.pub_date.slice(0, 10)}` : ""}
             </div>
             {status.notes ? (
-              <div className="text-sm text-text-secondary leading-[1.75] border-t border-border-secondary pt-3 [&_li]:marker:text-text-faint">
+              /* 无描边：更新说明是紧跟标题的第二段文字，用间距而不是线分界。 */
+              <div className="mt-3 text-sm text-text-secondary leading-[1.75] [&_li]:marker:text-text-faint">
                 <MarkdownBody content={status.notes} />
               </div>
             ) : null}

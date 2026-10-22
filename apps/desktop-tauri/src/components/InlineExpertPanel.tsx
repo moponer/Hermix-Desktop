@@ -88,7 +88,9 @@ export function InlineExpertPanel({
   return (
     <div
       ref={panelRef}
-      className="border-b border-border-subtle bg-bg-secondary"
+      /* 无描边：面板本身是 bg-secondary、压在白色对话区上，底色差已经把
+         边界说清楚了，底边那条线是重复表达。 */
+      className="bg-bg-secondary"
       style={{ animation: "slideDown 0.15s ease-out" }}
     >
       <style>{`

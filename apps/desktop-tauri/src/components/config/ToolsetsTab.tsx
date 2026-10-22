@@ -223,9 +223,9 @@ function ToolsetCard({
   const shown = expanded ? tools : tools.slice(0, 4);
   const hidden = tools.length - shown.length;
   return (
-    <div className="group flex flex-col gap-2.5 px-3 py-3 rounded-xl bg-bg-card hover:bg-bg-card-hover transition-colors">
+    <div className="m-lift group flex flex-col gap-2.5 px-3 py-3 rounded-xl bg-bg-card hover:bg-bg-card-hover">
       <div className="flex items-start gap-3">
-        <ToolCardIcon>
+        <ToolCardIcon category={toolset.label}>
           <Icon className="icon-lg" />
         </ToolCardIcon>
         <div className="min-w-0 flex-1">

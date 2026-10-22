@@ -39,16 +39,23 @@ export const EDITOR_HINT: Record<Exclude<EditorKind, "none">, string> = {
   text: "编辑文本（另存为新文件）",
 };
 
-/** 菜单里「编辑」这一项的文案。 */
+/**
+ * 菜单里「编辑」这一项的文案。
+ *
+ * 2026-10-23：去掉「…」后缀与冗余词。菜单项是**命令**不是对话框标题，
+ * 省略号在 Windows 约定里表示「还会再弹一层」，而这里直接进编辑器；
+ * 冗长的「系统资源管理…」这类 7 字标签会把菜单宽度撑到 236px 以上，
+ * 反而更难扫。短标签 + 图标是菜单栏的正确密度。
+ */
 export function editorLabel(kind: EditorKind): string {
   switch (kind) {
     case "image":
-      return "编辑图片…";
+      return "编辑图片";
     case "pdf":
-      return "编辑 PDF…";
+      return "编辑 PDF";
     case "text":
-      return "编辑文本…";
+      return "编辑文本";
     default:
-      return "编辑…";
+      return "编辑";
   }
 }

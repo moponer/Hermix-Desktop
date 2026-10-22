@@ -363,16 +363,14 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
             <div className="flex justify-end gap-2 pt-2">
               <button
                 onClick={() => setStep("template")}
-                className="px-3.5 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
-                style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
+                className="btn-flat btn-flat--secondary"
               >
                 上一步
               </button>
               <button
                 onClick={submitInput}
                 disabled={!description.trim()}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[length:var(--text-ui)] font-medium disabled:opacity-40"
-                style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
+                className="btn-flat btn-flat--primary disabled:opacity-40"
 >
                 下一步 <ArrowRight className="icon-md" />
               </button>
@@ -464,15 +462,13 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
             <div className="flex justify-end gap-2 pt-2">
               <button
                 onClick={() => setStep("input")}
-                className="px-3.5 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
-                style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
+                className="btn-flat btn-flat--secondary"
               >
                 上一步
               </button>
               <button
                 onClick={submitClarify}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
-                style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
+                className="btn-flat btn-flat--primary"
               >
                 <Wand2 className="icon-md" /> 生成专家
               </button>
@@ -587,15 +583,13 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                   <div className="flex gap-2">
                     <button
                       onClick={runGeneration}
-                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
-                      style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
+                      className="btn-flat btn-flat--secondary"
 >
                       <RefreshCw className="icon-md" /> 换个版本
                     </button>
                     <button
                       onClick={handleConfirm}
-                      className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
-                      style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
+                      className="btn-flat btn-flat--primary"
                     >
                       <Check className="icon-md" /> 确认保存
                     </button>

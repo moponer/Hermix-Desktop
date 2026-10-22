@@ -330,14 +330,18 @@ function checkPrimitives() {
 
 /* ── G10：中性结构描边不得超过基线（棘轮）────────────────────
    用户明确「UI 一律不用描边，层次靠底色差 + 阴影 + 间距」。
-   2026-10-21 清掉了 238 处里的 211 处，剩下的是刻意保留的：
+   2026-10-21 清掉了 238 处里的 211 处；2026-10-23 扁平化收口再清到 15 处
+   （Composer / 自动化页 / 专家面板 / 更新面板的分隔线改为间距或淡染底；
+    阿黎页、代码块、引用块在 CSS 层整片去线 —— 那部分不在本规则的统计里）。
+   剩下 15 处是刻意保留的：
      · 复选框自身的方框（去掉就看不见控件了）
      · spinner 圆环（描边就是图形）
-     · 状态横幅的语义描边
+     · 状态横幅的语义描边（ACUI 健康卡 / 压缩横幅）
      · 图片边框
+     · 少数浮层内部分隔
    所以不能一刀切禁掉，而是**棘轮**：数量不得增加。
    每次清理后把 BASELINE 调低，新代码再画中性描边就会让门禁变红。 */
-const STRUCTURAL_BORDER_BASELINE = 27;
+const STRUCTURAL_BORDER_BASELINE = 15;
 
 const NEUTRAL_BORDER = new RegExp(
   "^(border|border-border|border-border-primary|border-border-secondary|border-border-subtle|" +

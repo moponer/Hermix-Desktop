@@ -1,38 +1,63 @@
 /* Hermix 文件查看器 — Explorer + 共享预览样式。
  * 设计语言：从桌面 app 沿用（slate 主色 + token 驱动），但 viewer 是
  * 独立进程，复刻桌面 token 子集即可。共享预览样式由 @hermix/preview
- * 提供（main.tsx 中 import "@hermix/preview/styles/preview-doc.css"）。 */
+ * 提供（main.tsx 中 import "@hermix/preview/styles/preview-doc.css"）。
+ *
+ * 2026-10-23 统一收口：此前 viewer 用的是 slate 蓝灰轴 + 苹果蓝强调色
+ * （#3b82f6），与主程序的纯中性灰轴 + 松墨绿（#1e4a3c）是两套色 —— 同一
+ * 台机器上主程序与查看器窗口并排时，明显不是同一个产品。现在 viewer 的
+ * 中性轴与强调色全部对齐主程序 tokens.css；字体栈也补齐中文回退链
+ * （原来只有 "Segoe UI", system-ui 两项，中文会落到不可控的默认字体）。
+ */
 
 @import "@hermix/preview/styles/preview-doc.css";
+@import "@hermix/preview/styles/icon-tone.css";
 
 /* ─── 通用 token（共享预览样式所需 + viewer UI） ───────────────── */
 :root {
   --bg-primary: #ffffff;
-  --bg-secondary: #f4f5f7;
-  --bg-tabbar: #eceef1;
-  --bg-tertiary: #e6e9ef;
+  --bg-secondary: #f5f5f5;
+  --bg-tabbar: #ececec;
+  --bg-tertiary: #ededed;
   --bg-card: #ffffff;
-  --bg-card-hover: #f8fafc;
-  --bg-hover: rgba(15, 23, 42, 0.06);
-  --bg-accent-soft: rgba(59, 130, 246, 0.10);
+  --bg-card-hover: #f6f6f6;
+  --bg-hover: rgba(20, 20, 20, 0.06);
+  --bg-accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
 
-  --border: #d9dde3;
-  --border-subtle: #e6e9ef;
-  --text-primary: #1e293b;
-  --text-secondary: #64748b;
-  --text-muted: #94a3b8;
-  --text-faint: #cbd5e1;
+  --border: #d4d4d4;
+  --border-subtle: #e5e5e5;
+  --text-primary: #181818;
+  --text-secondary: #565656;
+  --text-muted: #5f5f5f;
+  --text-faint: #6a6a6a;
   /* 强调色底上的文字（主按钮）：色值只在 token 层出现，组件里一律 var()。 */
   --text-on-accent: #ffffff;
 
-  --accent: #3b82f6;
-  --accent-strong: #2563eb;
-  --danger: #dc2626;
-  --info: #0ea5e9;
-  --success: #16a34a;
+  --accent: #1e4a3c;
+  --accent-strong: #163a2f;
+  --danger: #c74436;
+  --info: #4f7fa3;
+  --success: #3e8153;
 
-  --font-sans: "Segoe UI", system-ui, sans-serif;
-  --font-mono: Consolas, "Courier New", ui-monospace, monospace;
+  /* 分类色板（与主程序 lib/categoryTone 的 8 档一一对应）—— 查看器与主程序
+     共用 icon-tone.css，因此这套 token 必须与主程序 tokens.css 同名同序。 */
+  --color-tone-slate: #64748b;
+  --color-tone-blue: #3b7fd4;
+  --color-tone-cyan: #0e7c9b;
+  --color-tone-green: #3d8a5a;
+  --color-tone-amber: #b57f1a;
+  --color-tone-orange: #d9772f;
+  --color-tone-rose: #d1546e;
+  --color-tone-violet: #7c5cd6;
+  /* 扁平化焦点：无硬边描边，用强调色淡晕（与主程序 base.css 同机制）。
+     WCAG 2.4.7 要求键盘焦点可见，光晕是「可见」与「无描边」的唯一交点。 */
+  --shadow-focus-flat: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent);
+
+  --font-sans: "Segoe UI Variable", "Segoe UI", -apple-system,
+    BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC", "Source Han Sans SC",
+    "Noto Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code",
+    "Source Code Pro", Consolas, Menlo, monospace;
   --font-size-body: 14px;
   --text-body: 15px;
   --text-meta: 12px;
@@ -117,31 +142,40 @@
 /* 暗色由 JS 写入的 data-theme 驱动（theme.ts），不用媒体查询——
    用户强制亮色时 OS 暗色不应抢走 token。 */
 :root[data-theme="dark"] {
-  --bg-primary: #0f172a;
-  --bg-secondary: #1e293b;
-  --bg-tabbar: #16202f;
-  --bg-tertiary: #1f2a3c;
-  --bg-card: #182236;
-  --bg-card-hover: #1f2c44;
+  --bg-primary: #141414;
+  --bg-secondary: #1f1f1f;
+  --bg-tabbar: #1a1a1a;
+  --bg-tertiary: #292929;
+  --bg-card: #1f1f1f;
+  --bg-card-hover: #262626;
   --bg-hover: rgba(255, 255, 255, 0.06);
-  --bg-accent-soft: rgba(96, 165, 250, 0.16);
+  --bg-accent-soft: rgba(111, 174, 148, 0.16);
 
-  --border: #334155;
-  --border-subtle: #1e293b;
-  --text-primary: #e2e8f0;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --text-faint: #475569;
+  --border: #3a3a3a;
+  --border-subtle: #2a2a2a;
+  --text-primary: #e9e9e9;
+  --text-secondary: #b0b0b0;
+  --text-muted: #8a8a8a;
+  --text-faint: #6f6f6f;
 
-  --accent: #60a5fa;
-  --accent-strong: #3b82f6;
-  --danger: #f87171;
-  --info: #38bdf8;
-  --success: #22c55e;
+  --accent: #6fae94;
+  --accent-strong: #86c0a8;
+  --danger: #e06b52;
+  --info: #8a9aa8;
+  --success: #84b383;
 
-  --color-bg-code: #020617;
-  --color-bg-code-header: #0f172a;
-  --color-bg-code-border: #1e293b;
+  --color-tone-slate: #9aa4b2;
+  --color-tone-blue: #6aa9f0;
+  --color-tone-cyan: #4fc3d9;
+  --color-tone-green: #6cc08a;
+  --color-tone-amber: #e0b054;
+  --color-tone-orange: #f09a5c;
+  --color-tone-rose: #ef8ba0;
+  --color-tone-violet: #a992ee;
+
+  --color-bg-code: #1a1a1a;
+  --color-bg-code-header: #141414;
+  --color-bg-code-border: #292929;
 }
 
 * { box-sizing: border-box; }
@@ -204,7 +238,7 @@ html, body, #root {
   transition: background 120ms ease-out;
 }
 .pure-location:not(.is-empty):hover { background: var(--bg-card-hover); }
-.pure-location:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pure-location:focus-visible { outline: none; box-shadow: var(--shadow-focus-flat); }
 .pure-location.is-empty { color: var(--text-muted); cursor: default; }
 /* 主机名（网页）/ 文件名（本地文件）：始终在，优先保住。
    路径 / 目录是次要信息，先被省略号吃掉。 */
@@ -410,15 +444,25 @@ html, body, #root {
 }
 .search-scope.is-global { color: var(--accent); background: var(--bg-accent-soft); }
 
-/* 键盘焦点指示——无障碍必需，是全文件唯一保留的描边。
-   静态描边一律去掉，层次改由底色差承担。 */
+/* 键盘焦点指示——无障碍必需，但**不用描边**（2026-10-23）。
+   旧版是 2px 实线 outline，与主程序统一扁平化后改为强调色淡晕
+   （--shadow-focus-flat）：没有硬边线，界面上不会长出第二层框，
+   同时满足 WCAG 2.4.7 的「焦点可见」。
+
+   为什么不能直接删掉焦点样式：键盘用户靠焦点定位，去掉全部焦点指示
+   会让整个查看器无法用键盘操作。 */
 .path-input:focus-visible,
 .search-input:focus-visible,
 .ai-input:focus-visible,
 .resizer:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  box-shadow: var(--shadow-focus-flat);
 }
+/* 全局兜底：任何未被上面覆盖的可聚焦元素，键盘聚焦时也走淡晕而不是
+   浏览器默认的黑框（默认 outline 在深色主题下几乎看不见）。 */
+:focus-visible { outline: none; box-shadow: var(--shadow-focus-flat); }
+/* PDF 文本选中态的 outline 是**语义标记**不是焦点环（表示"这一块被选中了"），
+   保留 —— 它表达的是数据状态，不是键盘位置。 */
 
 /* ─── 三栏主区 ────────────────────────────────────── */
 .body-row {

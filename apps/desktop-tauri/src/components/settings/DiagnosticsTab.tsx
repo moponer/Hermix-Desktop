@@ -216,8 +216,7 @@ export function DiagnosticsTab() {
             </button>
           </div>
           <pre
-            className="p-3 text-[length:var(--text-meta)] leading-snug font-mono overflow-auto max-h-[60vh] whitespace-pre-wrap break-words text-text-secondary"
-            style={{ background: "var(--color-bg-tertiary)" }}
+            className="bg-bg-tertiary p-3 text-[length:var(--text-meta)] leading-snug font-mono overflow-auto max-h-[60vh] whitespace-pre-wrap break-words text-text-secondary"
           >
             {tail.lines.join("\n")}
           </pre>
