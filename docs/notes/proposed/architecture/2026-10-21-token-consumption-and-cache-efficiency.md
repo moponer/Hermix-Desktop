@@ -314,6 +314,26 @@ M22「丢陈旧工具组的存根」在**自动化**场景下**什么也没做**
 - 技能索引应该**按任务相关性裁剪**，而不是把 agent 自己生成的垃圾 skill
   也算进去（`auto` 分类应当排除，或只保留与当前任务相关的）。
 
+### 事实 17（2026-10-22 补）：长等待链路端到端打通（实测）
+
+新二进制（新 sidecar + 新查看器 + 新提示词）起来后的第一轮，agent 就开始给
+`webview_eval` 传 `timeout_ms`：
+
+```
+213744 tool_call hermix-viewer__webview_eval tm=20000 :: new Promise(r => setTimeout(...))
+213754 tool_call hermix-viewer__webview_eval tm=20000 :: ...
+213758 tool_call hermix-viewer__webview_eval tm=25000 :: ...
+```
+
+**链路验证通过**：agent → 桥接 `tool_call` → MCP HTTP 传输（300s）→ 查看器
+`tools/call` → `webview_eval(expression, timeout_ms)` → CDP `call_with_timeout`
+（socket 读超时同步放宽）→ 页面里的 `await`。
+
+**这一轮的计费不可用作对比**：查看器重启后 agent 的页面状态丢了，整轮都在
+重新找课程（试了 mooc1-api / mooc-ans / mobilelearn / sspu.jxjy 四个入口），
+是**恢复轮**不是干活轮。干净对比需要「起新二进制后、agent 已重新定位到课程」
+的下一轮 —— 指标表里的「每轮调用次数 ≤35 / 每轮计费 ≤200K」等它落地再对。
+
 ## Decision（按复核后的重心重排）
 
 > **2026-10-22 更正**：本节原写「绝对量的 99% 在会话历史里 → 先把历史管住」。
