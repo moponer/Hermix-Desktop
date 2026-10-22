@@ -164,8 +164,10 @@ export function QueueItemRow({
   return (
     <li
       /* 2026-10-22 对齐 CodeBuddy 参考稿：队列项从"hover 高亮的行"升级为
-         独立卡片——每条自带边框与消息图标，操作按钮 hover 浮现。 */
-      className="group flex items-start gap-2 rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-primary)]/60 px-2.5 py-2 transition-colors hover:border-[var(--color-border-secondary)]"
+         独立卡片——每条自带边框与消息图标，操作按钮 hover 浮现。
+         底色用**不透明** bg-primary：旧版 /60 半透明白压在浅灰输入区上
+         会变成一层灰雾，浅色主题下显脏（反馈「浅色没有演示干净」）。 */
+      className="group flex items-start gap-2 rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-primary)] px-2.5 py-2 transition-colors hover:border-[var(--color-border-secondary)]"
       aria-label={`第 ${index + 1} 条排队消息`}
     >
       <MessageSquare className="mt-0.5 icon-sm shrink-0 text-text-faint" aria-hidden />

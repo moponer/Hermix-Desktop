@@ -344,7 +344,7 @@
 
      注：注释里也别把已删掉的间接引用写成 `var(--…)` 的完整形式——Check 2 的
      孤儿扫描不跳过注释，会把它当成活跃引用。 */
-  --color-accent: #1e4a3c;
+  --color-accent: #386340;   /* 深鼠尾草 Sage：兼顾"填充 + 浅底文字"双用途，过 WCAG AA（浅雾绿 #6f8a64 作浅底文字仅 3.7:1 不达标） */
 
   /* 压在 accent 实色块上的文字色。
      与下面 --color-accent-on-text 是**两件事，名字却只差词序**：
@@ -357,7 +357,8 @@
      ——accent 底 + 16% 淡 accent 字，文字与底色几乎同色，肉眼等于隐形。
      放进 @theme 才能生成 `text-on-accent`；暗色主题的值在 themes/dark.css
      覆写（accent 提亮后白字对比度不足）。 */
-  --color-on-accent: #ffffff;
+  --color-on-accent: #ffffff;   /* 深鼠尾草绿实底用白字 */
+  --color-accent-contrast: var(--color-on-accent);  /* 强调底上的文字/图标色（供 Composer 等引用） */
 
   /* accent 的派生档位：hover / on-text / soft / soft-strong。
      2026-10-04 起与本体同处 @theme。此前它们在 base.css 的别名层
@@ -384,8 +385,8 @@
      「混白」是**为白纸面调的**，暗底上混白 = 近白亮块：preview 的行内代码
      底 + text-primary 字会变成白底浅字、引用块同样读不出来。暗色改成
      「accent 混纸面底」，保持同样的极淡染色而不反色。 */
-  --color-accent-soft: color-mix(in srgb, var(--color-accent) 10%, white);
-  --color-accent-soft-strong: color-mix(in srgb, var(--color-accent) 18%, white);
+  --color-accent-soft: var(--color-bg-tertiary);
+  --color-accent-soft-strong: var(--color-bg-active);
   /* accent-line：给「恒暗底浮层」用的可见强调线（截图覆盖窗的选区边框、
      标注输入框 outline）。与 soft 档语义相反 —— soft 是纸面上的淡染色，
      line 是暗底上的亮线，因此**不随暗色主题变暗**，恒为 accent 混白。 */
@@ -395,22 +396,22 @@
   --color-brand-qq: #12b7f5;
   --color-brand-wecom: #07c160;
 
-  --color-link: #1e4a3c;
-  --color-link-hover: #163a2f;
+  --color-link: #4f6b46;          /* 鼠尾草墨绿：比填充档更深的文字档，压白底 ≥5.9:1 */
+  --color-link-hover: #3f5a37;    /* 派生：压深一档 */
   --color-link-soft: #5f5f5f;
-  --color-link-soft-hover: #2f6b58;
+  --color-link-soft-hover: #4f6b46;
   /* ── 按钮语义对 ──────────────────────────────────────────────────
      2026-09-30：这里此前有**两套并存的按钮 token**（`-fg` 与 `-text`），
      键名重复、CSS 后者覆盖前者 —— 结果 primary 按钮实际是苹果蓝 #0071e3，
      改 -fg 那套完全没生效。现只保留 `-text` 一套（代码里 21 处引用它），
      并把主按钮并入新强调色（松墨绿）。 */
-  --color-btn-primary-bg: #1e4a3c;
+  --color-btn-primary-bg: #386340;
   --color-btn-primary-text: #ffffff;
-  --color-btn-primary-hover: #163a2f;
+  --color-btn-primary-hover: #2f5234;
   --color-btn-secondary-bg: transparent;
   --color-btn-secondary-fg: #181818;
   --color-btn-secondary-hover: #ededed;
-  --color-on-primary: #ffffff;   /* 品牌绿实底上的文字 */
+  --color-on-primary: #ffffff;   /* 深鼠尾草绿实底上的文字（白字） */
   --color-on-error: #ffffff;     /* 错误红实底上的文字（暗色主题翻成深色） */
   --color-inverse-surface: #181818;
   --color-inverse-on-surface: #ffffff;

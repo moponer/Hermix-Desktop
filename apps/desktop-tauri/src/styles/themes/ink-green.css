@@ -30,80 +30,80 @@
      蓝灰衬绿会显得"脏、发闷"。新轴改为与墨绿同族的绿灰，且饱和度略高于
      宣纸主题（4-6% vs 2-3%），两套主题因此一冷一暖，可辨认而不雷同。
      相邻明度差 ≥4%，面间亮度比 ≥1.06 —— 桌面端 125%/150% 缩放下的硬门槛。 */
-  --color-bg-app: #e2e9e5;         /* 案·最外层：窗口底、列间空隙（最深） */
-  --color-bg-primary: #fdfefd;     /* 纸·对话与主区底 = 最亮 */
-  --color-bg-card: #f3f7f4;        /* 面·卡片（压纸一档） */
-  --color-bg-base: #e8eeea;
-  --color-bg-secondary: #e8eeea;   /* 案·侧栏 / 顶栏 */
-  --color-bg-inset: #e8eeea;
-  --color-bg-input: #f3f7f4;
-  --color-bg-card-hover: #dbe3de;
-  --color-bg-tertiary: #dbe3de;    /* 案·深一档：分隔区 / chip */
-  --color-bg-hover: #dbe3de;
-  --color-bg-active: #ced8d2;
-  --color-bg-quaternary: #ced8d2;
+  --color-bg-app: #ececec;         /* 案·最外层：窗口底、列间空隙（最深） */
+  --color-bg-primary: #ffffff;     /* 纸·对话与主区底 = 最亮 */
+  --color-bg-card: #f6f6f6;        /* 面·卡片（压纸一档） */
+  --color-bg-base: #f5f5f5;
+  --color-bg-secondary: #f5f5f5;   /* 案·侧栏 / 顶栏 */
+  --color-bg-inset: #f5f5f5;
+  --color-bg-input: #f6f6f6;
+  --color-bg-card-hover: #ededed;
+  --color-bg-tertiary: #ededed;    /* 案·深一档：分隔区 / chip */
+  --color-bg-hover: #ededed;
+  --color-bg-active: #e3e3e3;
+  --color-bg-quaternary: #e3e3e3;
   --color-bg-elevated: #ffffff;    /* 浮·弹层 / 菜单 */
 
   /* Code / chat 场景面板 */
-  --color-bg-code: #f5f8f6;
-  --color-bg-code-header: #f0f5f2;
-  --color-bg-code-border: #e2eae5;
-  --color-chat-assistant-bg: #fdfefd;
-  --color-chat-tool-bg: #f5f8f6;
+  --color-bg-code: #f8f8f8;
+  --color-bg-code-header: #f4f4f4;
+  --color-bg-code-border: #e7e7e7;
+  --color-chat-assistant-bg: #ffffff;
+  --color-chat-tool-bg: #f8f8f8;
   --color-chat-terminal-bg: #17181b;  /* 终端恒暗：任何主题都一样 */
 
   /* ── 分隔线：与所压底色亮度比 ≥1.10（缩放重采样余量） ── */
-  --color-border-subtle: #edf2ef;
-  --color-border-primary: #e0e9e4;
-  --color-border-secondary: #c6d2cb;  /* 发丝分隔线：与所压底色亮度比 ≥1.10。
-     **不是** 3:1 —— 1.4.11 的 3:1 落在 --color-border 上（控件边界）。 */
-  --color-border: #7b8b83;            /* 强描边 / focus 参照 */
-  --color-border-strong: #7b8b83;
+  --color-border-subtle: #f0f0f0;
+  --color-border-primary: #e5e5e5;
+  --color-border-secondary: #d4d4d4;  /* 发丝分隔线：与所压底色亮度比 ≥1.10。 */
+  --color-border: #7c7c7c;            /* 强描边 / focus 参照 */
+  --color-border-strong: #7c7c7c;
 
   /* ── 文字：四级墨，全部 ≥4.5:1 压在最深案面 #e8eeea 上 ── */
-  --color-text-primary: #1b221e;
-  --color-text-secondary: #54635b;
-  --color-text-tertiary: #5c6a62;
-  --color-text-muted: #5c6a62;
-  --color-text-faint: #5e6c64;
-  --color-text-on-code: #323c36;
-  --color-text-thinking: #5c6a62;   /* 过程文字 = tertiary，不与结论抢通道 */
+  --color-text-primary: #181818;
+  --color-text-secondary: #565656;
+  --color-text-tertiary: #5f5f5f;
+  --color-text-muted: #5f5f5f;
+  --color-text-faint: #6a6a6a;
+  --color-text-on-code: #3a3a3a;
+  --color-text-thinking: #5f5f5f;   /* 过程文字 = tertiary，不与结论抢通道 */
   /* hero 满对比（浅色主题用黑，与 light 基线一致）：空态大标题专用
      （墨与纸 v4）。**不是**白色 —— ink-green 是浅色主题，白字压在
      #fdfefd 的纸面上只有 1.01:1，标题会完全看不见。 */
   --color-text-hero: #000000;
 
-  /* ── 墨：主色墨绿 #2f6b4f（新造品牌色，与亮色基线的青碧 #1e4a3c 分叉） ── */
-  --color-accent: #2f6b4f;
-  --color-on-accent: #ffffff;       /* #2f6b4f 底上白字 ≈ 5.9:1 */
+  /* ── 深鼠尾草 Sage：强调色 #386340（用户选定；浅雾绿 #6f8a64 作浅底文字仅 3.7:1 不达标，加深过 AA） ── */
+  --color-accent: #386340;
+  --color-on-accent: #ffffff;       /* #386340 深鼠尾草绿底上用白字 */
+  --color-accent-contrast: var(--color-on-accent);
   /* 恒暗底浮层用的可见强调线（截图覆盖窗等）。语义是「暗底上的亮线」，
      与纸面淡染色的 soft 档相反，故三套主题取值一致，不随主题反色。 */
   --color-accent-line: color-mix(in srgb, var(--color-accent) 18%, white);
 
   /* Link */
-  --color-link: #2f6b4f;
-  --color-link-hover: #255641;      /* 派生：主色压深一档 */
+  --color-link: #4f6b46;            /* 鼠尾草墨绿：文字档，压白底 ≥5.9:1 */
+  --color-link-hover: #3f5a37;      /* 派生：压深一档 */
   --color-link-soft: #70767e;         /* 4.53:1 —— #7d838b 只有 3.78:1 */
-  --color-link-soft-hover: #2f6b4f;
+  --color-link-soft-hover: #4f6b46;
 
   /* ── 按钮语义对 ── */
-  --color-btn-primary-bg: #2f6b4f;
+  --color-btn-primary-bg: #386340;
   --color-btn-primary-text: #ffffff;
-  --color-btn-primary-hover: #255641;
+  --color-btn-primary-hover: #2f5234;
   --color-btn-secondary-bg: transparent;
-  --color-btn-secondary-fg: #33383e;
-  --color-btn-secondary-text: #33383e;
-  --color-btn-secondary-hover: #eef0f3;
+  --color-btn-secondary-fg: #181818;
+  --color-btn-secondary-text: #181818;
+  --color-btn-secondary-hover: #ededed;
   --color-btn-ghost-bg: transparent;
-  --color-btn-ghost-text: #5f636b;
+  --color-btn-ghost-text: #565656;
   --color-btn-ghost-hover: rgba(26, 29, 33, 0.05);
   --color-on-primary: #ffffff;
   --color-on-error: #ffffff;        /* #e5484d 实底够深，白字 4.6:1 */
-  --color-inverse-surface: #1a1d21;
+  --color-inverse-surface: #181818;
   --color-inverse-on-surface: #ffffff;
   --color-primary-fixed-dim: color-mix(in srgb, var(--color-accent) 15%, var(--color-bg-card));
   --shadow-button-primary: 0 2px 10px rgba(26, 29, 33, 0.22);
-  --shadow-focus-ring: 0 0 0 1px rgba(47, 107, 79, 0.28);
+  --shadow-focus-ring: 0 0 0 1px rgba(56, 99, 64, 0.32);
 
   /* ── 语义四色（取移动端值；text-warning 为文字对比度派生加深） ── */
   --color-success: #2ba24a;
@@ -147,12 +147,12 @@
   --color-zinc-500:     var(--color-text-secondary);
 
   /* Status chips —— 全部进墨绿邻域 */
-  --color-chip-model-bg: rgba(47, 107, 79, 0.1);
-  --color-chip-model-fg: #2f6b4f;
-  --color-chip-workspace-bg: #e2eae6;   /* --hm-primary-weak */
-  --color-chip-workspace-fg: #2f6b4f;
-  --color-chip-permission-bg: #e2eae6;
-  --color-chip-permission-fg: #2f6b4f;
+  --color-chip-model-bg: rgba(56, 99, 64, 0.12);
+  --color-chip-model-fg: #4f6b46;
+  --color-chip-workspace-bg: #e8e8e8;   /* --hm-primary-weak */
+  --color-chip-workspace-fg: #4f6b46;
+  --color-chip-permission-bg: #e8e8e8;
+  --color-chip-permission-fg: #4f6b46;
 
   /* 渠道徽标品牌色：不随主题变 */
   --color-brand-qq: #12b7f5;
@@ -169,8 +169,8 @@
   --shadow-modal: 0 24px 64px rgba(26, 29, 33, 0.16), 0 8px 24px rgba(26, 29, 33, 0.08);
 
   /* Scene surfaces — 纸（对话区）最亮、案（侧栏/顶栏）低一档、窗口底最低 */
-  --theme-bg-app: #f2f3f5;
-  --theme-bg-sidebar: #eef0f3;
-  --theme-bg-titlebar: #eef0f3;   /* 与侧栏同案面：取消独立色带 */
+  --theme-bg-app: #ececec;
+  --theme-bg-sidebar: #f5f5f5;
+  --theme-bg-titlebar: #f5f5f5;   /* 与侧栏同案面：取消独立色带 */
   --theme-bg-chat: #ffffff;
 }

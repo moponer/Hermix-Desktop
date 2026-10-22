@@ -300,5 +300,6 @@ button:disabled,
      与主题无关的两条。 */
 
   /* 压在 accent 实色上的文字。自由取色下无正解，L3.5 由调色板注入。 */
-  --color-on-accent: #ffffff;
+  --color-on-accent: #ffffff;   /* 深鼠尾草绿实色块上用白字，保 AA */
+  --color-accent-contrast: var(--color-on-accent);
 }

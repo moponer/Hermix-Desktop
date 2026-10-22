@@ -633,16 +633,20 @@ export function Composer(p: ComposerProps) {
                     /* 2026-10-22 改版：发送钮恢复强调色圆形 CTA（参考 CodeBuddy
                        稿）。原"墨与纸 v4 结构件"方案被用户否了——他要的是一眼
                        能找到的主行动按钮。 */
-                    className="relative flex items-center justify-center w-9 h-9 rounded-full transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:brightness-110 active:scale-95"
+                    className="relative flex items-center justify-center w-9 h-9 rounded-full transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:brightness-105 active:scale-95"
                     style={{
+                      /* 纯 accent 填充，不用「accent → 72% 黑」的渐变：浅色主题
+                         （暖纸底）下渐变右半截发黑发脏，和演示里的
+                         清透绿完全不是一回事（2026-10-22 反馈）。纯色在两个
+                         主题下都干净，深度感交给阴影。 */
                       background: hasContent
-                        ? "linear-gradient(135deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 72%, #000))"
+                        ? "var(--color-accent)"
                         : "var(--color-bg-quaternary)",
                       color: hasContent
                         ? "var(--color-accent-contrast, #fff)"
                         : "var(--color-text-faint)",
                       boxShadow: hasContent
-                        ? "0 2px 8px color-mix(in srgb, var(--color-accent) 35%, transparent)"
+                        ? "0 1px 4px color-mix(in srgb, var(--color-accent) 30%, transparent)"
                         : "none",
                     }}
                     title={canQueue ? "加入队列，等当前回复完成后自动发送 (Enter)" : "发送 (Enter)"}
@@ -817,10 +821,6 @@ export function Composer(p: ComposerProps) {
           </div>
           </div>
         )}
-        {/* 2026-10-22 对齐 CodeBuddy 参考稿：输入框底部免责声明。 */}
-        <div className="px-3 pb-1.5 text-center text-[10px] leading-none text-text-faint select-none">
-          内容由 AI 生成，仅供参考
-        </div>
     </div>
   );
 }

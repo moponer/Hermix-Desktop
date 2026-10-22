@@ -1213,17 +1213,17 @@ export const ChatView = memo(function ChatView({
             </>
           ) : (
             <>
-              {/* 墨与纸 v4：吉祥物移除、留空 —— hero 标题独当焦点，空白即大气 */}
-              <h1 className="text-hero font-semibold text-[var(--color-text-hero)] mb-5">{welcomeGreeting}</h1>
-              {/* 场景切换：独立药丸，接真实机制 domainMode（办公=自动识别 / 开发=钉代码域） */}
-              <div className="flex items-center gap-2.5 mb-5">
+              {/* 优化：hero 降权 —— 从 48px 黑标缩为 20px 灰标，焦点让给输入卡（兼消字号债） */}
+              <h1 className="text-xl font-semibold text-text-secondary mb-6">{welcomeGreeting}</h1>
+              {/* 优化：办公/开发 做成真正分段控件（选中态=石墨灰实心），与下方 6 个轻量 tag 拉开层级 */}
+              <div className="inline-flex items-center gap-1 rounded-full bg-[var(--color-bg-tertiary)] p-1 mb-6">
                 <button
                   type="button"
                   onClick={() => setDomainMode("auto")}
                   className={`flex items-center gap-1.5 h-7 px-4 rounded-full text-[length:var(--text-ui)] transition-colors ${
                     domainMode !== "code"
-                      ? "bg-[var(--color-bg-card)] text-[var(--color-text-primary)] font-medium shadow-[var(--shadow-card)]"
-                      : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                      ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-medium"
+                      : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                   }`}
                 >
                   <Briefcase className="icon-sm" /> 办公
@@ -1233,8 +1233,8 @@ export const ChatView = memo(function ChatView({
                   onClick={() => setDomainMode("code")}
                   className={`flex items-center gap-1.5 h-7 px-4 rounded-full text-[length:var(--text-ui)] transition-colors ${
                     domainMode === "code"
-                      ? "bg-[var(--color-bg-card)] text-[var(--color-text-primary)] font-medium shadow-[var(--shadow-card)]"
-                      : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                      ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-medium"
+                      : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                   }`}
                 >
                   <Code2 className="icon-sm" /> 开发
@@ -1315,36 +1315,32 @@ export const ChatView = memo(function ChatView({
               />
             )}
           </div>
-          {/* 建议行（墨与纸 v4，对齐 WorkBuddy 快捷入口）：左对齐自适应宽度
-              圆角矩形（非药丸、不居中），↗ 表示"填入输入框"。内容全部对应
-              Hermix 真实能力：差异审查 / 文档写作 / 定时自动化 / 文件落盘。 */}
+          {/* 优化：建议行合并为一张分组卡，行间 1px 分隔，箭头仅 hover 出现，去噪 */}
           {!isWorkbenchChat && (
-            <div className="w-full max-w-3xl flex flex-col items-start gap-1.5 mt-3">
-              {WELCOME_SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => {
-                    setInput(s);
-                    textareaRef.current?.focus();
-                  }}
-                  className="group flex w-auto max-w-full items-center gap-6 rounded-[var(--radius-lg)] bg-[var(--color-bg-card)] px-4 py-2.5 text-left transition-colors hover:bg-[var(--color-bg-card-hover)]"
-                >
-                  <span className="text-[length:var(--text-ui)] text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]">
-                    {s}
-                  </span>
-                  <ArrowUpRight
-                    className="icon-sm shrink-0 text-[var(--color-text-faint)] group-hover:text-[var(--color-text-secondary)]"
-                    aria-hidden="true"
-                  />
-                </button>
-              ))}
+            <div className="w-full max-w-3xl mt-4">
+              <div className="rounded-[var(--radius-lg)] border border-[var(--color-border-secondary)] bg-[var(--color-bg-card)] overflow-hidden">
+                {WELCOME_SUGGESTIONS.map((s, i) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => {
+                      setInput(s);
+                      textareaRef.current?.focus();
+                    }}
+                    className={`group flex w-full items-center gap-6 px-4 py-3 text-left transition-colors hover:bg-[var(--color-bg-card-hover)] ${i > 0 ? "border-t border-[var(--color-border-primary)]" : ""}`}
+                  >
+                    <span className="text-[length:var(--text-ui)] text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]">
+                      {s}
+                    </span>
+                    <ArrowUpRight
+                      className="icon-sm shrink-0 text-[var(--color-text-faint)] opacity-0 group-hover:opacity-100 transition-opacity ml-auto"
+                      aria-hidden="true"
+                    />
+                  </button>
+                ))}
+              </div>
             </div>
           )}
-          {/* 免责微文案（信任感细节；字号取仓库下限 12px 而非参考的 10-11px） */}
-          <p className="text-center text-[length:var(--text-tiny)] text-[var(--color-text-faint)] mt-8">
-            内容由 AI 生成，请核实重要信息
-          </p>
         </div>
         </div>
       </div>

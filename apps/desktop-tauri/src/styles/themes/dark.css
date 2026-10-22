@@ -11,7 +11,7 @@
    3. **hero 纯白满对比，正文降一档**（规律 2）。正文 #e9e9e9 比上一版
       #d6d7da 提亮，落在 WorkBuddy 实测值上；2026-10-12 的"刺眼"投诉
       针对 #ededed 全屏近白，#e9e9e9 + 降档的次级灰是折中。
-   4. **accent（#6fae94）只给主行动**；status chip 中性化；链接回归
+   4. **accent（鼠尾草绿提亮 #aebfa3）只给主行动**；status chip 中性化；链接回归
       品牌绿系（此前残留陶土红 #d07b52——2026-09-30 换色的漏网之鱼）。
 
    本文件是暗色的唯一真相源。完整覆盖 CONTRACT 全部色彩令牌。
@@ -59,15 +59,16 @@
   /* hero 满对比（暗 #fff）：空态大标题专用 */
   --color-text-hero: #ffffff;
 
-  /* Accent — 主行动专用（松墨绿暗色提亮档） */
-  --color-accent: #6fae94;
-  --color-on-accent: #14201b;
+  /* Accent — 主行动专用（石墨灰暗色提亮档） */
+  --color-accent: #aebfa3;
+  --color-on-accent: #15151a;
+  --color-accent-contrast: var(--color-on-accent);
   /* accent 的 soft 档（2026-10-21 补齐，此前完全漏覆盖）：
      tokens.css 里是「accent 混白」——那是为白纸面调的。暗底上混白会翻成
      近白亮块，实测表现为：外观页选中的选择卡变成白底、preview 的行内代码
      与引用块变成白底浅字（直接读不出来）、::selection 选区变成白底浅字。
      这里改为「accent 混纸面底」：同样的极淡染色语义，在暗底上不反色。
-     对比度（WCAG，accent 文字 #6fae94 落在 soft 底上）：
+     对比度（WCAG，accent 文字 #aebfa3 落在 soft 底上）：
        soft        #2a332f → 5.0:1
        soft-strong #2d3934 → 4.6:1
      均过 4.5:1（check-theme-tokens 的 contrast 规则按此判定）。 */
@@ -77,11 +78,11 @@
      就是「暗底上的亮线」，不随暗色主题反色。 */
   --color-accent-line: color-mix(in srgb, var(--color-accent) 18%, white);
 
-  /* Link — 回归品牌绿系（陶土红残留清零） */
-  --color-link: #86c0a8;
-  --color-link-hover: #9fd0b8;
+  /* Link — 石墨灰（与 accent 一致） */
+  --color-link: #aebfa3;
+  --color-link-hover: #c2d0b6;
   --color-link-soft: #9b9b9b;
-  --color-link-soft-hover: #9fd0b8;
+  --color-link-soft-hover: #aebfa3;
 
   /* Semantic 四色组（功能性色彩，允许色相；soft 底保持 alpha 派生） */
   --color-success: #84b383;
@@ -121,10 +122,10 @@
   --color-zinc-400:     var(--color-text-faint);
   --color-zinc-500:     var(--color-text-secondary);
 
-  /* Buttons — primary 绿钮照旧；secondary/ghost 全中性化 */
-  --color-btn-primary-bg: #6fae94;
-  --color-btn-primary-text: #14201b;
-  --color-btn-primary-hover: #86c0a8;
+  /* Buttons — primary 石墨灰；secondary/ghost 全中性化 */
+  --color-btn-primary-bg: #aebfa3;
+  --color-btn-primary-text: #16241a;
+  --color-btn-primary-hover: #c2cfb4;
   --color-btn-secondary-bg: transparent;
   --color-btn-secondary-fg: #d4d4d4;
   --color-btn-secondary-hover: #292929;
