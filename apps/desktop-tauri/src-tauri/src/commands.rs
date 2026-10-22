@@ -89,9 +89,24 @@ pub(crate) fn resolve_data_dir() -> PathBuf {
             return hermix_data;
         }
     }
-    // Last-ditch: next to the executable.
-    if let Ok(install_root) = portable_env::compute_install_root() {
-        return install_root.join("data");
+    // Last-ditch: **mirror the sidecar's `hermix_home()` default**
+    // (`~/.hermix`), NOT the install directory.
+    //
+    // Production portable installs deliberately do NOT set
+    // `HERMIX_PORTABLE_DATA_DIR`/`HERMIX_HOME` (see
+    // `portable_env::install_portable_env`'s doc comment), so on those
+    // machines the sidecar resolves its data dir to `~/.hermix` while the
+    // old fallback here resolved to `<install>\data`. The diagnostic page
+    // then read `<install>\data\logs` — which never existed — and reported
+    // "从未生成过日志" while weeks of sidecar logs sat in `~/.hermix/logs`
+    // (2026-10-22 测试机实测). Every consumer of this function has the
+    // same skew: data dir shown to the user, export targets, log
+    // directory.
+    if let Some(home) = dirs::home_dir() {
+        return home.join(".hermix");
+    }
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        return PathBuf::from(profile).join(".hermix");
     }
     PathBuf::from(".")
 }
