@@ -253,8 +253,19 @@ export function TwinView({ upsertSessions, onOpenSession }: TwinViewProps) {
       setTwinPhase("running");
       void pollReply(ali.id);
     } catch (err) {
-      setTwinError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      // 409 = 上一轮还占着闸。原文「她正在处理上一条消息」对用户没有
+      // 可操作性，补上出路（等一会儿；若很久没回应说明上一轮卡住，
+      // 重启应用即复位——闸是进程级的）。
+      setTwinError(
+        msg.includes("正在处理")
+          ? `${msg}（若已等很久没有回应，说明上一轮卡住了——重启应用即可恢复）`
+          : msg,
+      );
       setTwinPhase("error");
+      // 草稿在请求**之前**就被清空了；失败必须还回去，否则用户打了一遍
+      // 字、消息没发出去、内容还丢了——体感就是「发不出去消息」。
+      setDraft(text);
     }
   };
 

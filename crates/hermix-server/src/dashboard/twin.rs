@@ -25,6 +25,17 @@ use crate::state::HttpServerState;
 
 static TWIN_RUNNING: AtomicBool = AtomicBool::new(false);
 
+/// 一轮的最长寿命（秒）。超过即取消该轮并放闸。
+///
+/// `RunningGuard` 只在任务**结束**时（含 panic 展开）放闸；`send_message`
+/// 若卡住不返回——不 panic、也不结束——Drop 永远不到来，闸就一直关着，
+/// 用户看到的是「阿黎发不出去消息」（2026-10-22 实测：上一轮卡死后，
+/// 之后每条消息都 409「她正在处理上一条消息」，只能重启）。
+///
+/// 30 分钟远高于任何正常轮次（工具单次预算 600s、轮次有 max_turns），
+/// 只用来兜住病态挂起。超时 = drop 掉 future（取消），闸随 guard 复位。
+const TWIN_RUN_BUDGET_SECS: u64 = 30 * 60;
+
 /// 运行结束后放闸。用 Drop 而不是在任务尾部手动 store：
 /// `send_message` 若 panic，任务尾部那行不会执行，闸就永远关上了。
 struct RunningGuard;
@@ -72,8 +83,26 @@ pub async fn send_twin_message(
     tokio::spawn(async move {
         let _guard = RunningGuard;
         let overrides = AgentOverrides::default();
-        if let Err(e) = agent.send_message(&run_session_id, &text, overrides).await {
-            tracing::warn!(session_id = %run_session_id, error = %e, "阿黎的一轮运行失败");
+        // 见 `TWIN_RUN_BUDGET_SECS`：闸的寿命必须有上限，否则一轮卡住就
+        // 永久锁死整条通道。
+        let budget = std::time::Duration::from_secs(TWIN_RUN_BUDGET_SECS);
+        match tokio::time::timeout(
+            budget,
+            agent.send_message(&run_session_id, &text, overrides),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(session_id = %run_session_id, error = %e, "阿黎的一轮运行失败");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    session_id = %run_session_id,
+                    budget_secs = TWIN_RUN_BUDGET_SECS,
+                    "阿黎的一轮超过预算，已取消并放闸"
+                );
+            }
         }
     });
 
