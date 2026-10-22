@@ -150,8 +150,8 @@ pub struct WebViewState {
 /// 页面状态（URL / 标题）。
 pub fn state() -> Result<WebViewState, String> {
     let (mut cdp, sid) = connect_page()?;
-    let url = evaluate(&mut cdp, &sid, "location.href").unwrap_or_default();
-    let title = evaluate(&mut cdp, &sid, "document.title").unwrap_or_default();
+    let url = evaluate(&mut cdp, &sid, "location.href", crate::cdp::IO_TIMEOUT).unwrap_or_default();
+    let title = evaluate(&mut cdp, &sid, "document.title", crate::cdp::IO_TIMEOUT).unwrap_or_default();
     Ok(WebViewState { url, title })
 }
 
@@ -162,6 +162,7 @@ pub fn text() -> Result<String, String> {
         &mut cdp,
         &sid,
         "(document.body && document.body.innerText) || ''",
+        crate::cdp::IO_TIMEOUT,
     )?;
     Ok(crate::mcp_server::truncate_chars(&raw, 6000))
 }
@@ -171,11 +172,20 @@ pub fn text() -> Result<String, String> {
 /// `frame` = 目标 iframe 的 URL 片段（可选）。**跨源 iframe 里的元素顶层
 /// 够不到**（超星的视频播放器就在 `/ananas/modules/video/index.html` 这个
 /// 跨源 iframe 里）→ 指定 frame 时改在那个 iframe 的执行上下文里跑。
-pub fn eval(expression: &str, frame: Option<&str>) -> Result<String, String> {
+///
+/// `timeout` = 这一次最多等多久。**等一件长事发生完时用长超时**（例如等
+/// 视频播完）：默认 30s 逼着 agent 每 25 秒轮询一次，而每次轮询都是一次
+/// 带完整上下文的模型调用 —— 实测一条刷课任务里，轮询占了单节调用数的
+/// 大头。给了长超时就是「一次 eval 等完」。
+pub fn eval(
+    expression: &str,
+    frame: Option<&str>,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
     let (mut cdp, sid) = connect_page()?;
     match frame.map(str::trim).filter(|f| !f.is_empty()) {
-        Some(needle) => cdp.evaluate_in_frame(&sid, needle, expression),
-        None => evaluate(&mut cdp, &sid, expression),
+        Some(needle) => cdp.evaluate_in_frame(&sid, needle, expression, timeout),
+        None => evaluate(&mut cdp, &sid, expression, timeout),
     }
 }
 
@@ -220,8 +230,8 @@ pub fn click_text(text: &str, frame: Option<&str>) -> Result<Value, String> {
 
     let eval_in = |cdp: &mut Cdp, js: &str| -> Result<String, String> {
         match in_frame {
-            Some(needle_frame) => cdp.evaluate_in_frame(&sid, needle_frame, js),
-            None => evaluate(cdp, &sid, js),
+            Some(needle_frame) => cdp.evaluate_in_frame(&sid, needle_frame, js, crate::cdp::IO_TIMEOUT),
+            None => evaluate(cdp, &sid, js, crate::cdp::IO_TIMEOUT),
         }
     };
 

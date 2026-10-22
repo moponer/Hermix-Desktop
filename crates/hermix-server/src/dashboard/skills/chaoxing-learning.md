@@ -53,7 +53,7 @@ agent 会为此连开 13 次 terminal（每��都带整个上下文），纯�
 |---|---|---|
 | 1 | 找下一个该做的节 | 一次 `webview_eval` 把目录项的**文本 + 图标 + class** 一起读出来（**别截图**） |
 | 2 | 跳到那一节 | 一次 `webview_navigate`（URL 带 `chapterId`） |
-| 3 | 视频节 | 一次 `webview_eval`：设 `v.muted=true; v.player.playbackRate(2); v.play()` 并在**同一个 eval 里 await 结束**（别多次轮询；页面没加载出来才补一次） |
+| 3 | 视频节 | 一次 `webview_eval`：**设 `v.muted=true; v.player.playbackRate(2); v.play()`，并在同一个 eval 里 await 到 `v.ended`**（用 `timeout_ms` 把这次调用的等待上限抬到 280000 毫秒）。**别每 25 秒轮询一次** —— 每次轮询都是一次带完整上下文的模型调用，实测一条 831 秒的视频用轮询要 15~30 次调用，一次长等待只要 1~2 次 |
 | 4 | 测验：量坐标 + 看题 | 一次 `webview_eval` 把所有 `.TiMu` 的 `getBoundingClientRect()` 算完；一次 `webview_screenshot`（`clip` 覆盖**全部题目** + `scale=2`）一次看全，**别一题一张** |
 | 5 | 测验：点 + 提交 + 读结果 | 一次 `webview_eval`：点完全部题 → 提交 → 等 200ms → 读 `input:checked` → 读结果页的「正确答案 / 我的答案 / 得分」 |
 
@@ -150,6 +150,28 @@ agent 会为此连开 13 次 terminal（每��都带整个上下文），纯�
   `v.player.playbackRate(2); v.play()`（`v.muted = true` 也要重设）。
 - **长等待不要用 terminal 的 `Start-Sleep`**：它会阻塞 IO。
   在 `hermix-viewer__webview_eval` 里 `await` 一个 Promise 即可。
+- **长等待要给足超时**（2026-10-22 实测）：`webview_eval` 默认只等 30 秒，
+  等不完一个 7 分钟的视频 → agent 只能退化成每 25 秒轮询一次，**轮询占了
+  单节 15~30 次调用中的绝大多数**，而每次调用都带着整个上下文重新计费。
+  等长事时把 `timeout_ms` 一起给上（上限 300000 毫秒，建议 280000）：
+
+  ```js
+  (async () => {
+    const cards = document.querySelector('iframe[src*="knowledge/cards"]').contentDocument;
+    const vf = cards.querySelector('iframe[src*="ananas/modules/video"]');
+    const v = vf.contentDocument.querySelector('video');
+    v.muted = true; v.player.playbackRate(2); v.play();
+    const deadline = Date.now() + 270000;
+    while (!v.ended && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 1000));
+      if (v.paused) v.play();          // 页面会自动暂停，得顶回去
+    }
+    return JSON.stringify({ended: v.ended, t: v.currentTime, d: v.duration});
+  })()
+  ```
+
+  调用形式：`webview_eval(expression=<上面这段>, timeout_ms=280000)`。
+  **一次没等到（`ended:false`）就再来一次**，最多两次；别退回轮询。
 - **`hermix-viewer__webview_screenshot` 的 clip 偶尔会截到同一帧**（多张图 MD5 相同）——
   那是页面没动，不是工具坏了；等页面变化再截。
 - **多选题的隐藏域值可能带前缀**：读 `input[type=hidden][name^=answer]` 的 value

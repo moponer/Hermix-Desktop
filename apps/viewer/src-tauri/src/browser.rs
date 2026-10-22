@@ -471,7 +471,7 @@ pub fn eval(session: &str, expression: &str) -> Result<String, String> {
     let (port, ws_path, target_id) = endpoints(session)?;
     let mut cdp = Cdp::connect(port, &ws_path)?;
     let sid = cdp.attach(&target_id)?;
-    crate::cdp::evaluate(&mut cdp, &sid, expression)
+    crate::cdp::evaluate(&mut cdp, &sid, expression, crate::cdp::IO_TIMEOUT)
 }
 
 /// 点击页面坐标（CSS 像素，相对视口左上角）。

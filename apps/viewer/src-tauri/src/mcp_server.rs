@@ -276,10 +276,17 @@ fn tool_defs() -> Vec<ToolDef> {
                           **跨源 iframe 里的元素顶层求值够不到**（超星的视频播放器就在\
                           `/ananas/modules/video/index.html` 这个跨源 iframe 里）——\
                           这时用参数 frame 给一个 URL 片段（如 \"ananas\"），\
-                          就会在那个 iframe 的执行上下文里执行。",
+                          就会在那个 iframe 的执行上下文里执行。\
+                          **要等一件长事发生完**（比如等视频播完）就用 timeout_ms \
+                          加大超时，一次 eval 等完 —— 默认 30s 会逼着你每 25 秒轮询一次，\
+                          而每次轮询都是一次带完整上下文的模型调用。",
             properties: json!({
                 "expression": {"type": "string", "description": "要执行的 JavaScript 表达式"},
                 "frame": {"type": "string", "description": "目标 iframe 的 URL 片段（可选）"},
+                "timeout_ms": {
+                    "type": "number",
+                    "description": "这一次求值最多等多久（毫秒）。默认 30000，上限 900000。等长事件时用它",
+                },
             }),
             required: &["expression"],
             read_only: false,
@@ -746,7 +753,17 @@ fn call_tool_text(name: &str, args: &Value) -> Result<String, String> {
         "webview_eval" => {
             let expression = str_arg("expression")?;
             let frame = args.get("frame").and_then(|v| v.as_str());
-            crate::webview_cdp::eval(&expression, frame)
+            // 长等待：默认 30s；调用方要「等一件长事发生完」时自己抬。
+            let timeout = args
+                .get("timeout_ms")
+                .and_then(|v| v.as_f64())
+                .map(|ms| {
+                    std::time::Duration::from_millis(ms.max(0.0) as u64)
+                        .min(crate::cdp::MAX_EVAL_TIMEOUT)
+                })
+                .filter(|d| *d > crate::cdp::IO_TIMEOUT)
+                .unwrap_or(crate::cdp::IO_TIMEOUT);
+            crate::webview_cdp::eval(&expression, frame, timeout)
         }
         "webview_click" => {
             let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);

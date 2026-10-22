@@ -129,6 +129,15 @@ pub fn per_tool_budget(tool: &str) -> Duration {
         "delegate_task" => Duration::from_secs(1900),
         // 文档转换（Office MCP / markitdown）跑外部进程，大文件转换慢
         "markitdown" | "file_converter" | "read_pdf" => Duration::from_secs(300),
+        // 查看器 MCP 的 `webview_eval`：支持长等待（等视频播完）。
+        // 匹配两种形态 —— 直连（`hermix-viewer__webview_eval`）与桥接
+        // （`tool_call`，agent 把 webview_eval 裹在桥接里调；桥接转发
+        // arguments，所以 `timeout_ms` 会一路传到查看器）。
+        //
+        // 为什么值得单独放行：默认 60s 逼着 agent 每 25 秒轮询一次视频，
+        // 实测一条刷课任务里轮询占了单节 15~30 次调用中的绝大多数，而
+        // 每次调用都带着整个上下文重新计费。一次长等待 = 1 次调用。
+        t if t.ends_with("webview_eval") || t == "tool_call" => Duration::from_secs(300),
         // 图片/视频生成走外部 API，出图 1-3 分钟是常态
         "image_generate" | "gpt_image_generate" | "video_generate" | "tts" => {
             Duration::from_secs(600)
@@ -378,7 +387,9 @@ pub async fn dispatch_single(
     max_result_size_chars: usize,
 ) -> ToolResult {
     let start = Instant::now();
-    let per_call_timeout = Duration::from_secs(60); // Same as dispatch_tools default
+    // 走**单一真相源** `per_tool_budget`（按工具身份声明），不再硬编码 60s ——
+    // 否则查看器的 `webview_eval` 长等待会在这里被掐断（外层比内层先到）。
+    let per_call_timeout = per_tool_budget(&call.function.name);
     let result = match tokio::time::timeout(
         per_call_timeout,
         registry.dispatch_async(

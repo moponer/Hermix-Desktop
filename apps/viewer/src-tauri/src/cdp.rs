@@ -18,7 +18,20 @@ use tungstenite::client::{client as ws_client, IntoClientRequest};
 use tungstenite::{Message, WebSocket};
 
 /// 单次读写的超时。
-const IO_TIMEOUT: Duration = Duration::from_secs(30);
+pub const IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `webview_eval` 的 `timeout_ms` 上限。
+///
+/// **为什么需要长等待**：一次 `Runtime.evaluate` 的等待时间决定了 agent
+/// 能不能「等一件事发生完」。默认 30s 意味着「等一个 7 分钟的视频播完」
+/// 只能退化成每 25 秒轮询一次 —— 实测一条刷课任务里，轮询占了单节 15~30
+/// 次调用中的绝大多数，而每次调用都带着整个上下文重新计费。
+/// 给了长超时，agent 就能**一次 eval 等到视频结束**（1 次调用 vs 15~30 次）。
+///
+/// 上限 300s 是三方对齐的结果：MCP HTTP 传输的总超时也是 300s，
+/// dispatch 的每工具预算同样给到 300s —— 三道闸必须同时够长，
+/// 否则最矮的那道先把请求掐了（实测症状是 `os error 10060`）。
+pub const MAX_EVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// 一条 CDP 连接。
 pub struct Cdp {
@@ -53,6 +66,21 @@ impl Cdp {
     /// `session` = 已 attach 的页面会话（`Target.attachToTarget` 返回的
     /// sessionId）；传 None 就是 browser 级命令。
     pub fn call(&mut self, method: &str, params: Value, session: Option<&str>) -> Result<Value, String> {
+        self.call_with_timeout(method, params, session, IO_TIMEOUT)
+    }
+
+    /// 同 [`Cdp::call`]，但**这一次调用**用自定义超时。
+    ///
+    /// 底层 socket 的读超时是连接时定下的（30s），光改这里的 deadline 不够
+    /// —— socket 会先一步超时返回 `os error 10060`。所以这里把 socket 的
+    /// 读超时也一起调宽，长等待才真的等得到。
+    pub fn call_with_timeout(
+        &mut self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
         let mut message = json!({"id": id, "method": method, "params": params});
@@ -63,7 +91,10 @@ impl Cdp {
             .send(Message::Text(message.to_string().into()))
             .map_err(|e| format!("发送 {method} 失败：{e}"))?;
 
-        let deadline = Instant::now() + IO_TIMEOUT;
+        // socket 读超时必须 ≥ 本次调用的 deadline，否则它会先断。
+        let _ = self.ws.get_ref().set_read_timeout(Some(timeout));
+
+        let deadline = Instant::now() + timeout;
         loop {
             if Instant::now() > deadline {
                 return Err(format!("等待 {method} 响应超时"));
@@ -163,10 +194,11 @@ impl Cdp {
         page_session: &str,
         frame_needle: &str,
         expression: &str,
+        timeout: Duration,
     ) -> Result<String, String> {
         // 1) 先在本页面的 frame tree 里找。
         if let Some(session) = self.session_holding_frame(page_session, frame_needle)? {
-            return self.evaluate_with_context(&session, frame_needle, expression);
+            return self.evaluate_with_context(&session, frame_needle, expression, timeout);
         }
         // 2) 跨 target 找（**跨源 iframe 可能是独立 target / 独立进程**：
         //    超星的播放器就嵌在 `knowledge/cards` 这个同源 iframe 里，而
@@ -191,7 +223,7 @@ impl Cdp {
             };
             self.enable_runtime(&session)?;
             if let Some(found) = self.session_holding_frame(&session, frame_needle)? {
-                return self.evaluate_with_context(&found, frame_needle, expression);
+                return self.evaluate_with_context(&found, frame_needle, expression, timeout);
             }
         }
         Err(format!("页面里没有 URL 含「{frame_needle}」的 iframe"))
@@ -229,6 +261,7 @@ impl Cdp {
         session: &str,
         frame_needle: &str,
         expression: &str,
+        timeout: Duration,
     ) -> Result<String, String> {
         let tree = self.call("Page.getFrameTree", json!({}), Some(session))?;
         let mut frame_id: Option<String> = None;
@@ -255,7 +288,7 @@ impl Cdp {
             .get(&format!("{session}:{frame_id}"))
             .copied()
             .ok_or_else(|| format!("找不到该 iframe 的执行上下文（{frame_needle}）"))?;
-        let result = self.call(
+        let result = self.call_with_timeout(
             "Runtime.evaluate",
             json!({
                 "expression": expression,
@@ -264,6 +297,7 @@ impl Cdp {
                 "contextId": context_id,
             }),
             Some(session),
+            timeout,
         )?;
         if let Some(details) = result.get("exceptionDetails") {
             let text = details
@@ -281,11 +315,19 @@ impl Cdp {
 }
 
 /// 在页面里求值一个 JS 表达式，返回按值的结果。
-pub fn evaluate(cdp: &mut Cdp, session: &str, expression: &str) -> Result<String, String> {
-    let result = cdp.call(
+///
+/// `timeout` = 这一次求值最多等多久（长等待用；见 [`MAX_EVAL_TIMEOUT`]）。
+pub fn evaluate(
+    cdp: &mut Cdp,
+    session: &str,
+    expression: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let result = cdp.call_with_timeout(
         "Runtime.evaluate",
         json!({"expression": expression, "returnByValue": true, "awaitPromise": true}),
         Some(session),
+        timeout,
     )?;
     if let Some(details) = result.get("exceptionDetails") {
         let text = details

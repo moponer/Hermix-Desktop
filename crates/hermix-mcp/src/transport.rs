@@ -451,7 +451,11 @@ impl StreamableHttpTransport {
     pub fn new(url: &str, auth_token: Option<String>) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(120))
+            // 总超时 300s：查看器 MCP 的 `webview_eval` 支持长等待（等视频
+            // 播完，一次调用 vs 每 25 秒轮询），它内部把这次请求挂到 300s。
+            // 真正的护栏是 dispatch 层的每工具预算（普通工具仍 60s），这里
+            // 只是「HTTP 层不再成为最矮的那道闸」。
+            .timeout(std::time::Duration::from_secs(300))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
