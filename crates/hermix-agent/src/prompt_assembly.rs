@@ -28,7 +28,7 @@ use hermix_focus::MemoryRouter;
 
 use crate::agent_config::AgentConfig;
 use crate::agent_helpers::AgentCallbacks;
-use crate::context::{load_builtin_memory_snapshot, load_soul_md, resolve_personality, SystemPromptBuilder};
+use crate::context::{load_soul_md, resolve_personality, SystemPromptBuilder};
 use crate::context_files::{load_hermes_context_files, load_workspace_context};
 use crate::ContextManager;
 use hermix_intelligence::{DomainMode, DomainModeDetector};
