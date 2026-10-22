@@ -26,12 +26,16 @@ import { PageHeader, SkeletonCard } from "./ui";
 import { AliCharacter, type AliState } from "./twin/AliCharacter";
 
 interface TwinViewProps {
-  /** 会话通道接通前的降级：把用户送去对话页。 */
-  onOpenChat: () => void;
   /** 把阿黎的专属会话登记进宿主表（工作台同款机制）——不登记 ChatView 渲染不出来。 */
   upsertSessions: (list: Session[]) => void;
-  /** 只切激活会话、不动当前页面：点「打开对话」时用。 */
-  selectSessionOnly: (id: string) => void;
+  /**
+   * 打开某个会话：切激活会话 + 跳到对话页，**且不新建对话**。
+   *
+   * 不要用宿主的 `openChat`（Semantics 是「回到新对话空屏」，它会把
+   * activeSessionId 置 null）。之前用错它，导致点「打开对话」必然落到
+   * 一个空白新对话上。
+   */
+  onOpenSession: (id: string) => void;
 }
 
 type Mode = "watch" | "dispatch" | "summary";
@@ -58,11 +62,7 @@ type TwinPhase = "idle" | "sending" | "running" | "done" | "error";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export function TwinView({
-  onOpenChat,
-  upsertSessions,
-  selectSessionOnly,
-}: TwinViewProps) {
+export function TwinView({ upsertSessions, onOpenSession }: TwinViewProps) {
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
   const [activeRuns, setActiveRuns] = useState(0);
   /** 最近的工作日志（daily_memory）—— 三栏右侧的真实数据源之一。 */
@@ -289,12 +289,12 @@ export function TwinView({
     setTwinPhase("error");
   }, []);
 
-  /** 打开阿黎的会话（登记 → 切激活 → 跳对话页），后续轮次直接在对话里聊。 */
+  /** 打开阿黎的会话（登记 → 切激活 + 跳对话页），后续轮次直接在对话里聊。
+   *  必须先登记：ChatView 只认宿主会话表里的对象。 */
   const openAliChat = () => {
     if (!aliSession) return;
     upsertSessions([aliSession]);
-    selectSessionOnly(aliSession.id);
-    onOpenChat();
+    onOpenSession(aliSession.id);
   };
 
   return (

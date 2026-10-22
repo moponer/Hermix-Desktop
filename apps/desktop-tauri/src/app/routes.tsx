@@ -52,9 +52,8 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
       return (
         <Suspense fallback={<RouteLoading />}>
           <TwinView
-            onOpenChat={ctx.openChat}
             upsertSessions={ctx.upsertSessions}
-            selectSessionOnly={ctx.selectSessionOnly}
+            onOpenSession={ctx.handleSelectSession}
           />
         </Suspense>
       );
