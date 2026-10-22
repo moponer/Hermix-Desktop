@@ -109,8 +109,19 @@ res_check() { # $1 = sentinel file, $2 = dir to compare against, $3 = 源码目�
 }
 res_check "apps/desktop-tauri/src-tauri/builtin-soul/SOUL.md" "apps/desktop-tauri/src-tauri/builtin-soul"
 res_check "apps/desktop-tauri/src-tauri/resources/loader/hx-shell.exe" "apps/desktop-tauri/src-tauri/resources/loader" "apps/hx-shell/src"
-res_check "apps/desktop-tauri/src-tauri/resources/loader/WebView2Loader.dll" "apps/desktop-tauri/src-tauri/resources/loader"
-res_check "apps/desktop-tauri/src-tauri/resources/loader/esbuild.exe" "apps/desktop-tauri/src-tauri/resources/loader"
+# 外来二进制（esbuild.exe / WebView2Loader.dll）**没有本仓源码** —— 它们随
+# 上游发行版（esbuild / WebView2 SDK）一起提交。按同目录比，它们必然比同目录
+# 里后放入的自研产物（hx-shell.exe）旧 → 误判成 STALE（2026-10-22 实测：
+# 打包前检查一直 exit 1，与本次改动无关）。它们该比的是**上游发行版**，仓库
+# 里没有 → 与 markitdown 同一条不对称：**只查在位，不查新鲜度**。
+res_presence() {
+  if [ ! -f "$1" ]; then
+    echo "  MISSING: bundled resource absent: $1"
+    RES_STALE=1
+  fi
+}
+res_presence "apps/desktop-tauri/src-tauri/resources/loader/WebView2Loader.dll"
+res_presence "apps/desktop-tauri/src-tauri/resources/loader/esbuild.exe"
 
 if [ -n "$RES_STALE" ]; then
   echo "         Rebuild the bundle so the fresh copy is compiled/packaged in."
