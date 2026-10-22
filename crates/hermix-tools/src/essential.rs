@@ -94,6 +94,16 @@ pub const HARD_ESSENTIAL_TOOLSETS: &[&str] = &[
     "memory",
     "pdf",
     "core",
+    // 桥接三件套是**机制**而不是可关的功能（2026-10-21 第四例）：延迟工具
+    // 数 ≥ 阈值时 `assemble_tool_schemas` 会把它们的 schema **合成**进工具表，
+    // 模型看得见就一定会调 —— 若对应 handler 所在的 toolset 被白名单后置过滤
+    // 关掉，就成了「看得见、调不动」：模型每轮调它必被校验器拒，纯烧轮次。
+    // `tool_describe` 所在的 toolset 是 10-17 那份 `enabled_toolsets.json`
+    // 之后新增的，按「新 toolset 默认关」的规则被关掉，而系统提示仍在宣传它
+    // → agent 连着几轮调它都被拒。
+    "tool_search",
+    "tool_describe",
+    "tool_call",
     "security",
     "security_guidance",
     "custom_app",
@@ -171,6 +181,10 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "memory",
     "pdf",
     "core",
+    // 桥接三件套（机制，非可关功能）—— 见 HARD_ESSENTIAL_TOOLSETS 的说明
+    "tool_search",
+    "tool_describe",
+    "tool_call",
     "security",
     "security_guidance",
     "custom_app",
@@ -237,6 +251,16 @@ mod tests {
                 "memory",
                 "pdf",
                 "core",
+       // 桥接三件套是**机制**而不是可关的功能：延迟工具数 ≥ 阈值时
+       // `assemble_tool_schemas` 会把它们的 schema **合成**进工具表，模型
+       // 看得见就一定会调 —— 若对应 handler 所在的 toolset 被关掉，就成了
+       // 「看得见、调不动」：模型每轮调它必被校验器拒，纯烧轮次。
+       // 2026-10-21 实测：`tool_describe` 所在的 toolset 是 10-17 那份
+       // `enabled_toolsets.json` 之后新增的，按「新 toolset 默认关」的规则
+       // 被关掉，而系统提示仍在宣传它 → agent 连着几轮调它都被拒。
+       "tool_search",
+       "tool_describe",
+       "tool_call",
                 "security",
                 "security_guidance",
                 "custom_app",

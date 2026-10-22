@@ -123,10 +123,17 @@ pub fn assemble_tool_schemas(all: Vec<ToolSchema>) -> AssemblyResult {
     }
     let (visible, deferred) = classify_tools(&incoming);
     if deferred.len() < DEFERRED_THRESHOLD {
-        let mut tool_schemas = incoming;
-        tool_schemas.extend(existing_bridges);
+        // Bridge NOT active → every deferred tool is directly visible, so the
+        // bridge trio is pure overhead: it occupies slots in the tools array
+        // (prompt tokens) and it *invites* the model to go on a discovery
+        // detour. Measured 2026-10-22: 25% of a long-running task's calls
+        // were spent hunting for tools through it.
+        //
+        // Dropping them here also keeps `directions.rs` honest: that guidance
+        // is gated on the visible tool names, so with the trio out of the
+        // array the model is never told the bridge exists.
         return AssemblyResult {
-            tool_schemas,
+            tool_schemas: incoming,
             activated: false,
             deferred_count: 0,
         };
