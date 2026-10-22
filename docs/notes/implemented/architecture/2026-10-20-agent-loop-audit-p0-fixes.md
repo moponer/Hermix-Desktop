@@ -1,6 +1,6 @@
 # Decision Note: Agent Loop 审计后的 P0 / P1 修复
 
-Status: implemented — 见 Decision 1–27
+Status: implemented — 见 Decision 1–28
 
 来源：2026-10-20 对 agent 循环四维度（工具执行 / 上下文与缓存 / 资源占用 / 持久化）的源码审计。P0 是正确性缺口，P1 是一致性与体感问题。
 
@@ -311,6 +311,21 @@ Decision 26 的审查结论是"缺对比式精炼"。这一项把它补齐，新
 **判定**：`category == "auto"`（frontmatter 派生）**或** 路径含 `auto` 段（`AUTO_SKILL_DIR` 的硬约定）。任一命中即算——宁可多降权一个手写技能，也不要漏掉一个沉淀产物。
 
 **验证**：`hand_written_skill_outranks_an_equally_matching_auto_skill`（同分时手写第一）、`an_auto_skill_alone_still_activates`（降权不是封杀）、`a_weak_auto_match_is_dropped_by_the_discount`（0.1875 必须落选）。真实库（44 个技能）中性查询仍 3/10 且全部为正确激活。
+
+### 23. 压缩横幅的假用量 + 压缩后不自动继续（2026-10-22 测试机实测）
+
+用户在测试机跑超星长任务：压缩完成后横幅仍显示 **184k/205k (90%)**——压缩前的数字；随后 agent 把压缩当收尾信号，输出总结自然结束，长任务中断。
+
+**① 横幅假用量，两条路径两个 bug：**
+
+- **同步红线路径**（≥85%）：post 快照的 `used_after = total_tokens − tokens_saved` 是**引擎自报**的估算；引擎漏报 `tokens_saved` 时它就等于压缩前数字。而权威值（`ctx.recompute_total_tokens()`）在消息替换后才存在——原代码先发快照后重算，顺序反了。修复：recompute 之后用 `ctx.total_tokens()` 覆盖 `current_tokens` 再 emit。
+- **spawn 路径**（`emit_post_compression_status`）：`breaker_snapshot_with_phase(tokens_saved, 0, 0, …)`——把**节省量**当成**当前用量**，threshold/max 传 0（前端百分比除零）。修复：调用方传入重算后的真实三值。
+
+**② 压缩后自动继续**：压缩应用后注入一条 **user 角色、`ephemeral: true`** 的继续指令（"继续推进当前未完成的工作……不要向用户确认是否继续"）。三个设计点：
+
+- **user 角色而非 system**：先前的 system nudge 在实测中被模型当背景信息忽略（它仍选择收尾）；user 角色语义是"用户要求继续"，模型必须回应。
+- **ephemeral**：flush 跳过 → DB 与 UI 时间线不出现这条假用户消息；LLM 在 ctx 内存态每轮可见。长期持久化由 `compressed_summary` 负责，互补。
+- **不代猜任务内容**：指令不写死"继续调试超星"（用户中途可能已切话题，如实测中的"明治维新"），只把"继续"意图顶到最前，任务判断交给模型基于摘要与任务清单。
 
 ## Alternatives considered
 

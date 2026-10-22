@@ -274,6 +274,34 @@ pub(crate) fn apply_compression_outcome(
     }
     let mut merged = outcome.compressed_base;
     merged.extend(new_messages);
+
+    // 压缩后**自动继续**。
+    //
+    // 实测（2026-10-22，超星长任务）：压缩把中间历史替换成摘要后，模型在
+    // 新窗口里看到"摘要 + 尾部片段"，把它读成收尾信号——输出一段总结
+    // 自然结束，长任务中断，用户被迫手动输入"继续"。
+    //
+    // 修复：注入一条 **user 角色**的继续指令。为什么不用 system：system
+    // nudge 在实测中被模型当背景信息忽略（它仍然选择收尾）；user 角色
+    // 语义上是"用户要求继续"，模型必须回应，且指令明确"不要向用户确认"。
+    //
+    // `ephemeral: true`：不落 DB（flush 跳过），UI 时间线不出现这条假
+    // 用户消息；LLM 每轮都能看到（ctx 内存态）。任务的长期持久化由
+    // `compressed_summary` 负责，与本条互补。
+    //
+    // 不代猜任务内容（"继续调试超星"这种具体目标不写死）：任务是否完成、
+    // 下一步是什么，交给模型基于摘要与任务清单判断——压缩时 todo 状态
+    // 并未被清掉，指令只负责把"继续"的意图顶到最前。
+    let mut resume = Message::user(
+        "[自动继续] 上下文已压缩为摘要。请继续推进当前未完成的工作：\
+         先对照你的任务清单（如有）确认剩余步骤，然后从上次进度继续执行；\
+         若所有步骤确已完成，直接输出最终总结。\
+         不要向用户确认是否继续——直接行动。"
+            .to_string(),
+    );
+    resume.ephemeral = true;
+    merged.push(resume);
+
     *ctx.get_messages_mut() = merged;
     ctx.recompute_total_tokens();
     // Best-effort log line — we can't easily log the live
@@ -686,12 +714,23 @@ pub async fn auto_compress_if_over_threshold<F>(
             snap.state = post_state;
             snap
         };
-        emit_compaction_status(callbacks, &post_snap);
+        // NOTE: the post_snap is NOT emitted here. Its `used_after` is an
+        // engine-self-reported estimate (`total_tokens - tokens_saved`);
+        // engines that fail to report `tokens_saved` leave it at the
+        // pre-compression value and the banner freezes at e.g.
+        // "184k/205k" after a successful compression (2026-10-22 实测).
+        // The authoritative number only exists after the messages are
+        // swapped in and tokens recomputed — see the corrected emit below.
         *ctx.get_messages_mut() = compressed;
         // Bulk-replace invalidates the cached running token total; the
         // agent loop's next pressure check calls `total_tokens()` and
         // would otherwise read the pre-compression count.
         ctx.recompute_total_tokens();
+        // Corrected post-attempt snapshot: `current_tokens` now comes from
+        // the recomputed live context, not the engine's self-report.
+        let mut final_snap = post_snap;
+        final_snap.current_tokens = ctx.total_tokens() as u64;
+        emit_compaction_status(callbacks, &final_snap);
     } else {
         // Fallback: simple character-based compression. The method is
         // deprecated as a no-op fallback only — when no LLM compressor
@@ -960,10 +999,10 @@ mod spawn_streaming_tests {
         assert!(applied, "spawn should have completed by now");
         // Pass-through engine — the spawn's compressed base is
         // `snapshot` plus the archive-summary system message the
-        // spawn inserts (3 + 1 = 4). The pre-spawn ctx had 3
-        // messages; the apply path replaces them with the
-        // compressed base, so the final length is 4.
-        let expected_len = snapshot.len() + 1;
+        // spawn inserts, plus the post-apply re-anchoring nudge
+        // (3 + 1 + 1 = 5). The pre-spawn ctx had 3 messages; the
+        // apply path replaces them with the compressed base.
+        let expected_len = snapshot.len() + 2;
         assert_eq!(
             ctx.get_messages().len(),
             expected_len,
@@ -1052,12 +1091,24 @@ mod spawn_streaming_tests {
         let last_archive_refs: std::sync::Mutex<Vec<ArchiveRef>> =
             std::sync::Mutex::new(Vec::new());
         apply_compression_outcome(outcome, 3, 300, &mut ctx, &last_archive_refs);
-        // Final ctx: [a, b] (compressed base) + [d, e] (post-snapshot).
-        assert_eq!(ctx.get_messages().len(), 4);
+        // Final ctx: [a, b] (compressed base) + [d, e] (post-snapshot)
+        // + the re-anchoring nudge appended by `apply_compression_outcome`.
+        assert_eq!(ctx.get_messages().len(), 5);
         assert_eq!(ctx.get_messages()[0].content.as_deref(), Some("a"));
         assert_eq!(ctx.get_messages()[1].content.as_deref(), Some("b"));
         assert_eq!(ctx.get_messages()[2].content.as_deref(), Some("d"));
         assert_eq!(ctx.get_messages()[3].content.as_deref(), Some("e"));
+        assert!(
+            ctx.get_messages()[4]
+                .content
+                .as_deref()
+                .is_some_and(|c| c.contains("[自动继续]")),
+            "压缩后必须以自动继续指令收尾（user 角色，防模型把压缩当收尾信号）"
+        );
+        assert!(
+            ctx.get_messages()[4].ephemeral,
+            "继续指令不得进入持久化时间线（否则 UI 出现假用户消息）"
+        );
     }
 
     /// T6: the slot helpers (`in_flight_slot_is_empty`,

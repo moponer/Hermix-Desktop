@@ -527,7 +527,14 @@ impl AgentLoop {
         .await;
         if applied {
             self.refresh_post_compression_slots_from_outcome();
-            self.emit_post_compression_status();
+            // 应用完成后 ctx 已重算过 token（apply 路径保证），用**真实值**
+            // 发 post 快照——旧版把 tokens_saved 当 current_tokens、
+            // threshold/max 传 0，横幅的百分比全是错的。
+            self.emit_post_compression_status(
+                ctx.total_tokens() as u64,
+                ctx.pressure_threshold_tokens() as u64,
+                ctx.max_context_tokens() as u64,
+            );
         }
         applied
     }

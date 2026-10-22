@@ -54,7 +54,12 @@ impl AgentLoop {
     /// here on the next `do_pre_turn_setup` when the outcome lands.
     /// The snapshot is already constructed and stored on the engine
     /// by the spawn task; we just forward it through the callback.
-    pub(crate) fn emit_post_compression_status(&self) {
+    pub(crate) fn emit_post_compression_status(
+        &self,
+        current_tokens: u64,
+        threshold_tokens: u64,
+        max_tokens: u64,
+    ) {
         let Some(compressor) = self.compression.as_ref() else {
             return;
         };
@@ -66,15 +71,17 @@ impl AgentLoop {
         // metrics we passed in at spawn time are reflected here
         // because the spawn task already ran `record_outcome` on
         // the same engine.
-        let tokens_saved = guard.last_metrics().tokens_saved;
-        // derive `phase` from the engine's own metrics
-        // — the spawn path doesn't get an explicit "complete"/"failed"
-        // label from the caller, so we infer it. `summary_errors == 0`
-        // means success (matches the post-snap logic in
-        // `compression_ops::auto_compress_if_over_threshold`).
+        //
+        // 2026-10-22 fix: the previous version passed
+        // `breaker_snapshot_with_phase(tokens_saved, 0, 0, …)` — the
+        // *saved* token count as the *current* usage, with zeroed
+        // threshold/max. The banner then showed a nonsense ratio (or
+        // division by zero on the front end). The caller now supplies
+        // the recomputed live numbers from the context.
         let summary_errors = guard.last_metrics().summary_errors;
         let phase = if summary_errors == 0 { "complete" } else { "failed" };
-        let snap = guard.breaker_snapshot_with_phase(tokens_saved, 0, 0, None, phase);
+        let snap =
+            guard.breaker_snapshot_with_phase(current_tokens, threshold_tokens, max_tokens, None, phase);
         crate::message_helpers::emit_compaction_status(&self.callbacks, &snap);
     }
 
