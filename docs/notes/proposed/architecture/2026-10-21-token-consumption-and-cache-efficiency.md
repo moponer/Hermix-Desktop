@@ -139,6 +139,30 @@ MCP 客户端**只在 sidecar 启动时连一次**，连不上就 `skipping` —
    并加一句「摸了也没用 → 先怀疑 MCP 没连上」，让 agent 报告真实原因而不是
    继续找替代路径。
 
+### 事实 9（2026-10-22 补）：桥接三件套「看得见、调不动」，且多数时候是纯开销
+
+`tool_search` / `tool_describe` / `tool_call` 是「找工具 → 取 schema → 调工具」
+三步链。实测两个问题：
+
+**(a) 看得见、调不动。** `assemble_tool_schemas` 在桥接激活时用
+`bridge_tool_schemas(count)` **凭空合成**三个 schema 塞进工具表；而
+`tool_describe` 所在的 toolset 不在用户那份 `enabled_toolsets.json`（**10-17**
+写的）里 → 按 `apply_persisted_toolset_state` 的「新 toolset 默认关」规则被关掉
+→ 它的 handler 不在 agent 的派发注册表里 → 模型看得见 schema、调它必被拒。
+证据：`/v1/tools` 里 `tool_describe.isEnabled=false`，而系统提示仍在宣传它
+（`directions.rs` 的 `TOOL_DISCOVERY_GUIDANCE`），实测 agent 连着几轮调它都被拒。
+
+**(b) 多数时候是纯开销。** 延迟工具数 < 阈值（25）时桥接**不激活** → 所有工具
+都直接可见 → 桥接三件套毫无用处，却占着工具表的位置（prompt token），还
+**诱导模型去摸工具**（实测 25% 的调用花在摸工具上）。
+
+### 修法
+
+- **桥接三件套进 `HARD_ESSENTIAL_TOOLSETS`** —— 桥接是**机制**不是可关的功能，
+  它的每一步都必须可调度（与 `core` 里的 `list_tools` 同性质：模型的逃生口）。
+- **桥接未激活时不把这三个放进工具表** —— `directions.rs` 的指引按可见工具名
+  gate，于是模型也不会再被告知桥接存在。
+
 ## Decision（按复核后的重心重排）
 
 **先做「有界历史窗口」（已实施），再做「让字节稳定」，最后才是 prompt 层瘦身。**
