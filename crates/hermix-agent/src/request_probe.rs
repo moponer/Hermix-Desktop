@@ -176,6 +176,12 @@ fn hashable_messages(messages: &[Message]) -> String {
             out.push_str("|R:");
             out.push_str(r);
         }
+        // `cache_control` 同样会进请求体，而 `apply_prompt_cache_markers`
+        // 把它标在**最后 3 条** user/assistant 上 —— 标记每调用都在移动，
+        // 那几条消息的字节也就每调用都在变。不进指纹就看不见它（盲区）。
+        if m.cache_control.is_some() {
+            out.push_str("|CC");
+        }
         if let Some(calls) = &m.tool_calls {
             for c in calls {
                 out.push_str("|C:");
