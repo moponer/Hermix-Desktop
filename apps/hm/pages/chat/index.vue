@@ -27,6 +27,9 @@ import { ChatSession } from '../../core/session'
 import { renderMarkdown } from '../../core/markdown'
 import { newSessionId, loadSession, saveSession } from '../../core/history'
 import { interruptSession } from '../../core/tasks'
+import { loadModelConfig, saveModelConfig, clearModelConfig } from '../../core/modelStore'
+import { streamLocalChat, type LocalTurn } from '../../core/localChat'
+import type { ModelConfig } from '../../core/model'
 import { useKeyboardHeight } from '../../composables/useKeyboardHeight'
 import { useVoiceInput, type VoiceSttWire } from '../../composables/useVoiceInput'
 
@@ -70,6 +73,11 @@ const typedText = ref('')
 const turnStart = ref(0)
 const elapsed = ref(0)
 const lastDuration = ref<number | null>(null)
+/**
+ * 电脑端**没有**开启「模型配置推送」→ 手机端不能本地对话，且本地存的那份
+ * （含 API Key）已被删除。界面上要说清是「电脑端没开」而不是「手机坏了」。
+ */
+const modelPushOff = ref(false)
 let typer: ReturnType<typeof setInterval> | null = null
 let ticker: ReturnType<typeof setInterval> | null = null
 
@@ -124,6 +132,19 @@ function todoIcon(status: string): string {
   if (status === 'completed' || status === 'done') return '✓'
   if (status === 'in_progress') return '●'
   return '○'
+}
+/**
+ * 手机端切换默认模型：走同一条密封上行（WS），不走 REST。
+ *
+ * 中继是只路由的字节管道，没有通往桌面的 HTTP 通道——手机此前那条
+ * `GET {relay}/api/model/list` 必然 404，模型清单因此永远是空的。
+ * 桌面收到后会回推一份新清单（`model.list`），这里不必自己改本地状态。
+ */
+async function onSelectModel(model: string): Promise<void> {
+  const ok = await session?.selectModel(model)
+  if (!ok) {
+    uni.showToast({ title: '没连上电脑，切换失败', icon: 'none' })
+  }
 }
 
 /** 空态：还没有任何一轮对话。 */
@@ -200,6 +221,13 @@ async function ensureSession(): Promise<void> {
     },
     onError: (m) => {
       linkMsg.value = m
+      // 凭据被撤销（终态，不会自愈）→ 这台手机再也连不上这台电脑了。本地
+      // 存的模型配置（含 API Key）必须一并删掉：撤销的意义是「这台设备不再
+      // 持有访问权」，留着 key 等于只撤了一半。
+      if (/401|凭据已被撤销|已被中转拒绝/i.test(m)) {
+        clearModelConfig()
+        modelPushOff.value = true
+      }
     },
   })
   await session.start()
@@ -209,6 +237,19 @@ async function ensureSession(): Promise<void> {
 // 不会叠连接。
 onShow(() => {
   paired.value = isPaired()
+  // 先装上次从电脑收到的配置：电脑没连上（或还没把配置推过来）时，模型
+  // 选择器不该是空的——本地直连也靠这份凭据。
+  if (!chat.value.models.length) {
+    const saved = loadModelConfig()
+    if (saved) {
+      chat.value = {
+        ...chat.value,
+        models: saved.models,
+        providers: saved.providers,
+        defaultModel: saved.defaultModel,
+      }
+    }
+  }
   // session 已死（401 撤销，closed=true）时清掉它，让 ensureSession 走 _doStart 重建。
   // 正在连接中（isConnecting=true）的不动——让它继续，不要打断。
   if (session && !session.connected && !session.isConnecting) {
@@ -260,6 +301,25 @@ function onFrame(raw: string) {
   // 落定前要先把这一轮的思考过程从会话状态取走（reduce 的 turn.done 会清空它）
   const thinking = chat.value.thinking
   const next = reduce(chat.value, ev)
+  // 电脑推来的模型配置 → 存一份本地：电脑关机后这份就是唯一可用的配置
+  // （本地直连要用它），电脑改了配置手机下次连上就跟着变。
+  //
+  // **空清单 = 电脑端没开这个开关**（或它没有可用模型）。这时手机端必须
+  // **删掉本地存的那份**（含 API Key）：只留着不删，等于「电脑说不给了，
+  // 手机还拿着旧 key 继续用」——用户以为收干净了，其实没有。
+  if (ev.kind === 'model.list') {
+    if (!next.models.length) {
+      clearModelConfig()
+      modelPushOff.value = true
+    } else {
+      saveModelConfig({
+        models: next.models,
+        providers: next.providers,
+        defaultModel: next.defaultModel,
+      })
+      modelPushOff.value = false
+    }
+  }
   // 桌面开始处理的第一帧：清除所有用户消息的 sending 状态
   if (!prevTurnActive && next.turnActive) {
     messages.value.forEach((m) => { m.sending = false })
@@ -388,6 +448,61 @@ function confirmNew() {
   })
 }
 
+// ── 本地直连（电脑离线时）──────────────────────────────────────────
+//
+// 对话走哪条路：auto = 电脑在线就走电脑，否则走本地（手机用电脑推来的凭据
+// 直连云厂商，不经 relay 也不经电脑）。凭据是电脑给的，所以「电脑端没开
+// 模型配置推送」＝本地这条路不可用——界面要说清是电脑端没开，不是手机坏了。
+type ChatChannel = 'auto' | 'remote' | 'local'
+const channel = ref<ChatChannel>('auto')
+
+/** 本地直连要用的配置（与电脑推来的那份同源，已存在手机本地）。 */
+const localConfig = computed<ModelConfig>(() => ({
+  models: chat.value.models,
+  providers: chat.value.providers,
+  defaultModel: chat.value.defaultModel,
+  updatedAt: 0,
+}))
+/** 有没有可用的本地凭据。 */
+const canLocal = computed(() => chat.value.providers.length > 0 && !!chat.value.defaultModel)
+/** 实际生效的通道。 */
+const activeChannel = computed<'remote' | 'local'>(() => {
+  if (channel.value === 'local') return 'local'
+  if (channel.value === 'remote') return 'remote'
+  return link.value === 'online' ? 'remote' : 'local'
+})
+const channelLabel = computed(() => {
+  if (channel.value === 'remote') return '仅电脑'
+  if (channel.value === 'local') return '仅本地'
+  return `自动 · ${activeChannel.value === 'remote' ? '走电脑' : '走本地'}`
+})
+function cycleChannel() {
+  channel.value =
+    channel.value === 'auto' ? 'remote' : channel.value === 'remote' ? 'local' : 'auto'
+}
+
+/**
+ * 跑一轮本地直连。
+ *
+ * 增量**转成同名 App 事件喂给 onFrame** —— 于是打字机、淡入、markdown 渲染、
+ * 气泡落定全部复用现有管线，不写第二套渲染。
+ */
+function runLocalChat(history: LocalTurn[]) {
+  const model = chat.value.defaultModel
+  if (!model) {
+    uni.showToast({ title: '没有可用的默认模型', icon: 'none' })
+    return
+  }
+  streamLocalChat(localConfig.value, model, history, {
+    onDelta: (d) => onFrame(JSON.stringify({ type: 'assistant.message', content: d })),
+    onDone: () => onFrame(JSON.stringify({ type: 'turn.done' })),
+    onError: (msg) => {
+      onFrame(JSON.stringify({ type: 'turn.error', message: msg }))
+      uni.showToast({ title: msg, icon: 'none' })
+    },
+  })
+}
+
 function send() {
   sendText(draft.value)
   draft.value = ''
@@ -402,6 +517,25 @@ function sendText(t: string) {
     saveSession(currentSid.value, [])
   }
   void (async () => {
+    // 本地直连：电脑不在线（或用户强制走本地）时，手机拿电脑推来的凭据
+    // 直接问云厂商。**不等 ensureSession** —— 这条路不需要电脑。
+    if (activeChannel.value === 'local') {
+      if (!canLocal.value) {
+        uni.showToast({ title: '电脑端未启用模型配置推送，本地对话不可用', icon: 'none' })
+        return
+      }
+      // 先落用户气泡：历史里要带上它（云端要看到这轮的问题）
+      if (!messages.value.some((m) => m.role === 'user' && m.text === text && m.viaVoice)) {
+        messages.value.push({ id: String(Date.now()), role: 'user', text, sending: true })
+      }
+      const history: LocalTurn[] = messages.value
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.text }))
+      runLocalChat(history)
+      persistSession()
+      scrollToTail()
+      return
+    }
     // 等连接真正就绪（hello + key.exchange 完成）再发，否则 send() 返回 false
     // 导致消息「发出去没回」而用户以为是网络慢。
     await ensureSession()
@@ -449,7 +583,15 @@ onUnmounted(() => {
 <template>
   <hm-shell title="对话" :scroll-into-view="anchor" :class="{ 'kb-open': kbHeight > 120 }">
     <template #end>
-      <hm-model-picker />
+      <hm-model-picker
+        :models="chat.models"
+        :default-model="chat.defaultModel"
+        @select="onSelectModel"
+      />
+      <!-- 通道选择：自动（电脑在线走电脑，否则走本地直连）/ 仅电脑 / 仅本地 -->
+      <view class="hm-pill chan-pill" @tap="cycleChannel">
+        <text>{{ channelLabel }}</text>
+      </view>
       <view class="hist-btn" @tap="goHistory"><text>☰</text></view>
       <!-- 通话：当前对话的另一种交互模式，入口挂在这条对话上，不占底部频道位 -->
       <view class="call-btn" @tap="goCall"><text>☎</text></view>
@@ -556,6 +698,7 @@ onUnmounted(() => {
     <view v-if="chat.busy" class="hm-notice warn notice-line"><text>上一轮还在跑 · 你发的话会排队</text></view>
     <view v-else-if="chat.turnActive" class="hm-notice notice-line"><text>还在想 · 已运行 {{ fmtDur(elapsed) }}</text></view>
     <view v-if="chat.lastError" class="hm-notice err notice-line"><text>{{ chat.lastError }}</text></view>
+    <view v-if="modelPushOff" class="hm-notice notice-line"><text>电脑端未启用模型配置推送 · 本地对话不可用</text></view>
 
     <view id="tail" class="tail" />
 
@@ -776,6 +919,14 @@ onUnmounted(() => {
   animation: pulse 1.4s ease-in-out infinite;
 }
 .cap-txt {
+  font-size: $fs-mini;
+  color: $fg2;
+}
+
+/* 通道选择（自动 / 仅电脑 / 仅本地）：顶栏里与模型芯片并列，点一下轮换。 */
+.chan-pill {
+  flex: none;
+  padding: 10rpx 18rpx;
   font-size: $fs-mini;
   color: $fg2;
 }

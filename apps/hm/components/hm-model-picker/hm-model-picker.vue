@@ -7,66 +7,58 @@
  *
  * 桌面端的模型配置 UI（ModelListTab）不在手机端复刻——
  * 添加/删除模型需要填 API Key，手机上打字体验差，交给桌面端。
+ *
+ * ## 清单从哪来
+ *
+ * **桌面推来的快照**（`model.list` 事件）。手机端不自己存清单，也不走
+ * HTTP：此前它调 `GET {relay}/api/model/list`，而中继是只路由的字节管道、
+ * 没有通往桌面的 HTTP 通道 → 必然 404 → 选择器永远是空的。
+ * 切换同理走 WS（只改默认值，见 `core/session.ts` 的 selectModel）。
  */
-import { ref, computed, onMounted } from 'vue'
-import { getModelList, setDefaultModel, type ModelEntry } from '../../core/model'
+import { computed, ref } from 'vue'
+import { modelId, type ModelEntry } from '../../core/model'
+
+const props = defineProps<{
+  /** 桌面推来的已启用模型清单。 */
+  models: ModelEntry[]
+  /** 桌面当前的默认模型（`provider:model`）。 */
+  defaultModel: string | null
+}>()
+
+const emit = defineEmits<{ (e: 'select', model: string): void }>()
 
 const open = ref(false)
-const loading = ref(false)
-const modelList = ref<ModelEntry[]>([])
-const defaultModel = ref<string | null>(null)
 const saving = ref(false)
 const error = ref('')
 
-/** "provider:model" 格式 */
-const currentId = computed(() => defaultModel.value)
+const modelList = computed(() => props.models ?? [])
+
+const currentId = computed(() => props.defaultModel)
+
 const currentName = computed(() => {
-  if (!defaultModel.value) return '选择模型'
-  const [p, m] = defaultModel.value.split(':', 2)
-  return m || defaultModel.value
+  if (!props.defaultModel) return '选择模型'
+  const i = props.defaultModel.indexOf(':')
+  return i > 0 ? props.defaultModel.slice(i + 1) : props.defaultModel
 })
 
-onMounted(() => {
-  void loadModels()
-})
-
-async function loadModels() {
-  loading.value = true
+function pick(entry: ModelEntry) {
+  if (saving.value) return
+  const id = modelId(entry)
   error.value = ''
-  const data = await getModelList()
-  loading.value = false
-  if (!data) {
-    error.value = '获取模型列表失败'
-    return
-  }
-  modelList.value = data.models
-  defaultModel.value = data.default_model
-}
-
-async function pick(entry: ModelEntry) {
-  const id = `${entry.provider_id}:${entry.model_id}`
   saving.value = true
-  error.value = ''
-  const ok = await setDefaultModel(modelList.value, id)
-  saving.value = false
-  if (!ok) {
-    error.value = '切换失败，请重试'
-    return
-  }
-  defaultModel.value = id
+  emit('select', id)
+  // 桌面会回推新的清单（model.list），那边到了才收。
+  setTimeout(() => {
+    saving.value = false
+  }, 1500)
   open.value = false
-}
-
-function openSheet() {
-  open.value = true
-  void loadModels()
 }
 </script>
 
 <template>
   <!-- 顶栏芯片：当前模型名 -->
-  <view class="chip" @tap="openSheet">
-    <text class="chip-txt">{{ loading ? '…' : currentName }}</text>
+  <view class="chip" @tap="open = true">
+    <text class="chip-txt">{{ currentName }}</text>
     <text class="chip-arrow">▾</text>
   </view>
 
@@ -77,13 +69,9 @@ function openSheet() {
       <text class="sh-title">切换模型</text>
       <text v-if="error" class="sh-err">{{ error }}</text>
 
-      <view v-if="loading" class="loading">
-        <text>加载中…</text>
-      </view>
-
-      <view v-else-if="!modelList.length" class="empty">
-        <text>暂无可用模型</text>
-        <text class="empty-hint">在桌面端配置模型后可在此切换</text>
+      <view v-if="!modelList.length" class="empty">
+        <text>还没收到模型清单</text>
+        <text class="empty-hint">清单由桌面推过来——确认电脑上的 hermix 正在运行且已与这台手机配对</text>
       </view>
 
       <view v-else class="list">
@@ -96,7 +84,7 @@ function openSheet() {
         >
           <view class="row-info">
             <text class="row-model">{{ entry.model_id }}</text>
-            <text class="row-provider">{{ entry.provider_id }}</text>
+            <text class="row-provider">{{ entry.provider_name || entry.provider_id }}</text>
           </view>
           <text v-if="`${entry.provider_id}:${entry.model_id}` === currentId" class="cur-check">✓</text>
           <view v-if="saving && `${entry.provider_id}:${entry.model_id}` === currentId" class="saving-dot" />
