@@ -173,6 +173,26 @@ pub fn main() {
         return;
     }
 
+    // ── 恢复模式：重置内嵌网页视图的数据目录 ──
+    //
+    // 唯一要救的场景是 WebView2 报 `ERROR_INVALID_STATE (0x8007139F)`——通常是
+    // 上一次进程残留锁着 profile，重启查看器也好不了。**显式参数而不是自动
+    // 清理**：这个目录里存着用户在各站点的登录态，自动删等于悄悄把用户登出
+    // 所有站点。删完不退出，接着正常启动，用户可以直接重试。
+    if args.iter().any(|a| a == "--reset-webview-profile") {
+        let dir = webview_host::profile_dir();
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => eprintln!("已重置内嵌网页视图数据目录：{}", dir.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("数据目录本就不存在，无需重置：{}", dir.display())
+            }
+            Err(e) => eprintln!(
+                "重置失败（多半是有 msedgewebview2 进程占用）：{e}\n\
+                 先结束这些进程再重试。"
+            ),
+        }
+    }
+
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;

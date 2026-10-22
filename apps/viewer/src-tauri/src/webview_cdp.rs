@@ -52,7 +52,19 @@ fn devtools_endpoint_in(base: &Path, timeout: Duration) -> Result<(u16, String),
                 if let (Some(port), Some(path)) = (lines.next(), lines.next()) {
                     if let Ok(port) = port.trim().parse::<u16>() {
                         if !path.trim().is_empty() {
-                            return Ok((port, path.trim().to_string()));
+                            // **文件存在不等于端口活着。**
+                            //
+                            // WebView2 把端口写进 UDF 后从不清理：进程退出、或
+                            // 复用已有环境（此时 `--remote-debugging-port` 不再
+                            // 生效）时，这个文件会留着上一次的值。直接用它去
+                            // 连接，报出来的是"连接被拒"，而真正的原因是"这个
+                            // 端口是上一世的"。
+                            //
+                            // 所以先握手再采信；不通就继续等——新环境起来后会
+                            // 覆盖这个文件。
+                            if port_is_live(port) {
+                                return Ok((port, path.trim().to_string()));
+                            }
                         }
                     }
                 }
@@ -60,7 +72,28 @@ fn devtools_endpoint_in(base: &Path, timeout: Duration) -> Result<(u16, String),
         }
         std::thread::sleep(Duration::from_millis(120));
     }
-    Err("内嵌网页视图的调试端口还没就绪（视图是否已打开？）".to_string())
+    // 错误里带上现场，省掉一整轮排查：用户/agent 需要知道"目录在不在、环境起没起"，
+    // 而不是只有一句"端口没就绪"。
+    let initialised = base.join("EBWebView").is_dir();
+    Err(format!(
+        "内嵌网页视图的调试端口还没就绪（视图是否已打开？）\n\
+         数据目录：{}\n\
+         （目录存在={}，WebView2 环境已初始化={initialised}）\n\
+         若视图确实已打开却一直读不到这个文件：说明 WebView2 的浏览器进程没带 \
+         `--remote-debugging-port` 启动。查看器的 `web_open` 会设置 \
+         WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS，故重启查看器后再试；\
+         仍不行则是有残留 msedgewebview2 锁着该目录。",
+        base.display(),
+        base.is_dir()
+    ))
+}
+
+/// 端口上有没有活着的监听者（200ms 足够确认本机回环）。
+fn port_is_live(port: u16) -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
 }
 
 /// 连上内嵌网页视图的页面 target，返回 (连接, 会话 id)。
@@ -348,6 +381,57 @@ pub fn navigate(url: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2026-10-22 的真实故障形态：端口文件里写着 `59280`，那个进程早在
+    /// 00:45 就退了，文件留了下来。只检查"文件能不能读"会把这个死端口当成
+    /// 有效端点返回，然后连接被拒——报出来的是下游的错，真正的原因看不见。
+    #[test]
+    fn stale_port_file_is_rejected() {
+        let dir = std::env::temp_dir().join("hermix-cdp-stale-port-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 绑一个端口拿到号，立刻释放 → 几乎不可能有人在听。
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        std::fs::write(
+            dir.join("DevToolsActivePort"),
+            format!("{port}\n/devtools/browser/long-gone\n"),
+        )
+        .unwrap();
+
+        let err = devtools_endpoint_in(&dir, Duration::from_millis(60)).unwrap_err();
+        assert!(err.contains("调试端口"), "错误必须点明端口：{err}");
+        assert!(
+            err.contains("remote-debugging") || err.contains("WebView2"),
+            "错误必须指路（环境变量 / 残留进程）：{err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 端口真的在听 → 才采信这个文件。
+    #[test]
+    fn live_port_file_is_accepted() {
+        let dir = std::env::temp_dir().join("hermix-cdp-live-port-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::fs::write(
+            dir.join("DevToolsActivePort"),
+            format!("{port}\n/devtools/browser/alive\n"),
+        )
+        .unwrap();
+
+        let (got, ws) = devtools_endpoint_in(&dir, Duration::from_millis(500)).unwrap();
+        assert_eq!(got, port);
+        assert_eq!(ws, "/devtools/browser/alive");
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn missing_port_file_reports_clearly() {

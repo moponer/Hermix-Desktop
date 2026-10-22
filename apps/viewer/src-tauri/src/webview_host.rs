@@ -52,7 +52,10 @@ pub fn normalize_url(raw: &str) -> Result<tauri::Url, String> {
 }
 
 /// 子 webview 的独立数据目录（与主窗口 profile 隔离）。
-fn profile_dir() -> PathBuf {
+///
+/// `pub` 是为了让 `--reset-webview-profile` 恢复模式能删它——那条通道存在
+/// 的唯一理由是：WebView2 报 `ERROR_INVALID_STATE` 时没有别的手段能把它救回来。
+pub fn profile_dir() -> PathBuf {
     hermix_config::paths::hermix_home().join("webview-profile")
 }
 
@@ -120,6 +123,25 @@ pub fn open_sync(
     h: f64,
 ) -> Result<(), String> {
     let target = normalize_url(url)?;
+
+    // 让 WebView2 的**浏览器进程**带上调试端口参数。
+    //
+    // 为什么不能只靠下面的 `additional_browser_args`：那个 API 只在"这一次
+    // 真的新建环境"时把参数塞进 `CoreWebView2EnvironmentOptions`。而实测的
+    // 失败路径是**环境创建失败**（`0x8007139F` / ERROR_INVALID_STATE）——参数
+    // 根本没机会生效，`webview_cdp` 也就永远等不到 `DevToolsActivePort`。
+    //
+    // 环境变量是 WebView2 loader 在**每次** `CreateCoreWebView2Environment`
+    // 时读的，覆盖面更宽。放在 `add_child` 之前设置：主窗口的 WebView2 环境
+    // 早在 setup 阶段就建好了（那时这个变量还不存在），所以它只作用于子
+    // webview，不会把查看器主 UI 也暴露成 CDP target。
+    if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--remote-debugging-port=0",
+        );
+    }
+
     close_webview(app);
 
     let emitter = app.clone();
@@ -146,12 +168,38 @@ pub fn open_sync(
             PhysicalPosition::new(x as i32, y as i32),
             PhysicalSize::new(w.max(1.0) as u32, h.max(1.0) as u32),
         )
-        .map_err(|e| format!("内嵌网页视图创建失败：{e}"))?;
+        .map_err(|e| explain_create_failure(&e.to_string()))?;
     remember_bounds(x, y, w, h);
     // 告诉前端「有个网页视图开了」→ 前端开对应的网页标签（否则用户看到的是
     // 一块没有标签的网页浮在界面上）。
     let _ = app.emit("web-opened", url.to_string());
     Ok(())
+}
+
+/// 把 WebView2 的创建失败翻译成能照着做的说明。
+///
+/// 为什么值得单独写：`0x8007139F`（ERROR_INVALID_STATE）在这条链上只有一个
+/// 常见成因——**数据目录被上一次没退干净的 msedgewebview2 锁着**。原始错误码
+/// 对用户和 agent 都没有信息量，而现场（目录在不在、有没有初始化过）是现成的，
+/// 顺手带上就能省掉一整轮排查。
+fn explain_create_failure(raw: &str) -> String {
+    let profile = profile_dir();
+    let dir_exists = profile.is_dir();
+    let initialised = profile.join("EBWebView").is_dir();
+    let mut msg = format!("内嵌网页视图创建失败：{raw}");
+
+    let lower = raw.to_ascii_lowercase();
+    if raw.contains("0x8007139F") || lower.contains("invalid state") {
+        msg.push_str(&format!(
+            "\n\n【ERROR_INVALID_STATE】WebView2 无法在这个数据目录创建环境：{}\n\
+             （目录存在={dir_exists}，已初始化={initialised}）\n\
+             最常见原因：上一次查看器进程没有退干净，残留的 msedgewebview2 还锁着该目录。\n\
+             处置：任务管理器结束所有 msedgewebview2.exe 后重试；仍失败再删掉该目录\
+             （会丢登录态，但能恢复通道）。",
+            profile.display()
+        ));
+    }
+    msg
 }
 
 /// 最近一次的视图位置（物理像素）——agent 侧开视图时用它摆位。
