@@ -161,7 +161,7 @@ fn archive_dir_for(hermix_home: &Path, now: &DateTime<Local>) -> PathBuf {
 fn session_index_path(hermix_home: &Path, session_id: &str) -> PathBuf {
     hermix_home
         .join("sessions")
-        .join(session_id)
+        .join(crate::session_persistence::session_stem(session_id))
         .join("archive-index.jsonl")
 }
 
@@ -232,7 +232,10 @@ pub fn append_rollup_archive(
     if originals.is_empty() {
         return;
     }
-    let path = hermix_home.join("sessions").join(sid).join("tool-rollup-archive.md");
+    let path = hermix_home
+        .join("sessions")
+        .join(crate::session_persistence::session_stem(sid))
+        .join("tool-rollup-archive.md");
     if let Some(parent) = path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
             tracing::warn!(
@@ -588,5 +591,37 @@ mod tests {
             !tmp.path().join("sessions").exists(),
             "no session_id must not create a sessions/ subtree"
         );
+    }
+
+    /// 自动化会话的 id 带冒号（`automation:<task-id>`），而 Windows 不允许
+    /// 目录名里有冒号 —— 直接拼路径必然 `create_dir_all` 失败（os error
+    /// 267），归档索引与 rollup 证据档就静默写不出来（2026-10-22 实测）。
+    #[test]
+    fn colon_session_id_still_writes_archive_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sid = "automation:task-1792560224893";
+
+        // 1) 归档索引
+        let refs =
+            archive_context_section(&fixture_messages(3), tmp.path(), None, Some(sid)).unwrap();
+        assert!(!refs.is_empty());
+        let index = tmp
+            .path()
+            .join("sessions")
+            .join(crate::session_persistence::session_stem(sid))
+            .join("archive-index.jsonl");
+        assert!(index.exists(), "archive index must exist: {}", index.display());
+
+        // 2) rollup 证据档
+        append_rollup_archive(tmp.path(), Some(sid), &[(0, "原始输出".to_string())]);
+        let rollup = tmp
+            .path()
+            .join("sessions")
+            .join(crate::session_persistence::session_stem(sid))
+            .join("tool-rollup-archive.md");
+        assert!(rollup.exists(), "rollup archive must exist: {}", rollup.display());
+
+        // 3) 索引能被读回来（写读用同一个映射，否则认不出自己写的文件）
+        assert_eq!(read_session_index(tmp.path(), sid).len(), refs.len());
     }
 }

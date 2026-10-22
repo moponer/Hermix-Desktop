@@ -66,12 +66,21 @@ where
     }
 }
 
-/// 会话 id → 文件名主体。`im:device:*`、`im:qq:*` 这类 id 带冒号，而
-/// Windows 禁用 `: * ? " < > | / \`——直接拼路径必然 `os error 123`
-/// （「文件名、目录名或卷标语法不正确」），日志落盘全部失败（2026-10-16 案）。
-/// 写 .md / 写 trajectory / 孤儿恢复匹配三处必须共用本函数，否则改完规则
-/// 就再也认不出对方生成的文件。
-pub(crate) fn session_stem(session_id: &str) -> String {
+/// 会话 id → 文件名主体。`im:device:*`、`im:qq:*`、`automation:<task-id>`
+/// 这类 id 带冒号，而 Windows 禁用 `: * ? " < > | / \`——直接拼路径必然
+/// `os error 123`（文件名语法不正确）或 `os error 267`（目录名无效），
+/// 落盘全部失败（2026-10-16 案）。
+///
+/// **凡是拿会话 id 拼路径的地方都必须共用本函数**，否则改完规则就再也
+/// 认不出对方生成的文件。除写 .md / trajectory / 孤儿恢复外，还有：
+/// - 归档目录 `sessions/<sid>/`（`archive-index.jsonl` + rollup 证据档）
+/// - 会话级记忆目录 `sessions/<sid>/memories`
+/// - 删除会话时的清理路径
+///
+/// 2026-10-22 实测：自动化会话 `automation:task-…` 因为目录名带冒号，
+/// 归档索引、rollup 证据档、会话记忆三样全部静默写不出来（agent 每轮
+/// 因此无法留下持久笔记，只能每轮重新摸状态）。
+pub fn session_stem(session_id: &str) -> String {
     session_id
         .chars()
         .map(|c| match c {

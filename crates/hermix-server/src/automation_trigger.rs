@@ -274,7 +274,7 @@ async fn execute_automation_run(
     // 送给模型，磁盘上的会话照旧完整。理由见
     // `dashboard::automation::AUTOMATION_HISTORY_TOKEN_BUDGET` 的注释。
     overrides.history_token_budget = Some(
-        crate::dashboard::automation::AUTOMATION_HISTORY_TOKEN_BUDGET,
+        crate::dashboard::automation::automation_history_token_budget(),
     );
 
     if let Some(ref model) = auto.model_id {

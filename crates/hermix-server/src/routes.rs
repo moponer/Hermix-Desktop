@@ -644,10 +644,14 @@ pub(crate) async fn delete_session(
     // closures at both call sites without being consumed.
     let cleanup_session_dir: fn(&std::path::Path, &str) = |home, session_id| {
         let data_dir = hermix_config::paths::data_dir_in(home);
+        // 会话 id 可能带冒号（`automation:<task-id>` / `im:qq:*`），而 Windows
+        // 不允许目录名/文件名里有冒号 —— 必须与写入端共用同一个映射，否则
+        // 删会话时按原 id 拼的路径根本不存在（残留文件）。
+        let stem = hermix_agent::session_persistence::session_stem(session_id);
 
         // 1. Archive tree: <hermix_home>/sessions/<sid>/ (holds
         // archive-index.jsonl + per-turn markdown sidecars).
-        let archive_dir = home.join("sessions").join(&session_id);
+        let archive_dir = home.join("sessions").join(&stem);
         if archive_dir.exists() {
             if let Err(e) = std::fs::remove_dir_all(&archive_dir) {
                 tracing::warn!(
@@ -660,7 +664,7 @@ pub(crate) async fn delete_session(
 
         // 2. Session log file: <data>/sessions/<sid>.md
         let sessions_dir = data_dir.join("sessions");
-        let log_file = sessions_dir.join(format!("{session_id}.md"));
+        let log_file = sessions_dir.join(format!("{stem}.md"));
         if log_file.exists() {
             if let Err(e) = std::fs::remove_file(&log_file) {
                 tracing::warn!(
@@ -676,9 +680,7 @@ pub(crate) async fn delete_session(
         if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
-                if name.ends_with(&format!("-{session_id}.md"))
-                    && name != format!("{session_id}.md")
-                {
+                if name.ends_with(&format!("-{stem}.md")) && name != format!("{stem}.md") {
                     if let Err(e) = std::fs::remove_file(entry.path()) {
                         tracing::warn!(
                             session_id = %session_id,
@@ -692,7 +694,7 @@ pub(crate) async fn delete_session(
 
         // 3. RL trajectory: <data>/trajectories/<sid>.json (written by
         // SessionPersistence::save_trajectory on every completed turn).
-        let traj_file = data_dir.join("trajectories").join(format!("{session_id}.json"));
+        let traj_file = data_dir.join("trajectories").join(format!("{stem}.json"));
         if traj_file.exists() {
             if let Err(e) = std::fs::remove_file(&traj_file) {
                 tracing::warn!(

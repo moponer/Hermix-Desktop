@@ -55,6 +55,26 @@ use hermix_tools::tools::cronjob::CronjobBackend;
 /// 裁不准。
 pub const AUTOMATION_HISTORY_TOKEN_BUDGET: usize = 60_000;
 
+/// 环境变量名：覆盖上面的默认预算。
+///
+/// 预算直接决定**每次请求要付多少钱**：实测成本 ≈ 窗口大小 × 未命中率 ×
+/// 调用次数（窗口 60K token、未命中 10%、每轮 67 次调用 ≈ 每轮 40 万
+/// 计费 token）。调参需要反复对比不同预算，而每次改常量都要重编 sidecar
+/// —— 这条变量把「重编」从实验回路里拿掉。
+pub const AUTOMATION_HISTORY_TOKEN_BUDGET_ENV: &str = "HERMIX_AUTOMATION_HISTORY_TOKEN_BUDGET";
+
+/// 当前生效的历史预算：环境变量优先，否则用默认值。
+///
+/// 下限 1,000 token —— 比这更小的窗口连一轮对话都放不下，与其静默
+/// 产生一个必然失败的请求，不如回落到默认值。
+pub fn automation_history_token_budget() -> usize {
+    std::env::var(AUTOMATION_HISTORY_TOKEN_BUDGET_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v >= 1_000)
+        .unwrap_or(AUTOMATION_HISTORY_TOKEN_BUDGET)
+}
+
 fn automation_state_path(state: &HttpServerState) -> PathBuf {
     state.hermix_home.join("automation_tasks.json")
 }
@@ -961,7 +981,7 @@ fn spawn_run(state: HttpServerState, task: AutomationTask) {
         // 磁盘上的会话照旧完整（UI 时间线 / 归档 / 检索不受影响），但不再每轮
         // 重发整段历史 —— 实测一条跑 41 轮的刷课任务，历史累积到 3,718 条消息 /
         // 6.1M 字符，单次请求长到 ~1M token（模型窗口就是 1M），系统提示只占 1%。
-        overrides.history_token_budget = Some(AUTOMATION_HISTORY_TOKEN_BUDGET);
+        overrides.history_token_budget = Some(automation_history_token_budget());
         // 标成「外部触发」：这一轮的提示词与回复都以 `MessageRole::Automation`
         // 落库 —— 前端渲染成自动化卡片，而**不进 LLM 上下文**，模型不会在下一轮
         // 看到「用户说过这句话」的假象。

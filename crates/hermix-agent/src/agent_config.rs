@@ -1021,7 +1021,9 @@ impl AgentConfig {
             .unwrap_or_else(|| hermix_config::paths::hermix_home().to_string_lossy().to_string());
         PathBuf::from(home)
             .join("sessions")
-            .join(self.session_id.clone().unwrap_or_default())
+            .join(crate::session_persistence::session_stem(
+                &self.session_id.clone().unwrap_or_default(),
+            ))
             .join("memories")
     }
 
