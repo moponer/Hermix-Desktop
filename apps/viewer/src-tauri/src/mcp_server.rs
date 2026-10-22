@@ -285,7 +285,13 @@ fn tool_defs() -> Vec<ToolDef> {
                 "frame": {"type": "string", "description": "目标 iframe 的 URL 片段（可选）"},
                 "timeout_ms": {
                     "type": "number",
-                    "description": "这一次求值最多等多久（毫秒）。默认 30000，上限 900000。等长事件时用它",
+                    // 描述里的数字**从常量派生** —— 写死的话改闸门时必然漂移
+                    //（模型按 900000ms 等，闸门却是 300000ms，白等一轮）。
+                    "description": format!(
+                        "这一次求值最多等多久（毫秒）。默认 {}，上限 {}。等长事件时用它",
+                        crate::cdp::IO_TIMEOUT.as_millis(),
+                        crate::cdp::MAX_EVAL_TIMEOUT.as_millis()
+                    ),
                 },
             }),
             required: &["expression"],
