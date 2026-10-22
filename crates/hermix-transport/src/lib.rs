@@ -738,6 +738,26 @@ pub enum StreamEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recent_steps: Option<Vec<String>>,
     },
+    /// 桌面侧模型清单，**手机连上时推一份快照**。
+    ///
+    /// 手机端没有独立的模型配置面：清单的唯一真相源在桌面（config.yaml 的
+    /// `model_selector` / `llm_providers`）。手机此前只能走
+    /// `GET {relay}/api/model/list`——而中继是**只路由的字节管道**，根本没有
+    /// 通往节点的 HTTP 通道，那条请求必然 404，于是模型选择器永远是空的。
+    /// 这里复用 voice_stt 的同一范式（桌面配置 → WS 密封帧下发手机）：手机
+    /// 收到的就是桌面此刻的真清单，不留第二份会漂移的副本。
+    ModelList {
+        /// 已启用的模型（`provider_id` + `model_id`）。
+        models: Vec<ModelListEntry>,
+        /// 当前默认模型（`provider:model`）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default_model: Option<String>,
+        /// 已启用模型实际用到的 provider 凭据（手机离线时直连云模型用）。
+        ///
+        /// 只推用到的那些；用环境变量配 key 且环境里没有的 provider 不出现。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        providers: Vec<ProviderCredential>,
+    },
     Error {
         code: String,
         message: String,
@@ -924,6 +944,45 @@ pub struct RequestApprovalItem {
 }
 
 /// `hermix_tools::backends::todo::TodoItem`, but defined here so the
+/// 手机端模型清单条目。
+///
+/// 与桌面 `GET /api/model/list` 的 `models` 同形（`provider_id` / `model_id`
+/// 为主，能力字段可选）——手机端不另存一份必然漂移的模型清单，只接收桌面
+/// 推来的快照。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelListEntry {
+    pub provider_id: String,
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_reasoning: Option<bool>,
+}
+
+/// 手机在**电脑离线**时直连云模型用的 provider 凭据。
+///
+/// 只推**已启用模型**实际用到的 provider（其余的不给）——推得越少，手机上
+/// 持有的密钥面越小。
+///
+/// ⚠️ 这里带的是**真凭据**：手机拿到后就能在没有电脑的情况下直接调云厂商。
+/// 这是"电脑关机也能继续本地对话"这个能力的必要条件（否则手机无从登录云
+/// 厂商），代价是**一台被攻破的手机 = 一把泄漏的 LLM 密钥**。通道本身是
+/// E2EE 密封的（relay 读不到），但手机本地存储要按敏感信息对待。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderCredential {
+    pub provider_id: String,
+    /// 推理端点（`{base}/chat/completions` 的 base）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// 真实可用的 key（config 里的字面量或环境变量解析后的值）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// 端点风格。目前只实现了 `openai`（OpenAI 兼容的 /chat/completions）。
+    pub api_style: String,
+}
+
 /// transport crate doesn't depend on hermix-tools (which would form
 /// a cycle hermix-server → hermix-tools → hermix-transport).
 /// Fields mirror `TodoItem` 1:1 — when adding a field there, mirror
@@ -1010,6 +1069,13 @@ pub enum WsClientMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         skills: Option<Vec<String>>,
     },
+    /// 手机端切换默认模型（`provider:model`）。
+    ///
+    /// 只带**一个**模型名，不带整份 enabled 清单：手机端的清单是桌面推来的
+    /// 快照，让它整份回写会把桌面「已启用」列表覆盖成手机那份——付费厂商的
+    /// 模型会被挤出可见范围（桌面 `/api/model/list` 的注释记着这次事故）。
+    /// 服务端只改默认值，`enabled` 保持桌面自己那份。
+    ModelSelect { model: String },
     /// Response to a [`StreamEvent::RequestApproval`].
     /// The `decision` field is a free-form string that maps to
     /// [`ApprovalChoice`]: `"once"`, `"session"`, `"always"`, or

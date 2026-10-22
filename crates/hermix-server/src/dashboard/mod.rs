@@ -66,6 +66,12 @@ pub fn router() -> Router<HttpServerState> {
             "/api/voice/stt",
             get(voice_stt::get_voice_stt).put(voice_stt::put_voice_stt),
         )
+        // 手机端「模型配置推送」开关（**默认关闭**）：打开才把模型清单与
+        // provider 凭据经密封帧推给手机（见 config::MobileModelPushConfig）。
+        .route(
+            "/api/mobile/model-push",
+            get(config::get_mobile_model_push).put(config::put_mobile_model_push),
+        )
         // Builtin provider metadata (id + env var) — single source of truth
         // in hermix-config; the frontend groups builtin/custom from here.
         .route("/api/providers/meta", get(config::get_provider_meta))

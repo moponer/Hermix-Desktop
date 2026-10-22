@@ -430,12 +430,180 @@ pub struct ModelListRequest {
 /// source of truth. When that is absent we fall back to building the list
 /// from each `llm_providers[*].model` so the switcher is never empty.
 pub async fn get_model_list(State(state): State<HttpServerState>) -> Json<ModelListResponse> {
-    let cfg: hermix_config::GatewayConfig = state
+    Json(build_model_list(&current_gateway_config(&state)))
+}
+
+/// 桌面的**当前**网关配置（内存里的 live config 优先，落盘配置兜底）。
+///
+/// `GET /api/model/list` 与 WS 推送共用这一份——两处各读一次会出现
+/// 「HTTP 看到的清单和推给手机的不一样」这种最难查的偏差。
+fn current_gateway_config(state: &HttpServerState) -> hermix_config::GatewayConfig {
+    state
         .agent_service
         .current_config_value()
         .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_else(|| state.config.as_ref().clone());
-    Json(build_model_list(&cfg))
+        .unwrap_or_else(|| state.config.as_ref().clone())
+}
+
+/// 当前模型清单（供 **WS 推给手机**用）。
+///
+/// 手机端没有独立的模型配置面：清单的唯一真相源在桌面。手机此前只能走
+/// `GET {relay}/api/model/list`——而中继是**只路由的字节管道**，没有通往
+/// 节点的 HTTP 通道，那条请求必然 404，于是模型选择器永远是空的。这里把
+/// 同一份逻辑暴露出来，让桌面在手机连上时推一份快照过去。
+pub fn model_list_for(state: &HttpServerState) -> ModelListResponse {
+    build_model_list(&current_gateway_config(state))
+}
+
+/// 手机在**电脑离线**时直连云模型用的 provider 凭据。
+///
+/// 只给**已启用模型实际用到的** provider（其余的不推）——推得越少，手机上
+/// 持有的密钥面越小。
+///
+/// key 的来源，按优先级：
+/// 1. `config.yaml` 里 `llm_providers[pid].api_key` 的**字面量**
+///    （`${ENV}` 形式是引用不是密钥本身，不算）；
+/// 2. 环境变量里的 key（`provider_api_key_from_env`）；
+/// 3. 内置免费渠道的哨兵凭据。
+///
+/// 免费渠道的 `KEY_NO_AUTH` 哨兵会被解析成 `None`（无鉴权端点）——手机端
+/// 的约定是「没有 key 就不发 Authorization 头」，与 `auth_header` 一致。
+pub fn model_credentials_for(
+    state: &HttpServerState,
+    providers_in_use: &[String],
+) -> Vec<hermix_transport::ProviderCredential> {
+    let cfg = current_gateway_config(state);
+    let mut out = Vec::new();
+    for pid in providers_in_use {
+        let pc = cfg.llm_providers.get(pid);
+        let free = hermix_config::free_channel::FREE_CHANNELS
+            .iter()
+            .find(|c| c.id == pid);
+        let base_url = pc
+            .and_then(|p| p.base_url.clone())
+            .or_else(|| free.map(|c| c.base_url.to_string()));
+        let key = pc
+            .and_then(|p| p.api_key.as_deref())
+            .map(str::trim)
+            .filter(|k| !k.is_empty() && !k.starts_with("${"))
+            .map(str::to_string)
+            .or_else(|| hermix_config::provider_api_key_from_env(pid))
+            .or_else(|| free.map(|c| c.api_key.to_string()))
+            .filter(|k| !k.eq_ignore_ascii_case(hermix_config::free_channel::KEY_NO_AUTH));
+        out.push(hermix_transport::ProviderCredential {
+            provider_id: pid.clone(),
+            base_url,
+            api_key: key,
+            // 目前只实现了 OpenAI 兼容风格（`{base}/chat/completions`）。
+            api_style: "openai".to_string(),
+        });
+    }
+    out
+}
+
+/// 手机端「模型配置推送」开关（主人拍板 2026-10-22：**默认关闭**）。
+///
+/// ## 为什么要有这个开关
+///
+/// 推给手机的不只是模型名单，还有 **provider 凭据**（base_url + API Key）——
+/// 没有凭据，手机在电脑关机时就没法直连云厂商继续对话。
+/// 但凭据出电脑等于**多了一把长期有效的钥匙**：它不像其它配对能力那样随电脑
+/// 一起失效，手机丢了/被攻破就等于泄漏了一把能烧钱的 key。
+///
+/// 所以这件事**默认不做**，要由主人在电脑端显式开一次。
+///
+/// ## 关闭 = 撤销，不是「不再推」
+///
+/// 关掉后推给手机的是一份**空清单**（`models`/`providers` 都空）——手机端据此
+/// **删掉本地存的那份**（含 key）并提示「电脑端未启用模型配置推送」。
+/// 只停推而不清手机那份，等于给人**假安全感**：用户以为收���了，手机其实还在
+/// 拿着旧 key 照用不误。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct MobileModelPushConfig {
+    /// 是否允许把模型配置（含凭据）推给手机。**默认 false。**
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl MobileModelPushConfig {
+    fn path(state: &HttpServerState) -> std::path::PathBuf {
+        state.hermix_home.join("mobile_model_push.json")
+    }
+
+    /// 读开关。文件缺失 / 解析失败 → **关闭**（fail-closed）。
+    pub fn load(state: &HttpServerState) -> Self {
+        let Ok(raw) = std::fs::read_to_string(Self::path(state)) else {
+            return Self::default();
+        };
+        match serde_json::from_str(&raw) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!("mobile_model_push.json 解析失败（按关闭处理）: {e}");
+                Self::default()
+            }
+        }
+    }
+
+    fn save(&self, state: &HttpServerState) -> Result<(), String> {
+        let path = Self::path(state);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        std::fs::write(&path, json).map_err(|e| e.to_string())
+    }
+
+    /// 当前是否允许推送（含凭据）。**默认 false。**
+    pub fn is_enabled(state: &HttpServerState) -> bool {
+        Self::load(state).enabled
+    }
+}
+
+/// GET /api/mobile/model-push — 桌面端读开关状态。
+pub async fn get_mobile_model_push(
+    State(state): State<HttpServerState>,
+) -> Json<MobileModelPushConfig> {
+    Json(MobileModelPushConfig::load(&state))
+}
+
+/// PUT /api/mobile/model-push — 桌面端保存开关。保存即生效：下一次手机连上
+/// 就按新状态推送（已在连的手机重连后更新）。
+pub async fn put_mobile_model_push(
+    State(state): State<HttpServerState>,
+    Json(body): Json<MobileModelPushConfig>,
+) -> Result<Json<serde_json::Value>, HttpError> {
+    body.save(&state).map_err(|e| HttpError {
+        status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("mobile_model_push.json 写入失败: {e}"),
+    })?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// 只改**默认模型**，不动 `enabled` 清单。
+///
+/// 手机端切模型时只带一个 `provider:model`。若让它整份回写 enabled，会把
+/// 桌面「已启用」列表覆盖成手机那份——付费厂商的模型会被挤出可见范围
+/// （`/api/model/list` 的注释记着这次用户实测事故）。这里保持 enabled
+/// 原样，只改 default_model，并同步旧的单模型字段 `cfg.model`。
+pub fn set_default_model(state: &HttpServerState, model: &str) -> Result<(), String> {
+    let m = model.trim();
+    if m.is_empty() {
+        return Err("模型名为空".to_string());
+    }
+    if !m.contains(':') {
+        return Err(format!("模型名应为 provider:model，收到 {m:?}"));
+    }
+    let mut cfg = current_gateway_config(state);
+    cfg.model = Some(m.to_string());
+    if let Some(sel) = cfg.model_selector.as_mut() {
+        sel.default_model = Some(m.to_string());
+    }
+    let config_path = state.hermix_home.join("config.yaml");
+    hermix_config::save_config_yaml(&config_path, &cfg)
+        .map_err(|e| format!("persist model selection: {e}"))?;
+    let cfg_value = serde_json::to_value(&cfg).map_err(|e| format!("serialize config: {e}"))?;
+    state.agent_service.set_config(cfg_value);
+    Ok(())
 }
 
 /// 解析单条模型的展示信息与能力。

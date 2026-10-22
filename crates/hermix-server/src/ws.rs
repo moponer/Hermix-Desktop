@@ -341,6 +341,79 @@ fn task_in_flight_status(queued_text: &str) -> String {
     .to_string()
 }
 
+/// 推一份**模型清单快照**给手机。
+///
+/// 手机端没有独立的模型配置面：清单的唯一真相源在桌面（config.yaml）。
+/// 手机此前只能靠 `GET {relay}/api/model/list` 取——而中继是只路由的字节
+/// 管道，**没有**通往节点的 HTTP 通道，那条请求必然 404，于是模型选择器
+/// 永远是空的、桌面换模型手机也看不见。这里在手机连上时推一份快照过去
+/// （与 voice_stt 的「桌面配置 → WS 密封帧下发手机」同一范式）。
+async fn push_model_list(
+    state: &HttpServerState,
+    sender: &mut dyn TransportSink,
+    trace_id: &str,
+) {
+    let list = crate::dashboard::config::model_list_for(state);
+    // **默认关闭**（主人拍板 2026-10-22）：推给手机的模型配置里带着 provider
+    // 凭据（API Key），那是一把「电脑关机也还有效、能烧钱」的钥匙。主人没在
+    // 电脑端显式打开，就不推。
+    //
+    // 关掉时推的是一份**空清单**——手机端据此**删掉本地存的那份**（含 key）。
+    // 只停推不清手机那份 = 假安全感：用户以为收干净了，手机其实还在用旧 key。
+    if !crate::dashboard::config::MobileModelPushConfig::is_enabled(state) {
+        let frame = WsEnvelope {
+            version: 1,
+            request_id: None,
+            trace_id: trace_id.to_string(),
+            seq: None,
+            attachment_id: None,
+            event: StreamEvent::ModelList {
+                models: Vec::new(),
+                default_model: None,
+                providers: Vec::new(),
+            },
+        };
+        let _ = sender
+            .send(serde_json::to_string(&frame).unwrap_or_default())
+            .await;
+        return;
+    }
+    let models: Vec<hermix_transport::ModelListEntry> = list
+        .models
+        .iter()
+        .map(|m| hermix_transport::ModelListEntry {
+            provider_id: m.provider_id.clone(),
+            model_id: m.model_id.clone(),
+            provider_name: Some(m.provider_name.clone()),
+            context_window: m.context_window,
+            supports_reasoning: m.supports_reasoning,
+        })
+        .collect();
+    // 凭据只给**已启用模型用到的** provider——手机离线时凭它直连云模型。
+    let mut pids: Vec<String> = Vec::new();
+    for m in &list.models {
+        if !pids.contains(&m.provider_id) {
+            pids.push(m.provider_id.clone());
+        }
+    }
+    let providers = crate::dashboard::config::model_credentials_for(state, &pids);
+    let frame = WsEnvelope {
+        version: 1,
+        request_id: None,
+        trace_id: trace_id.to_string(),
+        seq: None,
+        attachment_id: None,
+        event: StreamEvent::ModelList {
+            models,
+            default_model: list.default_model.clone(),
+            providers,
+        },
+    };
+    let _ = sender
+        .send(serde_json::to_string(&frame).unwrap_or_default())
+        .await;
+}
+
 /// Handle a single `SendMessageRequest` inside a streaming WS session.
 /// Extracted so the `WsClientMessage::Send` path and the legacy
 /// `SendMessageRequest` / plain-text path share the same logic.
@@ -2870,6 +2943,10 @@ pub(crate) async fn handle_ws_stream(
             .await;
     }
 
+    // 模型清单快照：手机连上就有清单可看（此前它只能走 HTTP 取，而中继没有
+    // 通往节点的 HTTP 通道 → 必然 404 → 选择器永远是空的）。
+    push_model_list(&state, &mut *sender, &trace_id_base).await;
+
     while let Some(first) = receiver.recv().await {
         // A turn's `handle_ws_stream_send` can hand back a user message it
         // consumed mid-stream. Re-drive it here rather than waiting for the
@@ -3216,6 +3293,44 @@ async fn handle_inbound_frame(
                     request,
                 )
                 .await;
+            }
+            WsClientMessage::ModelSelect { model } => {
+                // 手机切默认模型：**只改默认值**，`enabled` 保持桌面那份
+                // （手机回写整份清单会把付费模型挤出可见范围——真实事故）。
+                match crate::dashboard::config::set_default_model(&state, &model) {
+                    Ok(()) => {
+                        tracing::info!(
+                            session = %session_id,
+                            model = %model,
+                            "手机切换默认模型成功",
+                        );
+                        // 回推新清单，手机端立刻看到自己选中的那一个。
+                        push_model_list(&state, &mut *sender, trace_id_base).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            session = %session_id,
+                            error = %e,
+                            "手机切换默认模型失败",
+                        );
+                        let err = WsEnvelope {
+                            version: 1,
+                            request_id: None,
+                            trace_id: trace_id_base.to_string(),
+                            seq: None,
+                            attachment_id: None,
+                            event: StreamEvent::Error {
+                                code: "model_select_failed".to_string(),
+                                message: format!("切换默认模型失败：{e}"),
+                                detail: None,
+                            },
+                        };
+                        let _ = sender
+                            .send(serde_json::to_string(&err).unwrap_or_default())
+                            .await;
+                    }
+                }
+                return StreamSendOutcome::Completed;
             }
             WsClientMessage::Ping => {
                 //: respond to client application-level
