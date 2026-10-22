@@ -318,6 +318,16 @@ Status: proposed — 方案已定稿，阶段一（界面落地）已执行，�
 
 **验证结果**：`cargo check -p hermix-server --all-targets` exit 0；`tsc --noEmit` exit 0；`check-design-guard` / `check-design-primitives --strict` / `check-theme-tokens` / `impeccable detect` 全部 exit 0。
 
+**追加：待你定夺接上真实审批**（同日）
+
+会话通道接通后立刻暴露一个真问题：她跑的轮次若遇到需批准的工具，审批卡挂在她自己的会话里，用户在阿黎页看不到 —— 轮次会干等到超时（默认 600s）。
+
+解法用现成的 `GET /v1/sessions/{id}/approvals/pending`：第三栏「待你定夺」改为轮询阿黎会话的挂起审批（10s 一次），每条显示工具名 + 参数摘要 + 「去处理」按钮（跳到她的会话）。顶栏读数与该栏同步。
+
+**裁决不在这里做**：审批的批准/拒绝走会话内审批卡的 WS 通道；在阿黎页另开一条裁决通道要动审批安全面（谁批的、按什么权限批），那是代批身份那一批的事。第一版只保证「你不会漏」。
+
+至此三栏里两栏（正在盯 / 待你定夺）+ 输入口全部接通真实数据，只剩情报源与成长档案。
+
 **并行会话干扰实录（记录在此防误判）**
 
 - 中途 `cargo check -p hermix-server` 连续报错：先是指向 `crates/hermix-agent/src/run_loop/pre_turn.rs` 的两个 E0425（**另一条工作线正在编辑的文件**，我从未碰过 hermix-agent），后是 `dashboard/twin.rs` 的 E0308（这是我自己的：`.into_response()` 加在了元组内部而不是调用处）。前者等对方修好即消失，后者我修。

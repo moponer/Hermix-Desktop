@@ -5,14 +5,17 @@
  * 单行输入口。设计依据见
  * docs/notes/proposed/feature/2026-10-21-digital-twin-assistant.md。
  *
- * 数据纪律：**只渲染真实数据**。阿黎自己的情报源、决策队列、成长档案
- * 都还没有后端，这三块一律显示「待接通」并说明将来会显示什么，不用
- * 示例数据填空——用户看到的数据必须能当真。
+ * 数据纪律：**只渲染真实数据**。阿黎的情报源与成长档案还没有后端，这两块
+ * 一律显示「待接通」并说明将来会显示什么，不用示例数据填空——用户看到的
+ * 数据必须能当真。
  *
  * 当前真实数据源：
- *   - 自动化任务（`GET /api/automation/tasks`）→ 正在执行
+ *   - 自动化任务（`GET /api/automation/tasks`）→ 正在执行 + 正在盯
  *   - 在途运行数（`GET /api/automation/active-count`）→ 顶栏读数
  *   - 最近会话（宿主 sessions prop）→ 新鲜情报栏的补充，标明是替代源
+ *   - 挂起审批（`GET /v1/sessions/{id}/approvals/pending`）→ 待你定夺
+ *   - 工作日志（`GET /api/memory/daily`）→ 最近工作日志
+ *   - 会话通道（`POST /api/twin/message`）→ 底部输入口
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Sparkles } from "lucide-react";
@@ -80,6 +83,10 @@ export function TwinView({
   const [twinReply, setTwinReply] = useState<string | null>(null);
   const [twinError, setTwinError] = useState<string | null>(null);
   const [aliSession, setAliSession] = useState<Session | null>(null);
+  /** 她的轮次里挂起的审批 —— 「待你定夺」的真实数据源。 */
+  const [pendingApprovals, setPendingApprovals] = useState<
+    api.PendingApprovalItem[]
+  >([]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -104,6 +111,24 @@ export function TwinView({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // 阿黎会话存在后，持续盯她的挂起审批：她跑的轮次若遇到需批准的操作，
+  // 审批卡挂在她自己的会话里 —— 用户在阿黎页看不到，轮次就会干等到超时。
+  // 裁决仍走会话内的审批卡（WS 通道），这里只负责「让你知道有东西要拍板」。
+  useEffect(() => {
+    if (!aliSession) return;
+    let alive = true;
+    const load = async () => {
+      const items = await api.getPendingApprovals(aliSession.id);
+      if (alive) setPendingApprovals(items);
+    };
+    void load();
+    const timer = setInterval(load, 10_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [aliSession]);
 
   const enabledTasks = useMemo(() => {
     const list = tasks.filter((t) => t.enabled);
@@ -286,7 +311,9 @@ export function TwinView({
               </div>
               <div className="twin-readout">
                 <span className="twin-readout__label">待你定夺</span>
-                <span className="twin-readout__value">—</span>
+                <span className="twin-readout__value">
+                  {pendingApprovals.length}
+                </span>
               </div>
             </div>
             <button
@@ -500,17 +527,37 @@ export function TwinView({
         <section className="twin-col twin-col--third">
           <div className="twin-col__head">
             <span className="twin-col__title">待你定夺</span>
-            <span className="twin-col__meta">待接通</span>
+            <span className="twin-col__meta">
+              {pendingApprovals.length > 0
+                ? `${pendingApprovals.length} 件待批`
+                : "无"}
+            </span>
           </div>
           <div className="twin-col__body">
-            <Pending
-              title="决策队列尚未接通"
-              desc="接通后，她需要你拍板的事会出现在这里，每条都附一句依据——你要能一眼看出她凭什么问这个。"
-              items={[
-                "「把这件事转成每天 9 点的常驻任务？」",
-                "「外部 CLI 请求删除 3 个已合并分支」",
-              ]}
-            />
+            {pendingApprovals.length === 0 ? (
+              <Pending
+                title="没有等你拍板的事"
+                desc="她的轮次若遇到需要批准的操作，审批会出现在这里——你在对话页看不到时，至少这里不会漏。"
+              />
+            ) : (
+              pendingApprovals.map((a) => (
+                <article key={a.request_id} className="twin-ask">
+                  <div className="twin-ask__q">{a.tool}</div>
+                  <div className="twin-ask__why">
+                    {summarizeArgs(a.arguments)}
+                  </div>
+                  <div className="twin-ask__acts">
+                    <button
+                      type="button"
+                      className="twin-btn twin-btn--primary"
+                      onClick={openAliChat}
+                    >
+                      去处理
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
 
             <div className="twin-col__head">
               <span className="twin-col__title">最近工作日志</span>
@@ -617,6 +664,19 @@ function statusDotClass(status: AutomationTask["last_status"]): string {
   if (status === "failed") return " twin-dot--error";
   if (status === "ok" || status === "running") return "";
   return " twin-dot--idle";
+}
+
+/** 把审批参数压成一行可读摘要（上限 120 字）。 */
+function summarizeArgs(args: unknown): string {
+  if (args == null) return "（无参数）";
+  let text: string;
+  try {
+    text = typeof args === "string" ? args : JSON.stringify(args);
+  } catch {
+    return "（参数无法序列化）";
+  }
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > 120 ? `${line.slice(0, 118)}…` : line || "（空参数）";
 }
 
 /** 取首行非空文本并裁到 80 字，把一天的三段日志压成一行。 */
