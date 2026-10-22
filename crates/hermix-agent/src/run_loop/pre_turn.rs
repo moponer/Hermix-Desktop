@@ -15,6 +15,10 @@ use serde_json::json;
 const SKILL_BLOCK_MARKER: &str = "## Auto-Matched Skills (system-injected)";
 /// 跨会话教训块的标记（`experience_archive::experience_prompt_for_tools`）。
 const EXPERIENCE_BLOCK_MARKER: &str = "[Relevant Past Experience]";
+/// 会话记忆快照块的标记（`context::render_memory_block` 的标题行）。
+const MEMORY_BLOCK_MARKER: &str = "MEMORY (your personal notes)";
+/// 用户画像快照块的标记（`context::render_memory_block` 的标题行）。
+const USER_BLOCK_MARKER: &str = "USER PROFILE (who the user is)";
 
 /// 上下文里是否已经有**内容完全相同**的同类块。
 ///
@@ -30,6 +34,34 @@ fn ctx_has_same_block(ctx: &ContextManager, marker: &str, new_content: &str) -> 
         .find(|m| m.content.as_deref().unwrap_or("").contains(marker))
         .map(|m| m.content.as_deref().unwrap_or("") == new_content)
         .unwrap_or(false)
+}
+
+/// 把会话记忆快照（MEMORY/USER）追加进**上下文消息**。
+///
+/// 为什么不在 system 提示里：见 `prompt_assembly::build_context_layer` 的
+/// 注释 —— system 提示的任何变化都会连带干掉它后面 messages 段的缓存。
+///
+/// 幂等：内容没变就不重复追加（重复追加的字节在块级前缀缓存下全是 fresh
+/// token）；内容变了就追加一份新的（变更落在新旧两轮之间 → 旧历史继续命中）。
+pub(crate) fn inject_memory_snapshot(config: &crate::agent_config::AgentConfig, ctx: &mut ContextManager) {
+    if config.skip_memory {
+        return;
+    }
+    let memory_dir = config.resolved_memory_dir();
+    let (memory_block, user_block) = crate::context::load_builtin_memory_snapshot(
+        &memory_dir,
+        config.memory_reads_global_fallback(),
+    );
+    for (marker, block) in [
+        (MEMORY_BLOCK_MARKER, memory_block),
+        (USER_BLOCK_MARKER, user_block),
+    ] {
+        let Some(block) = block else { continue };
+        if ctx_has_same_block(ctx, marker, &block) {
+            continue;
+        }
+        ctx.add_message(Message::system(&block));
+    }
 }
 
 impl AgentLoop {
@@ -172,6 +204,19 @@ impl AgentLoop {
             }
         }
 
+        // ── 会话记忆快照（2026-10-22，D1b）──
+        //
+        // 记忆**不放在 system 提示里** —— 实测 system 提示的任何变化都会连带
+        // 干掉它后面 messages 段的缓存（改中间一处 → 首发命中掉到 2.1%）。
+        // 而 agent 的自动记忆审查会定期改写 MEMORY.md → 拼在 system 提示里
+        // 的话，每次改写都把整轮上下文重新计费。
+        //
+        // 放这里（messages，轮边界追加）：变更落在**新旧两轮之间**，旧历史
+        // 全部继续命中；内容不变时不重复追加（同一套去重守卫）——
+        // 重复追加的字节在块级前缀缓存下全是 fresh token。
+        if !self.config.skip_memory {
+            inject_memory_snapshot(&self.config, ctx);
+        }
         //跨会话教训注入（Harness² 的 harnessing 级递归，读取侧）。
         //
         //`harness_self_edit` 的写入链与 `experience_archive` 的读取链都早已
@@ -404,5 +449,86 @@ impl AgentLoop {
                 on_acui(&json);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod memory_snapshot_tests {
+    use super::*;
+    use crate::agent_config::AgentConfig;
+
+    fn cfg_with_memory(dir: &std::path::Path) -> AgentConfig {
+        AgentConfig {
+            memory_dir: Some(dir.to_string_lossy().to_string()),
+            ..AgentConfig::default()
+        }
+    }
+
+    fn write_memory(dir: &std::path::Path, body: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("MEMORY.md"), body).unwrap();
+    }
+
+    /// 记忆快照必须进**消息**（而不是 system 提示），且内容不变时不重复追加。
+    #[test]
+    fn memory_snapshot_lands_in_messages_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("memories");
+        write_memory(&dir, "Use ripgrep for search\n§\nWorkspace is Rust");
+        let cfg = cfg_with_memory(&dir);
+
+        let mut ctx = ContextManager::new(100_000);
+        inject_memory_snapshot(&cfg, &mut ctx);
+        let first = ctx.len();
+        assert!(first > 0, "记忆块必须被注入");
+        let joined = ctx
+            .get_messages()
+            .iter()
+            .map(|m| m.content.as_deref().unwrap_or("").to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("Use ripgrep for search"),
+            "记忆内容必须进上下文消息"
+        );
+
+        // 幂等：内容没变 → 不重复追加
+        inject_memory_snapshot(&cfg, &mut ctx);
+        assert_eq!(
+            ctx.len(),
+            first,
+            "记忆内容没变时不得重复追加（重复的字节全是 fresh token）"
+        );
+
+        // 记忆变了 → 追加新的（变更落在新旧两轮之间 → 旧历史继续命中）
+        write_memory(&dir, "Use ripgrep for search\n§\nWorkspace is Rust\n§\nNow uses fd");
+        inject_memory_snapshot(&cfg, &mut ctx);
+        assert!(
+            ctx.len() > first,
+            "记忆变了必须追加新的一份，否则模型看不到更新"
+        );
+        let joined2 = ctx
+            .get_messages()
+            .iter()
+            .map(|m| m.content.as_deref().unwrap_or("").to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined2.contains("Now uses fd"), "新记忆必须在上下文里");
+    }
+
+    /// `skip_memory` 时不注入。
+    #[test]
+    fn skip_memory_injects_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("memories");
+        write_memory(&dir, "something");
+        let cfg = AgentConfig {
+            memory_dir: Some(dir.to_string_lossy().to_string()),
+            skip_memory: true,
+            ..AgentConfig::default()
+        };
+        let mut ctx = ContextManager::new(100_000);
+        inject_memory_snapshot(&cfg, &mut ctx);
+        assert_eq!(ctx.len(), 0, "skip_memory 时不得注入记忆快照");
     }
 }

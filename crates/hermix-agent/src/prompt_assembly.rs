@@ -1176,20 +1176,14 @@ fn build_context_layer(
     }
 
     // ── 易变块放在末尾 ──
-    if !config.skip_memory {
-        let memory_dir = config.resolved_memory_dir();
-        let (memory_block, user_block) = load_builtin_memory_snapshot(
-            &memory_dir,
-            config.memory_reads_global_fallback(),
-        );
-        if let Some(block) = memory_block {
-            builder = builder.with_block(&block);
-        }
-        if let Some(block) = user_block {
-            builder = builder.with_block(&block);
-        }
-    }
-
+    //
+    // **记忆快照（MEMORY/USER）刻意不在这一层**（2026-10-22，D1b）。
+    // 实测：system 提示的任何变化都会连带干掉它后面 messages 段的缓存
+    // （改中间一处 → 首发命中 2.1%）。而 agent 的自动记忆审查会定期改写
+    // MEMORY.md → 只要它拼在 system 提示里，每次改写就把整轮上下文重新
+    // 计费。正确形态是把记忆放进 **messages**（轮边界追加，变更落在新旧
+    // 两轮之间 → 旧历史全部继续命中）——见 `run_loop::pre_turn` 的
+    // 「会话记忆快照」注入块。
     let mem_block = memory_router
         .map(|r| r.collect_system_prompt_blocks())
         .unwrap_or_default();
@@ -1575,22 +1569,54 @@ mod tests {
             0,
         );
 
-        // The volatile suffix is a handful of chars; the stable layer is
-        // identical between the two configs. So any size delta comes
-        // from the context layer.
+        // D1b（2026-10-22）：记忆快照**不再进 system 提示**，所以
+        // `skip_memory` 不再影响 context 层的长度（两者应当相等）。
         let len_with = slot_with.lock().unwrap().context.as_ref().map(|t| t.len()).unwrap_or(0);
         let len_skip = slot_skip.lock().unwrap().context.as_ref().map(|t| t.len()).unwrap_or(0);
-        assert!(
-            len_skip <= len_with,
-            "skip_memory=true must produce a context layer no larger than the default \
-             (skip={}, default={})",
-            len_skip,
-            len_with
+        assert_eq!(
+            len_skip, len_with,
+            "D1b 之后记忆不在 context 层里 → skip_memory 不应改变它的大小 \
+             (skip={len_skip}, default={len_with})"
         );
-        // Prompt lengths should also reflect the reduction.
+        assert_eq!(
+            prompt_skip.len(),
+            prompt_with.len(),
+            "D1b 之后记忆不在 system 提示里 → skip_memory 不应改变提示长度"
+        );
+    }
+
+    /// D1b 的不变量：**记忆快照绝不能出现在 system 提示里**。
+    ///
+    /// 理由（2026-10-22 实测）：system 提示的任何变化都会连带干掉它后面
+    /// messages 段的缓存（改中间一处 → 首发命中 2.1%）。agent 的自动记忆
+    /// 审查会定期改写 MEMORY.md → 记忆一旦拼在 system 提示里，每次改写
+    /// 都把整轮上下文重新计费。
+    #[test]
+    fn memory_snapshot_is_not_in_the_system_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let memories = tmp.path().join("memories");
+        std::fs::create_dir_all(&memories).unwrap();
+        std::fs::write(
+            memories.join("MEMORY.md"),
+            "Use ripgrep for search\n§\nWorkspace is Rust",
+        )
+        .unwrap();
+
+        let cfg = AgentConfig {
+            memory_dir: Some(memories.to_string_lossy().to_string()),
+            ..AgentConfig::default()
+        };
+        let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+        let prompt = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model, 0);
+
         assert!(
-            prompt_skip.len() <= prompt_with.len(),
-            "skip_memory prompt must be no larger than default prompt"
+            !prompt.contains("Use ripgrep for search"),
+            "记忆内容不得出现在 system 提示里 —— 它会让每次记忆改写都作废整轮缓存"
+        );
+        assert!(
+            !prompt.contains("MEMORY (your personal notes)"),
+            "记忆块的标题也不得出现在 system 提示里"
         );
     }
 
