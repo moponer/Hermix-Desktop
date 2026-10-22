@@ -124,23 +124,11 @@ pub fn open_sync(
 ) -> Result<(), String> {
     let target = normalize_url(url)?;
 
-    // 让 WebView2 的**浏览器进程**带上调试端口参数。
-    //
-    // 为什么不能只靠下面的 `additional_browser_args`：那个 API 只在"这一次
-    // 真的新建环境"时把参数塞进 `CoreWebView2EnvironmentOptions`。而实测的
-    // 失败路径是**环境创建失败**（`0x8007139F` / ERROR_INVALID_STATE）——参数
-    // 根本没机会生效，`webview_cdp` 也就永远等不到 `DevToolsActivePort`。
-    //
-    // 环境变量是 WebView2 loader 在**每次** `CreateCoreWebView2Environment`
-    // 时读的，覆盖面更宽。放在 `add_child` 之前设置：主窗口的 WebView2 环境
-    // 早在 setup 阶段就建好了（那时这个变量还不存在），所以它只作用于子
-    // webview，不会把查看器主 UI 也暴露成 CDP target。
-    if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
-        std::env::set_var(
-            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            "--remote-debugging-port=0",
-        );
-    }
+    // 2026-10-22 实测撤稿：曾在此设置 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
+    // 作为 builder 参数之外的兜底——**测试机证伪**（agent 记录：环境变量对
+    // 内嵌视图不生效，wry 建环境时直接传 EnvironmentOptions，不读该变量）。
+    // 真正的根因与修复见下方 `additional_browser_args` 的注释：参数必须与
+    // 主窗口环境逐字一致。
 
     close_webview(app);
 
@@ -151,7 +139,18 @@ pub fn open_sync(
         // **开调试端口**（端口写 0 = 让浏览器进程自己挑，真实端口写进 profile 的
         // DevToolsActivePort）：这是 agent 能驱动「用户正在看的那块预览区」的
         // 关键 —— 用户与 agent 看到的是同一个页面、同一个登录态。
-        .additional_browser_args("--remote-debugging-port=0")
+        //
+        // **参数必须与主窗口环境逐字一致**（tauri.conf.json 的
+        // additionalBrowserArgs）。WebView2 的进程级限制：同进程内第二个环境
+        // 若携带与第一个不同的 AdditionalBrowserArguments，创建直接返回
+        // ERROR_INVALID_STATE (0x8007139F)——此前这里只给
+        // `--remote-debugging-port=0`（缺 disable-features），与主窗口环境的
+        // 参数不一致，内嵌视图自第一天起就必炸（2026-10-22 测试机实测排到
+        // 死路：重启/换 profile/杀进程全部无效，因为这是进程级校验）。
+        // disable-features 三件套是 wry 的默认值，conf 覆盖后需显式带上。
+        .additional_browser_args(
+            "--remote-debugging-port=0 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection",
+        )
         // 页面内跳转同样只放行 http / https。
         .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
         // 页面自己跳了别的地址 → 通知前端（标签标题要跟着变）。
