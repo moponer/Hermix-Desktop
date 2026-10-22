@@ -479,26 +479,23 @@ export function App() {
 
   // —— 右键菜单（全局拦截原生右键，落点由 data-ctx 属性决定） ——
   /**
-   * 菜单展开计数 → 网页子 webview 让位。
+   * 菜单展开 → 网页子 webview 让位。
    *
    * 网页是**独立的子 webview（独立 HWND）**，永远画在父 webview 的 DOM
    * 之上 —— 不是同一层的东西，CSS 的 z-index 根本管不到它。菜单一旦展开
    * 到内容区（标题栏菜单、右键菜单都会），就被这块网页整个盖住。
    *
    * 所以：菜单展开时把网页 **hide**（不是 close —— 关掉会丢页面状态、
-   * 滚动位置、表单内容），全部收起后再 show 回来。用计数而不是布尔：
-   * 两个菜单可能同时开着。
+   * 滚动位置、表单内容），全部收起后再 show 回来。
+   *
+   * **单一真相源**（2026-10-22 重构）：可相见性从「menu state + 标题栏
+   * 菜单开关」**派生**，不再用手动计数。旧实现要求每个关闭路径都记得
+   * 调 `setMenuOpen(false)`——Esc 关闭（App.tsx 1863）和 ContextMenu 的
+   * onClose（2494）都漏了，webview hide 后永远不 show，浏览器区域
+   * 从此空白（实测：右键菜单展开后整个网页区变白且不恢复）。新增关闭
+   * 路径时不再可能漏——state 变化自动驱动。
    */
-  const menuDepthRef = useRef(0);
-  const setMenuOpen = useCallback((open: boolean) => {
-    const next = Math.max(0, menuDepthRef.current + (open ? 1 : -1));
-    const changed = next !== menuDepthRef.current;
-    menuDepthRef.current = next;
-    if (changed) {
-      void invoke("web_set_visible", { visible: next === 0 }).catch(() => undefined);
-    }
-  }, []);
-
+  const [titleBarMenuOpen, setTitleBarMenuOpen] = useState(false);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -515,6 +512,12 @@ export function App() {
   const noticeTimer = useRef<number | undefined>(undefined);
   /** 菜单打开时聚焦着的输入框（文本编辑动作作用在它身上）。 */
   const fieldRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+
+  // 菜单开合 → 子 webview 让位（派生自两个菜单 state，见上方重构注释）。
+  const webHidden = menu !== null || titleBarMenuOpen;
+  useEffect(() => {
+    void invoke("web_set_visible", { visible: !webHidden }).catch(() => undefined);
+  }, [webHidden]);
 
   // —— 书签（localStorage 持久化） ——
   const [bookmarks, setBookmarks] = useState<Bookmark[]>(readBookmarks);
@@ -1332,9 +1335,8 @@ export function App() {
         ? f.value.slice(f.selectionStart ?? 0, f.selectionEnd ?? 0)
         : "";
       setMenu({ x, y, target, viaKeyboard, fieldSelection });
-      setMenuOpen(true);
     },
-    [setMenuOpen],
+    [],
   );
 
   useEffect(() => {
@@ -1431,7 +1433,6 @@ export function App() {
     if (!menu) return undefined;
     const close = () => {
     setMenu(null);
-    setMenuOpen(false);
   };
     document.addEventListener("scroll", close, true);
     return () => document.removeEventListener("scroll", close, true);
@@ -1966,7 +1967,7 @@ export function App() {
         title="Hermix 文件查看器"
         menus={menus}
         onMenuCommand={onMenuCommand}
-        onMenuOpenChange={setMenuOpen}
+        onMenuOpenChange={setTitleBarMenuOpen}
       />
       {sysOpen && <SystemPanel onClose={() => setSysOpen(false)} />}
       {browserOpen && <BrowserPanel onClose={() => setBrowserOpen(false)} />}

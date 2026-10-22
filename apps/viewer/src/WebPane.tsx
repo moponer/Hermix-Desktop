@@ -95,6 +95,24 @@ export function WebPane({ url, chrome = true }: { url: string; chrome?: boolean 
     void invoke("web_exec", { script }).catch(() => undefined);
   }, []);
 
+  // 地址栏编辑态：null = 展示 current；非 null = 用户正在输入。
+  // 2026-10-22：旧版是只读 span——用户输入网址后没有任何方式确认进入
+  //（没有回车处理，也没有 Go 按钮）。
+  const [draft, setDraft] = useState<string | null>(null);
+
+  /** 地址栏导航：补全协议后用 location.href 跳转——**不重建 webview**，
+   *  会话、登录态、滚动位置全部保留（web_open 会整个重开）。 */
+  const go = useCallback(
+    (raw: string) => {
+      const t = raw.trim();
+      if (!t) return;
+      const target = /^https?:\/\//i.test(t) ? t : `https://${t}`;
+      setDraft(null);
+      run(`location.href = ${JSON.stringify(target)};`);
+    },
+    [run],
+  );
+
   const openExternally = useCallback(() => {
     void invoke("viewer_open_with_system", { path: current }).catch(() => undefined);
   }, [current]);
@@ -132,9 +150,35 @@ export function WebPane({ url, chrome = true }: { url: string; chrome?: boolean 
           >
             <RefreshCw size={14} className="icon-sm" />
           </button>
-          <span className="web-pane-url" title={current}>
-            {current}
-          </span>
+          <input
+            className="web-pane-url web-pane-url-input"
+            value={draft ?? current}
+            onChange={(e) => setDraft(e.target.value)}
+            onFocus={() => setDraft(current)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                go(draft ?? current);
+                (e.target as HTMLInputElement).blur();
+              } else if (e.key === "Escape") {
+                setDraft(null);
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+            title="输入网址后回车进入"
+            aria-label="网址"
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            className="tb-btn tb-icon"
+            onClick={() => go(draft ?? current)}
+            disabled={!draft || !draft.trim()}
+            title="进入网页（回车）"
+            aria-label="进入网页"
+          >
+            <ArrowRight size={14} className="icon-sm" />
+          </button>
           <span className="preview-toolbar-spacer" />
           <button
             type="button"
