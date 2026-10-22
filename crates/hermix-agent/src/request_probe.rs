@@ -76,22 +76,30 @@ pub fn observe(session_id: Option<&str>, messages: &[Message], tools: &[ToolSche
     };
 
     let system_chars = system_text.len();
-    let messages_chars: usize = rest
-        .iter()
-        .map(|m| {
-            m.content.as_deref().map(str::len).unwrap_or(0)
-                + m.tool_calls
-                    .as_ref()
-                    .map(|c| {
-                        c.iter()
-                            .map(|tc| {
-                                tc.function.name.len() + tc.function.arguments.len()
-                            })
-                            .sum::<usize>()
-                    })
-                    .unwrap_or(0)
-        })
-        .sum();
+    // 分段统计对话历史：**哪一段在变大**就是 fresh token 的来源。
+    let mut content_chars = 0usize;
+    let mut tool_call_chars = 0usize;
+    let mut tool_result_chars = 0usize;
+    for m in rest {
+        let c = m.content.as_deref().map(str::len).unwrap_or(0);
+        let tc = m
+            .tool_calls
+            .as_ref()
+            .map(|calls| {
+                calls
+                    .iter()
+                    .map(|t| t.function.name.len() + t.function.arguments.len())
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
+        if m.role == MessageRole::Tool {
+            tool_result_chars += c;
+        } else {
+            content_chars += c;
+            tool_call_chars += tc;
+        }
+    }
+    let messages_chars: usize = content_chars + tool_call_chars + tool_result_chars;
     let tools_chars: usize = tools
         .iter()
         .map(|t| {
@@ -132,11 +140,14 @@ pub fn observe(session_id: Option<&str>, messages: &[Message], tools: &[ToolSche
     map.insert(key, (fp, seq));
 
     tracing::info!(
-        "prefix_probe: #{} system={}chars tools={}chars messages={}chars | 变了: {}",
+        "prefix_probe: #{} system={}chars tools={}chars messages={}chars (内容{} + 工具调用{} + 工具结果{}) | 变了: {}",
         seq,
         system_chars,
         tools_chars,
         messages_chars,
+        content_chars,
+        tool_call_chars,
+        tool_result_chars,
         if changed.is_empty() {
             "无".to_string()
         } else {

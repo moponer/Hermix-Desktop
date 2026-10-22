@@ -439,17 +439,29 @@ pub fn messages_for_api_call(config: &AgentConfig, ctx: &ContextManager) -> Vec<
     }
     messages = merged;
 
-    // Strip reasoning_content from all but the last assistant message.
-    // Old thinking blocks are noise once the LLM has moved on — it doesn't
-    // need to re-read its own previous reasoning every turn.
-    for i in (0..messages.len()).rev() {
-        if messages[i].reasoning_content.is_some() {
-            // Keep the last one (most recent assistant), clear the rest.
-            // Scan backwards: the first hit is the last assistant.
-            for j in (0..i).rev() {
-                messages[j].reasoning_content = None;
-            }
-            break;
+    // Strip `reasoning_content` from everything **before the current turn's
+    // start**; the current turn's own thinking is kept.
+    //
+    // 为什么不是「只保留最后一条」：那是**追溯性**改写 —— 每来一条新的带
+    // reasoning 的 assistant，就把上一条的就地置 None。上一条可能位于消息数组
+    // 很靠前的位置，于是那一处的字节变了 → provider 的块级前缀缓存从那里
+    // 往后全部失效（实测 -833 token/次）。
+    //
+    // 「本轮起点」= 最后一条 **User** 消息之后。自动化的提示词在进 agent loop
+    // 之前会被改回 `User`（见 `local_agent_service` 的 `automation_meta` 段），
+    // 所以每一轮都能认出自己的起点。
+    //
+    // 效果：轮内 assistant 的思考**全部保留**（模型能接着自己的思考往下做），
+    // **轮内的字节不再变化**；只有跨轮时上一轮的最后几条会被改写一次
+    // → 每轮一次失效，而不是每次调用都失效。
+    let turn_start = messages
+        .iter()
+        .rposition(|m| m.role == hermix_core::MessageRole::User)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    for msg in messages.iter_mut().take(turn_start) {
+        if msg.reasoning_content.is_some() {
+            msg.reasoning_content = None;
         }
     }
     apply_prompt_cache_markers(config, &mut messages);
@@ -856,6 +868,7 @@ fn build_stable_layer(
         config.personality.as_deref(),
         config.system_prompt.as_deref(),
         config.workspace.as_deref(),
+        tool_schemas,
     );
 
     // Hot-path read: peek the cache without re-rendering. The lookup

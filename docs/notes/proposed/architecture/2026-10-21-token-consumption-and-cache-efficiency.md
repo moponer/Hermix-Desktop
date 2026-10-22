@@ -58,6 +58,37 @@ Status: proposed — 2026-10-21 完成全量盘点 + provider 级对照实验；
 它是「**一个巨大的请求**里 89.21% 被缓存了」，不是「小请求被缓存了 89%」。
 新鲜部分 ~10.8% ≈ **800K token/轮** —— 这才是每轮真正在付的钱。
 
+## 事实 7（2026-10-22 补）：每轮调用都在重复注入同一份 skill 正文
+
+探针加了分项之后，messages 段的构成一目了然：
+
+```
+#1  system=50068 tools=26272 messages=84194  (内容25073 + 工具调用0   + 工具结果59121)
+#5  system=50068 tools=26272 messages=197282 (内容110549+ 工具调用913  + 工具结果85820)
+#11 system=50068 tools=26272 messages=319523 (内容238763+ 工具调用3651 + 工具结果77109)
+```
+
+「内容」以 **~21.7K 字符/次调用**线性增长，而模型输出才 ~2.2K token/次 —— 说明
+**每次 API 调用都在往 messages 里追加约 21.7K 字符**，追加的不是模型的输出。
+
+根因（`run_loop/pre_turn.rs`）：**每次工具迭代**都重新注入
+
+| 块 | 上限 | 位置 |
+|---|---|---|
+| 自动匹配的 skill 正文 | `skill_injection_char_budget` = **16,000 字符** | `pre_turn.rs:204` |
+| 跨会话教训 | 1,200 字符 | `pre_turn.rs:179` |
+
+旧注释写「Compression folds them on context pressure」—— 但压缩要逼近模型窗口才
+触发，这里根本等不到（见事实 6.3）。**同一文件的 plan-mode 块有去重守卫**
+（"skipped when a recent message already carries it"），skill / 教训块**没有**。
+
+每次追加都是**新的字节** → 在块级前缀缓存下**全部变成 fresh token**。这正是
+「命中率只有 83.6%、但绝对消耗已经降了 10 倍」的原因。
+
+修法：新增 `ctx_has_same_block(ctx, marker, new_content)` —— **最近一份**同类块的
+内容与新的相同就不重复追加（不是「任意一份」，否则换了用户消息、命中集合变了
+就不会注入新的）。
+
 ## Decision（按复核后的重心重排）
 
 **先做「有界历史窗口」（已实施），再做「让字节稳定」，最后才是 prompt 层瘦身。**
@@ -133,7 +164,7 @@ Status: proposed — 2026-10-21 完成全量盘点 + provider 级对照实验；
   （`browser-automation` §3.8），但实测没稳定走到那条路径 —— 大概率是每章按章节类型
   （纯视频 / 视频+测验 / 纯测验）重新决策流程，而不是套固定剧本。
 
-## Decision
+## 三、优化措施（措施清单）
 
 **分三档做：P0 让字节稳定（提命中率到 98%+）、P1 砍固定前缀里的冗余（压绝对量）、P2 减少每章调用次数（压墙钟）。先做「可观测地基」，再按 P0 → P1 → P2 推进。**
 
@@ -142,14 +173,15 @@ Status: proposed — 2026-10-21 完成全量盘点 + provider 级对照实验；
 
 ### P0 档：让字节稳定（命中率 → 98%+）
 
-| 措施 | 做法 | 预期 |
+| 措施 | 做法 | 状态 |
 |---|---|---|
-| **M1 剥离改为单调** | `reasoning_content` 的剥离改成「**按本轮起点**切」：只剥离**最后一个 user 消息之前**的 assistant 消息；本轮内产生的 assistant 保留 reasoning | 字节只在一轮内第一次调用变一次 → 从「每调用变」降到「每轮变一次」 |
-| **M2 工具顺序确定化** | `registry.schemas()` 与 `names()` 按名字排序后输出；`AlwaysInclude` 追加也按名字排 | 重启不再作废前缀（实测 107/109 位置变化消失） |
-| **M3 工具集合稳定化** | 同一会话内对路由结果做**迟滞**（hysteresis）：集合未显著变化就不重算；或路由结果按会话缓存，仅在用户显式换话题时失效 | 集合不变 → tools 不变 → 前缀整体保住 |
-| **M4 时间戳冻结** | `session_started_at` 改为**每会话一次**（从 session 行 `created_at` 取，或按 session_id 缓存），并把 `hydrate_stored_system_prompt_from_hermes_home` 真正接上 | 与注释对齐；块级缓存下省 ~12 token/次，但为将来换 provider 兜底 |
-| **M5 stable 层 key 纳入工具集** | `compute_prompt_cache_key` 加入工具集哈希 | 修 P0-5 的正确性 bug（清单与实际不一致） |
-| **M6 directions 分层** | 把 always-on 的 10,313 字符移进 **stable 层**（它们与 turn 无关），只把真正 per-turn 的（domain.directive / tool-gated / project.conventions / workbench）留在变动区 | 19,628 字符的变动区缩到几百字符 |
+| **M1 剥离改为单调** | `reasoning_content` 的剥离改成「**按本轮起点**切」：只剥离**最后一个 user 消息之前**的 assistant 消息；本轮内产生的 assistant 保留 reasoning | ✅ 已实施 |
+| **M2 工具顺序确定化** | `registry.schemas()` 与 `names()` 按名字排序后输出；`AlwaysInclude` 追加也按名字排 | ✅ 已实施（实测重启后 107/109 位置变化消失） |
+| **M3 工具集合稳定化** | 同一会话内对路由结果做**迟滞**（hysteresis） | ⛔ **不需要** —— 探针实测工具指纹跨 3 轮一次没变，路由天然稳定 |
+| **M4 时间戳冻结** | `session_started_at` 改为**每会话一次**（按 session_id 记忆） | ✅ 已实施（探针实测 system 段跨轮不再变） |
+| **M5 stable 层 key 纳入工具集** | `compute_prompt_cache_key` 加入工具集哈希 | ✅ 已实施（修 P0-5 的正确性 bug） |
+| **M6 directions 分层** | 把 always-on 的 10,313 字符移进 **stable 层** | ⏳ 未做（收益随请求变小而变小） |
+| **M17 注入块去重** | skill 正文块 / 跨会话教训块：最近一份同类块内容相同就不重复追加 | ✅ 已实施（见「事实 7」） |
 
 ### P1 档：固定前缀瘦身（**降级**：绝对量里只占 1%，做完 P0 再看）
 

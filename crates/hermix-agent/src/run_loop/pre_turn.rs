@@ -11,6 +11,27 @@ use crate::context::ContextManager;
 use hermix_core::ToolErrorRecord;
 use serde_json::json;
 
+/// 自动匹配到的 skill 正文块的标记（`skill_loader::build_injection_and_tools` 的标题行）。
+const SKILL_BLOCK_MARKER: &str = "## Auto-Matched Skills (system-injected)";
+/// 跨会话教训块的标记（`experience_archive::experience_prompt_for_tools`）。
+const EXPERIENCE_BLOCK_MARKER: &str = "[Relevant Past Experience]";
+
+/// 上下文里是否已经有**内容完全相同**的同类块。
+///
+/// 「最近一份」而不是「任意一份」：同一轮里块的内容不变 → 命中 → 不重复追加；
+/// 换了用户消息（命中集合变了 → 内容变了）→ 不命中 → 照常注入新的。
+///
+/// 为什么要这个守卫：这些块每次追加都是**新的字节**，在块级前缀缓存下全部
+/// 变成 fresh token。重复注入 25 次就是 25 份白烧的 token。
+fn ctx_has_same_block(ctx: &ContextManager, marker: &str, new_content: &str) -> bool {
+    ctx.get_messages()
+        .iter()
+        .rev()
+        .find(|m| m.content.as_deref().unwrap_or("").contains(marker))
+        .map(|m| m.content.as_deref().unwrap_or("") == new_content)
+        .unwrap_or(false)
+}
+
 impl AgentLoop {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn do_pre_turn_setup(
@@ -176,7 +197,16 @@ impl AgentLoop {
                         &tool_names,
                         1200,
                     ) {
-                        Ok(Some(block)) => ctx.add_message(Message::system(&block)),
+                        Ok(Some(block)) => {
+                            // **去重**：这段内容由「本轮用过哪些工具」决定，轮内
+                            // 基本不变。不去重就会在每次工具迭代里重复追加同一段
+                            // 教训 —— 而每次追加都是**新的字节** → 全是 fresh
+                            // token。与 plan-mode / skills 块用同一套守卫：
+                            // 只在「最近一份同类块的内容与新的不同」时才追加。
+                            if !ctx_has_same_block(ctx, EXPERIENCE_BLOCK_MARKER, &block) {
+                                ctx.add_message(Message::system(&block));
+                            }
+                        }
                         Ok(None) => {}
                         Err(e) => {
                             tracing::debug!(error = %e, "experience prompt skipped");
@@ -201,7 +231,22 @@ impl AgentLoop {
                 self.config.skill_injection_char_budget,
             ) {
                 Some((trimmed, tools)) => {
-                    ctx.add_message(Message::system(&trimmed));
+                    // **去重**（2026-10-22）：skill 正文块的上限是
+                    // `skill_injection_char_budget`（默认 16,000 字符）。
+                    // 原实现每次工具迭代都注入一份 → 一个 25 次调用的轮次往
+                    // messages 里堆 25 份同样的 skill 正文，实测**每次调用追加
+                    // ~21.7K 字符**，而这些重复**每次都是新的字节** → 全部变成
+                    // fresh token，缓存命中率被拖到 83%。
+                    //
+                    // 旧注释写「Compression folds them on context pressure」——
+                    // 但压缩要等到逼近模型窗口才触发，这里根本等不到。
+                    //
+                    // 改成与 plan-mode 块同一套守卫：**最近一份同类块的内容与
+                    // 新的相同就不重复追加**。命中集合由用户消息决定，轮内不变
+                    // → 一轮注入一次就够；换了用户消息（命中集合变了）仍会注入。
+                    if !ctx_has_same_block(ctx, SKILL_BLOCK_MARKER, &trimmed) {
+                        ctx.add_message(Message::system(&trimmed));
+                    }
                     // allowed-tools enforcement (subtract-only): the tools
                     // union of the activated skills narrows this turn's
                     // dispatch surface. Recomputed every turn so a stale

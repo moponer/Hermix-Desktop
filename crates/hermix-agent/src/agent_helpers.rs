@@ -141,13 +141,24 @@ impl ToolRegistry {
     }
 
     /// Return all registered tool schemas.
+    ///
+    /// **按名字排序**：底层是 `HashMap`，迭代序**跨进程不稳定**（Rust 的
+    /// `RandomState` 用每进程随机种子）。工具数组是 provider 前缀缓存的一部分
+    /// —— 顺序一变，`tools + system + messages` 整条前缀的缓存全部作废。
+    /// 实测（2026-10-22）：sidecar 重启后 109 个工具里 **107 个位置变了**
+    /// （集合相同、纯顺序差异）。
     pub fn schemas(&self) -> Vec<ToolSchema> {
-        self.tools.values().map(|e| e.schema.clone()).collect()
+        let mut out: Vec<ToolSchema> = self.tools.values().map(|e| e.schema.clone()).collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
     }
 
     /// Return all registered tool names.
+    /// Sorted for the same reason as [`Self::schemas`].
     pub fn names(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
+        let mut out: Vec<String> = self.tools.keys().cloned().collect();
+        out.sort();
+        out
     }
 
     /// Return a clone of this registry with the named tools
@@ -207,13 +218,19 @@ impl Default for ToolRegistry {
 // ---------------------------------------------------------------------------
 
 /// Compute a stable hash key for system prompt caching.
+///
 /// Only the config-driven factors that rarely change; excludes
-/// per-turn data (tool list, user message, timestamp).
+/// per-turn data (user message, timestamp).
+///
+/// **工具集必须在 key 里**：stable 层渲染的 `<tools>` 清单来自它。工具集变了
+/// （MCP 注册/注销、路由结果变了）而 key 不变 → 命中缓存 → 清单是**旧的**，
+/// 与实际发出的 `tools` 数组对不上（正确性 bug）。
 pub fn compute_prompt_cache_key(
     model: &str,
     personality: Option<&str>,
     system_prompt: Option<&str>,
     workspace: Option<&str>,
+    tool_schemas: &[hermix_core::ToolSchema],
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::default();
@@ -221,6 +238,10 @@ pub fn compute_prompt_cache_key(
     personality.unwrap_or("").hash(&mut h);
     system_prompt.unwrap_or("").hash(&mut h);
     workspace.unwrap_or("").hash(&mut h);
+    // 工具集按名字排序后进 key —— 顺序无关，只有集合本身变了才失效。
+    let mut names: Vec<&str> = tool_schemas.iter().map(|t| t.name.as_str()).collect();
+    names.sort_unstable();
+    names.hash(&mut h);
     h.finish()
 }
 

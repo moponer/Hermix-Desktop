@@ -218,6 +218,16 @@ pub struct LocalAgentService {
     session_persistence: Arc<SessionPersistence>,
     /// Optional provider factory override, mainly for tests.
     provider_factory: Option<ProviderFactory>,
+    /// 每个会话的「会话起始时间」（**会话内恒定**）。
+    ///
+    /// 系统提示尾部的 `Conversation started` 块用它。这个块在**系统消息的
+    /// 末尾** —— 它每 turn 变化，从那里往后的整条前缀（整个 messages 数组）
+    /// 就都失去 provider 的缓存。块级缓存下实测只损失 ~12 token/次，但那是
+    /// 「provider 恰好也按块缓存」的运气；换个严格前缀缓存的 provider 就会
+    /// 立刻变成最大的坑。
+    ///
+    /// 按 session_id 记一次即可。会话数有上限，超过就整体清空重来。
+    session_started_at: Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
     /// Tirith tool-call policy engine.
     /// Pre-evaluates each tool call before it reaches
     /// `on_pre_tool_dispatch` and can short-circuit with a
@@ -646,6 +656,7 @@ impl LocalAgentService {
             tool_registry,
             session_persistence,
             provider_factory: None,
+            session_started_at: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             tirith: Some(Arc::new(TirithSecurity::from_default_or_bundled())),
             consciousness_tracker: None,
             task_record_sink: None,
@@ -672,6 +683,7 @@ impl LocalAgentService {
             tool_registry,
             session_persistence,
             provider_factory: Some(provider_factory),
+            session_started_at: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             tirith: Some(Arc::new(TirithSecurity::from_default_or_bundled())),
             consciousness_tracker: None,
             task_record_sink: None,
@@ -687,6 +699,22 @@ impl LocalAgentService {
     /// without requiring a desktop-app restart.
     pub fn set_config(&self, new: GatewayConfig) {
         *self.config.lock().unwrap_or_else(|e| e.into_inner()) = new;
+    }
+
+    /// 取（并首次记住）某个会话的起始时间。
+    ///
+    /// 会话内恒定 —— 这是缓存稳定性的关键，不是「顺便记一下时间」。
+    fn session_started_at(&self, session_id: &str) -> String {
+        let mut map = self
+            .session_started_at
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if map.len() > 512 {
+            map.clear();
+        }
+        map.entry(session_id.to_string())
+            .or_insert_with(|| chrono::Local::now().to_rfc3339())
+            .clone()
     }
 
     /// Snapshot the current config (cheap clone). Used by
@@ -1880,7 +1908,7 @@ impl AgentService for LocalAgentService {
         agent_config.session_id = Some(session_id.to_string());
         // 会话内恒定的"会话起始时间"，供系统提示尾部的 Conversation
         // started 块使用（缓存稳定性：每 turn 变化会打碎 provider 前缀缓存）。
-        agent_config.session_started_at = Some(chrono::Local::now().to_rfc3339());
+        agent_config.session_started_at = Some(self.session_started_at(session_id));
 
         //(session isolation): the per-session workspace,
         // approval context, session id, and message id are now carried
@@ -2350,7 +2378,7 @@ impl AgentService for LocalAgentService {
         agent_config.session_id = Some(session_id.to_string());
         // 会话内恒定的"会话起始时间"，供系统提示尾部的 Conversation
         // started 块使用（缓存稳定性：每 turn 变化会打碎 provider 前缀缓存）。
-        agent_config.session_started_at = Some(chrono::Local::now().to_rfc3339());
+        agent_config.session_started_at = Some(self.session_started_at(session_id));
 
         //(session isolation): the per-session workspace,
         // approval context, session id, and message id are now carried
