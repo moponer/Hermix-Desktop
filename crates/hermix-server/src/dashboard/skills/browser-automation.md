@@ -2,7 +2,7 @@
 name: "browser-automation"
 display_name: "浏览器自动化"
 category: "software-development"
-description: "用 MCP 驱动真实网页：导航、登录、填表、点击、截图、抓取，每步先核对再动手。**浏览器自动化统一由文件查看器的 MCP 承载**（桌面端工具前缀 hermix-viewer__）：内嵌网页视图 web_open / webview_* 是**主路径**（有头、用户看得见、能自己登录），独立浏览器窗口 browser_open(headed=true) 次之，无头 browser_open(headed=false) 用于批量。当用户要「操作某个网站」「登录某个系统」「代填网页表单」「抓取需登录或 JS 渲染的页面」「在查看器里打开网址并自动点」时使用。不适用于：公开网页纯文本抓取（web_extract 更省）、用户粘贴的截图分析（直接读图）、本地文档编辑（用查看器的文档编辑能力）。"
+description: "用 MCP 驱动真实网页：导航、登录、填表、点击、截图、抓取，每步先核对再动手。**浏览器自动化统一由文件查看器的 MCP 承载**（桌面端工具前缀 hermix-viewer__）：内嵌网页视图 hermix-viewer__web_open / webview_* 是**主路径**（有头、用户看得见、能自己登录），独立浏览器窗口 hermix-viewer__browser_open(headed=true) 次之，无头 hermix-viewer__browser_open(headed=false) 用于批量。当用户要「操作某个网站」「登录某个系统」「代填网页表单」「抓取需登录或 JS 渲染的页面」「在查看器里打开网址并自动点」时使用。不适用于：公开网页纯文本抓取（web_extract 更省）、用户粘贴的截图分析（直接读图）、本地文档编辑（用查看器的文档编辑能力）。"
 version: "1.0.0"
 author: "Hermix Desktop"
 source: "builtin"
@@ -19,7 +19,7 @@ tags: ["software-development", "builtin", "browser", "浏览器", "自动化", "
 
 | | **① 内嵌网页视图（主路径）** | ② 独立浏览器窗口 | ③ 无头 |
 |---|---|---|---|
-| 工具 | `web_open` / `webview_*` | `browser_open(headed=true)` | `browser_open(headed=false)` |
+| 工具 | `hermix-viewer__web_open` / `webview_*` | `hermix-viewer__browser_open(headed=true)` | `hermix-viewer__browser_open(headed=false)` |
 | 页面在哪 | **查看器的预览区**（用户眼前） | 系统浏览器独立窗口 | 后台，无界面 |
 | 用户能看见 | **能**（同一块屏幕、同一页面） | 能（但不是同一块屏幕） | **不能** |
 | 用户能登录 | **能**（自己点、自己输密码） | 能 | **不能** |
@@ -30,7 +30,7 @@ tags: ["software-development", "builtin", "browser", "浏览器", "自动化", "
 纯抓公开页面 → 形态 ③（或 `web_extract`）。
 
 > 2026-10-21 起，内建的**无头 `browser` 工具集已退役**（`hermix-tools` 不再注册
-> 它）：同名工具两套并存会让模型在 `browser_click(ref)` 与
+> 它）：同名工具两套并存会让模型在 `hermix-viewer__browser_click(ref)` 与
 > `hermix-viewer__browser_click(x, y)` 之间猜参数形状。浏览器自动化的唯一入口
 > 是查看器 MCP。
 
@@ -46,41 +46,56 @@ tags: ["software-development", "builtin", "browser", "浏览器", "自动化", "
    而不是只留查看器那几十个。抽掉 `tool_search` / `tool_describe` 之后，
    agent 会卡在「找工具」上反复失败（`Tool 'tool_search' does not exist`），
    一轮下来什么正事也没干。
-4. **`tool_describe` 调不动就别调**：2026-10-21 实测，agent 的可调度工具面里
-   有 `tool_search` / `tool_call`、**没有** `tool_describe`，而系统提示仍在宣传它
-   —— 模型会连着几轮调它、每轮都被校验器拒（`Tool 'tool_describe' does not exist`），
-   白烧好几轮。要看工具的完整参数就直接调 `list_tools`，
-   或直接用上面点名的 `hermix-viewer__webview_*`（它们的参数在本 skill 里已写全）。
+4. **查看器工具是「延迟加载」的 —— 必须走桥接工具调**（2026-10-22 实测澄清）：
+   `hermix-viewer__*` **不在**可直接调用的列表里（直接点名调会被校验器拒）。
+   唯一正确的形式是桥接工具 `tool_call`：
+
+   ```
+   tool_call(name="hermix-viewer__webview_eval",       arguments={"expression": "<JS>"})
+   tool_call(name="hermix-viewer__webview_navigate",   arguments={"url": "..."})
+   tool_call(name="hermix-viewer__webview_screenshot", arguments={"clip":{"x":0,"y":0,"width":800,"height":600},"scale":2})
+   ```
+
+   **不要**先 `tool_search` / `tool_describe` / `list_tools` 去摸工具 ——
+   本 skill §2 的表已经把名字和参数形状写全了，直接调。
+   实测「摸工具」这件事每轮要烧 **5 次调用**（`tool_search` → `list_tools` →
+   `search_files` → `tool_describe` → 才开工），而**每次调用的请求都带着整个上下文**
+   —— 5 次摸工具 ≈ 白烧 5 个完整请求，是长跑任务最大的单项浪费。
+   另外桥接工具里**没有** `tool_describe`（系统提示还在宣传它，调了会被校验器拒）。
 
 ## 2. 形态 ①：内嵌网页视图（主路径）
 
 | 步骤 | 工具 |
 |---|---|
-| 在查看器里打开网址 | `web_open(url)` —— **默认切纯净模式** |
-| 当前页面是啥 | `webview_state()`（标题 + URL） |
-| 读页面文字 | `webview_text()` —— 比截图省 token，**读内容优先用它** |
-| 执行 JS | `webview_eval(expression, frame?)` |
-| **按文字点击** | `webview_click_text(text, frame?)` —— **优先用这个**，自带核对（§3.5） |
-| 悬停（真鼠标） | `webview_hover(x, y)` |
-| 点坐标（兜底） | `webview_click(x, y)` |
-| 跳地址 | `webview_navigate(url)` |
-| 截图 | `webview_screenshot(clip?, scale?)` —— **读小字必须带 clip+scale**（§3.1） |
-| 收摊 | `web_close()` |
-| 操作查看器本身 | `viewer_ui_state()` / `viewer_action(...)`（切模式、开文件、开网址、读当前视图） |
+| 在查看器里打开网址 | `hermix-viewer__web_open(url)` —— **默认切纯净模式** |
+| 当前页面是啥 | `hermix-viewer__webview_state()`（标题 + URL） |
+| 读页面文字 | `hermix-viewer__webview_text()` —— 比截图省 token，**读内容优先用它** |
+| 执行 JS | `hermix-viewer__webview_eval(expression, frame?)` |
+| **按文字点击** | `hermix-viewer__webview_click_text(text, frame?)` —— **优先用这个**，自带核对（§3.5） |
+| 悬停（真鼠标） | `hermix-viewer__webview_hover(x, y)` |
+| 点坐标（兜底） | `hermix-viewer__webview_click(x, y)` |
+| 跳地址 | `hermix-viewer__webview_navigate(url)` |
+| 截图 | `hermix-viewer__webview_screenshot(clip?, scale?)` —— **读小字必须带 clip+scale**（§3.1） |
+| 收摊 | `hermix-viewer__web_close()` |
+| 操作查看器本身 | `hermix-viewer__viewer_ui_state()` / `hermix-viewer__viewer_action(...)`（切模式、开文件、开网址、读当前视图） |
+
+> 表里的工具名就是 `tool_call` 的 `name` 参数值（**已带 `hermix-viewer__` 前缀**）。
+> 例：`hermix-viewer__webview_eval(expression)` →
+> `tool_call(name="hermix-viewer__webview_eval", arguments={"expression": "..."})`
 
 **模式选择**：浏览器自动化 → **纯净模式**（预览区占满、干扰最少）；办公文档 → 重量模式。
 开网址/开文件**与模式无关**，需要输入框的动作（切目录、搜索）自动先切重量。
 
 ## 3. 实测原语（2026-10-21 真机跑出来的，照着做）
 
-### 3.1 读页面小字：`webview_screenshot` 必须带 `clip` + `scale`
+### 3.1 读页面小字：`hermix-viewer__webview_screenshot` 必须带 `clip` + `scale`
 
 - 整视口截图会被**压到 1024 宽**再给模型 → 14px 的正文直接糊掉，认不出字。
 - `clip = {x, y, width, height}` + `scale = 2`：**只截这一小块并放大** → 又清晰又省上下文。
 - **坑：`clip` 用的是「顶层文档坐标」，不是视口坐标**。页面滚动了就得把
-  `scrollY` 加进去，否则裁到一片空白。用 `webview_eval` 量元素位置时，
+  `scrollY` 加进去，否则裁到一片空白。用 `hermix-viewer__webview_eval` 量元素位置时，
   沿 `frameElement` 链把每层 iframe 的偏移和滚动量都累加上去。
-- 用 `webview_text` / `webview_eval` 拿到的文本**不要**再截图复核（省上下文），
+- 用 `hermix-viewer__webview_text` / `hermix-viewer__webview_eval` 拿到的文本**不要**再截图复核（省上下文），
   除非文本明显不可读（见 §3.2）。
 
 ### 3.2 字体混淆页：DOM 读不出，但有两条路能拿到原文
@@ -99,7 +114,7 @@ DOM 里是 `系统是由处于一定环懌中的…`，但**渲染出来是正�
   2026-10-21 实测：40 个字形全匹配，6 道题一字不差地还原出来（见超星 skill 的
   具体配方）。
 - **B. 截图看图**（通用、零实现成本）
-  `webview_screenshot` 带 `clip` + `scale`（§3.1）→ 画面本来就是正常汉字，
+  `hermix-viewer__webview_screenshot` 带 `clip` + `scale`（§3.1）→ 画面本来就是正常汉字，
   直接读。缺点是要人/模型逐题认字，且复制不了。
 
 **判断**：题目多、需要精确措辞（判断题里的「是/不是」差一个字就错）→ 走 A；
@@ -110,7 +125,7 @@ DOM 里是 `系统是由处于一定环懌中的…`，但**渲染出来是正�
 > 反渲染，十几分钟就把整套题精确还原了。**能解码就解码**，别在「读 DOM 读不出」
 > 这件事上反复打转。
 
-### 3.3 点击优先 `webview_eval` 里 `el.click()`，别用坐标
+### 3.3 点击优先 `hermix-viewer__webview_eval` 里 `el.click()`，别用坐标
 
 - DOM 点击**精确**、不受滚动/缩放/遮挡影响；坐标点击要跨 iframe 换算，误差大。
 - 单选/复选框：`input[name=answerX][value="B"]` 直接 `.click()`。
@@ -118,7 +133,7 @@ DOM 里是 `系统是由处于一定环懌中的…`，但**渲染出来是正�
 - 勾选后**等 200ms** 再读隐藏域：这类页面常把答案回填到隐藏 input
   （`addcheck` 之类的函数带延时），立刻读会读到空串。
 
-### 3.4 嵌套 iframe：`webview_eval` 的 `frame` 参数不够用
+### 3.4 嵌套 iframe：`hermix-viewer__webview_eval` 的 `frame` 参数不够用
 
 - `frame` 参数**只扫当前 target 的 frame tree**。页面把内容 iframe 嵌在
   另一个 iframe 里时，顶层根本看不到它 → 报「页面里没有 URL 含 X 的 iframe」。
@@ -134,12 +149,12 @@ const pd = p.contentDocument;                   // 第 3 层
 - 跨源 iframe 拿不到 `contentDocument`，只能改用 `frame` 参数（它按 URL 片段
   跨 target 找）。两条路都试不通时，**换策略**（看截图 + 坐标点），别死磕。
 
-### 3.5 每步都要核对（`webview_click_text` 自带核对）
+### 3.5 每步都要核对（`hermix-viewer__webview_click_text` 自带核对）
 
-- `webview_click_text` 点完会比对 **URL + 正文指纹**，回 `changed: true/false`。
+- `hermix-viewer__webview_click_text` 点完会比对 **URL + 正文指纹**，回 `changed: true/false`。
   `changed: false` = **没点上** → 换一种点法（文字更精确 / 先滚到可见 / 改用
   坐标），**不要重复同一个动作**。
-- 悬停才出现的菜单（超星的用户名 →「个人空间」）必须用 `webview_hover`
+- 悬停才出现的菜单（超星的用户名 →「个人空间」）必须用 `hermix-viewer__webview_hover`
   （**真鼠标 move**）：JS 派发的合成 mouseover 常常不触发站点的处理器。
 - 动作后**没反应 ≠ 没生效**：先读状态确认，再决定重试还是换路。
 
@@ -173,7 +188,7 @@ const pd = p.contentDocument;                   // 第 3 层
 - 视频：平台把倍速限在 2x，9~10 分钟的视频在 2x 下就是 **4~5 分钟墙钟** ——
   这是**物理下限**，不要去拆播放器自己的钳制（那是平台的学习完整性设计）。
 - 测验：**可以压到 2~3 分钟**，做法是
-  ① 一次 eval 量出整块题目的文档坐标 → ② 一次 `webview_screenshot`
+  ① 一次 eval 量出整块题目的文档坐标 → ② 一次 `hermix-viewer__webview_screenshot`
   （`clip` 覆盖**全部题目**，`scale=2`）读完整套题 → ③ **一次 eval 把 6 道题
   全点完**（不要一题一次调用）→ ④ 一次 eval 读回 `input:checked` 核对
   → ⑤ 一次 eval 提交 → ⑥ 一次 eval 读结果页的「正确答案 / 我的答案 / 得分」。
@@ -181,9 +196,9 @@ const pd = p.contentDocument;                   // 第 3 层
 - 反面教材：早先一轮在「破解混淆字体」上耗了 20 分钟，一题没做。
   **读不清就截图看图，别写代码猜。**
 
-### 3.9 查看器刚重启过：`webview_eval` 会报「连接被拒绝」—— 先 `web_open` 一个页面
+### 3.9 查看器刚重启过：`hermix-viewer__webview_eval` 会报「连接被拒绝」—— 先 `hermix-viewer__web_open` 一个页面
 
-**症状**：`webview_eval` / `webview_text` / `webview_screenshot` 全部返回
+**症状**：`hermix-viewer__webview_eval` / `hermix-viewer__webview_text` / `hermix-viewer__webview_screenshot` 全部返回
 `远程计算机积极拒绝，无法连接 (os error 10061)`，但 MCP 端点本身是通的
 （`tools/list` 正常返回 30 个工具）。
 
@@ -191,15 +206,15 @@ const pd = p.contentDocument;                   // 第 3 层
 `$hermix_home/webview-profile/EBWebView/DevToolsActivePort` 读。
 **查看器重启后如果还没有网页视图，WebView2 根本不会启用远程调试**，
 那个文件里留着上一个进程的旧端口号 → 连过去没人听 → 拒绝连接。
-（2026-10-21 22:38 实测：重启查看器后连开 4 次 `webview_eval` 全是这个错。）
+（2026-10-21 22:38 实测：重启查看器后连开 4 次 `hermix-viewer__webview_eval` 全是这个错。）
 
-**解法（不需要用户动手）**：先用 **`web_open` 打开任意一个页面**
+**解法（不需要用户动手）**：先用 **`hermix-viewer__web_open` 打开任意一个页面**
 （它走的是查看器 UI 层面，不依赖 CDP）→ 网页视图被创建 →
-`DevToolsActivePort` 被重写 → `webview_eval` 立刻可用。
+`DevToolsActivePort` 被重写 → `hermix-viewer__webview_eval` 立刻可用。
 
 > 同样的道理：查看器重启后**登录态还在**（网页 profile 是持久化的，
 > `$hermix_home/webview-profile/` 不随进程消失），但**页面不在了**。
-> 所以重启后第一件事是 `web_open` 回到课程页，而不是让用户重新登录。
+> 所以重启后第一件事是 `hermix-viewer__web_open` 回到课程页，而不是让用户重新登录。
 
 ## 4. 形态 ②③：独立浏览器窗口 / 无头（`browser_*`）
 
@@ -207,24 +222,24 @@ const pd = p.contentDocument;                   // 第 3 层
 进程 + 独立 profile（cookie 互不干扰，多 agent 可并行）。
 
 ```
-browser_open(url, session?, headed?)   → 开；headed=true 弹窗，false 无头
-browser_navigate(session, url)         → 跳地址（复用已开的会话，别重复 open）
-browser_text(session)                  → 读页面文本
-browser_eval(session, expression)      → 执行 JS
-browser_click(session, x, y)           → 点坐标
-browser_screenshot(session)            → 截图
-browser_sessions()                     → 列所有会话（id / 有头无头 / 当前网址）
-browser_close(session)                 → 收尾（并删掉 profile，cookie 不留痕）
+hermix-viewer__browser_open(url, session?, headed?)   → 开；headed=true 弹窗，false 无头
+hermix-viewer__browser_navigate(session, url)         → 跳地址（复用已开的会话，别重复 open）
+hermix-viewer__browser_text(session)                  → 读页面文本
+hermix-viewer__browser_eval(session, expression)      → 执行 JS
+hermix-viewer__browser_click(session, x, y)           → 点坐标
+hermix-viewer__browser_screenshot(session)            → 截图
+hermix-viewer__browser_sessions()                     → 列所有会话（id / 有头无头 / 当前网址）
+hermix-viewer__browser_close(session)                 → 收尾（并删掉 profile，cookie 不留痕）
 ```
 
 - **这套没有 `browser_snapshot`**（内建工具集退役时一起没了）：用
-  `browser_text` / `browser_eval` 代替「先看结构」这一步。
-- **这套没有 `browser_type`**：填表用 `browser_eval` 设值
+  `hermix-viewer__browser_text` / `hermix-viewer__browser_eval` 代替「先看结构」这一步。
+- **这套没有 `browser_type`**：填表用 `hermix-viewer__browser_eval` 设值
   （`el.value = 'x'; el.dispatchEvent(new Event('input', {bubbles:true}))`），
   或点坐标后用键盘事件。
 - 填表前确认字段语义（"姓名"填姓还是全名、日期格式 YYYY-MM-DD 还是
   MM/DD），有歧义先问或按表单提示文案来。
-- `browser_close` 收尾：会话结束或用户不再需要时关闭，不留幽灵窗口。
+- `hermix-viewer__browser_close` 收尾：会话结束或用户不再需要时关闭，不留幽灵窗口。
 - **形态 ③ 用户看不见也登不了号** —— 要登录的任务别放这里。
 
 ## 5. 流程纪律（各形态通用）

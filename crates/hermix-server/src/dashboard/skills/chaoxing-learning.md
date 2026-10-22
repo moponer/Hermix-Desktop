@@ -13,7 +13,7 @@ tags: ["超星", "学习通", "chaoxing", "课程", "作业", "测验", "浏览�
 # 超星学习通：按顺序学习 + 提交作业
 
 > **通用能力看 `browser-automation` skill**：通道选择（必须走查看器内嵌浏览器，
-> 用户自己登录）、截图读小字的 `clip+scale`、DOM 点击优先、`webview_eval` 下钻
+> 用户自己登录）、截图读小字的 `clip+scale`、DOM 点击优先、`hermix-viewer__webview_eval` 下钻
 > 同源 iframe、每步核对、提交后读标准答案再重做 —— 那些都在那边。
 > 本文件只记**超星自己的**门道。
 
@@ -22,19 +22,44 @@ tags: ["超星", "学习通", "chaoxing", "课程", "作业", "测验", "浏览�
 **在查看器内嵌视图打开超星 → 用户本人登录 → agent 用 `webview_*` 驱动同一块
 预览区 → 按章节顺序刷学习进度 → 逐个提交作业/测验 → 把新学到的补回本 skill。**
 
+## 0.5 每轮固定剧本（照着走，别每轮重新设计流程）
+
+**工具怎么调**：查看器的工具是**延迟加载**的，**必须**用桥接工具 `tool_call` 调：
+
+```
+tool_call(name="hermix-viewer__webview_eval", arguments={"expression": "<JS>"})
+```
+
+**不要** `tool_search` / `tool_describe` / `list_tools` 去摸工具 —— 名字和参数
+形状下面全写死了。实测「摸工具」每轮烧 **5 次调用**（`tool_search` →
+`list_tools` → `search_files` → `tool_describe` → 才开工），而**每次调用的请求
+都带着整个上下文** —— 5 次摸工具 ≈ 白烧 5 个完整请求。
+
+**一轮 5~6 次调用，按这个顺序**（章节类型不同只差中间两步）：
+
+| 步 | 做什么 | 怎么一次做完 |
+|---|---|---|
+| 1 | 找下一个该做的节 | 一次 `webview_eval` 把目录项的**文本 + 图标 + class** 一起读出来（**别截图**） |
+| 2 | 跳到那一节 | 一次 `webview_navigate`（URL 带 `chapterId`） |
+| 3 | 视频节 | 一次 `webview_eval`：设 `v.muted=true; v.player.playbackRate(2); v.play()` 并在**同一个 eval 里 await 结束**（别多次轮询；页面没加载出来才补一次） |
+| 4 | 测验：量坐标 + 看题 | 一次 `webview_eval` 把所有 `.TiMu` 的 `getBoundingClientRect()` 算完；一次 `webview_screenshot`（`clip` 覆盖**全部题目** + `scale=2`）一次看全，**别一题一张** |
+| 5 | 测验：点 + 提交 + 读结果 | 一次 `webview_eval`：点完全部题 → 提交 → 等 200ms → 读 `input:checked` → 读结果页的「正确答案 / 我的答案 / 得分」 |
+
+**每步的核对放进同一次 eval 的返回值里**，不要为「核对一下」再多开一次调用。
+
 ## 1. 登录（必须用户本人）
 
-1. `web_open("https://chaoxing.com/")`。
+1. `hermix-viewer__web_open("https://chaoxing.com/")`。
 2. **不自己登录、不代填密码/验证码/短信码。**
 3. 让用户在**查看器右侧预览区**登录，完成后回复「已登录」。
-4. 用 `webview_state` / `webview_text` 验证右上角出现**用户名**（当时是「汪风」）
+4. 用 `hermix-viewer__webview_state` / `hermix-viewer__webview_text` 验证右上角出现**用户名**（当时是「汪风」）
    而不是「登录」按钮。
 
 ### 进个人空间是**悬停**，不是点击
 
-- 菜单**悬停触发** → 必须 `webview_hover`（真鼠标 move），JS 合成的 mouseover
+- 菜单**悬停触发** → 必须 `hermix-viewer__webview_hover`（真鼠标 move），JS 合成的 mouseover
   常常不触发超星的处理器。
-- 坐标先用 `webview_eval` 取元素位置（`getBoundingClientRect()` → 视口坐标）。
+- 坐标先用 `hermix-viewer__webview_eval` 取元素位置（`getBoundingClientRect()` → 视口坐标）。
 - **预览区窄时首页会被压住**：超星首页的 `.vue-grid-item`（z-index 1）盖在顶栏
   导航上，真鼠标会落到「超星读书卡会员」而不是用户名 → 必要时把导航所在的
   grid item 临时提到 `z-index: 99999`。
@@ -70,7 +95,7 @@ tags: ["超星", "学习通", "chaoxing", "课程", "作业", "测验", "浏览�
 ## 3. 视频节：播放器在**同源 iframe** 里
 
 超星把播放器塞在 `knowledge/cards` → `ananas/modules/video` 两层 iframe 里。
-顶层 DOM 里**找不到** ananas（别用 `webview_eval` 的 `frame` 参数找它）→ 按
+顶层 DOM 里**找不到** ananas（别用 `hermix-viewer__webview_eval` 的 `frame` 参数找它）→ 按
 `browser-automation` skill 的 §3.4 **顶层 eval + `contentDocument` 逐层下钻**。
 
 - **倍速要用播放器自己的 API**：`el.player.playbackRate(2)`；直接写
@@ -92,12 +117,12 @@ tags: ["超星", "学习通", "chaoxing", "课程", "作业", "测验", "浏览�
   **渲染出来是正常汉字**。两条路拿原文（详见 `browser-automation` §3.2）：
   1. **canvas 反渲染解码（精确，优先）** —— 页面把混淆字体以 base64 TTF 内嵌在
      `<style>` 的 `@font-face { font-family: font-cxsecret; src: url(data:application/font-ttf;base64,…) }`。
-     做法：`webview_eval` 里取那段 base64 → 在 canvas 上用 `font-family: font-cxsecret`
+     做法：`hermix-viewer__webview_eval` 里取那段 base64 → 在 canvas 上用 `font-family: font-cxsecret`
      逐字渲染每个混淆字 → 与**题干正文字体**（页面里题干 span 的 `font-family`，
      这次是 **Source Han Sans CN Normal**）逐个字形比像素 → 得到「混淆字 ↔ 真字」
      对照表 → 用真字把题干重绘 → 拿到精确文本。
      2026-10-21 实测：40 个字形全匹配，6 道题一字不差还原。
-  2. **截图看图（通用兜底）** —— `webview_screenshot` 带 `clip` + `scale=2`，
+  2. **截图看图（通用兜底）** —— `hermix-viewer__webview_screenshot` 带 `clip` + `scale=2`，
      画面本来就是正常汉字。缺点是认字、复制不了，适合只读一两题。
 - **别在「DOM 读不出」上反复打转**：早先的 agent 在这条上空转了 20 分钟，
   改用解码后十几分钟就还原了。
@@ -112,8 +137,8 @@ tags: ["超星", "学习通", "chaoxing", "课程", "作业", "测验", "浏览�
 - **视频重开后进度归零、倍速与自动播放都不恢复** → 必须重新
   `v.player.playbackRate(2); v.play()`（`v.muted = true` 也要重设）。
 - **长等待不要用 terminal 的 `Start-Sleep`**：它会阻塞 IO。
-  在 `webview_eval` 里 `await` 一个 Promise 即可。
-- **`webview_screenshot` 的 clip 偶尔会截到同一帧**（多张图 MD5 相同）——
+  在 `hermix-viewer__webview_eval` 里 `await` 一个 Promise 即可。
+- **`hermix-viewer__webview_screenshot` 的 clip 偶尔会截到同一帧**（多张图 MD5 相同）——
   那是页面没动，不是工具坏了；等页面变化再截。
 - **多选题的隐藏域值可能带前缀**：读 `input[type=hidden][name^=answer]` 的 value
   时别整条当答案——用正则取**最后一个**字段（`/([^;]*)/`），否则会被前缀骗。
@@ -159,14 +184,26 @@ tags: ["超星", "学习通", "chaoxing", "课程", "作业", "测验", "浏览�
 
 ## 6. 已知坑汇总
 
-- **查看器必须在窗口模式**：`web_open` / `webview_*` 需要查看器有窗口；
+- **查看器必须在窗口模式**：`hermix-viewer__web_open` / `webview_*` 需要查看器有窗口；
   MCP 走 HTTP 端点时就在 GUI 进程里，stdio 模式没有窗口 → 工具会报
   「需要查看器窗口模式」。
 - **端口文件在 `EBWebView` 子目录**：`<profile>/EBWebView/DevToolsActivePort`。
 - **别用 PrintWindow 截图判断"页面有没有渲染"**：它抓不到 WebView2 的合成层，
-  一律是空白。要看渲染结果就用屏幕实拍或 `webview_screenshot`。
+  一律是空白。要看渲染结果就用屏幕实拍或 `hermix-viewer__webview_screenshot`。
 - **浏览器自动化只有一个入口**：查看器 MCP（`hermix-viewer__*`）。内建的无头
-  `browser` 工具集已于 2026-10-21 退役；查看器 MCP 的 `browser_open(headed=false)`
-  覆盖同样的无头语义。超星这种要人登录的活，一律走 `web_open` + `webview_*`。
+  `browser` 工具集已于 2026-10-21 退役；查看器 MCP 的 `hermix-viewer__browser_open(headed=false)`
+  覆盖同样的无头语义。超星这种要人登录的活，一律走 `hermix-viewer__web_open` + `webview_*`。
 - **agent 那一轮可能很长**：长请求下客户端连接可能被掐断 → **用 session 接口
   轮询进度**（`GET /v1/sessions/{id}/messages`），别只靠一次同步请求的返回。
+
+## 实测补充（2026-10-22，agent 跑《现代企业管理》时回写）
+
+下面这些是**跑出来的**、原 skill 里没有的细节。
+
+2026-10-22 《现代企业管理》补充要点：
+1. 目录状态读法（比看图标更稳）：`.ncells h4[id^="cur"]` 内 `span.roundpointStudent` 的 class 决定状态——`blue`=已完成、`orange01 a002 jobCount`=还有 N 个任务点（数字在 textContent）、`lock`=未解锁。**提交后必须 `location.reload()` 再读目录**，否则看到的是旧状态。
+2. 测验 iframe 的坑：cards 里的 work iframe，`src` 是通用壳 `ananas/modules/work/index.html?v=...`，**真实作业地址在 `_src` 属性**（`/mooc-ans/api/work?api=1&workId=...`）。必须 `wf.src = wf.getAttribute('_src')` 才能载入题目，否则 contentDocument 为空、看不到任何题。
+3. 提交确认框里有 4 个 `a.bluebtn`「确定」，只有 1 个是可见的（另外 3 个是隐藏副本）——必须按 `offsetWidth||offsetHeight||getClientRects().length` 挑可见的那个点，否则点了不生效。
+4. 工具参数名是 `expression`（不是 code），工具名 `hermix-viewer__webview_eval`；**不要查工具**：名字与参数形状见本 skill §0.5，直接 `tool_call` 调；`tool_describe` 不存在（调了被拒）。
+5. 判断题 radio 的 value 是 `true`/`false`；单选是 A/B/C。答案全点完再点 `a.workBtnIndex`「提交」。
+6. 做完一节提交后要等 ~2.5s 再读 `contentDocument.body.innerText`（结果页在 work iframe 内，不是顶层文档）。
