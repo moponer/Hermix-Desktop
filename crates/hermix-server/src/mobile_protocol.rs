@@ -69,6 +69,8 @@ pub fn to_mobile_event(msg_type: &str) -> Option<&'static str> {
         "request_approval" => "approval.request",
         "done" => "turn.done",
         "error" => "turn.error",
+        // 桌面推来的模型清单（手机连上即下发）——手机端唯一的模型来源
+        "model_list" => "model.list",
         // 上下文窗口占用（持久条）/ 单轮 token 用量（cache 命中率）
         "context_usage" => "context.usage",
         "usage_update" => "usage.update",
@@ -147,6 +149,13 @@ pub fn to_mobile_frame(frame: &Value) -> Option<Value> {
         "tool_call_id",
         "denial_kind",
         "is_error",
+        // **错误原因**（StreamEvent::Error 的字段是 code/message/detail，
+        // 不是 content）。不透传它们，手机端只能显示兜底文案"出错了"，
+        // 真实原因（LLM 401 / 参数非法 / 5xx）被整个吞掉——用户看到的是
+        // 一个没有信息量的横幅，排查时只能去翻电脑的日志。
+        "code",
+        "message",
+        "detail",
         // 上下文窗口占用（context.usage）
         "used_tokens",
         "max_tokens",
@@ -158,6 +167,9 @@ pub fn to_mobile_frame(frame: &Value) -> Option<Value> {
         "cache_read_tokens",
         "cache_creation_tokens",
         "reasoning_tokens",
+        // 桌面推来的模型清单（model.list）
+        "models",
+        "default_model",
         // 待办列表（todo.*）
         "items",
         "item",
@@ -262,6 +274,40 @@ mod tests {
         let flat = json!({"type": "voice_stt_config", "voice_stt": {"ok": true}});
         let m2 = to_mobile_frame(&flat).expect("扁平帧应可映射");
         assert_eq!(m2["type"], "voice.stt_config");
+    }
+
+    #[test]
+    fn 错误帧必须带出原因_否则手机端只剩兜底文案() {
+        // StreamEvent::Error 的字段是 code/message/detail——**没有 content**。
+        // 映射只透传 content 时，手机端拿到的错误帧是空的，只能显示兜底文案，
+        // 真实原因（LLM 401 / 参数非法 / 5xx）被整个吞掉。
+        let env = json!({
+            "event": {
+                "type": "error",
+                "code": "llm_error",
+                "message": "401 invalid api_key",
+            },
+        });
+        let m = to_mobile_frame(&env).expect("应可映射");
+        assert_eq!(m["type"], "turn.error");
+        assert_eq!(m["code"], "llm_error");
+        assert_eq!(m["message"], "401 invalid api_key");
+    }
+
+    #[test]
+    fn 模型清单映射成手机事件() {
+        let env = json!({
+            "event": {
+                "type": "model_list",
+                "models": [{"provider_id": "deepseek", "model_id": "chat"}],
+                "default_model": "deepseek:chat",
+            },
+        });
+        let m = to_mobile_frame(&env).expect("应可映射");
+        assert_eq!(m["type"], "model.list");
+        assert_eq!(m["models"][0]["provider_id"], "deepseek");
+        assert_eq!(m["models"][0]["model_id"], "chat");
+        assert_eq!(m["default_model"], "deepseek:chat");
     }
 
     #[test]

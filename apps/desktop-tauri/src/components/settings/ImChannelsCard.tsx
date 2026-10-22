@@ -1067,6 +1067,11 @@ export function ImChannelsCard({
                 )}
               </section>
 
+              {/* ── 模型配置推送（默认关闭）────────────────────────────
+                  推给手机的模型配置里带着 provider 凭据（API Key），
+                  那是「电脑关机也还有效、能烧钱」的钥匙，所以默认不推，
+                  要在这里显式开。关闭后手机会删除本地那份。 */}
+              <ModelPushToggle />
             </div>
           )}
 
@@ -1123,6 +1128,77 @@ export function ImChannelsCard({
         }}
       />
     </div>
+  );
+}
+
+/**
+ * 手机端「模型配置推送」开关（**默认关闭**）。
+ *
+ * 打开后，手机会拿到这台电脑的模型清单**和 provider 凭据**（base_url + API
+ * Key）——于是电脑关机时它还能直连云厂商继续对话。凭据出电脑等于多一把
+ * 「电脑关机也还有效、能烧钱」的钥匙，所以这件事默认不做，由主人在这里显式开。
+ *
+ * 关闭后手机会**删除**本地存的那份（含 key），只停推不清手机那份等于假安全感。
+ */
+function ModelPushToggle() {
+  const [cfg, setCfg] = useState<{ enabled: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setCfg(await fetchJSON<{ enabled: boolean }>("/api/mobile/model-push"));
+    } catch {
+      // 读不到就按「关闭」显示——多显示一次开启按钮只是多点一下，
+      // 少显示一次则可能让人以为已经开着。
+      setCfg({ enabled: false });
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const toggle = useCallback(async () => {
+    const next = !(cfg?.enabled ?? false);
+    setBusy(true);
+    try {
+      await fetchJSON("/api/mobile/model-push", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: next }),
+      });
+      await refresh();
+      toastSuccess(
+        next
+          ? "已开启：已配对的手机会拿到模型配置与凭据（电脑关机时它仍可本地对话）"
+          : "已关闭：手机端会删除本地存的模型配置与密钥",
+      );
+    } catch (e) {
+      toastError(`保存失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [cfg, refresh]);
+
+  const on = cfg?.enabled === true;
+  return (
+    <section className="space-y-3">
+      <SubHead>模型配置推送</SubHead>
+      <div className="rounded-lg bg-bg-secondary px-4 py-3 flex items-center gap-3 flex-wrap">
+        <div className="min-w-0 flex-1 text-[length:var(--text-meta)] text-text-secondary leading-relaxed">
+          {on
+            ? "已开启：手机端拿到了这台电脑的模型清单与凭据，电脑关机时它仍可直连云厂商对话。关闭会立即让手机删除本地那份（含密钥）。"
+            : "已关闭（默认）：手机端拿不到模型配置与凭据，本地对话不可用。"}
+        </div>
+        <ActionBtn
+          onClick={() => void toggle()}
+          disabled={busy}
+          tone={on ? "ghost" : "primary"}
+          title="把模型配置与凭据推给已配对的手机"
+        >
+          {on ? "关闭" : "开启"}
+        </ActionBtn>
+      </div>
+    </section>
   );
 }
 
