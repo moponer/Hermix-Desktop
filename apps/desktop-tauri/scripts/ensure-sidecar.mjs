@@ -6,6 +6,11 @@
 //
 // 任一步失败 exit 1 —— cargo tauri build 绝不能拿着陈旧 sidecar 打包
 // （10-06 / 10-08 两次「安装包内嵌旧二进制」交付事故的根治）。
+//
+// ⚠️ 打包前必须先停掉正在运行的 `hermix.exe` / `hermix-viewer.exe`：
+// 它们占着 `target/release/<name>.exe`，cargo 无法替换正在运行的 exe ——
+// 会报 `failed to remove file ... 拒绝访问 (os error 5)` 并中止打包
+// （2026-10-22 踩了两次）。要边跑边打包，就把 sidecar / viewer 从**副本**启动。
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
