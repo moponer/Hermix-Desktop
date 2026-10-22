@@ -24,16 +24,22 @@ tags: ["超星", "学习通", "chaoxing", "课程", "作业", "测验", "浏览�
 
 ## 0.5 每轮固定剧本（照着走，别每轮重新设计流程）
 
-**工具怎么调**：查看器的工具是**延迟加载**的，**必须**用桥接工具 `tool_call` 调：
+**工具怎么调**：**直接点名调**查看器的常驻工具：
 
 ```
-tool_call(name="hermix-viewer__webview_eval", arguments={"expression": "<JS>"})
+hermix-viewer__webview_eval(expression, frame?)
+hermix-viewer__webview_navigate(url)
+hermix-viewer__webview_screenshot(clip?, scale?)
 ```
 
 **不要** `tool_search` / `tool_describe` / `list_tools` 去摸工具 —— 名字和参数
 形状下面全写死了。实测「摸工具」每轮烧 **5 次调用**（`tool_search` →
 `list_tools` → `search_files` → `tool_describe` → 才开工），而**每次调用的请求
 都带着整个上下文** —— 5 次摸工具 ≈ 白烧 5 个完整请求。
+
+**摸了也没用 → 先怀疑 MCP 没连上**：查看器或它的 MCP 端点挂了 → sidecar 启动时
+连不上 → 那批工具压根不在注册表里 → 怎么摸都摸不到。这时让用户在
+「连接器 → MCP」里把「文件查看器」关一次再开一次（触发重连），不要改用别的路径。
 
 **一轮 5~6 次调用，按这个顺序**（章节类型不同只差中间两步）：
 
@@ -204,6 +210,6 @@ tool_call(name="hermix-viewer__webview_eval", arguments={"expression": "<JS>"})
 1. 目录状态读法（比看图标更稳）：`.ncells h4[id^="cur"]` 内 `span.roundpointStudent` 的 class 决定状态——`blue`=已完成、`orange01 a002 jobCount`=还有 N 个任务点（数字在 textContent）、`lock`=未解锁。**提交后必须 `location.reload()` 再读目录**，否则看到的是旧状态。
 2. 测验 iframe 的坑：cards 里的 work iframe，`src` 是通用壳 `ananas/modules/work/index.html?v=...`，**真实作业地址在 `_src` 属性**（`/mooc-ans/api/work?api=1&workId=...`）。必须 `wf.src = wf.getAttribute('_src')` 才能载入题目，否则 contentDocument 为空、看不到任何题。
 3. 提交确认框里有 4 个 `a.bluebtn`「确定」，只有 1 个是可见的（另外 3 个是隐藏副本）——必须按 `offsetWidth||offsetHeight||getClientRects().length` 挑可见的那个点，否则点了不生效。
-4. 工具参数名是 `expression`（不是 code），工具名 `hermix-viewer__webview_eval`；**不要查工具**：名字与参数形状见本 skill §0.5，直接 `tool_call` 调；`tool_describe` 不存在（调了被拒）。
+4. 工具参数名是 `expression`（不是 code），工具名是 `hermix-viewer__webview_eval` —— **直接调**它（名字与参数形状见本 skill §0.5）；`tool_describe` 不存在（调了被拒），也别去 `list_tools` 摸工具
 5. 判断题 radio 的 value 是 `true`/`false`；单选是 A/B/C。答案全点完再点 `a.workBtnIndex`「提交」。
 6. 做完一节提交后要等 ~2.5s 再读 `contentDocument.body.innerText`（结果页在 work iframe 内，不是顶层文档）。

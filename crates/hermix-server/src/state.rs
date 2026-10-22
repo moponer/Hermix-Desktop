@@ -711,36 +711,63 @@ impl HttpServerState {
         // prevent the rest from coming up.
         let mcp_manager = hermix_mcp::ArcMcpManager::new(tool_registry.clone());
         {
-            let mcp_list = crate::dashboard::mcp::load_mcp_servers(&hermix_home);
             let mcp_mgr = mcp_manager.clone();
-            // Spawn MCP connection as a background task so it does NOT
-            // block the HTTP listener from binding. `npx -y <pkg>` can
-            // take 10-30s on first run (package download + Node startup),
-            // which would cause the sidecar watchdog to think the server
-            // is dead and restart it in a loop. The MCP tools appear in
-            // the registry as soon as each server finishes connecting.
+            let home = hermix_home.clone();
+            // Connect the MCP servers — and **reconnect the ones that dropped**.
+            //
+            // Why the retry (measured 2026-10-22): an MCP server very often
+            // starts *after* the sidecar (the desktop app boots the sidecar
+            // first, then launches the viewer), and it can also die mid-run.
+            // The old code connected **once at startup** and logged
+            // "connect failed at startup; skipping" — so those tools were
+            // **never in the registry at all**. The agent's tool table simply
+            // didn't have them, and it kept calling `tool_search` /
+            // `tool_describe` / `list_tools` to hunt for tools that did not
+            // exist: **25% of every round's calls**, and each of those calls
+            // carries the whole context.
+            //
+            // Now: re-read the config every tick and reconnect whatever is
+            // enabled but not connected. A newly added server also gets picked
+            // up without restarting the sidecar.
+            //
+            // Runs in the background so it never blocks the HTTP listener
+            // from binding: `npx -y <pkg>` can take 10-30s on first run
+            // (package download + Node startup), which would otherwise make
+            // the sidecar watchdog think the server is dead and restart it in
+            // a loop.
             tokio::spawn(async move {
-                for entry in mcp_list.servers.iter().filter(|e| e.enabled) {
-                    match crate::dashboard::mcp::entry_to_server_config(entry) {
-                        Ok((cfg_name, cfg)) => {
-                            if let Err(e) = mcp_mgr.connect(&cfg_name, cfg).await {
-                                tracing::warn!(
-                                    server = %cfg_name,
-                                    error = %e,
-                                    "MCP server connect failed at startup; skipping"
-                                );
-                            } else {
-                                tracing::info!(server = %cfg_name, "MCP server connected");
-                            }
-                        }
-                        Err(e) => {
+                loop {
+                    let mcp_list = crate::dashboard::mcp::load_mcp_servers(&home);
+                    for entry in mcp_list.servers.iter().filter(|e| e.enabled) {
+                        let Ok((cfg_name, cfg)) =
+                            crate::dashboard::mcp::entry_to_server_config(entry)
+                        else {
                             tracing::warn!(
                                 server = %entry.name,
-                                error = %e,
                                 "MCP server entry invalid; skipping"
                             );
+                            continue;
+                        };
+                        if mcp_mgr.is_connected(&cfg_name).await {
+                            continue;
+                        }
+                        match mcp_mgr.connect(&cfg_name, cfg).await {
+                            Ok(()) => {
+                                tracing::info!(server = %cfg_name, "MCP server connected");
+                            }
+                            Err(e) => {
+                                // Debug, not warn: a server that is simply not
+                                // running yet is normal, and this line repeats
+                                // every tick.
+                                tracing::debug!(
+                                    server = %cfg_name,
+                                    error = %e,
+                                    "MCP server connect failed; will retry"
+                                );
+                            }
                         }
                     }
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 }
             });
         }

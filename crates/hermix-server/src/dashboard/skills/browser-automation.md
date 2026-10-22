@@ -46,22 +46,27 @@ tags: ["software-development", "builtin", "browser", "浏览器", "自动化", "
    而不是只留查看器那几十个。抽掉 `tool_search` / `tool_describe` 之后，
    agent 会卡在「找工具」上反复失败（`Tool 'tool_search' does not exist`），
    一轮下来什么正事也没干。
-4. **查看器工具是「延迟加载」的 —— 必须走桥接工具调**（2026-10-22 实测澄清）：
-   `hermix-viewer__*` **不在**可直接调用的列表里（直接点名调会被校验器拒）。
-   唯一正确的形式是桥接工具 `tool_call`：
+4. **直接点名调，别摸工具**（2026-10-22 实测澄清）：`hermix-viewer__*` 是**常驻**
+   工具，**直接调**即可：
 
    ```
-   tool_call(name="hermix-viewer__webview_eval",       arguments={"expression": "<JS>"})
-   tool_call(name="hermix-viewer__webview_navigate",   arguments={"url": "..."})
-   tool_call(name="hermix-viewer__webview_screenshot", arguments={"clip":{"x":0,"y":0,"width":800,"height":600},"scale":2})
+   hermix-viewer__webview_eval(expression, frame?)
+   hermix-viewer__webview_navigate(url)
+   hermix-viewer__webview_screenshot(clip?, scale?)
    ```
 
-   **不要**先 `tool_search` / `tool_describe` / `list_tools` 去摸工具 ——
-   本 skill §2 的表已经把名字和参数形状写全了，直接调。
-   实测「摸工具」这件事每轮要烧 **5 次调用**（`tool_search` → `list_tools` →
+   **不要** `tool_search` / `tool_describe` / `list_tools` 去摸它们 —— 本 skill §2
+   的表已经把名字和参数形状写全了。
+   实测「摸工具」每轮要烧 **5 次调用**（`tool_search` → `list_tools` →
    `search_files` → `tool_describe` → 才开工），而**每次调用的请求都带着整个上下文**
    —— 5 次摸工具 ≈ 白烧 5 个完整请求，是长跑任务最大的单项浪费。
-   另外桥接工具里**没有** `tool_describe`（系统提示还在宣传它，调了会被校验器拒）。
+   桥接工具（`tool_search` / `tool_call`）只在你**某个工具确实不在工具表里**时
+   才用；`tool_describe` **不存在**（系统提示还在宣传它，调了会被校验器拒）。
+
+   **摸了也没用时，先怀疑 MCP 没连上**：查看器进程或它的 MCP 端点挂了 →
+   sidecar 启动时连不上 → 那批工具**压根不在注册表里** → 你怎么摸都摸不到。
+   这时让用户在「连接器 → MCP」里把「文件查看器」关一次再开一次（触发重连），
+   不要继续找替代路径。
 
 ## 2. 形态 ①：内嵌网页视图（主路径）
 
@@ -79,9 +84,8 @@ tags: ["software-development", "builtin", "browser", "浏览器", "自动化", "
 | 收摊 | `hermix-viewer__web_close()` |
 | 操作查看器本身 | `hermix-viewer__viewer_ui_state()` / `hermix-viewer__viewer_action(...)`（切模式、开文件、开网址、读当前视图） |
 
-> 表里的工具名就是 `tool_call` 的 `name` 参数值（**已带 `hermix-viewer__` 前缀**）。
-> 例：`hermix-viewer__webview_eval(expression)` →
-> `tool_call(name="hermix-viewer__webview_eval", arguments={"expression": "..."})`
+> 表里的工具名就是**直接调用的名字**（已带 `hermix-viewer__` 前缀）。
+> 例：`hermix-viewer__webview_eval(expression)`
 
 **模式选择**：浏览器自动化 → **纯净模式**（预览区占满、干扰最少）；办公文档 → 重量模式。
 开网址/开文件**与模式无关**，需要输入框的动作（切目录、搜索）自动先切重量。
