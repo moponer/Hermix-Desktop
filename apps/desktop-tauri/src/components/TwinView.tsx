@@ -86,6 +86,8 @@ export function TwinView({
   >([]);
   /** 她的动静（阿黎会话里最近的 assistant / automation 消息）—— 新鲜情报栏。 */
   const [intel, setIntel] = useState<IntelItem[]>([]);
+  /** USER.md —— 「她记住的你」，本来就每轮注入，这里只是让它可见。 */
+  const [userMemory, setUserMemory] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -97,7 +99,7 @@ export function TwinView({
       const ali = all.find((s) => s.title === ALI_SESSION_TITLE) ?? null;
       setAliSession(ali);
 
-      const [list, active, days, intelRes] = await Promise.all([
+      const [list, active, days, intelRes, personaUser] = await Promise.all([
         api.getAutomationTasks(),
         api.getActiveAutomationRuns(),
         api.getDailyMemoryList(14).catch(() => [] as api.DailyMemoryDay[]),
@@ -106,10 +108,12 @@ export function TwinView({
               .getSessionMessages(ali.id, { limit: 30 })
               .catch(() => null)
           : Promise.resolve(null),
+        api.getPersonaUser().catch(() => null),
       ]);
       setTasks(list);
       setActiveRuns(active);
       setWorkDays(days);
+      setUserMemory(personaUser?.content ?? null);
       if (intelRes) setIntel(extractIntel(intelRes.messages));
       setCheckedAt(Date.now());
     } catch (e) {
@@ -200,6 +204,16 @@ export function TwinView({
   // 守望任务与普通定时任务的区分（v1 约定）：`watch` 工具建的任务名
   // 一律以「守望：」开头。等 `AutomationTask` 有 kind 字段后换成结构化
   // 判定，这里的字符串匹配随之删除。
+  // USER.md 的可展示行：去掉空行与纯标题行，压成单行裁 100 字。
+  const memoryLines = useMemo(() => {
+    if (!userMemory) return [];
+    return userMemory
+      .split(/\r?\n/)
+      .map((l) => clipLine(l, 100))
+      .filter((l) => l.length > 0 && !/^#{1,3}\s*$/.test(l))
+      .slice(0, 6);
+  }, [userMemory]);
+
   const watchTasks = useMemo(
     () => enabledTasks.filter((t) => t.name.startsWith(WATCH_NAME_PREFIX)),
     [enabledTasks],
@@ -591,9 +605,27 @@ export function TwinView({
               </div>
             )}
 
+            <div className="twin-col__head">
+              <span className="twin-col__title">她记住的你</span>
+              <span className="twin-col__meta">USER.md</span>
+            </div>
+            {memoryLines.length === 0 ? (
+              <Pending
+                title="还没有记住关于你的事实"
+                desc="她在对话里说「记住：…」时会写进 USER.md，那里就是每轮都注入给她的持久记忆。"
+              />
+            ) : (
+              <div className="twin-learn">
+                {memoryLines.map((line) => (
+                  <div key={line} className="twin-learn__item">
+                    <span>{line}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             <Pending
-              title="成长档案待接通"
-              desc="上面是她的工作日志。真正「学到你」的部分（偏好、判断准不准）要等 profile 与证据账本落地，现在不假装有。"
+              title="带证据的成长档案待接通"
+              desc="上面的记忆没有证据链接与置信度。带证据的版本（哪次对话学到的、推断还是明说、会不会用于打扰）要等 profile 与证据账本。"
             />
           </div>
         </section>
