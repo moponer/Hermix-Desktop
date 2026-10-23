@@ -80,6 +80,12 @@ pub fn router() -> Router<HttpServerState> {
             "/api/models/context-windows",
             post(config::resolve_context_windows),
         )
+        // 选中模型时拉取该模型的 provider 级真实窗口（endpoints），
+        // 让卡片上的上下文从"聚合值"校准到"我们实际连的那家"。
+        .route(
+            "/api/models/refresh-context",
+            post(config::refresh_model_context),
+        )
         // Env
         .route(
             "/api/env",

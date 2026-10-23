@@ -368,6 +368,66 @@ pub async fn resolve_context_windows(
     Json(ContextWindowsResponse { windows })
 }
 
+/// Request for `POST /api/models/refresh-context`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RefreshContextRequest {
+    pub model: String,
+}
+
+/// Response for `POST /api/models/refresh-context`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RefreshContextResponse {
+    pub model: String,
+    pub context_window: u64,
+    /// `"probed"`（provider 级 endpoints）| `"catalog"` | `"fallback"`.
+    pub source: String,
+    /// 本次拉到的 provider 条数（0 = 目录没这个型号 / 网络失败）。
+    pub providers: usize,
+}
+
+/// POST /api/models/refresh-context —— 为一个模型**拉取并缓存** provider 级
+/// 真实窗口，然后返回解析结果。
+///
+/// 为什么需要：目录里的 `context_length` 是"模型支持的最大窗口"，而
+/// `top_provider` 只是**某一家** provider 的窗口。列表里没被选过的模型
+/// 只有聚合值，可能偏高（实测 `minimax-m3` 模型级 1M / 某家 512K；
+/// nemotron 模型级 1M / 某家 256K）。选中时调一次，把这个模型的
+/// endpoints 拉下来，之后解析链与 UI 都用 provider 级值。
+///
+/// 同步等最多 8 秒（用户刚点选模型，值得等）；失败不影响返回——照旧给
+/// 当前能解析到的值，只是 `source` 停在 catalog/fallback。
+pub async fn refresh_model_context(
+    State(state): State<HttpServerState>,
+    Json(body): Json<RefreshContextRequest>,
+) -> Json<RefreshContextResponse> {
+    let model = body.model;
+    let mut providers = 0usize;
+    if let Some(id) = hermix_intelligence::model_directory::openrouter_id_for(&model) {
+        if let Ok(http) = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .build()
+        {
+            providers = tokio::time::timeout(
+                std::time::Duration::from_secs(8),
+                hermix_intelligence::model_directory::refresh_endpoints(&http, &id),
+            )
+            .await
+            .unwrap_or(0);
+        }
+    }
+    let (value, source) =
+        hermix_intelligence::model_metadata::get_model_context_length_with_source(
+            &model,
+            Some(&state.config.llm_providers),
+        );
+    Json(RefreshContextResponse {
+        model,
+        context_window: value,
+        source: source.as_str().to_string(),
+        providers,
+    })
+}
+
 /// `GET /api/model/list` 的单条模型（启用/可添加通用）。
 ///
 /// 除标识外还带上上游声明的能力（上下文、最大输出、模态、reasoning），

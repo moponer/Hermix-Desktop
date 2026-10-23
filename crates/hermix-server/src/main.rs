@@ -28,27 +28,58 @@ async fn main() -> Result<(), AgentError> {
     // 没有它，上下文长度只能靠静态家族表猜：`minimax → 204.8K` 在 M3.1
     // （实际 1M）上照样生效（2026-10-23 实测）。
     let cached_models = hermix_intelligence::model_directory::load_from_disk();
-    if hermix_intelligence::model_directory::cache_is_stale() {
-        tokio::spawn(async {
-            match reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(25))
-                .build()
-            {
-                Ok(http) => {
-                    let n = hermix_intelligence::model_directory::refresh(&http).await;
-                    tracing::info!(models = n, "模型目录已刷新（OpenRouter 公开目录）");
-                }
-                Err(e) => tracing::debug!("模型目录：HTTP client 构建失败: {e}"),
-            }
-        });
-    } else {
-        tracing::debug!(models = cached_models, "模型目录：使用本地缓存");
-    }
+    let cached_endpoints = hermix_intelligence::model_directory::load_endpoints_from_disk();
+    tracing::debug!(
+        models = cached_models,
+        providers = cached_endpoints,
+        "模型目录：本地缓存"
+    );
 
     let config = load_config(None).map_err(|e| AgentError::Config(e.to_string()))?;
 
     // 安全中心：启动即按 config.yaml 的 security 刷新自动备份策略。
     hermix_tools::backup::set_policy_from_config(&config.security, &hermix_config::paths::hermix_home());
+
+    // ── 模型目录 + provider 级 endpoints 的后台刷新 ──
+    //
+    // 两件事都必须在拿到 config.model 之后做：
+    // 1. 目录（/models）——聚合上下文，缓存过期才刷；
+    // 2. 当前模型的 endpoints（/models/{id}/endpoints）——**provider 级真实
+    //    窗口与输出上限**，压缩阈值按它算才不会估错（M3.1：1M 上下文 /
+    //    512K 输出，聚合值给的是 1M，但若某模型的聚合值来自别家 provider，
+    //    按它算阈值会超限 → 400）。
+    //
+    // 全程后台、失败静默：拿不到就继续用磁盘缓存 / 静态表兜底。
+    {
+        let model_name = config.model.clone();
+        tokio::spawn(async move {
+            let http = match reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(25))
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::debug!("模型目录：HTTP client 构建失败: {e}");
+                    return;
+                }
+            };
+            if hermix_intelligence::model_directory::cache_is_stale() {
+                let n = hermix_intelligence::model_directory::refresh(&http).await;
+                tracing::info!(models = n, "模型目录已刷新（OpenRouter 公开目录）");
+            }
+            if let Some(model_name) = model_name {
+                if let Some(id) =
+                    hermix_intelligence::model_directory::openrouter_id_for(&model_name)
+                {
+                    let n =
+                        hermix_intelligence::model_directory::refresh_endpoints(&http, &id).await;
+                    if n > 0 {
+                        tracing::info!(model = %id, providers = n, "provider 级上下文限额已刷新");
+                    }
+                }
+            }
+        });
+    }
 
     // --stdio：接管 stdin/stdout 跑 JSON Lines 多路复用协议（桌面端 IPC），
     // 不绑定任何 TCP 端口；默认（无 flag）保持 HTTP/WS TCP 监听。

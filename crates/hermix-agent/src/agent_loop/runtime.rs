@@ -225,6 +225,20 @@ impl AgentLoop {
         if let Some(ratio) = self.config.context_pressure_ratio {
             ctx = ctx.with_pressure_ratio(ratio);
         }
+        // 输出预留 = 每轮实际请求的 max_tokens（钳到模型真实上限）。
+        //
+        // 旧实现固定 4096：阈值是 `(max_context − reserve) × ratio`，配置里
+        // 把 max_tokens 调到 64K 也不会反映到 reserve 上，阈值偏高 60K，
+        // 压缩会拖到 `prompt + max_tokens` 超出窗口才触发（上游 400）。
+        // 目录没收录 max_output 时保持默认 4096，不猜。
+        if let Some(reserve) = hermix_intelligence::model_directory::clamp_output_tokens(
+            &self.config.model,
+            self.config.max_tokens,
+        ) {
+            if reserve > 0 {
+                ctx = ctx.with_output_reserve(reserve as usize);
+            }
+        }
 
         // Sanitize surrogates and strip prior budget warnings from history
         for msg in messages.iter_mut() {

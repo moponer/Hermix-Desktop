@@ -1398,6 +1398,27 @@ export const pinMemory = async (id: string, pinned: boolean): Promise<void> => {
 export const getDailyMemoryList = async (limit = 60): Promise<DailyMemoryDay[]> =>
   fetchJSON(`/api/memory/daily?limit=${limit}`);
 
+/**
+ * 选中模型时拉取它的 **provider 级真实窗口**（OpenRouter endpoints）。
+ *
+ * 目录里的 `context_length` 是"模型支持的最大窗口"，`top_provider` 只是
+ * 某一家 provider 的窗口。列表里没被选过的模型只有聚合值，可能偏高
+ * （实测 nemotron 模型级 1M / 实际 provider 256K）。选中即校准一次，
+ * 后端写入缓存，之后的解析与压缩阈值都用校准后的值。
+ */
+export const refreshModelContext = async (
+  model: string,
+): Promise<{
+  model: string;
+  context_window: number;
+  source: string;
+  providers: number;
+}> =>
+  fetchJSON("/api/models/refresh-context", {
+    method: "POST",
+    body: JSON.stringify({ model }),
+  });
+
 // ── Persona API（角色提示词 / SOUL / 全局记忆文本）────────────
 
 export interface PersonalitySummary {

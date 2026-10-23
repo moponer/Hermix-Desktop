@@ -430,6 +430,13 @@ pub(crate) async fn collect_stream_inner(
     let (_, active_request_model) = extract_provider_and_model(config, active_model);
     let (_, primary_request_model) =
         extract_provider_and_model(config, config.model.as_str());
+    // 输出上限钳到模型真实值（目录的 provider 级 endpoints）。
+    //
+    // 上下文窗口是 `prompt + max_tokens` 的总和：配置里写了超过模型上限的
+    // max_tokens，请求会被上游 400，而错误通常只说 "invalid max_tokens"。
+    // 目录没收录时原样返回（不猜）。
+    let requested_max_tokens =
+        hermix_intelligence::model_directory::clamp_output_tokens(active_model, config.max_tokens);
     let mut stream = if let Some(rt) = route {
         let (provider_name, model_name) = extract_provider_and_model(config, active_model);
         let mode = rt.api_mode.as_ref().unwrap_or(&config.api_mode);
@@ -449,7 +456,7 @@ pub(crate) async fn collect_stream_inner(
             Ok(provider) => provider.chat_completion_stream(
                 &api_messages,
                 tool_schemas,
-                config.max_tokens,
+                requested_max_tokens,
                 config.temperature,
                 Some(model_name),
                 extra_body_for_call.as_ref(),
@@ -463,7 +470,7 @@ pub(crate) async fn collect_stream_inner(
                 llm_provider.chat_completion_stream(
                     &api_messages,
                     tool_schemas,
-                    config.max_tokens,
+                    requested_max_tokens,
                     config.temperature,
                     Some(primary_request_model),
                     default_extra_body.as_ref(),
@@ -474,7 +481,7 @@ pub(crate) async fn collect_stream_inner(
         llm_provider.chat_completion_stream(
             &api_messages,
             tool_schemas,
-            config.max_tokens,
+            requested_max_tokens,
             config.temperature,
             Some(active_request_model),
             default_extra_body.as_ref(),

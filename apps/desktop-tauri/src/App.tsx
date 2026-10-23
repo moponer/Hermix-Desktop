@@ -3711,6 +3711,17 @@ return {
         currentAssistantIdRef,
         acuiReset: acui.reset,
       });
+
+      // 选中即校准：拉这个模型的 provider 级真实窗口（endpoints）。
+      //
+      // 模型列表里的上下文默认取 OpenRouter 目录的聚合值，而 `top_provider`
+      // 只是某一家 provider 的窗口，可能与我们实际连的那家不同
+      // （实测 nemotron 模型级 1M / 某家 256K）。不校准会让压缩阈值估高，
+      // 请求拖到超出上游窗口才触发压缩（400）。
+      //
+      // fire-and-forget：校准失败不影响切换；成功后后端已写缓存，下一次
+      // 解析（含压缩阈值）就是校准后的值。
+      void api.refreshModelContext(newId).catch(() => undefined);
     },
     [
       cancelStream,

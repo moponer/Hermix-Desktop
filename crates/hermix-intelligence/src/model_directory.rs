@@ -56,6 +56,34 @@ fn store() -> &'static RwLock<HashMap<String, ModelLimits>> {
     STORE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+/// provider 级真实限额（`/models/{id}/endpoints` 的一条）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointLimits {
+    /// 上游 provider 名（`Minimax` / `Anthropic` / `Bedrock` …）。
+    pub provider: String,
+    /// 该 provider 实际提供的上下文窗口。
+    pub context: u64,
+    /// 该 provider 实际允许的最大输出。
+    pub max_output: Option<u64>,
+}
+
+/// `endpoints` 快照：归一化模型名 → 各 provider 的限额。
+///
+/// 为什么需要它（而不是只用 `/models` 的聚合值）：`/models` 的
+/// `top_provider.context_length` 是"某个 provider 的窗口"，而同一模型
+/// 可能被多家托管、窗口各不相同。我们直连的是特定一家，聚合值可能给
+/// 出别家的数字——估大就会被上游 400。
+fn endpoint_store() -> &'static RwLock<HashMap<String, Vec<EndpointLimits>>> {
+    static STORE: OnceLock<RwLock<HashMap<String, Vec<EndpointLimits>>>> = OnceLock::new();
+    STORE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// 归一化模型名 → OpenRouter 的完整 id（拉 endpoints 要用原样 id）。
+fn id_index() -> &'static RwLock<HashMap<String, String>> {
+    static IDX: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+    IDX.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
 /// 归一化：小写 + 只保留 ASCII 字母数字。
 ///
 /// `MiniMax-M3.1-Flash` → `minimaxm31flash`
@@ -90,13 +118,17 @@ pub fn parse_catalog(v: &Value) -> HashMap<String, ModelLimits> {
             .and_then(|t| t.get("context_length"))
             .and_then(|x| x.as_u64())
             .filter(|c| *c > 0);
-        // 两者都缺 → 这条对上下文没用，跳过。
-        let ctx_opt = match (model_ctx, provider_ctx) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (Some(a), None) => Some(a),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
-        };
+        // **模型级优先**，不是取 min（2026-10-23 修正）。
+        //
+        // `context_length` 是"该模型支持的最大窗口"；`top_provider` 只是
+        // "某一家 provider 的实际窗口"。取 min 会把小 provider 当成全局：
+        // 实测 `minimax/minimax-m3` 模型级 1,048,576、某家 524,288 ——
+        // 取 min 会把 M3 显示成 512K（再被静态表兜成 205K），而用户直连
+        // 官方拿到的就是 1M。
+        //
+        // provider 精确值由 endpoints 层负责：它带 provider 名字，能按我们
+        // 实际用的那家匹配（见 `lookup_limits`）。
+        let ctx_opt = model_ctx.or(provider_ctx);
         let Some(ctx) = ctx_opt else {
             continue;
         };
@@ -118,25 +150,254 @@ pub fn parse_catalog(v: &Value) -> HashMap<String, ModelLimits> {
     out
 }
 
-/// 查一个型号的限额。
+/// 解析 per-model endpoints 响应
+/// （`{"data": {"endpoints": [{provider_name, context_length, max_completion_tokens}]}}`）。
 ///
-/// 先精确匹配归一化名，再退到后缀匹配（目录 id 常带厂商前缀，
-/// 例如配置写 `MiniMax-M3.1-Flash`、目录是 `minimax/minimax-m3.1-flash`）。
-/// 多个候选时取最长（最具体的）那条。
-pub fn lookup(model: &str) -> Option<ModelLimits> {
+/// 纯函数，便于测试。
+pub fn parse_endpoints(v: &Value) -> Vec<EndpointLimits> {
+    let Some(eps) = v.pointer("/data/endpoints").and_then(|x| x.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for ep in eps {
+        let Some(context) = ep.get("context_length").and_then(|x| x.as_u64()) else {
+            continue;
+        };
+        if context == 0 {
+            continue;
+        }
+        let provider = ep
+            .get("provider_name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let max_output = ep
+            .get("max_completion_tokens")
+            .and_then(|x| x.as_u64())
+            .filter(|c| *c > 0);
+        out.push(EndpointLimits {
+            provider,
+            context,
+            max_output,
+        });
+    }
+    out
+}
+
+/// 在 endpoints 快照里找这个型号（精确 → 后缀匹配）。
+fn resolve_endpoints<'a>(
+    guard: &'a HashMap<String, Vec<EndpointLimits>>,
+    key: &str,
+) -> Option<&'a Vec<EndpointLimits>> {
+    if let Some(v) = guard.get(key) {
+        return Some(v);
+    }
+    guard
+        .iter()
+        .filter(|(k, _)| k.ends_with(key) || key.ends_with(k.as_str()))
+        .max_by_key(|(k, _)| k.len())
+        .map(|(_, v)| v)
+}
+
+/// 查型号限额：**provider 级真实值优先**，其次目录聚合值。
+///
+/// `provider_hint` 是配置里的 provider id（`minimax` / `anthropic`…）。
+/// 命中该 provider 的 endpoint 就用它；没注明或没命中时，取 endpoints 里
+/// **上下文最大**的那条（与我们"直连官方"的常见形态一致，且不会因为
+/// 取到小窗口而过早压缩）。
+pub fn lookup_limits(model: &str, provider_hint: Option<&str>) -> Option<ModelLimits> {
     let key = norm(model);
     if key.is_empty() {
         return None;
     }
+
+    // 1. provider 级（endpoints 快照）。
+    if let Ok(guard) = endpoint_store().read() {
+        if let Some(list) = resolve_endpoints(&guard, &key) {
+            let picked = provider_hint
+                .map(norm)
+                .and_then(|hint| {
+                    list.iter()
+                        .find(|e| {
+                            let p = norm(&e.provider);
+                            !p.is_empty() && (p.contains(&hint) || hint.contains(&p))
+                        })
+                        .cloned()
+                })
+                .or_else(|| list.iter().max_by_key(|e| e.context).cloned());
+            if let Some(e) = picked {
+                return Some(ModelLimits {
+                    context: e.context,
+                    max_output: e.max_output,
+                });
+            }
+        }
+    }
+
+    // 2. 目录聚合值。
+    lookup_aggregate(&key)
+}
+
+/// 只查聚合值（`/models` 的 `context_length` / `top_provider`）。
+fn lookup_aggregate(key: &str) -> Option<ModelLimits> {
     let guard = store().read().ok()?;
-    if let Some(hit) = guard.get(&key) {
+    if let Some(hit) = guard.get(key) {
         return Some(*hit);
+    }
+    guard
+        .iter()
+        .filter(|(k, _)| k.ends_with(key) || key.ends_with(k.as_str()))
+        .max_by_key(|(k, _)| k.len())
+        .map(|(_, v)| *v)
+}
+
+/// 兼容旧调用点：不带 provider hint 的查询。
+pub fn lookup(model: &str) -> Option<ModelLimits> {
+    lookup_limits(model, None)
+}
+
+/// 把请求的输出上限钳到模型**真实**上限。
+///
+/// 上下文窗口是 `prompt + max_tokens` 的总和：配置里写了超过模型上限的
+/// `max_tokens`，请求会被上游直接 400，而错误通常只说 "invalid
+/// max_tokens"，看不出是配置问题。目录没收录时原样返回（不猜）。
+pub fn clamp_output_tokens(model: &str, requested: Option<u32>) -> Option<u32> {
+    let req = requested?;
+    let cap = lookup(model)
+        .and_then(|l| l.max_output)
+        .and_then(|v| u32::try_from(v).ok())
+        .filter(|c| *c > 0);
+    match cap {
+        Some(c) => Some(req.min(c)),
+        None => Some(req),
+    }
+}
+
+/// 拉取并缓存单个模型的 provider 级 endpoints。
+///
+/// 需要 OpenRouter 的完整 id（`minimax/minimax-m3.1-flash`）——从目录快照的
+/// id 反查；查不到就直接用传进来的值试。
+pub async fn refresh_endpoints(http: &reqwest::Client, openrouter_id: &str) -> usize {
+    let url = format!("{OPENROUTER_MODELS_URL}/{openrouter_id}/endpoints");
+    let resp = match http.get(&url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            debug!(status = %r.status(), id = openrouter_id, "endpoints: non-success");
+            return 0;
+        }
+        Err(e) => {
+            debug!(id = openrouter_id, "endpoints: fetch failed: {e}");
+            return 0;
+        }
+    };
+    let v = match resp.json::<Value>().await {
+        Ok(v) => v,
+        Err(e) => {
+            debug!(id = openrouter_id, "endpoints: decode failed: {e}");
+            return 0;
+        }
+    };
+    let list = parse_endpoints(&v);
+    if list.is_empty() {
+        debug!(id = openrouter_id, "endpoints: no usable provider entries");
+        return 0;
+    }
+    let n = list.len();
+    let key = norm(openrouter_id);
+    if let Ok(mut guard) = endpoint_store().write() {
+        guard.insert(key.clone(), list);
+    }
+    persist_endpoints();
+    n
+}
+
+/// 目录里这个型号的 OpenRouter 完整 id（拉 endpoints 用）。
+pub fn openrouter_id_for(model: &str) -> Option<String> {
+    let key = norm(model);
+    let guard = id_index().read().ok()?;
+    if let Some(id) = guard.get(&key) {
+        return Some(id.clone());
     }
     guard
         .iter()
         .filter(|(k, _)| k.ends_with(&key) || key.ends_with(k.as_str()))
         .max_by_key(|(k, _)| k.len())
-        .map(|(_, v)| *v)
+        .map(|(_, id)| id.clone())
+}
+
+/// endpoints 磁盘缓存路径。
+pub fn endpoints_cache_path() -> PathBuf {
+    hermix_config::paths::hermix_home().join("openrouter_endpoints_cache.json")
+}
+
+/// 把 endpoints 快照落盘（失败只记 debug——它只是缓存）。
+fn persist_endpoints() {
+    let Ok(guard) = endpoint_store().read() else {
+        return;
+    };
+    let map: serde_json::Map<String, Value> = guard
+        .iter()
+        .map(|(k, v)| {
+            let arr: Vec<Value> = v
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "provider": e.provider,
+                        "context": e.context,
+                        "max_output": e.max_output,
+                    })
+                })
+                .collect();
+            (k.clone(), Value::Array(arr))
+        })
+        .collect();
+    let payload = Value::Object(map);
+    if let Ok(text) = serde_json::to_string(&payload) {
+        if let Err(e) = std::fs::write(endpoints_cache_path(), text) {
+            debug!("endpoints cache write failed: {e}");
+        }
+    }
+}
+
+/// 启动时装载 endpoints 缓存（与目录缓存并列）。
+pub fn load_endpoints_from_disk() -> usize {
+    let path = endpoints_cache_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return 0;
+    };
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) else {
+        return 0;
+    };
+    let mut guard = match endpoint_store().write() {
+        Ok(g) => g,
+        Err(_) => return 0,
+    };
+    guard.clear();
+    for (key, val) in map {
+        let Some(arr) = val.as_array() else { continue };
+        let list: Vec<EndpointLimits> = arr
+            .iter()
+            .filter_map(|e| {
+                let context = e.get("context")?.as_u64()?;
+                if context == 0 {
+                    return None;
+                }
+                Some(EndpointLimits {
+                    provider: e
+                        .get("provider")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    context,
+                    max_output: e.get("max_output").and_then(|x| x.as_u64()),
+                })
+            })
+            .collect();
+        if !list.is_empty() {
+            guard.insert(key, list);
+        }
+    }
+    guard.len()
 }
 
 /// 同步装载磁盘缓存（启动时调）。过期与否都装——旧的也比静态表准。
@@ -151,10 +412,26 @@ pub fn load_from_disk() -> usize {
     };
     let parsed = parse_catalog(&v);
     let n = parsed.len();
+    fill_id_index(&v);
     if let Ok(mut guard) = store().write() {
         *guard = parsed;
     }
     n
+}
+
+/// 把目录里的 `归一化名 → 原始 id` 记下来（拉 endpoints 要用原样 id）。
+fn fill_id_index(v: &Value) {
+    let Some(items) = v.get("data").and_then(|d| d.as_array()) else {
+        return;
+    };
+    let Ok(mut idx) = id_index().write() else {
+        return;
+    };
+    for item in items {
+        if let Some(id) = item.get("id").and_then(|x| x.as_str()) {
+            idx.insert(norm(id), id.to_string());
+        }
+    }
 }
 
 /// 缓存是否已过期（文件不存在也算过期）。
@@ -198,6 +475,7 @@ pub async fn refresh(http: &reqwest::Client) -> usize {
         return 0;
     }
     let n = parsed.len();
+    fill_id_index(&v);
     if let Ok(mut guard) = store().write() {
         *guard = parsed;
     }
@@ -246,17 +524,25 @@ mod tests {
         })
     }
 
+    /// 模型级优先：`top_provider` 只是"某一家 provider"，不能当全局上限。
+    ///
+    /// 2026-10-23 修正前这里是 `min(模型级, top_provider)`，实测把
+    /// `minimax/minimax-m3`（模型级 1,048,576 / 某家 524,288）压成 512K，
+    /// 而那家不是用户直连的官方。
     #[test]
-    fn parses_context_and_takes_the_smaller_of_the_two() {
+    fn parses_context_and_prefers_the_model_level_value() {
         let m = parse_catalog(&sample());
         assert_eq!(m.get("minimaxminimaxm31flash").unwrap().context, 1_000_000);
-        // 模型级 1M 但实际可用 256K → 取小的（估大才会被 API 400 打脸）。
+        // nemotron：模型级 1,048,576 / 某家 262,144 → 用模型级。
         let nemotron = m
             .iter()
             .find(|(k, _)| k.contains("nemotron"))
             .map(|(_, v)| v)
             .expect("nemotron 条目应在表里");
-        assert_eq!(nemotron.context, 262_144);
+        assert_eq!(
+            nemotron.context, 1_048_576,
+            "provider 级窗口不能压掉模型级上限（provider 精确值由 endpoints 层负责）"
+        );
         assert_eq!(m.get("openaigpt5").unwrap().context, 128_000);
         assert!(
             !m.keys().any(|k| k.contains("router")),
@@ -272,6 +558,61 @@ mod tests {
         // 后缀匹配：目录 id 以配置名结尾。
         let catalog = norm("minimax/minimax-m3.1-flash");
         assert!(catalog.ends_with(&norm("MiniMax-M3.1-Flash")));
+    }
+
+    #[test]
+    fn parse_endpoints_reads_each_provider_separately() {
+        let v = serde_json::json!({
+            "data": {
+                "id": "minimax/minimax-m3.1-flash",
+                "endpoints": [
+                    { "provider_name": "Minimax", "context_length": 1_000_000, "max_completion_tokens": 524_288 },
+                    { "provider_name": "Together", "context_length": 262_144, "max_completion_tokens": 16_384 },
+                    // 上下文为 0 的条目没有信息量 → 丢弃
+                    { "provider_name": "Broken", "context_length": 0 }
+                ]
+            }
+        });
+        let list = parse_endpoints(&v);
+        assert_eq!(list.len(), 2, "0 上下文的条目应被丢弃: {list:?}");
+        assert_eq!(list[0].provider, "Minimax");
+        assert_eq!(list[0].context, 1_000_000);
+        assert_eq!(list[0].max_output, Some(524_288));
+        assert_eq!(list[1].max_output, Some(16_384));
+    }
+
+    /// provider hint 命中 → 用它；没命中/没给 → 取窗口最大的那条。
+    ///
+    /// 这条语义很重要：我们直连官方 API，聚合值可能来自别家（窗口更小），
+    /// 按别家的值算会把压缩提前；但也不能反过来把窗口估大（会 400）——
+    /// 所以只有"明确知道 provider"时才取小的那家，否则取官方最大。
+    #[test]
+    fn lookup_limits_prefers_the_matching_provider_then_the_largest() {
+        {
+            let mut g = endpoint_store().write().unwrap();
+            g.insert(
+                "minimaxminimaxm31flash".into(),
+                vec![
+                    EndpointLimits {
+                        provider: "Minimax".into(),
+                        context: 1_000_000,
+                        max_output: Some(524_288),
+                    },
+                    EndpointLimits {
+                        provider: "Together".into(),
+                        context: 262_144,
+                        max_output: Some(16_384),
+                    },
+                ],
+            );
+        }
+
+        let together = lookup_limits("MiniMax-M3.1-Flash", Some("together")).unwrap();
+        assert_eq!(together.context, 262_144, "指定 provider 时用它的真实窗口");
+
+        let any = lookup_limits("MiniMax-M3.1-Flash", None).unwrap();
+        assert_eq!(any.context, 1_000_000, "未指定时取最大窗口");
+        assert_eq!(any.max_output, Some(524_288));
     }
 
     /// 联网实测：真实目录里 M3.1 必须是 1M（这正是这次修复的动机）。
@@ -290,13 +631,46 @@ mod tests {
         }
         let m31 = lookup("MiniMax-M3.1-Flash").expect("M3.1 应在目录里");
         println!(
-            "MiniMax-M3.1-Flash → context={} max_output={:?}",
+            "聚合值：MiniMax-M3.1-Flash → context={} max_output={:?}",
             m31.context, m31.max_output
         );
         assert!(
             m31.context >= 1_000_000,
             "M3.1 实际是 {} tokens —— 静态表按 204.8K 算就是这次修的问题",
             m31.context
+        );
+
+        // M3（非 3.1）同样是 1M —— 2026-10-23 用户质疑后实测确认，
+        // 旧实现取 min(模型级 1,048,576, 某家 524,288) 会把它压成 512K，
+        // 再被静态表兜成 205K。
+        let m3 = lookup("MiniMax-M3").expect("M3 应在目录里");
+        println!("MiniMax-M3 → context={} max_output={:?}", m3.context, m3.max_output);
+        assert!(
+            m3.context >= 1_000_000,
+            "M3 的模型级窗口是 1,048,576，实际读到 {}",
+            m3.context
+        );
+
+        // provider 级（endpoints）：真实可用窗口 + 输出上限。
+        let id = openrouter_id_for("MiniMax-M3.1-Flash").expect("目录里应有完整 id");
+        let providers = refresh_endpoints(&http, &id).await;
+        println!("endpoints: {id} → {providers} 个 provider");
+        let lim = lookup_limits("MiniMax-M3.1-Flash", None).expect("endpoints 应可查");
+        println!(
+            "provider 级：context={} max_output={:?}",
+            lim.context, lim.max_output
+        );
+        // endpoints 可能有多家 provider，取最大窗口；只要 ≥1M 就说明
+        // provider 级数据可用（具体值随上游变动，不写死）。
+        assert!(
+            lim.context >= 1_000_000,
+            "provider 级窗口应 ≥1M，实际 {}",
+            lim.context
+        );
+        assert_eq!(
+            lim.max_output,
+            Some(524_288),
+            "输出上限 512K 是压缩阈值的关键输入"
         );
     }
 
