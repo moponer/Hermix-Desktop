@@ -20,6 +20,7 @@ use hermix_tools::{TirithAction, TirithSecurity, ToolRegistry};
 use hermix_tools::backends::memory::FileMemoryBackend;
 use hermix_tools::tools::memory::MemoryHandler;
 use hermix_intelligence::DomainMode;
+use crate::smart_model_routing::ApiMode;
 use serde_json::Value;
 
 /// Wrapper that makes `Arc<ToolRegistry>` (hermix_tools) implement the
@@ -1301,18 +1302,20 @@ impl LocalAgentService {
         // request unchanged — same pattern `reasoning_effort` uses.
         // `None` (old clients / field omitted) → no injection, behavior
         // identical to before this field existed.
-        if let Some(v) = overrides.enable_thinking {
+        if let Some(enabled) = overrides.enable_thinking {
             let mut eb = config.extra_body.unwrap_or(serde_json::json!({}));
             if let serde_json::Value::Object(ref mut map) = eb {
-                // `insert`, not `map["enable_thinking"] = …`: serde_json's
-                // `IndexMut` panics with "no entry found for key" when the key
-                // is absent (it is `get_mut(key).expect(...)`, NOT an
-                // entry-or-insert like `BTreeMap::entry`). An `extra_body`
-                // that already carries other keys — e.g. `reasoning_effort` —
-                // therefore panicked every single time a caller turned
-                // thinking on. Real panic logs: 2026-10-21 08:46, three in a
-                // row, all at this line.
-                map.insert("enable_thinking".to_string(), serde_json::json!(v));
+                // 统一开关 → 按 provider 翻译成正确的请求字段（见
+                // module 级 `inject_thinking_directive`）。写死
+                // `enable_thinking` 只对国内原生厂商有效，对 OpenRouter
+                // （reasoning 对象）/ Anthropic（thinking）/ OpenAI
+                // （reasoning_effort）无效——这正是实测"开关没用"的根因。
+                Self::inject_thinking_directive(
+                    map,
+                    &config.api_mode,
+                    &config.model,
+                    enabled,
+                );
             }
             config.extra_body = Some(eb);
         }
@@ -1322,6 +1325,71 @@ impl LocalAgentService {
             .map(|names| names.iter().cloned().collect::<HashSet<_>>());
         (config, allowed)
     }
+
+/// 把统一的"深度思考 开/关"开关翻译成各 provider 认识的请求字段。
+///
+/// 控制思考的参数名因通道而异，写死 `enable_thinking` 只对国内原生厂商
+/// （火山/豆包/直连 DeepSeek 等）有效；OpenRouter 走 `reasoning` 对象、
+/// Anthropic 走 `thinking`、OpenAI o-series 走 `reasoning_effort`。不翻译的话
+/// 开关对绝大多数经 OpenRouter 中转的模型毫无作用（用户实测"没啥用"）。
+fn inject_thinking_directive(
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    api_mode: &ApiMode,
+    model: &str,
+    enabled: bool,
+) {
+    // 先清掉上一次（含其它代码路径）可能残留的任一字段，保证开关状态干净切换、不串台。
+    body.remove("enable_thinking");
+    body.remove("reasoning");
+    body.remove("reasoning_effort");
+    body.remove("thinking");
+
+    if !enabled {
+        // 仅 OpenRouter 需要显式关闭才有意义；其它通道省略该字段即默认关闭。
+        if Self::looks_like_openrouter(model) {
+            body.insert("reasoning".to_string(), serde_json::json!({ "enabled": false }));
+        }
+        return;
+    }
+
+    match api_mode {
+        ApiMode::AnthropicMessages => {
+            // Anthropic extended thinking：必须带 budget_tokens，且小于 max_tokens。
+            body.insert(
+                "thinking".to_string(),
+                serde_json::json!({ "type": "enabled", "budget_tokens": 8000 }),
+            );
+        }
+        ApiMode::ChatCompletions | ApiMode::CodexResponses => {
+            if Self::looks_like_openrouter(model) {
+                body.insert(
+                    "reasoning".to_string(),
+                    serde_json::json!({ "enabled": true }),
+                );
+            } else if model.to_ascii_lowercase().starts_with("gpt")
+                || model.starts_with("o1")
+                || model.starts_with("o3")
+                || model.starts_with("o4")
+            {
+                // 直连 OpenAI o-series：reasoning_effort。
+                body.insert("reasoning_effort".to_string(), serde_json::json!("high"));
+            } else {
+                // 国内原生厂商（火山/豆包/直连 DeepSeek 等）仍用 enable_thinking。
+                body.insert("enable_thinking".to_string(), serde_json::json!(true));
+            }
+        }
+    }
+}
+
+/// 是否经 OpenRouter 或兼容中转。OpenRouter 的模型 id 形如 `provider/model-name`
+/// （带 `/`），直连 OpenAI 的 id 无 `/`；`anthropic/` 前缀排除——Anthropic
+/// 直连走 `thinking`，不走 reasoning 对象。
+fn looks_like_openrouter(model: &str) -> bool {
+    if model.to_ascii_lowercase().starts_with("anthropic/") {
+        return false;
+    }
+    model.contains('/')
+}
 
     /// Default [`PermissionLevel`] used when the caller doesn't specify one.
     fn default_permission() -> PermissionLevel {
@@ -5371,5 +5439,85 @@ mod override_tests {
                 "terminal command execution must NOT gate on command grant (2026-09-26 policy)"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod thinking_directive_tests {
+    use super::*;
+    use serde_json::{json, Map};
+
+    #[test]
+    fn openrouter_style_model_gets_reasoning_object() {
+        let mut body = Map::new();
+        LocalAgentService::inject_thinking_directive(
+            &mut body,
+            &ApiMode::ChatCompletions,
+            "minimax/minimax-m3.1-flash:free",
+            true,
+        );
+        assert_eq!(body.get("reasoning"), Some(&json!({ "enabled": true })));
+        assert!(!body.contains_key("enable_thinking"));
+        assert!(!body.contains_key("reasoning_effort"));
+    }
+
+    #[test]
+    fn anthropic_model_gets_thinking_block() {
+        let mut body = Map::new();
+        LocalAgentService::inject_thinking_directive(
+            &mut body,
+            &ApiMode::AnthropicMessages,
+            "claude-3-7-sonnet",
+            true,
+        );
+        match body.get("thinking") {
+            Some(serde_json::Value::Object(m)) => {
+                assert_eq!(m.get("type"), Some(&json!("enabled")));
+                assert_eq!(m.get("budget_tokens"), Some(&json!(8000)));
+            }
+            other => panic!("expected thinking object, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn openai_direct_model_gets_reasoning_effort() {
+        let mut body = Map::new();
+        LocalAgentService::inject_thinking_directive(
+            &mut body,
+            &ApiMode::ChatCompletions,
+            "gpt-4o",
+            true,
+        );
+        assert_eq!(body.get("reasoning_effort"), Some(&json!("high")));
+    }
+
+    #[test]
+    fn disabled_openrouter_emits_explicit_off_and_clears_others() {
+        let mut body = Map::new();
+        body.insert("enable_thinking".to_string(), json!(true));
+        body.insert("reasoning_effort".to_string(), json!("high"));
+        LocalAgentService::inject_thinking_directive(
+            &mut body,
+            &ApiMode::ChatCompletions,
+            "openrouter/anthropic/claude-3.7",
+            false,
+        );
+        assert!(!body.contains_key("enable_thinking"));
+        assert!(!body.contains_key("reasoning_effort"));
+        assert_eq!(body.get("reasoning"), Some(&json!({ "enabled": false })));
+    }
+
+    #[test]
+    fn disabled_plain_model_leaves_no_thinking_field() {
+        let mut body = Map::new();
+        body.insert("enable_thinking".to_string(), json!(true));
+        LocalAgentService::inject_thinking_directive(
+            &mut body,
+            &ApiMode::ChatCompletions,
+            "gpt-4o",
+            false,
+        );
+        assert!(!body.contains_key("enable_thinking"));
+        assert!(!body.contains_key("reasoning"));
     }
 }
