@@ -482,8 +482,7 @@ export function PreviewPanel({
       {renderHeader(false)}
 
       <div
-        className="flex-1 flex flex-col min-h-0 preview-body"
-        style={{ background: "var(--color-bg-code)" }}
+        className="flex-1 flex flex-col min-h-0 preview-body bg-bg-code"
       >
           {/* 全屏时面板这一份不参与渲染：同一载荷不画两遍（PDF / PPTX 都是 canvas） */}
           <div className="preview-pane-inner flex-1 overflow-auto min-h-0">

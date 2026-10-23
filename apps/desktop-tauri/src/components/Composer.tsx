@@ -193,8 +193,7 @@ export function Composer(p: ComposerProps) {
             {p.pendingImages.map((img, idx) => (
               <div
                 key={`${img.blobUrl}-${idx}`}
-                className="relative w-14 h-14 rounded-lg overflow-hidden flex items-center justify-center shrink-0"
-                style={{ background: "var(--color-bg-tertiary)", border: "1px solid var(--color-border-subtle)" }}
+                className="relative w-14 h-14 rounded-lg overflow-hidden flex items-center justify-center shrink-0 bg-bg-tertiary"
                 title={img.name}
               >
                 <img
@@ -247,8 +246,7 @@ export function Composer(p: ComposerProps) {
             {p.pendingDocs.map((doc, idx) => (
               <div
                 key={`${doc.name}-${idx}`}
-                className="relative flex items-center gap-2 max-w-[220px] h-14 px-2 rounded-lg overflow-hidden shrink-0"
-                style={{ background: "var(--color-bg-tertiary)", border: "1px solid var(--color-border-subtle)" }}
+                className="relative flex items-center gap-2 max-w-[220px] h-14 px-2 rounded-lg overflow-hidden shrink-0 bg-bg-tertiary"
                 title={doc.name}
               >
                 <FileText className="icon-lg shrink-0 text-text-muted" />

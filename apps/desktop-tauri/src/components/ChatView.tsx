@@ -102,8 +102,7 @@ function ModelStatusBar({
   // 各列不再各飞各的基线）。
   return (
     <div
-      className="h-10 shrink-0 flex items-center gap-2 px-4 sm:px-6 rounded-t-xl"
-      style={{ color: "var(--color-text-primary)" }}
+      className="h-10 shrink-0 flex items-center gap-2 px-4 sm:px-6 rounded-t-xl text-text-primary"
     >
       {showLeftActions && (
         <>

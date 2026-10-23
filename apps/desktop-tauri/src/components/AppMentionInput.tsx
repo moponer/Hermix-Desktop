@@ -272,8 +272,7 @@ function AppMentionInputImpl({
           }}
         >
           <div
-            className="px-3 py-2 text-[length:var(--text-meta)] font-medium"
-            style={{ color: "var(--color-text-muted)", borderBottom: "1px solid var(--color-border-primary)" }}
+            className="px-3 py-2 text-[length:var(--text-meta)] font-medium text-text-muted"
           >
             {panelTitle}
           </div>

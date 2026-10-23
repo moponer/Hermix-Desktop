@@ -187,7 +187,7 @@ export function PrefetchIntentChip({ intent, confidence }: PrefetchIntentChipPro
       <div className="prefetch-dot" />
       <Sparkles className="icon-xs text-success" />
       <span className="prefetch-label">预取</span>
-      <span className="prefetch-label" style={{ color: "var(--color-text-primary)" }}>{intent}</span>
+      <span className="prefetch-label text-text-primary">{intent}</span>
       <span className="prefetch-confidence">{pct}%</span>
     </div>
   );

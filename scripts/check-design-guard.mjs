@@ -52,12 +52,36 @@ const violations = [];
 const push = (file, line, rule, text) =>
   violations.push(`${relative(process.cwd(), file)}:${line} [${rule}] ${text.trim().slice(0, 120)}`);
 
+/* ── G6：内联样式里的静态配色不得超过基线（棘轮）────────────────────
+   用户要求「配色是完整体系、一键可换」—— 那么**样式的来源必须唯一**
+   （令牌 → 语义类 → 组件）。`style={{ background: "var(--color-x)" }}`
+   正是破坏这件事的写法：
+     · 它绕过 className，无法被 Tailwind 的语义类统一改写；
+     · 它拿不到 :hover / :focus / 响应式变体（所以这些地方交互永远是死的）；
+     · 换主题时它虽然跟着令牌变，但**换布局/密度/圆角体系时它不跟**。
+   历史上这类写法一路涨到 100+ 处，因为没有任何门禁拦它。
+
+   与 G10 同款棘轮：只禁止增加。清理一批后把 BASELINE 调低。
+   注意豁免：运行时几何（拖拽宽度、坐标、进度百分比）与数据自带色
+   （专家色板、渠道品牌色）不在统计里 —— 本规则只数 `var(--color-*)`。 */
+const INLINE_COLOR_BASELINE = 62;
+let inlineColorHits = 0;
+
 for (const file of walk(ROOT)) {
   const lines = readFileSync(file, "utf8").split("\n");
 
   let lastAllow = -99;
+  let lastStyleStart = -99;
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
+    // 内联样式块起点（多行 style={{ … }} 的配色行也算）
+    if (/style=\{\{/.test(ln)) lastStyleStart = i;
+    if (i - lastStyleStart <= 4 && /var\(--color/.test(ln) && /style=\{\{|background|color:|border/.test(ln)) {
+      // 只有当它确实处于内联样式块里才算（4 行窗口内出现过 style={{）
+      if (i >= lastStyleStart && lastStyleStart >= 0 && i - lastStyleStart <= 4) {
+        inlineColorHits++;
+      }
+    }
     // 当前行带 allow 标记，或处于 allow 标记后的 3 行窗口内
     // （注释行 + 被标注的多行块）即豁免。
     if (/design-guard:\s*allow/.test(ln)) {
@@ -109,6 +133,18 @@ for (const file of walk(ROOT)) {
       }
     }
   }
+}
+
+if (inlineColorHits > INLINE_COLOR_BASELINE) {
+  violations.push(
+    `[G6-inline-color] 内联样式的静态配色 ${inlineColorHits} 处 > 基线 ${INLINE_COLOR_BASELINE} 处`,
+    "  → 改用语义类（bg-bg-tertiary / text-text-muted / bg-accent …）。",
+    "     内联样式拿不到 hover / focus / 响应式变体，是「组件不可复用」的根源。",
+  );
+} else if (inlineColorHits < INLINE_COLOR_BASELINE) {
+  console.log(
+    `DesignGuard: 内联配色已降到 ${inlineColorHits} 处，请把 INLINE_COLOR_BASELINE 下调到该值。`,
+  );
 }
 
 if (violations.length > 0) {

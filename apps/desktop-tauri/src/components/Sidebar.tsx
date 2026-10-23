@@ -1028,11 +1028,10 @@ function RenameDialog({
         )}
       >
         <div className="flex items-start gap-3 px-5 py-4 border-b border-border-subtle">
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: "var(--color-accent-soft)" }}
-          >
-            <Pencil className="icon-md" style={{ color: "var(--color-accent)" }} />
+          {/* 配色走语义类而不是内联 style：内联样式既不能参与 hover/focus，
+              也让「换主题只改令牌」这条约束在门禁外留了口子。 */}
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-accent-soft">
+            <Pencil className="icon-md text-accent" />
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-body font-bold text-text-primary">{state.title}</h2>
@@ -1056,10 +1055,9 @@ function RenameDialog({
             disabled={!canConfirm}
             className={clsx(
               "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-bold",
-              "text-on-accent transition-opacity",
+              "text-on-accent bg-accent transition-opacity",
               canConfirm ? "hover:opacity-90" : "opacity-50 cursor-not-allowed",
             )}
-            style={{ background: "var(--color-accent)" }}
           >
             确认
           </button>
@@ -1111,11 +1109,8 @@ function DeleteConfirmDialog({
         )}
       >
         <div className="flex items-start gap-3 px-5 py-4 border-b border-border-subtle">
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: "var(--color-success-soft)" }}
-          >
-            <Trash2 className="icon-md" style={{ color: "var(--color-text-success)" }} />
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-success-soft">
+            <Trash2 className="icon-md text-text-success" />
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-body font-bold text-text-primary">{state.title}</h2>
@@ -1143,9 +1138,8 @@ function DeleteConfirmDialog({
             onClick={onConfirm}
             className={clsx(
               "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-bold",
-              "transition-opacity hover:opacity-90",
+              "bg-error text-on-error transition-opacity hover:opacity-90",
             )}
-            style={{ background: "var(--color-error)", color: "var(--color-on-error)" }}
           >
             删除
           </button>
