@@ -268,7 +268,16 @@ impl ToolRegistry {
         Self {
             inner: Arc::new(RwLock::new(ToolRegistryInner {
                 tools: HashMap::new(),
-                global_max_result_size_chars: 50_000,
+                // ★ The registry-level cap is the **outer safety net**,
+                // not the working budget. It used to be 50 000 — below
+                // `terminal`'s own 60 000 and `read_file`'s 80 000 — so
+                // the registry's middle-cut fired *first*: the per-tool
+                // budgets in `result_budget` never bound anything, and
+                // the cut that did fire was the one that discards the
+                // middle. It is now the largest per-tool budget, so the
+                // tool's own (recoverable, spill-backed) cap governs and
+                // the registry only catches runaway output.
+                global_max_result_size_chars: crate::result_budget::READ_FILE_CHARS,
                 terminal_workspace: Arc::new(std::sync::RwLock::new(None)),
                 terminal_approval_ctx: Arc::new(std::sync::Mutex::new(
                     TerminalApprovalContext::default(),
@@ -914,6 +923,34 @@ mod tests {
     use async_trait::async_trait;
     use hermix_core::{tool_schema, JsonSchema, ToolError, ToolSchema};
     use serde_json::{json, Value};
+
+    /// The registry-level cap is the **outer safety net**. It must not
+    /// be smaller than the per-tool budgets: when it was (50 000 vs
+    /// `terminal`'s 60 000 and `read_file`'s 80 000), the registry's
+    /// middle-cut fired *first* — so the per-tool caps never bound
+    /// anything, and the cut that did fire was the one that discards
+    /// the middle (unrecoverable), instead of the tool's own
+    /// spill-backed cap.
+    #[test]
+    fn default_result_cap_does_not_preempt_the_per_tool_budgets() {
+        let registry = ToolRegistry::new();
+        let cap = registry
+            .inner
+            .read()
+            .expect("registry lock")
+            .global_max_result_size_chars;
+        assert!(
+            cap >= crate::result_budget::READ_FILE_CHARS,
+            "注册表默认上限 {cap} 低于 read_file 的预算 {} —— \
+             工具自己的上限将永远不生效",
+            crate::result_budget::READ_FILE_CHARS
+        );
+        assert!(
+            cap >= crate::result_budget::TERMINAL_OUTPUT_CHARS,
+            "注册表默认上限 {cap} 低于 terminal 的预算 {}",
+            crate::result_budget::TERMINAL_OUTPUT_CHARS
+        );
+    }
 
     #[test]
     fn truncate_middle_keeps_head_and_tail() {

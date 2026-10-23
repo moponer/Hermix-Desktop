@@ -892,18 +892,41 @@ async fn execute_session_call(
     Ok(format_session_output(&output, just_created && persistent))
 }
 
+/// Oversized command output: **spill it to disk** instead of cutting it
+/// away.
+///
+/// The old behaviour kept the head and dropped everything past
+/// `max_chars` — the exit status, the failing assertion and the final
+/// error line were exactly what got discarded, and there was no way to
+/// get them back. Now the full output lands in the spill directory and
+/// the model gets a preview plus a **line-addressable** pointer
+/// (`read_file(path, offset=N)`), so the missing part is retrievable.
+///
+/// If the write fails we fall back to the old hard cut: the result was
+/// already produced, and losing it entirely because the disk is full
+/// would be worse than losing its tail.
+fn spill_or_truncate(output: &str, max_chars: usize) -> String {
+    use crate::spill::SpillSink;
+    let total = output.chars().count();
+    if let Some(spilled) = SpillSink::default_dir()
+        .try_spill_by_content(output, crate::spill::SPILL_INLINE_CHARS)
+    {
+        return spilled;
+    }
+    // The spill failed — degrade to the old truncation.
+    let truncated: String = output.chars().take(max_chars).collect();
+    format!(
+        "{}\n\n[... output truncated at {} chars, {} total ...]",
+        truncated, max_chars, total
+    )
+}
+
 /// 会话输出格式化：正文 + 会话状态页脚（id / busy 轮询指引 / 退出提示）。
 fn format_session_output(output: &PtySessionOutput, just_created: bool) -> String {
     const MAX_OUTPUT_CHARS: usize = crate::result_budget::TERMINAL_OUTPUT_CHARS;
     let mut result = output.text.clone();
     if result.chars().count() > MAX_OUTPUT_CHARS {
-        let truncated: String = result.chars().take(MAX_OUTPUT_CHARS).collect();
-        result = format!(
-            "{}\n\n[... output truncated at {} chars, {} total ...]",
-            truncated,
-            MAX_OUTPUT_CHARS,
-            result.chars().count()
-        );
+        result = spill_or_truncate(&result, MAX_OUTPUT_CHARS);
     }
 
     let mut footer = if just_created {
@@ -942,13 +965,7 @@ fn format_command_output(output: &CommandOutput) -> String {
     }
     // Safety truncation to prevent unbounded memory allocation
     if result.chars().count() > MAX_OUTPUT_CHARS {
-        let truncated: String = result.chars().take(MAX_OUTPUT_CHARS).collect();
-        result = format!(
-            "{}\n\n[... output truncated at {} chars, {} total ...]",
-            truncated,
-            MAX_OUTPUT_CHARS,
-            result.chars().count()
-        );
+        result = spill_or_truncate(&result, MAX_OUTPUT_CHARS);
     }
     if output.exit_code != 0 {
         result.push_str(&format!("\n[exit code: {}]", output.exit_code));
@@ -963,6 +980,44 @@ fn format_command_output(output: &CommandOutput) -> String {
 mod tests {
     use super::*;
     use hermix_core::AgentError;
+
+    /// Oversized command output must be **spilled**, not cut: the old
+    /// behaviour kept the head and dropped the tail — which is where
+    /// the exit status and the final error line live — and there was no
+    /// way to get them back.
+    #[test]
+    fn oversized_output_is_spilled_and_the_file_holds_everything() {
+        let dir = std::env::temp_dir().join("hermix-terminal-spill-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        // Point the spill sink at a scratch directory by using the
+        // tool-level helper with the default sink, then locate the file
+        // it wrote.
+        let output: String = (0..5_000).map(|i| format!("line-{i}\n")).collect();
+        let spilled = spill_or_truncate(&output, 60_000);
+
+        assert!(
+            crate::spill::is_spilled(&spilled),
+            "超限输出必须走落盘，而不是硬切：{spilled}"
+        );
+        assert!(
+            spilled.len() < output.len(),
+            "上下文里应该是预览而不是全文"
+        );
+        // The preview names the file and the line the rest starts at.
+        assert!(
+            spilled.contains("offset="),
+            "预览必须给出可用的行号：{spilled}"
+        );
+
+        // The file the pointer names holds the **complete** output.
+        let path = spilled
+            .split("read_file(path=\"")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+            .expect("预览里必须有路径");
+        let on_disk = std::fs::read_to_string(path).unwrap();
+        assert_eq!(on_disk, output, "落盘文件必须是完整输出");
+    }
 
     struct MockBackend {
         captured_workdir: std::sync::Arc<std::sync::Mutex<Option<String>>>,

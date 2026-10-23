@@ -40,8 +40,19 @@ pub fn enforce_budget_with_spill(
     spill: Option<&crate::spill::SpillSink>,
 ) {
     // Step 0: spill-to-disk（可选）。未配置 sink 时行为与旧路径完全一致。
+    //
+    // ★ Skip results that already carry a spill pointer. The agent
+    // layer spills twice (`enforce_budget_with_spill` here, then
+    // `push_tool_result`); the second spill used the same
+    // `tool_call_id` and therefore **overwrote the full result with
+    // its own preview** — so the pointer the model was handed led
+    // back to the preview instead of the missing bytes. Spilling once
+    // is enough.
     if let Some(sink) = spill {
         for result in results.iter_mut() {
+            if crate::spill::is_spilled(&result.content) {
+                continue;
+            }
             result.content =
                 sink.maybe_spill(&result.tool_call_id, &result.content, crate::spill::SPILL_INLINE_CHARS);
         }
@@ -177,5 +188,47 @@ mod tests {
     fn test_check_aggregate_budget_fail() {
         let results = vec![ToolResult::ok("1", "x".repeat(500))];
         assert!(!check_aggregate_budget(&results, 100));
+    }
+
+    /// ★ Regression: the agent layer spills at two points (here and in
+    /// `push_tool_result`). The second one used the same
+    /// `tool_call_id` and overwrote the full result **with its own
+    /// preview** — so the path the model was told to read back led to
+    /// the preview, and the missing bytes were gone.
+    ///
+    /// The file must still hold the **complete** result after the
+    /// budget pass.
+    #[test]
+    fn spill_is_not_repeated_so_the_file_keeps_the_full_result() {
+        let dir = std::env::temp_dir().join("hermix-budget-spill-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let sink = crate::spill::SpillSink::new(dir.clone());
+
+        // 5,000 lines ≈ 48K chars — comfortably over the 20K inline
+        // budget, so the spill actually fires.
+        let full: String = (0..5_000).map(|i| format!("line-{i}\n")).collect();
+        let mut results = vec![ToolResult::ok("call_1", full.clone())];
+        let budget = BudgetConfig {
+            max_result_size_chars: 1_000_000,
+            max_aggregate_chars: 1_000_000,
+        };
+        enforce_budget_with_spill(&mut results, &budget, Some(&sink));
+
+        // The context now carries a preview plus a pointer …
+        assert!(
+            results[0].content.len() < full.len(),
+            "上下文里应该是预览而不是全文"
+        );
+        assert!(
+            crate::spill::is_spilled(&results[0].content),
+            "预览必须带取回指引"
+        );
+
+        // … and the file the pointer names holds the **full** result.
+        let on_disk = std::fs::read_to_string(dir.join("call_1.txt")).unwrap();
+        assert_eq!(
+            on_disk, full,
+            "落盘文件必须是完整结果，不能被预览覆盖"
+        );
     }
 }

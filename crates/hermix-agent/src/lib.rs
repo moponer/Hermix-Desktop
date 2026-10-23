@@ -31,7 +31,7 @@ pub mod compression_ops;
 pub mod compression_pipeline;
 pub mod json_crusher;
 pub mod semantic_dedup;
-pub mod spill;
+pub use hermix_tools::spill;
 pub mod context;
 pub mod context_files;
 pub mod context_pressure;

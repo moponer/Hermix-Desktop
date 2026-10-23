@@ -433,7 +433,15 @@ pub fn push_tool_result(
     // chars with a "truncated at N" note and NO way to read the rest:
     // the missing middle was unrecoverable. `SpillSink` already existed
     // and was tested, but nothing in the production path called it.
-    let final_content = if final_content.chars().count() > SPILL_INLINE_CHARS {
+    //
+    // ★ Skip when the content already carries a spill pointer: the
+    // budget layer spills first (same `tool_call_id`), and spilling
+    // again here would **overwrite the full result with this
+    // preview** — the pointer the model was given would then lead back
+    // to the preview instead of the missing bytes.
+    let final_content = if final_content.chars().count() > SPILL_INLINE_CHARS
+        && !crate::spill::is_spilled(&final_content)
+    {
         crate::spill::SpillSink::default_dir()
             .maybe_spill(tool_call_id, &final_content, SPILL_INLINE_CHARS)
     } else {
