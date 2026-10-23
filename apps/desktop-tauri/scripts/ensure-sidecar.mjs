@@ -95,8 +95,11 @@ if (!existsSync(desktopVite)) {
 }
 sh("node", [desktopVite, "build"], appDir);
 
-// dsh 转换引擎（Office→PDF，构建期捆绑，运行期完全离线）：幂等，
-// 已就位且版本一致时秒过。见 scripts/fetch-dsh-engine.mjs 头注。
-sh("node", [path.join(__dirname, "fetch-dsh-engine.mjs")]);
+// dsh 转换引擎**不再**构建期捆绑：安装包不带这 190MB，改由运行期首次
+// Office→PDF / PDF→图片时按需下载到 <hermix home>/dsh-engine（见
+// crates/hermix-tools/src/tools/dsh_engine_fetch.rs）。
+// fetch-dsh-engine.mjs 保留给开发/打包机本地取引擎做 smoke 验证（产物落在
+// src-tauri/resources/dsh-engine，用 HERMIX_DSH_ENGINE 指过去即可），
+// 不进安装包、不进更新 zip，也不再由本脚本调用。
 
 console.log("[ensure-sidecar] sidecar 已刷新并逐字节校验。");

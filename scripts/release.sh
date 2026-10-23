@@ -173,7 +173,11 @@ done
 # 注意：必须在同一命令里短路吞掉成功码——set -e 会在 RC 赋值前就杀脚本。
 RES_SRC="$REPO_ROOT/apps/desktop-tauri/src-tauri/resources"
 [[ -d "$RES_SRC" ]] || { echo "错误：缺 resources 目录 $RES_SRC"; exit 1; }
-robocopy "$(cygpath -w "$RES_SRC")" "$(cygpath -w "$APP/resources")" //E //MT:16 //NFL //NDL //NJH //NJS //NP || { RC=$?; [[ $RC -le 7 ]] || { echo "错误：robocopy 复制 resources 失败（退出码 $RC）"; exit 1; }; }
+# dsh-engine（190MB / 800 文件）是**调试资产**，不是产品资产：fetch-dsh-engine.mjs
+# 会在开发机留下这份解压目录供 smoke 测试用 HERMIX_DSH_ENGINE 指过去。产品路径
+# 改为运行期按需下载到 <hermix home>/dsh-engine（dsh_engine_fetch.rs），
+# 打进 zip 会让每次自动更新多背 190MB。必须显式 /XD 排除，否则本地残留会静默入包。
+robocopy "$(cygpath -w "$RES_SRC")" "$(cygpath -w "$APP/resources")" //E //MT:16 //XD "$(cygpath -w "$RES_SRC/dsh-engine")" //NFL //NDL //NJH //NJS //NP || { RC=$?; [[ $RC -le 7 ]] || { echo "错误：robocopy 复制 resources 失败（退出码 $RC）"; exit 1; }; }
 
 # 许可随包分发 + 更新源自举。许可正文单一真相源 = 桌面端 src-tauri/LICENSE.txt，
 # 拷进 app 根，便携包里永远能找到许可正文。不再用旧 license.rtf（Unicode 转义、

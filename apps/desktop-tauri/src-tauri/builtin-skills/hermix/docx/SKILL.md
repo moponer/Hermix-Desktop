@@ -131,11 +131,12 @@ Hard-won rules (each of these has broken a real delivery):
 
 1. **Structural**: reopen with python-docx and assert what you promised:
    paragraph count > 0, expected headings exist, tables have the right shape.
-2. **Visual**: render page 1 and one inner page to PNG with the bundled engine
-   (offline, no LibreOffice install needed):
+2. **Visual**: render page 1 and one inner page to PNG with the conversion
+   engine (`file_converter` pdf→png; no LibreOffice install needed). The engine
+   is fetched on first use (~71MB, one-off) and is offline afterwards — if a
+   conversion is slow the first time, that is the download, not a hang:
    ```bat
-   :: via the app: ask the agent to run file_converter pdf→png after docx→pdf,
-   :: or call the engine directly if HERMIX_DSH_ENGINE is set.
+   :: via the app: ask the agent to run file_converter pdf→png after docx→pdf
    ```
    Then `read_image` the PNG and actually look at it: margins, table borders,
    Chinese glyphs (tofu boxes = missing font), title alignment.

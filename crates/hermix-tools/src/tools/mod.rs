@@ -52,6 +52,7 @@ pub mod todo;
 
 pub mod task_tracker;
 pub mod approval_tokens;
+pub mod dsh_engine_fetch;
 pub mod file_converter;
 pub mod html_to_docx;
 pub mod office_export;

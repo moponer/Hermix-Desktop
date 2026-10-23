@@ -87,6 +87,23 @@ pub struct ToolCallContext {
     /// can emit `tool_stdout` events with the correct ID.
     pub active_call_id: Arc<Mutex<Option<String>>>,
 
+    /// 通用执行进度回调：任何 opt-in [`ContextAware`] 的工具都可以在执行
+    /// 过程中推一行文本，前端那张工具卡片会实时显示（`tool_stdout` 事件）。
+    ///
+    /// 与 [`Self::stdout_cb`] 的分工：stdout_cb 是 code_execution 的逐行
+    /// 子进程输出，会持久化进 `execution_timeline`（重载会话要能回放）；
+    /// 这里是**瞬时进度**（"正在下载引擎 48%"），只走 WS 不落库——
+    /// 进度在回放里只是噪音。
+    ///
+    /// 事件里的 `tool` / `tool_call_id` 取 [`Self::active_tool`] 与
+    /// [`Self::active_call_id`]，由调度方在 `tool_start` 时写入。
+    pub progress_cb: Arc<Mutex<Option<Box<dyn Fn(&str) + Send + Sync>>>>,
+
+    /// 当前正在执行的工具名（每次 `tool_start` 由调度方写入）。
+    /// `progress_cb` 用它给事件打上正确的 `tool` 字段，前端才能把进度
+    /// 落到对应的那张卡片上。
+    pub active_tool: Arc<Mutex<Option<String>>>,
+
     /// 来源（§5.5 第 5 层）。由调度方根据连接属性填入：
     /// - `LocalAgentService`（桌面 WS）固定写 `Origin::Local`；
     /// - HTTP 路由在 `dispatch_with_context` 之前从 `Extension<Origin>`

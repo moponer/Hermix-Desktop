@@ -2,10 +2,13 @@
 //!
 //! Supports:
 //! - Image → PDF (using image crate + simple PDF)
-//! - Word/Excel/PPT → PDF (using LibreOffice CLI)
-//! - PDF → Image (placeholder - needs poppler)
+//! - Word/Excel/PPT → PDF (dsh 引擎，缺失时回退系统 LibreOffice)
+//! - PDF → Image (dsh 引擎的 render 协议，纯 dsh)
 //! - PDF → Text (using lopdf)
 //! - Image format conversion (using image crate)
+//!
+//! Office/PDF 两条路都依赖 dsh 转换引擎：安装包不带它，首次使用时由
+//! [`super::dsh_engine_fetch`] 下载到 `<hermix home>/dsh-engine/package`。
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -16,6 +19,7 @@ use std::io::BufWriter;
 use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
 use crate::ToolRegistry;
+use crate::context::{ContextAware, ToolCallContext};
 use std::sync::Arc;
 
 /// Register this tool with the registry.
@@ -26,16 +30,23 @@ pub fn register(registry: &ToolRegistry) {
         "file_converter",
         "file",
         schema,
-        handler,
+        handler.clone(),
         Arc::new(|| true),
         vec![],
         false,
-        "Convert files between formats: image→PDF, Word→PDF, PDF→image, merge PDFs, etc.",
+        "Convert files between formats: image→PDF, Word→PDF, PDF→image, merge PDFs, etc. \
+         Word/Excel/PPT→PDF and PDF→image use the built-in engine, which downloads once \
+         (~71MB) on first use — tell the user the first such conversion is slow because of \
+         that download; it is offline afterwards.",
         "🔄",
         None,
         RiskLevel::Safe,
         false,
     );
+    // 需要 ToolCallContext 只为一件事：首次使用下载/解压引擎时把进度
+    // 推给前端卡片（三十秒的静默等待无法自证）。转换本身不需要会话状态。
+    let context_aware: Arc<dyn ContextAware> = handler as Arc<dyn ContextAware>;
+    registry.set_context_aware("file_converter", context_aware);
 }
 
 // ---------------------------------------------------------------------------
@@ -101,9 +112,14 @@ impl FileConverterHandler {
     }
 }
 
-#[async_trait]
-impl ToolHandler for FileConverterHandler {
-    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+impl FileConverterHandler {
+    /// 真正的转换实现。`progress` 为 `Some` 时把长任务进度（引擎下载/解压）
+    /// 推到前端那张工具卡片；`ToolHandler::execute`（无会话上下文）传 `None`。
+    async fn run(
+        &self,
+        params: Value,
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> Result<String, ToolError> {
         let action = params
             .get("action")
             .and_then(|v| v.as_str())
@@ -153,11 +169,17 @@ impl ToolHandler for FileConverterHandler {
                     }
                     // Word/Excel/PPT to PDF
                     ("docx" | "doc" | "odt" | "xlsx" | "xls" | "ods" | "pptx" | "ppt" | "odp", "pdf") => {
-                        convert_office_to_pdf(input, output).await?
+                        convert_office_to_pdf(input, output, progress).await?
                     }
                     // PDF to image
                     ("pdf", "png" | "jpg") => {
-                        convert_pdf_to_image(input, output, &to_ext).await?
+                        let (msg, downloaded) =
+                            convert_pdf_to_image(input, output, &to_ext, progress).await?;
+                        if downloaded {
+                            format!("{msg}{FIRST_FETCH_NOTE}")
+                        } else {
+                            msg
+                        }
                     }
                     // PDF to text
                     ("pdf", "txt") => {
@@ -200,6 +222,13 @@ impl ToolHandler for FileConverterHandler {
             ))),
         }
     }
+}
+
+#[async_trait]
+impl ToolHandler for FileConverterHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        self.run(params, None).await
+    }
 
     fn schema(&self) -> ToolSchema {
         let mut props = IndexMap::new();
@@ -238,6 +267,29 @@ impl ToolHandler for FileConverterHandler {
             "Convert files between formats: image→PDF, Word→PDF, PDF→image, merge PDFs, image format conversion.",
             JsonSchema::object(props, vec!["action".into()]),
         )
+    }
+}
+
+/// 本工具 opt-in `ContextAware` 的唯一目的：把"正在下载/解压引擎"推给前端
+/// 那张卡片。`progress_cb` 是**瞬时**通道（只走 WS、不写 execution timeline）；
+/// 没有 UI 通道（headless / 测试）时 cb 为 None，run 照常执行。
+#[async_trait]
+impl ContextAware for FileConverterHandler {
+    async fn execute_with_context(
+        &self,
+        params: Value,
+        ctx: &ToolCallContext,
+    ) -> Result<String, ToolError> {
+        let cb = ctx.progress_cb.clone();
+        let progress_fn = move |msg: &str| {
+            if let Ok(g) = cb.lock() {
+                if let Some(f) = g.as_ref() {
+                    f(msg);
+                }
+            }
+        };
+        let progress: &(dyn Fn(&str) + Send + Sync) = &progress_fn;
+        self.run(params, Some(progress)).await
     }
 }
 
@@ -317,12 +369,12 @@ struct DshEngine {
     program_directory: PathBuf,
 }
 
-/// 定位捆绑引擎。候选（按序）：
+/// 定位引擎。候选（按序）：
 /// 1. `HERMIX_DSH_ENGINE` 环境变量（指向含 `bin/dsoffice.exe` 的包根）；
-/// 2. `<exe 目录>/resources/dsh-engine/package` —— 构建期捆绑（NSIS 与
-///    便携包的 resources 都落在 exe 旁）；
-/// 3. `<exe 目录>/dsh-engine/package` —— 开发期直接放的变体；
-/// 4. `<hermix home>/dsh-engine/package` —— 运行期按需下载的变体。
+/// 2. `<exe 目录>/resources/dsh-engine/package` —— 旧安装包（≤0.1.20）把引擎
+///    打在包里的布局，保留是为了让老用户升级后不必重下；
+/// 3. `<exe 目录>/dsh-engine/package` —— 手工放置的变体；
+/// 4. `<hermix home>/dsh-engine/package` —— 运行期按需下载的正式位置。
 fn locate_dsh_engine() -> Option<DshEngine> {
     let env = std::env::var("HERMIX_DSH_ENGINE").ok();
     locate_dsh_engine_from(
@@ -448,29 +500,71 @@ async fn convert_with_dsh_engine(
     Ok(())
 }
 
-/// Convert Office document to PDF：优先捆绑 dsh 引擎（离线、零用户安装），
+/// 定位引擎；未就位则按需下载（首次约 71MB，之后完全离线）。
+///
+/// 返回 `(engine, 失败原因, 本次是否刚下载)`：下载失败不直接报错——Office→PDF
+/// 还能回退系统 LibreOffice，把原因带给最终报错文案比在这里吞掉更有用。
+/// 第三个值让成功路径能如实告诉用户"这次慢是因为装了一次性引擎"。
+async fn engine_or_fetch(
+    progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+) -> (Option<DshEngine>, Option<String>, bool) {
+    if let Some(engine) = locate_dsh_engine() {
+        return (Some(engine), None, false);
+    }
+    match super::dsh_engine_fetch::ensure_engine(progress).await {
+        Ok((dir, downloaded)) => {
+            tracing::info!(engine = %dir.display(), downloaded, "引擎就位");
+            (locate_dsh_engine(), None, downloaded)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "内置转换引擎按需下载失败");
+            (None, Some(e), false)
+        }
+    }
+}
+
+/// 首次下载引擎时的说明后缀 —— 让"为什么这次等了半分钟"有答案。
+const FIRST_FETCH_NOTE: &str = "（首次使用已下载内置引擎约 71MB，之后离线）";
+
+/// Convert Office document to PDF：优先内置 dsh 引擎（离线、零用户安装），
 /// 回退系统 LibreOffice（保留：保真度历史路径），都没有则给出可行动的报错。
-async fn convert_office_to_pdf(input: &str, output: &str) -> Result<String, ToolError> {
+async fn convert_office_to_pdf(
+    input: &str,
+    output: &str,
+    progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+) -> Result<String, ToolError> {
     let input_path = Path::new(input);
     let output_path = Path::new(output);
 
-    // 1. 捆绑 dsh 引擎 —— 便携产品的主路径。
-    if let Some(engine) = locate_dsh_engine() {
-        match convert_with_dsh_engine(&engine, input_path, output_path).await {
-            Ok(()) => return Ok(format!("已将 {input} 转换为 PDF（内置 dsh 转换引擎）")),
+    // 1. 内置 dsh 引擎 —— 便携产品的主路径；首次使用时按需下载。
+    let (engine, fetch_error, downloaded) = engine_or_fetch(progress).await;
+    let engine_failure: Option<String> = match engine {
+        Some(engine) => match convert_with_dsh_engine(&engine, input_path, output_path).await {
+            Ok(()) => {
+                return Ok(format!(
+                    "已将 {input} 转换为 PDF（内置 dsh 转换引擎）{}",
+                    if downloaded { FIRST_FETCH_NOTE } else { "" }
+                ))
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "dsh 引擎转换失败，回退系统 LibreOffice");
+                Some(format!("内置引擎转换失败：{e}"))
             }
-        }
-    }
+        },
+        None => Some(format!(
+            "内置引擎不可用：{}",
+            fetch_error.unwrap_or_else(|| "未定位到引擎".into())
+        )),
+    };
 
     // 2. 系统 LibreOffice 回退（用户已自行安装时的保真路径）。
     let output_dir = Path::new(output).parent().unwrap_or(Path::new("."));
 
     let libreoffice = find_libreoffice().map_err(|e| {
         ToolError::ExecutionFailed(format!(
-            "{e}\n内置 dsh 转换引擎也未找到：开发环境请运行 \
-             apps/desktop-tauri/scripts/fetch-dsh-engine.mjs 获取（约 71MB，一次性）。",
+            "{e}\n{}\n首次使用会自动下载约 71MB 引擎（需联网），下载后可离线使用；\
+             也可直接安装 LibreOffice。",
+            engine_failure.unwrap_or_default(),
         ))
     })?;
 
@@ -534,19 +628,28 @@ fn find_libreoffice() -> Result<String, ToolError> {
 /// back a `kind:"paint"` JSON line pointing at a `{w}×{h}×4` raw RGBA tile
 /// file inside the scratch dir; finish with `DONE\n`. For PDF input the
 /// RGBA is straight (pdfium), so pages encode directly via the `image` crate.
-async fn convert_pdf_to_image(input: &str, output: &str, format: &str) -> Result<String, ToolError> {
+/// 返回 `(消息, 本次是否刚下载引擎)` —— 后者用于在结果里说明首调耗时来源。
+async fn convert_pdf_to_image(
+    input: &str,
+    output: &str,
+    format: &str,
+    progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+) -> Result<(String, bool), ToolError> {
     let format = format.to_ascii_lowercase();
     if !matches!(format.as_str(), "png" | "jpg" | "jpeg") {
         return Err(ToolError::InvalidParams(format!(
             "PDF 转图片仅支持 png/jpg，收到 `{format}`"
         )));
     }
-    let Some(engine) = locate_dsh_engine() else {
-        return Err(ToolError::ExecutionFailed(
-            "PDF 转图片需要内置 dsh 转换引擎（未找到）。开发环境请运行 \
-             apps/desktop-tauri/scripts/fetch-dsh-engine.mjs 获取。"
-                .into(),
-        ));
+    // PDF 渲染没有第二条路（libreoffice 不走这条协议）：引擎按需下载，
+    // 失败就直接报原因，不假装成功。
+    let (engine, fetch_error, downloaded) = engine_or_fetch(progress).await;
+    let Some(engine) = engine else {
+        return Err(ToolError::ExecutionFailed(format!(
+            "PDF 转图片需要内置 dsh 转换引擎：{}。首次使用会自动下载约 71MB（需联网），\
+             请检查网络后重试。",
+            fetch_error.unwrap_or_else(|| "未定位到引擎".into())
+        )));
     };
 
     let input_path = Path::new(input).to_path_buf();
@@ -749,12 +852,15 @@ async fn convert_pdf_to_image(input: &str, output: &str, format: &str) -> Result
             .map_err(|e| ToolError::ExecutionFailed(format!("完成确认读取失败: {e}")))?;
 
 
-        Ok(format!(
-            "已将 {input} 渲染为 {} 张 {} 图片（共 {} 字节）：{}",
-            produced.len(),
-            format.to_uppercase(),
-            total_png,
-            produced.join(", ")
+        Ok((
+            format!(
+                "已将 {input} 渲染为 {} 张 {} 图片（共 {} 字节）：{}",
+                produced.len(),
+                format.to_uppercase(),
+                total_png,
+                produced.join(", ")
+            ),
+            downloaded,
         ))
     }
     .await;
@@ -949,9 +1055,10 @@ mod tests {
         assert!(pdf.is_file());
 
         let png = dir.join("render.png");
-        let msg = convert_pdf_to_image(&pdf.to_string_lossy(), &png.to_string_lossy(), "png")
-            .await
-            .expect("pdf→png 渲染失败");
+        let (msg, _downloaded) =
+            convert_pdf_to_image(&pdf.to_string_lossy(), &png.to_string_lossy(), "png", None)
+                .await
+                .expect("pdf→png 渲染失败");
         println!("{msg}");
         // 至少 1 页产物，且文件非空。
         let produced: Vec<_> = std::fs::read_dir(&dir)

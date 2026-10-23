@@ -46,7 +46,7 @@ Never ask the user to "send logs" before you looked yourself.
 | Slow but eventually answers | `LLM API retry in`, `429` | upstream rate-limit / retry backoff |
 | Empty answer, model looks fine | `decide_empty_response`, `empty` | nudge budget exhausted |
 | Tool "not found" / "unavailable" | tool name + `not registered` | tool gated by env (e.g. `HASS_URL`) or not in this toolset |
-| Office/PDF conversion fails | `dsoffice`, `dsh 引擎` | bundled engine missing (run `scripts/fetch-dsh-engine.mjs`) |
+| Office/PDF conversion fails | `dsh 引擎`, `引擎按需下载失败`, `dsoffice` | conversion engine not yet downloaded — first use fetches ~71MB into `<hermix home>/dsh-engine`; a failure there is network or sha512 (per-mirror detail is in the log line) |
 
 ## Configuration knobs that matter
 

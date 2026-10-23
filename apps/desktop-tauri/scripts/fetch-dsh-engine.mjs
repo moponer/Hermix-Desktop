@@ -1,8 +1,10 @@
-// fetch-dsh-engine.mjs — 获取 dsh-libreoffice-kit 裁剪版 LibreOffice 引擎（Office→PDF）。
+// fetch-dsh-engine.mjs — 给**开发/打包机**取一份 dsh-libreoffice-kit 引擎做 smoke 验证。
 //
-// 由 ensure-sidecar.mjs 调起（构建期捆绑）：下载 @deepseek-ai/libreoffice-kit-win32-x64
-// 引擎包 → sha512 校验 → 解压到 src-tauri/resources/dsh-engine/package/ → 随 NSIS
-// 与便携包分发，运行期完全离线，不探测/不要求用户安装 LibreOffice。
+// 产品的引擎获取在运行期：首次 Office→PDF / PDF→图片时由
+// crates/hermix-tools/src/tools/dsh_engine_fetch.rs 下载到 <hermix home>/dsh-engine。
+// 本脚本**不再由构建链调用**（ensure-sidecar 已摘除），产物落在
+// src-tauri/resources/dsh-engine/package，被 tauri.conf 与 release.sh 显式排除，
+// 不进安装包、不进更新 zip —— 用 HERMIX_DSH_ENGINE 指向它跑 dsh_engine_* 测试。
 //
 // 引擎来源与许可：deepseek-ai/dsh-libreoffice-kit（MPL-2.0），预裁剪 LibreOffice
 // 引擎（禁 Java/Python/Base/安装器等，保留 Writer/Calc/Impress + PDF 导出），
