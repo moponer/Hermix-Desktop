@@ -205,6 +205,23 @@ function todoIcon(status: string): string {
  * `GET {relay}/api/model/list` 必然 404，模型清单因此永远是空的。
  * 桌面收到后会回推一份新清单（`model.list`），这里不必自己改本地状态。
  */
+/**
+ * 把离线存档整段交给阿黎：她在电脑上接手安排后续动作。
+ * 这正是「离线模式」存在的意义——临时沟通存档，回来后一键移交。
+ */
+async function sendTranscriptToAli() {
+  const lines = messages.value
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => `${m.role === 'user' ? '我' : '模型'}：${m.text}`)
+  if (!lines.length) return
+  const body = `以下是我在电脑离线时与模型的对话存档，请你接手：安排后续任务，需要我确认的单独列出来。\n\n${lines.join('\n')}`
+  const ok = await session?.sendToTwin(body)
+  uni.showToast({
+    title: ok ? '已交给阿黎（在电脑上执行）' : '没连上电脑，连上后再发',
+    icon: 'none',
+  })
+}
+
 async function onSelectModel(model: string): Promise<void> {
   const ok = await session?.selectModel(model)
   if (!ok) {
@@ -763,6 +780,12 @@ onUnmounted(() => {
     <view v-else-if="chat.turnActive" class="hm-notice notice-line"><text>还在想 · 已运行 {{ fmtDur(elapsed) }}</text></view>
     <view v-if="chat.lastError" class="hm-notice err notice-line"><text>{{ chat.lastError }}</text></view>
     <view v-if="modelPushOff" class="hm-notice notice-line"><text>电脑端未启用模型配置推送 · 本地对话不可用</text></view>
+    <!-- 离线存档的出口：一键交给阿黎（她在电脑上接手安排）。 -->
+    <view
+      v-if="offline && messages.length && paired"
+      class="hm-notice notice-line"
+      @tap="sendTranscriptToAli"
+    ><text>把这段离线记录发给阿黎 →</text></view>
 
     <view id="tail" class="tail" />
 

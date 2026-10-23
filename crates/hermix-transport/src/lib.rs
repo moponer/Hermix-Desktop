@@ -1068,6 +1068,14 @@ pub enum WsClientMessage {
         /// into `skills_system_prompt` on top of any server-enabled skills.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         skills: Option<Vec<String>>,
+        /// 帧内投递目标：手机在**自己的设备通道**上点名把这一轮投给谁。
+        ///
+        /// 信封 `session_id` 恒为设备会话（E2EE 对端公钥由 sid 前缀推导、
+        /// 归属闸门按它判），所以目标只能写在**密封载荷里**——relay 依旧
+        /// 读不到内容。目前只有一个合法值：`twin`（阿黎）。旧客户端不带
+        /// 该字段 → `None`，行为不变。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
     },
     /// 手机端切换默认模型（`provider:model`）。
     ///

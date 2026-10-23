@@ -328,6 +328,18 @@ export class ChatSession {
   }
 
   /**
+   * 把一段文字投给**阿黎**（`twin:ali`，在电脑上执行）。
+   *
+   * 走的还是自己的设备通道（信封 sid 不变，E2EE 不动），目标写在密封载荷里
+   * （`target: 'twin'`）——PC 收到后把这一轮投到阿黎的会话，回复经设备通道
+   * 密封回来。典型用途：把离线模式的存档整段交给她接手安排。
+   */
+  async sendToTwin(text: string): Promise<boolean> {
+    if (!text.trim()) return false
+    return this.sendPlain({ type: 'send', text, target: 'twin' })
+  }
+
+  /**
    * 切换默认模型（`provider:model`）。
    *
    * 走**和聊天同一条密封上行**，不走 REST：中继是只路由的字节管道，没有

@@ -3267,11 +3267,22 @@ async fn handle_inbound_frame(
                 image,
                 image_mime_type,
                 skills,
+                target,
             } => {
+            // 帧内 target：手机在自己的设备通道上点名把这一轮投给谁。
+            // 信封 session_id 恒为设备会话（E2EE 对端公钥由 sid 前缀推导、
+            // 归属闸门按它判），target 在**密封载荷里**——relay 读不到。
+            // 目前只有 `twin`（阿黎）一个合法值；乱写的 target 当作没带，
+            // 按原会话跑（fail-open 到安全默认，而不是凭空造一条会话）。
+            let agent_session = match target.as_deref() {
+                Some("twin") => crate::mobile::TWIN_SESSION_ID.to_string(),
+                _ => session_id.to_string(),
+            };
             // 阿黎（twin:ali）：这条会话固定用**她的人格**——桌面 TwinView 与
             // 手机端两个入口看到的是同一个她。请求显式带人格时尊重请求，
             // 兜底只发生在「没指定」的情况（手机端目前从不带）。
-            let personality = if session_id == crate::mobile::TWIN_SESSION_ID && personality.is_none()
+            let personality = if agent_session == crate::mobile::TWIN_SESSION_ID
+                && personality.is_none()
             {
                 Some(crate::mobile::TWIN_PERSONALITY.to_string())
             } else {
@@ -3311,7 +3322,7 @@ async fn handle_inbound_frame(
                     &mut *sender,
                     &mut *receiver,
                     &state,
-                    &session_id,
+                    &agent_session,
                     &trace_id,
                     request,
                 )
