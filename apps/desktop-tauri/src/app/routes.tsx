@@ -3,7 +3,6 @@
 // 的映射集中为一张路由表，App 主区只需调用 renderRoutes 即可。
 import { lazy, Suspense, type ReactNode } from "react";
 import type { NavPage, Session } from "../types";
-import type { StreamErrorKind } from "./streamEvents";
 import { Skeleton, SkeletonCard } from "../components/ui";
 
 // 重视图（ECharts / 大表单 / 全量列表）懒加载：首次进入才求值模块并挂载，
@@ -33,6 +32,46 @@ export interface TwinSendOptions {
   systemPrompt?: string;
 }
 
+/** 她这一轮在干什么 —— 她那页用它就地渲染，不依赖宿主会话表。 */
+export interface TwinTurn {
+  user: string;
+  reply: string;
+  /** 当前正在跑的工具名（工具调用期间有值），给一行动态提示用。 */
+  activity: string | null;
+  error: string | null;
+}
+
+/** 等她拍板的一件事：审批（工具）或澄清（问题）。 */
+export interface TwinPendingDecision {
+  id: string;
+  kind: "approval" | "clarify";
+  tool?: string;
+  reason?: string | null;
+  question?: string;
+  choices?: string[];
+}
+
+/**
+ * 「助手阿黎」页的独立发送器。
+ *
+ * 她有自己的 `useStreamChat` 实例（挂在 App 顶层，切页不断流），因此她的
+ * 一轮执行与任何对话的一轮执行**完全并行**：两边各自一条 `stream:<sid>`
+ * 通道、各自一套发送状态，互不禁用、互不串台。
+ */
+export interface TwinInlineApi {
+  /** 投递这一轮；false = 没发出去（错误在 `turn.error`）。 */
+  send: (text: string, opts: TwinSendOptions) => Promise<boolean>;
+  /** 停止当前这一轮。 */
+  stop: () => void;
+  streaming: boolean;
+  /** 本轮（内存态）—— 与落库历史分开，避免流式期间被轮询覆盖。 */
+  turn: TwinTurn | null;
+  /** 未决的审批 / 澄清，按到达顺序。 */
+  pending: TwinPendingDecision[];
+  /** 结算一件待决事项：审批给 decision，澄清把选项放进 answer。 */
+  resolve: (id: string, decision: "approved" | "denied", answer?: string) => void;
+}
+
 /** 渲染各非 chat 页面所需的 App 级依赖。chat 页面 props 复杂，
  *  由 App 预先渲染为 `chatNode` 元素传入，保持逻辑零改写。 */
 export interface RouteContext {
@@ -41,19 +80,8 @@ export interface RouteContext {
   handleSelectSession: (id: string) => void;
   /** 只切会话，不动当前页面 —— 工作台页面用这个。 */
   selectSessionOnly: (id: string) => void;
-  /**
-   * 「助手阿黎」页的内联对话：把这一轮投到 `twin:ali`。
-   *
-   * 复用 App 的完整发送链路（审批 / 澄清 / 工具时间线），只是不切
-   * activeSessionId、不跳页；返回 false 表示这一轮没发出去。
-   */
-  sendToTwin: (text: string, opts: TwinSendOptions) => Promise<boolean>;
-  /** `twin:ali` 这一轮的错误（由 App 的 streamErrors 按会话取）。 */
-  twinStreamError: { message: string; detail?: string; kind?: StreamErrorKind } | null;
-  /** `twin:ali` 正在流式 —— 她那页显示"正在执行"而不是空白。 */
-  twinStreaming: boolean;
-  /** 另一条会话正在流式：内联口禁用（发送器是进程级单流）。 */
-  anotherSessionStreaming: boolean;
+  /** 「助手阿黎」页的内联对话（独立发送器，见 `TwinInlineApi`）。 */
+  twin: TwinInlineApi;
   /**
    * 把会话登记进宿主的会话表，已存在的跳过。
    *
@@ -78,18 +106,15 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
     case "chat":
       return ctx.chatNode;
     case "twin":
-      // 阿黎吃宿主已有的会话表（避免再拉一次全量）。输入口直接投到
-      // `twin:ali`：她说的话真的跑在电脑上（工具 / 工作区 / 派 agent 全在），
-      // 回复就地显示在她自己页面里 —— 不再把用户踢去对话页。
+      // 阿黎吃宿主已有的会话表（避免再拉一次全量）；对话走她自己的发送器。
+      // `twin:ali` 在服务端是独立会话，这里也有独立的流 —— 她与任何对话并行，
+      // 回复就地显示，审批/澄清也在她自己页面处理。
       return (
         <Suspense fallback={<RouteLoading />}>
           <TwinView
             sessions={ctx.sessions}
             onOpenChat={() => ctx.handleSelectSession(TWIN_SESSION_ID)}
-            onSend={ctx.sendToTwin}
-            streamError={ctx.twinStreamError}
-            streaming={ctx.twinStreaming}
-            anotherSessionStreaming={ctx.anotherSessionStreaming}
+            twin={ctx.twin}
           />
         </Suspense>
       );

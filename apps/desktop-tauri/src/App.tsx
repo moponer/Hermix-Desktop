@@ -12,7 +12,15 @@ import { TitleBar } from "./components/TitleBar";
 import { SessionPickerDialog } from "./components/SessionPickerDialog";
 import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
-import { renderRoutes, TWIN_SESSION_ID, type RouteContext, type TwinSendOptions } from "./app/routes";
+import {
+  renderRoutes,
+  TWIN_SESSION_ID,
+  type RouteContext,
+  type TwinInlineApi,
+  type TwinPendingDecision,
+  type TwinSendOptions,
+  type TwinTurn,
+} from "./app/routes";
 import { SettingsDialog, type ConfigCategory } from "./components/SettingsDialog";
 
 import { useAppBootstrap } from "./app/useAppBootstrap";
@@ -573,6 +581,140 @@ setPage("chat");
   // 改由 ChatView 通过 StreamChatContext 直接读，不再逐层透传。
   const { streaming, streamingSessionId, setContextUsage, setUsageSnapshot, setStreamingStatus: setStreamingStatusImpl, send: sendStream, cancel: cancelStream, wsSendRaw } = streamChatApi;
 
+  // ── 阿黎的独立发送器 ────────────────────────────────────────────────
+  // 第二个 `useStreamChat` 实例，会话固定 `twin:ali`。为什么单开一个：
+  // 一个实例的发送状态（pendingResolveRef / streamingSessionIdRef /
+  // activeSendIdRef）是单例槽，共用一个实例就等于「她与任何对话互斥」。
+  // 传输层是按 `stream:<sessionId>` 分频道的，两个实例天然并行。
+  //
+  // 必须挂在这里（App 顶层）而不是 TwinView 内部：她跑了长任务时用户切去
+  // 别的页，TwinView 会卸载 —— 实例留在顶层，流不会断，回来接着看。
+  const twinChat = useStreamChat(TWIN_SESSION_ID);
+  const [twinTurn, setTwinTurn] = useState<TwinTurn | null>(null);
+  const [twinPending, setTwinPending] = useState<TwinPendingDecision[]>([]);
+  const twinApprovalResolvers = useRef(
+    new Map<string, (v: { decision: "approved" | "denied"; remember?: boolean }) => void>(),
+  );
+  const twinClarifyResolvers = useRef(new Map<string, (v: { answer: string }) => void>());
+
+  const stopTwin = useCallback(() => {
+    twinChat.cancel(TWIN_SESSION_ID);
+  }, [twinChat]);
+
+  /** 结算她的一件待决事项。审批与澄清各自一份 resolver，按 id 找。 */
+  const resolveTwin = useCallback(
+    (id: string, decision: "approved" | "denied", answer?: string) => {
+      const approval = twinApprovalResolvers.current.get(id);
+      if (approval) {
+        approval({ decision });
+        twinApprovalResolvers.current.delete(id);
+      } else {
+        const clarify = twinClarifyResolvers.current.get(id);
+        if (clarify) {
+          clarify({ answer: answer ?? "" });
+          twinClarifyResolvers.current.delete(id);
+        }
+      }
+      setTwinPending((prev) => prev.filter((p) => p.id !== id));
+    },
+    [],
+  );
+
+  const sendToTwin = useCallback(
+    async (text: string, opts: TwinSendOptions): Promise<boolean> => {
+      if (twinChat.streaming) return false;
+      setTwinPending([]);
+      setTwinTurn({ user: text, reply: "", activity: null, error: null });
+      try {
+        await twinChat.send(
+          TWIN_SESSION_ID,
+          text,
+          {
+            onChunk: (chunk) =>
+              setTwinTurn((t) => (t ? { ...t, reply: t.reply + chunk } : t)),
+            onToolStart: (info) =>
+              setTwinTurn((t) => (t ? { ...t, activity: info.tool } : t)),
+            onToolComplete: () =>
+              setTwinTurn((t) => (t ? { ...t, activity: null } : t)),
+            onApprovalRequest: (req) =>
+              new Promise<{ decision: "approved" | "denied"; remember?: boolean }>((resolve) => {
+                twinApprovalResolvers.current.set(req.requestId, resolve);
+                setTwinPending((prev) => [
+                  ...prev,
+                  {
+                    id: req.requestId,
+                    kind: "approval",
+                    tool: req.tool,
+                    reason: req.reason ?? null,
+                  },
+                ]);
+              }),
+            // 批量审批：一次点击结算整批，与后端「一个决策应用到所有项」一致。
+            onApprovalBatchRequest: (req) =>
+              new Promise<{ decision: "approved" | "denied"; remember?: boolean }>((resolve) => {
+                twinApprovalResolvers.current.set(req.batchId, resolve);
+                setTwinPending((prev) => [
+                  ...prev,
+                  {
+                    id: req.batchId,
+                    kind: "approval",
+                    tool: req.items.map((i) => i.tool).join(" / "),
+                    reason: null,
+                  },
+                ]);
+              }),
+            onClarifyRequest: (req) =>
+              new Promise<{ answer: string }>((resolve) => {
+                twinClarifyResolvers.current.set(req.requestId, resolve);
+                setTwinPending((prev) => [
+                  ...prev,
+                  {
+                    id: req.requestId,
+                    kind: "clarify",
+                    question: req.question,
+                    choices: req.choices ?? [],
+                  },
+                ]);
+              }),
+            onDone: (full) => {
+              setTwinTurn((t) => (t ? { ...t, reply: full || t.reply, activity: null } : t));
+              setTwinPending([]);
+            },
+            onError: (msg) => {
+              setTwinTurn((t) => (t ? { ...t, error: msg, activity: null } : t));
+              setTwinPending([]);
+            },
+          },
+          {
+            // 人格固定 `ali`：桌面与手机两个入口看到的是同一个她。
+            personality: "ali",
+            permissionLevel: opts.permissionLevel,
+            ...(opts.systemPrompt ? { systemPromptOverride: opts.systemPrompt } : {}),
+          },
+        );
+        return true;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setTwinTurn((t) => (t ? { ...t, error: msg, activity: null } : t));
+        setTwinPending([]);
+        return false;
+      }
+    },
+    [twinChat],
+  );
+
+  const twinApi: TwinInlineApi = useMemo(
+    () => ({
+      send: sendToTwin,
+      stop: stopTwin,
+      streaming: twinChat.streaming,
+      turn: twinTurn,
+      pending: twinPending,
+      resolve: resolveTwin,
+    }),
+    [sendToTwin, stopTwin, twinChat.streaming, twinTurn, twinPending, resolveTwin],
+  );
+
   // Session message eviction — clear the *previous* session's
   // messages array (keeping message_count) when switching away. This solves
   // the "A→B smooth, B→A laggy" asymmetry: when A has many messages, React
@@ -719,9 +861,10 @@ setPage("chat");
   useEffect(() => {
     setKeepAwake(
       keepAwakeEnabled &&
-        (streamingSessionId !== null || activeRuns > 0 || mobileActive),
+        // 她的独立发送器也算「有活在跑」——否则长任务做到一半电脑就睡了。
+        (streamingSessionId !== null || twinApi.streaming || activeRuns > 0 || mobileActive),
     );
-  }, [keepAwakeEnabled, streamingSessionId, activeRuns, mobileActive]);
+  }, [keepAwakeEnabled, streamingSessionId, twinApi.streaming, activeRuns, mobileActive]);
 
   // 上报「人在不在电脑前」。审批的超时按「可送达时间」计费，靠的就是这个信号：
   // 人不在时倒计时暂停，回来还能批，不必让那一轮任务白跑。
@@ -1401,20 +1544,24 @@ setPage("chat");
 
   // ── 托盘联动 ────────────────────────────────────────────────────
   // 流式会话数上报 → 托盘菜单「正在执行的任务」项的文本/可用态。托盘被
-  // 设置页关掉时后端 no-op，这里不用关心托盘开关。流式计数只有本窗视角
-  // （streamingSessionId），后端定时任务不在此列——托盘项作为入口已经够用。
+  // 设置页关掉时后端 no-op，这里不用关心托盘开关。两个发送器各自独立，
+  // 计数要把它们加起来 —— 她那一轮也是"正在执行的任务"。
   useEffect(() => {
-    setTrayTaskCount(streamingSessionId ? 1 : 0).catch(() => {});
-  }, [streamingSessionId]);
+    setTrayTaskCount((streamingSessionId ? 1 : 0) + (twinApi.streaming ? 1 : 0)).catch(() => {});
+  }, [streamingSessionId, twinApi.streaming]);
 
   // 托盘菜单「正在执行的任务」：Rust 已唤起主窗，这里负责跳到流式会话；
   // 没有在跑的就地回对话页。id 走 ref，避免每轮流式起停都重挂监听。
   const streamingIdRef = useRef<string | null>(null);
   useEffect(() => { streamingIdRef.current = streamingSessionId; }, [streamingSessionId]);
+  const twinStreamingRef = useRef(false);
+  useEffect(() => { twinStreamingRef.current = twinApi.streaming; }, [twinApi.streaming]);
   useEffect(() => {
     const un = listen("hermix:tray-open-tasks", () => {
       const id = streamingIdRef.current;
       if (id) void handleSelectSession(id);
+      // 只有她在跑：回她自己的页面（那里能看到本轮增量与待审批项）。
+      else if (twinStreamingRef.current) setPage("twin");
       else setPage("chat");
     });
     return () => { void un.then((f) => f()).catch(() => {}); };
@@ -1986,33 +2133,9 @@ setPage("chat");
     _projectId?: string,
     overrides?: import("./hooks/useStreamChat").ChatOverrides,
     attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[]; attachedFiles?: QueuedFile[] },
-    /**
-     * 投递到指定会话，而不是当前激活会话。「助手阿黎」页的内联对话用它：
-     * 这一轮仍走同一条完整链路（审批 / 澄清 / 工具时间线全在），但**不切
-     * activeSessionId、不跳页** —— 消息与回复都落在 `twin:ali` 这一条会话上，
-     * 她那页就地渲染，用户不必离开。
-     */
-    targetSessionId?: string,
   ) => {
-    let sessionId = targetSessionId ?? activeSessionId;
-    if (targetSessionId) {
-      // 宿主会话表里没有这条会话时先补一条占位：下面的乐观插入（flushSync）
-      // 与所有流式回调都按 `sessionId` 匹配，缺了它回复会"发出去了但界面不显示"。
-      // 后端 `persist_session` 会在这一轮结束后把真实行落库（INSERT … ON CONFLICT）。
-      if (!sessionsRef.current.some((s) => s.id === targetSessionId)) {
-        const now = new Date().toISOString();
-        const placeholder: Session = {
-          id: targetSessionId,
-          title: "助手阿黎",
-          messages: [],
-          created_at: now,
-          updated_at: now,
-        };
-        setSessions((prev) => (prev.some((s) => s.id === targetSessionId) ? prev : [placeholder, ...prev]));
-        // 同步镜像：本函数后面几处用 sessionsRef 判空/取当前会话，不等下一轮 render。
-        sessionsRef.current = [placeholder, ...sessionsRef.current.filter((s) => s.id !== targetSessionId)];
-      }
-    } else if (sessionId && !sessions.some((s) => s.id === sessionId)) { sessionId = null; setActiveSessionId(null); }
+    let sessionId = activeSessionId;
+    if (sessionId && !sessions.some((s) => s.id === sessionId)) { sessionId = null; setActiveSessionId(null); }
     // Clear any previous stream error for the *current* session — the
     // user is starting a new turn, so the old error is stale. If this
     // turn also fails the error will be re-set by the onError callback
@@ -2120,8 +2243,7 @@ streamPhaseRef.current = null;
     // a session-list reload (e.g. on next app launch) keeps the title the
     // user just gave it via their first message — instead of resetting to
     // the placeholder "新建对话" the createSession() call seeded.
-    // 指定会话（twin:ali）不改标题：她的名字是这个入口的标识，不是对话摘要。
-    const currentSession = targetSessionId ? undefined : sessions.find((s) => s.id === sessionId);
+    const currentSession = sessions.find((s) => s.id === sessionId);
     if (currentSession) {
       const newTitle = computeAutoTitle(currentSession, content);
       if (newTitle !== currentSession.title) {
@@ -2705,9 +2827,7 @@ streamPhaseRef.current = null;
               };
             }));
             currentAssistantIdRef.current = null;
-            // 指定会话（twin:ali）的错误也要落到它自己的槽位：TwinView 读它
-            // 显示在输入口上方，否则她那页只会看到"没反应"。
-            if (sessionId === activeSessionId || sessionId === targetSessionId) {
+            if (sessionId === activeSessionId) {
               // Keep the friendly localized message as the primary
               // text; stash the raw backend error as `detail` so the
               // error card can show it as a collapsible "技术详情".
@@ -3618,7 +3738,7 @@ return {
       // render a synthetic error row if the optimistic assistant
       // placeholder was filtered out (e.g. the WS rejected the
       // handshake before any chunk landed).
-      if (sessionId === activeSessionId || sessionId === targetSessionId) {
+      if (sessionId === activeSessionId) {
         const eMsg = e instanceof Error ? e.message : String(e);
         setStreamError(sessionId, {
           message: localizeStreamError(eMsg),
@@ -3628,31 +3748,6 @@ return {
       return false;
     }
   }, [activeSessionId, sessions, sendStream]);
-
-  /**
-   * 「助手阿黎」页的内联对话：把这一轮投到 `twin:ali`。
-   *
-   * 复用 handleSendMessage 而不是另开一条 WS 发送通道 —— 审批 / 澄清 /
-   * 工具时间线都在那条链路上，自建通道会让需要确认的工具调用在内联页
-   * 静默空等（服务端 600s 后自动拒绝）。
-   */
-  const sendToTwin = useCallback(
-    // 人格固定为 `ali`：这一条会话在桌面与手机两个入口看到的是同一个她。
-    // 不依赖服务端按会话注入 —— 桌面 WS 帧走的是另一条分支，显式带更稳。
-    (text: string, opts: TwinSendOptions) =>
-      handleSendMessage(
-        text,
-        undefined,
-        {
-          personality: "ali",
-          permissionLevel: opts.permissionLevel,
-          ...(opts.systemPrompt ? { systemPromptOverride: opts.systemPrompt } : {}),
-        },
-        undefined,
-        TWIN_SESSION_ID,
-      ),
-    [handleSendMessage],
-  );
 
   // pop a queued item out of turn and dispatch it
   // immediately. Defined here (after `handleSendMessage`) so the
@@ -4032,13 +4127,7 @@ return {
     startCreateWorkflowFlow,
     chatNode: chatViewNode,
     activeSessionId,
-    sendToTwin,
-    twinStreamError: streamErrors.get(TWIN_SESSION_ID) ?? null,
-    twinStreaming: streamingSessionId === TWIN_SESSION_ID,
-    // 单流约束：useStreamChat 的发送状态是进程级的（pendingResolveRef 等
-    // 单例），另一条会话正在跑时再发会把两边的回调打乱。内联口据此禁用并
-    // 说明原因，而不是静默串台。
-    anotherSessionStreaming: streamingSessionId !== null && streamingSessionId !== TWIN_SESSION_ID,
+    twin: twinApi,
     // 运行工作流后的跳转：落到新对话空屏，不落在可能早已过期的激活会话
     // （如工作台会话）。跑起来的会话出现在侧栏，用户自行点入。
     openChat: () => {

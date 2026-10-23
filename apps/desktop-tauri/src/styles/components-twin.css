@@ -1144,20 +1144,39 @@
   font-style: italic;
 }
 
-/* 等她拍板：一行说明 + 出口按钮。放在输入口上方，视线必经。 */
+/* 等她拍板：说明 + 就地按钮。放在输入口上方，视线必经。
+   `space-between` + `wrap`：说明可能很长（工具名 + 理由），按钮不能被挤掉。 */
 .twin-need {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   margin: 8px var(--space-5) 0;
   padding: 8px 12px;
   background: var(--color-warning-soft);
   border-radius: var(--radius-md);
 }
 .twin-need__text {
+  flex: 1;
+  min-width: 0;
   font-size: var(--text-ui);
   color: var(--color-text-warning);
+}
+.twin-need__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* 无选项澄清的就地回答：去描边输入条，靠面差与按钮区分。 */
+.twin-need__input {
+  min-width: 140px;
+  padding: 4px 8px;
+  background: var(--color-bg-primary);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-size: var(--text-ui);
 }
 .twin-error--inline {
   margin: 8px var(--space-5) 0;
