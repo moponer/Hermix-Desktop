@@ -6,7 +6,9 @@ import {
   type AnalyticsResponse,
   type AnalyticsDebugResponse,
 } from "../api";
-import { EmptyState, PageHeader, SkeletonCard } from "./ui";
+import { EmptyState, PageHeader, SkeletonCard, IconTile } from "./ui";
+import { cx } from "../lib/cx";
+import { type IconTone } from "../lib/categoryTone";
 import { LOADING, CLOSE } from "./strings";
 
 // Cache hit rate proxy: of all prompt tokens (freshly-written `input`
@@ -39,7 +41,11 @@ function effectiveHitRate(
 }
 
 function hitRateColor(pct: number): string {
-  return pct >= 80 ? "text-green-400" : pct >= 50 ? "text-amber-400" : "text-zinc-400";
+  /* 2026-10-23：green-400 / amber-400 / zinc-400 → 语义**文字安全档**
+     （text-text-success / warning / muted）。原来的 Tailwind 原色在浅色纸面
+     上只有 ~1.8:1（远低于 4.5:1），命中率那栏几乎读不出来；语义文字档是
+     "保持色相、只压暗"解出来的，三套主题都 ≥4.5:1。 */
+  return pct >= 80 ? "text-text-success" : pct >= 50 ? "text-text-warning" : "text-text-muted";
 }
 
 function hitRateLabel(pct: number | null): string {
@@ -226,40 +232,41 @@ export function AnalyticsView() {
       {/* Totals Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <StatCard
-          icon={<Cpu className="icon-lg" />}
+          icon={<Cpu className="icon-md" />}
+          tone="violet"
           label="输入 Token"
           value={formatNumber(totals.total_input)}
-          color="text-zinc-400"
         />
         <StatCard
-          icon={<Zap className="icon-lg" />}
+          icon={<Zap className="icon-md" />}
+          tone="blue"
           label="输出 Token"
           value={formatNumber(totals.total_output)}
-          color="text-green-400"
         />
         <StatCard
-          icon={<TrendingUp className="icon-lg" />}
+          icon={<TrendingUp className="icon-md" />}
+          tone="slate"
           label="会话数"
           value={totals.total_sessions.toString()}
-          color="text-amber-400"
         />
         <StatCard
-          icon={<DollarSign className="icon-lg" />}
+          icon={<DollarSign className="icon-md" />}
+          tone="amber"
           label="预估费用"
           value={formatCost(totals.total_estimated_cost)}
-          color="text-yellow-400"
         />
         <StatCard
-          icon={<Database className="icon-lg" />}
+          icon={<Database className="icon-md" />}
+          tone="green"
           label="缓存命中 Token"
           value={formatNumber(totals.total_cache_read)}
-          color="text-green-400"
         />
         <StatCard
-          icon={<Percent className="icon-lg" />}
+          icon={<Percent className="icon-md" />}
+          tone="cyan"
           label="缓存命中率"
           value={hitRateLabel(totalsHit)}
-          color={totalsHit == null ? "text-text-faint" : hitRateColor(totalsHit)}
+          valueClass={totalsHit == null ? "text-text-faint" : hitRateColor(totalsHit)}
         />
       </div>
 
@@ -681,20 +688,24 @@ function StatCard({
   icon,
   label,
   value,
-  color,
+  tone,
+  valueClass,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
-  color: string;
+  /** 图标块的身份色相。 */
+  tone: IconTone;
+  /** 数值文字的额外类（命中率那栏按好坏上语义色）。 */
+  valueClass?: string;
 }) {
   return (
     <div className="bg-bg-secondary rounded-xl p-3">
       <div className="flex items-center gap-2 mb-1">
-        <span className={color}>{icon}</span>
-        <span className="text-xs text-text-faint">{label}</span>
+        <IconTile icon={icon} tone={tone} size="sm" />
+        <span className="text-xs text-text-muted">{label}</span>
       </div>
-      <div className="text-lg font-semibold">{value}</div>
+      <div className={cx("text-lg font-semibold", valueClass)}>{value}</div>
     </div>
   );
 }

@@ -303,7 +303,13 @@ export function ModelListTab() {
               key={row.id}
               className="flex items-center gap-3 px-3 py-2.5 hover:bg-bg-hover"
             >
-              <ProviderIcon providerId={row.providerId} className="icon-lg shrink-0" />
+              {/* 厂商 logo 放在 28px 中性底块里：全站列表行都是同尺寸的
+                  方块，模型行不能是个 16px 的裸 logo。底保持中性 —— 品牌
+                  logo 自带颜色，铺在同色实底上会互相抵消（"logo 压 logo"），
+                  所以这里用中性底而不是实心品牌底。 */}
+              <span className="cat-icon cat-icon--sm shrink-0">
+                <ProviderIcon providerId={row.providerId} size={16} />
+              </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[length:var(--text-ui)] text-text-primary truncate">{row.modelId}</span>

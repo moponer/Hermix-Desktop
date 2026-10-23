@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Code2, Briefcase, FolderOpen, Copy, Check, BellRing } from "lucide-react";
+import {
+  Code2, Briefcase, FolderOpen, Copy, Check, BellRing,
+  Keyboard, Power, PanelTop, LogOut,
+} from "lucide-react";
 
 import { useDomainMode } from "../../hooks/useExpert";
 import { useSendKey } from "../../hooks/useSendKey";
@@ -9,7 +12,7 @@ import {
   getAutostart, setAutostart, getDesktopSettings, syncTray, setCloseAction,
   type DesktopSettings,
 } from "../../desktopBridge";
-import { SettingsGroup, SettingsRow, SegmentedControl, Switch } from "../ui";
+import { SettingsGroup, SettingsRow, SegmentedControl, Switch, IconTile } from "../ui";
 import { ChoiceCard } from "./ChoiceCard";
 import { toastError } from "../../hooks/useToast";
 import { COPIED, COPY_FAILED, failure } from "../strings";
@@ -50,7 +53,7 @@ function ModeCards() {
           label="编程开发"
           description="注入代码纪律，grep / 搜索类工具加权。"
           icon={<Code2 className="icon-lg" />}
-          tone="info"
+          tone="blue"
           selected={mode === "code"}
           onSelect={() => setMode("code")}
         />
@@ -58,7 +61,7 @@ function ModeCards() {
           label="日常办公"
           description="由后端按每轮对话内容自动判断，不固定加权。"
           icon={<Briefcase className="icon-lg" />}
-          tone="success"
+          tone="green"
           selected={mode === "auto"}
           onSelect={() => setMode("auto")}
         />
@@ -77,6 +80,7 @@ function SendKeyRow() {
   return (
     <SettingsGroup title="输入">
       <SettingsRow
+        icon={<IconTile icon={<Keyboard className="icon-md" />} tone="amber" />}
         title="发送快捷键"
         description={
           value === "enter"
@@ -169,6 +173,7 @@ function SystemGroup() {
       description="这些项会改动本机状态，改动立即生效，无需重启。"
     >
       <SettingsRow
+        icon={<IconTile icon={<Power className="icon-md" />} tone="slate" />}
         title="开机自启动"
         description={
           autostart === null
@@ -185,6 +190,7 @@ function SystemGroup() {
         }
       />
       <SettingsRow
+        icon={<IconTile icon={<PanelTop className="icon-md" />} tone="slate" />}
         title="显示在菜单栏"
         description="在系统托盘常驻图标：左键单击唤起主窗口，右键菜单有任务、更新与退出。"
         control={
@@ -197,6 +203,7 @@ function SystemGroup() {
         }
       />
       <SettingsRow
+        icon={<IconTile icon={<LogOut className="icon-md" />} tone="slate" />}
         title="关闭按钮行为"
         description={
           settings?.tray
@@ -216,6 +223,7 @@ function SystemGroup() {
         }
       />
       <SettingsRow
+        icon={<IconTile icon={<BellRing className="icon-md" />} tone="amber" />}
         title="回复完成时通知"
         description="一轮回复结束、且窗口当前没有焦点时弹系统通知。"
         control={
@@ -271,6 +279,7 @@ function DataDirGroup() {
       description="配置、会话、日志与备份都落在这里。"
     >
       <SettingsRow
+        icon={<IconTile icon={<FolderOpen className="icon-md" />} tone="green" />}
         title="数据目录"
         description={
           dir ? (

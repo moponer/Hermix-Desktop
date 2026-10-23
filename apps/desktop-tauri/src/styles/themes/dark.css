@@ -32,6 +32,12 @@
   --color-bg-quaternary: #313131;
   --color-bg-elevated: #262626;     /* 浮·弹层 / 菜单 */
 
+  /* 选中底 / 悬停轻档（2026-10-23 补）：这两个键在 tokens.css 的 @theme
+     契约里，主题必须逐个显式声明（check-theme-tokens 的 contract 规则）。
+     取值与 tokens.css 一致 —— 它们由 accent 现算，不随主题改语义。 */
+  --color-bg-selected: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  --color-bg-hover-subtle: color-mix(in srgb, var(--color-accent) 7%, transparent);
+
   /* Code / chat */
   --color-bg-code: #1a1a1a;
   --color-bg-code-header: #202020;
@@ -108,6 +114,11 @@
   --color-tone-orange: #f09a5c;
   --color-tone-rose: #ef8ba0;
   --color-tone-violet: #a992ee;
+
+  /* 实心色块上的字形前景色：深色主题的 tone 是"暗底提亮档"，
+     白字压上去只有 2.0~2.6:1（不达 WCAG 1.4.11 的 3:1），
+     改用深墨 = 6.99~9.14:1。浅色主题的取值在 tokens.css。 */
+  --color-on-tone: #12151c;
 
   /* Tailwind 原生色槽 → 语义令牌重定向（保持，跟随本主题四色组） */
   --color-red-200:      color-mix(in srgb, var(--color-error) 65%, transparent);

@@ -112,7 +112,10 @@ export function toneForCategory(category?: string | null): IconTone {
   return "slate";
 }
 
-/** 给 className 用：`cat-icon--blue`。 */
-export function toneClass(tone: IconTone, prefix: "cat-icon" | "cat-ink" = "cat-icon"): string {
+/** 给 className 用：`cat-icon--blue` / `cat-tile--blue` / `cat-ink--blue`。 */
+export function toneClass(
+  tone: IconTone,
+  prefix: "cat-icon" | "cat-tile" | "cat-ink" = "cat-icon",
+): string {
   return `${prefix}--${tone}`;
 }

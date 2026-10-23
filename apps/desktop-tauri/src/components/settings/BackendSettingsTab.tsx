@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import { RefreshCw, Save } from "lucide-react";
+import { RefreshCw, Save, Server, Activity } from "lucide-react";
 import * as api from "../../api";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import { useCurrentModel } from "../../hooks/useCurrentModel";
 import { toastError } from "../../hooks/useToast";
-import { Card, Input, Switch } from "../ui";
+import { Card, IconTile, Input, Switch } from "../ui";
 import { type PythonProbeResult } from "./settingsUtils";
 import { LOADING, SAVE, SAVE_FAILED, SAVING, failure } from "../strings";
 
@@ -44,7 +44,10 @@ export function BackendTab() {
   return (
     <div className="space-y-6">
       <Card>
-        <div className="text-sm font-medium text-text-primary mb-2">后端状态</div>
+        <div className="flex items-center gap-2.5 mb-2">
+          <IconTile icon={<Server className="icon-md" />} tone="blue" />
+          <div className="text-sm font-medium text-text-primary">后端状态</div>
+        </div>
         <div className="flex items-center gap-2">
           <div className={`w-2 h-2 rounded-full ${health ? "bg-green-400" : health === false ? "bg-red-400" : "bg-yellow-400"}`} />
           <span className="text-xs text-text-muted">{health === null ? LOADING : health ? "运行正常" : "未连接"}</span>
@@ -57,18 +60,21 @@ export function BackendTab() {
         </button>
       </Card>
       <Card>
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-sm font-medium text-text-primary">TickLoop 后台心跳</div>
-            <p className="text-xs text-text-muted mt-0.5">
-              启用后 AI 助手保持后台活跃状态，支持持续监控与定时任务。
-            </p>
-            {tickLoopRunning && (
-              <span className="inline-flex items-center gap-1 mt-1 text-[length:var(--text-meta)] text-green-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                运行中
-              </span>
-            )}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <IconTile icon={<Activity className="icon-md" />} tone="cyan" />
+            <div>
+              <div className="text-sm font-medium text-text-primary">TickLoop 后台心跳</div>
+              <p className="text-xs text-text-muted mt-0.5">
+                启用后 AI 助手保持后台活跃状态，支持持续监控与定时任务。
+              </p>
+              {tickLoopRunning && (
+                <span className="inline-flex items-center gap-1 mt-1 text-[length:var(--text-meta)] text-green-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                  运行中
+                </span>
+              )}
+            </div>
           </div>
           <Switch
             checked={tickLoopRunning}

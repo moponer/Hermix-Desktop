@@ -57,22 +57,66 @@
 /* ── 裸图标（只染色，不加底）───────────────────────────────────── */
 .cat-ink { --cat-tone: var(--color-tone-slate); color: var(--cat-tone); }
 
+/* ── 实心色块（底=身份色，字=反色）──────────────────────────────
+   2026-10-23 新增，与 .cat-icon 并存。
+
+   两者的差别只在**底与字谁带颜色**：
+     .cat-icon  = 中性底 + 彩色字形（色相落在图形上）
+     .cat-tile  = 彩色实底 + 反白字形（色相落在块上）
+
+   为什么需要第二种形态：
+     1. 28px 的块里放 12px 细描边字形，彩字会显单薄（描边 + 小尺寸 = 糊）；
+        反白实底 + 略加粗的描边在小尺寸下更"实"，扫视时先被色块抓住。
+     2. 一屏十几行全是彩字时，画面是一堆细线；实心块把它们变成一排色标，
+        定位速度更快（"这是什么"的线索在块上，不在字上）。
+
+   字形前景色走 --color-on-tone **分主题**：浅色主题 = 白字（对比度 3.17~4.82），
+   深色主题的 --color-tone-* 是"暗底提亮档"，白字只有 2.0~2.6:1（不达标），
+   必须用深墨（6.99~9.14:1）。所以这里不能图省事写死 #fff。 */
+.cat-tile {
+  --cat-tone: var(--color-tone-slate);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  background: var(--cat-tone);
+  color: var(--color-on-tone);
+  transition:
+    transform var(--duration-fast) var(--ease-out);
+}
+
+/* 实底上的描边要比彩字版略粗：14px 的白字用 1.75 档会发虚。 */
+.cat-tile > svg { stroke-width: 2; }
+
+.cat-tile--sm { width: 28px; height: 28px; border-radius: var(--radius-sm); }
+.cat-tile--md { width: 36px; height: 36px; border-radius: var(--radius-md); }
+.cat-tile--lg { width: 48px; height: 48px; border-radius: var(--radius-lg); }
+
 /* ── 8 档色相 ──────────────────────────────────────────────────── */
 .cat-icon--slate,
+.cat-tile--slate,
 .cat-ink--slate  { --cat-tone: var(--color-tone-slate); }
 .cat-icon--blue,
+.cat-tile--blue,
 .cat-ink--blue   { --cat-tone: var(--color-tone-blue); }
 .cat-icon--cyan,
+.cat-tile--cyan,
 .cat-ink--cyan   { --cat-tone: var(--color-tone-cyan); }
 .cat-icon--green,
+.cat-tile--green,
 .cat-ink--green  { --cat-tone: var(--color-tone-green); }
 .cat-icon--amber,
+.cat-tile--amber,
 .cat-ink--amber  { --cat-tone: var(--color-tone-amber); }
 .cat-icon--orange,
+.cat-tile--orange,
 .cat-ink--orange { --cat-tone: var(--color-tone-orange); }
 .cat-icon--rose,
+.cat-tile--rose,
 .cat-ink--rose   { --cat-tone: var(--color-tone-rose); }
 .cat-icon--violet,
+.cat-tile--violet,
 .cat-ink--violet { --cat-tone: var(--color-tone-violet); }
 
 /* 强调色档：给「当前主推 / 默认推荐」的选项用，与 8 档分类色不冲突

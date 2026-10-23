@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { FileCode2, GitBranch, RefreshCw } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { IconTile } from "../ui";
 import { LOADING } from "../strings";
 
 type RuntimeKind = "node" | "python" | "git";
@@ -34,6 +35,9 @@ const RUNTIMES: {
   kind: RuntimeKind;
   name: string;
   icon: typeof FileCode2;
+  /** 图标块的身份色相：按各语言的品牌主色取（Node 绿 / Python 蓝 / Git 橙），
+   *  都在 8 档身份色内，不额外开色。三者同屏时靠色相一眼分清。 */
+  tone: "green" | "blue" | "orange";
   /** 内置这一项要付的体积代价（压缩包 / 解压后），UI 如实标出来。 */
   sizeNote: string;
   hint: string;
@@ -42,6 +46,7 @@ const RUNTIMES: {
     kind: "node",
     name: "Node.js",
     icon: FileCode2,
+    tone: "green",
     sizeNote: "按需下载 ~45MB（默认不内置）",
     hint: "跑 JS/TS 脚本与前端构建。体积最大，默认用系统已装的。",
   },
@@ -49,6 +54,7 @@ const RUNTIMES: {
     kind: "python",
     name: "Python",
     icon: FileCode2,
+    tone: "blue",
     sizeNote: "内置约 10MB（解压后 ~20MB）",
     hint: "execute_code(python) 与 PDF 兜底转换都靠它，体积最小、收益最高。",
   },
@@ -56,6 +62,7 @@ const RUNTIMES: {
     kind: "git",
     name: "Git",
     icon: GitBranch,
+    tone: "orange",
     sizeNote: "按需下载 ~37MB（MinGit 便携包）",
     hint: "版本操作。日常 Git 需求优先走内置的 Rust 实现，不必拉这个包。",
   },
@@ -93,7 +100,7 @@ export function RuntimesTab() {
       )}
 
       <div className="space-y-3">
-        {RUNTIMES.map(({ kind, name, icon: Icon, sizeNote, hint }) => {
+        {RUNTIMES.map(({ kind, name, icon: Icon, tone, sizeNote, hint }) => {
           const res = probes[kind];
           const hit = res?.entries.find((e) => e.exists);
           const builtin = res?.entries.find((e) => e.source === "builtin" && e.exists);
@@ -104,7 +111,7 @@ export function RuntimesTab() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-2.5 min-w-0">
-                  <Icon className="icon-md mt-0.5 shrink-0" />
+                  <IconTile icon={<Icon className="icon-md" />} tone={tone} />
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-text-primary">{name}</div>
                     <p className="text-xs text-text-muted mt-0.5">{hint}</p>

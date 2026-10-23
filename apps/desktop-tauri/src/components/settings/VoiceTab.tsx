@@ -11,8 +11,9 @@
  * 提示「桌面端未配置语音识别，仅支持文字发送」。
  */
 import { useCallback, useEffect, useState } from "react";
+import { Mic } from "lucide-react";
 import { fetchJSON } from "../../api/rest";
-import { Button, Input, Switch } from "../ui";
+import { Button, IconTile, Input, Switch } from "../ui";
 import { SAVE, SAVED, SAVING } from "../strings";
 
 interface SttConfig {
@@ -83,6 +84,7 @@ export function VoiceTab() {
     <div className="space-y-4">
       <div className="space-y-4">
         <div className="flex items-center gap-3">
+          <IconTile icon={<Mic className="icon-md" />} tone="orange" />
           <Switch
             checked={cfg.enabled}
             onChange={(v) => setCfg({ ...cfg, enabled: v })}

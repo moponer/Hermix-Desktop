@@ -109,6 +109,21 @@ for (const f of cssFiles)
   for (const n of [...stripCssComments(read(f)).matchAll(/(--[a-z][a-z0-9-]*)\s*:/g)].map((m) => m[1]))
     anyDefined.add(n);
 
+/* 共享包的 CSS 也是"样式体系"的一部分：desktop 端在 globals.css 里
+   `@import "@hermix/preview/styles/icon-tone.css"`，那份文件定义的局部变量
+   （如 .cat-icon 的 --cat-tone）在 desktop 侧同样可用。此前本检查只扫
+   apps/desktop-tauri/src/styles，于是引用共享层变量的桌面样式会被误报成
+   "孤儿引用" —— 而孤儿检查要抓的是**拼错的变量名**（var() 解析失败 =
+   整条声明被丢弃），共享层定义的真变量不属于这一类。 */
+const SHARED_STYLES = join(ROOT, "packages/preview/src/styles");
+if (existsSync(SHARED_STYLES)) {
+  for (const e of readdirSync(SHARED_STYLES)) {
+    if (!e.endsWith(".css")) continue;
+    for (const n of [...stripCssComments(read(join(SHARED_STYLES, e))).matchAll(/(--[a-z][a-z0-9-]*)\s*:/g)].map((m) => m[1]))
+      anyDefined.add(n);
+  }
+}
+
 let usedVars = new Set();
 for (const f of cssFiles)
   for (const m of stripCssComments(read(f)).matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
@@ -523,6 +538,15 @@ if (typeHits > 0) {
     ["color-text-info", "color-bg-primary", 4.5, "info 文字 / 纸面"],
     ["color-text-info", "color-info-soft", 4.5, "info 文字 / info-soft 底"],
     ["color-on-accent", "color-accent", 4.5, "accent 底上的文字"],
+    // 实心色块上的字形（共享层 .cat-tile，2026-10-23）：字形前景是
+    // --color-on-tone，底是 8 档身份色之一。字形是**图形**不是正文，
+    // 按 WCAG 1.4.11 取 3:1（不是文字的 4.5:1）。
+    // 这 8 组 × 3 主题是本轮新增的硬约束：把 --color-on-tone 写成死值
+    // （例如全用 #ffffff）会在深色主题下静默掉到 2.0~2.6:1 —— 门禁要
+    // 能在那一刻报出来，而不是等肉眼发现"暗色下图标看不清了"。
+    ...["slate", "blue", "cyan", "green", "amber", "orange", "rose", "violet"].map(
+      (t) => [`color-on-tone`, `color-tone-${t}`, 3.0, `实心色块字形 / ${t} 底（1.4.11 的 3:1）`],
+    ),
     ["color-text-on-code", "color-bg-code", 4.5, "代码正文 / 代码底"],
     ["color-border", "color-bg-primary", 3.0, "控件边界 / 纸面（1.4.11 的 3:1）"],
     ["color-border", "color-bg-card", 3.0, "控件边界 / 卡片（1.4.11 的 3:1）"],

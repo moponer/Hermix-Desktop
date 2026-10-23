@@ -7,6 +7,8 @@ export interface SettingsRowProps {
   description?: ReactNode;
   /** 右侧控件：Switch / Select / Button / 色板，由调用方给。 */
   control?: ReactNode;
+  /** 左侧图标块：实心身份色块（`IconTile`）。不给则整行只有文字。 */
+  icon?: ReactNode;
   /** 整行可点（如点击标题切开关）时的处理器；有 control 时慎用。 */
   onClick?: () => void;
   disabled?: boolean;
@@ -19,11 +21,16 @@ export interface SettingsRowProps {
  *
  * 竖排而非横排：中文标题普遍 6–12 字，横排在 720px 栏宽里会把控件挤出
  * 视觉基线，用户扫一列开关时高低不齐。竖排让所有控件落在同一条右边界。
+ *
+ * `icon` 插槽（2026-10-23 新增）：左侧可放一个实心身份色块（`IconTile`）。
+ * 判据是**这一行是不是一项功能/能力**——是则给块（色块承担"这是什么"），
+ * 只是数值参数的行不给（参数行配图标等于几个同义图形，信息量为零）。
  */
 export function SettingsRow({
   title,
   description,
   control,
+  icon,
   onClick,
   disabled,
   className,
@@ -43,6 +50,7 @@ export function SettingsRow({
         className,
       )}
     >
+      {icon && <span className="shrink-0">{icon}</span>}
       <div className="min-w-0 flex-1">
         <div
           className={cx(

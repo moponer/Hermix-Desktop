@@ -4,7 +4,7 @@ import { fetchJSON } from "../../api/rest";
 import { toastError, toastSuccess } from "../../hooks/useToast";
 import { ImChannelsCard } from "./ImChannelsCard";
 import { channelOf, type ChannelId, type PairedDevice, type RevokeOutcome } from "./channelOf";
-import { ConfirmDialog } from "../ui";
+import { ConfirmDialog, IconTile } from "../ui";
 import { LOADING, failure } from "../strings";
 
 /** 列表标题跟着选中渠道走——固定写「已配对设备」会让人以为看到的是全局表。 */
@@ -134,7 +134,8 @@ export function DevicesTab() {
       {/* 当前渠道已连接的设备 */}
       <div className="overflow-hidden rounded-[var(--radius-lg)] bg-bg-card shadow-[var(--shadow-paper)]">
         <div className="flex items-center justify-between px-4 py-3 bg-bg-secondary">
-          <span className="text-[length:var(--text-ui)] font-medium text-text-primary">
+          <span className="flex items-center gap-2.5 text-[length:var(--text-ui)] font-medium text-text-primary">
+            <IconTile icon={<ChannelIcon className="icon-md" />} tone="slate" />
             {CHANNEL_TITLES[active]}
           </span>
           <button
@@ -165,7 +166,7 @@ export function DevicesTab() {
                 key={d.device_id}
                 className="px-3 py-3 flex items-center gap-3 flex-wrap rounded-lg bg-bg-secondary hover:bg-bg-card-hover transition-colors"
               >
-                <ChannelIcon className="icon-md text-text-muted shrink-0" />
+                <IconTile icon={<ChannelIcon className="icon-md" />} tone="slate" />
                 <div className="min-w-0 flex-1">
                   <div className="text-[length:var(--text-ui)] text-text-primary font-medium truncate">
                     {d.device_name}

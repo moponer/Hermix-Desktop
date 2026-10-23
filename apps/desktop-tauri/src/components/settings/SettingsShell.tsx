@@ -6,14 +6,14 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeft, Search, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
   Plug, Sparkles, Network, Image as ImageIcon, Activity, Shield,
-  Archive, Palette, Brain, AppWindow, Mic, X,
+  Archive, Palette, Brain, AppWindow, Mic, X, Camera, FlaskConical,
 } from "lucide-react";
 
 import { cx } from "../../lib/cx";
 import { type IconTone } from "../../lib/categoryTone";
 import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
-import { Switch, SettingsGroup, SettingsRow, SegmentedControl, Input } from "../ui";
+import { Switch, SettingsGroup, SettingsRow, SegmentedControl, Input, IconTile } from "../ui";
 import { toastWarning } from "../../hooks/useToast";
 import {
   PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab,
@@ -110,7 +110,7 @@ const GROUPS: GroupDef[] = [
     label: "诊断",
     items: [
       { id: "diagnostics", label: "诊断", hint: "日志、审计与网络出口；后端日志写入 hermix_home/logs/", icon: Activity, tone: "cyan", keywords: "diagnostics 日志 log 审计 出网" },
-      { id: "advanced", label: "高级", hint: "压缩、子 Agent 等内部参数；修改后需重启生效", icon: SlidersHorizontal, tone: "slate", keywords: "advanced 高级 实验 config yaml" },
+      { id: "advanced", label: "高级", hint: "压缩、子 Agent 等内部参数；修改后需重启生效", icon: FlaskConical, tone: "slate", keywords: "advanced 高级 实验 config yaml" },
     ],
   },
 ];
@@ -219,7 +219,7 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
               <div className="px-3 pb-1 pt-4 text-[length:var(--text-meta)] font-medium text-[var(--color-text-faint)]">
                 {g.label}
               </div>
-              {g.items.map(({ id, label, icon: Icon }) => (
+              {g.items.map(({ id, label, icon: Icon, tone }) => (
                 <button
                   key={id}
                   onClick={() => go(id)}
@@ -234,15 +234,20 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
                       : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]",
                   )}
                 >
-                  {/* 导航图标**不上色**（2026-10-23 修正）：侧栏是"位置"，
-                      不是"内容"。17 项各带一块彩色底时，整条侧栏变成一条
-                      彩虹，抢夺右内容区的注意力，而且彩色块本身比文字重，
-                      扫视时先看到色块再读字，反而更慢。
-                      改为随文字色的单色描边图标：选中态跟 primary、未选中
-                      跟 secondary，与文字一起进退，侧栏退成背景。
-                      彩色身份色只留在**内容区**（类目卡片），那里才需要
-                      "这是什么"的线索。 */}
-                  <Icon className="icon-md shrink-0" aria-hidden />
+                  {/* 导航图标：实心身份色块（2026-10-23 改）。
+                      此处此前是单色描边图标，理由是「侧栏是位置，不是内容，
+                      17 项彩色底会变成一条彩虹」。现在改成实心块，理由有三：
+                        1. 用户明确要求参照的「彩色方块 + 标题」样式；
+                        2. 18 项里的色相**不是随机彩虹**——每个页面的色相是
+                           按类目定的（偏好=slate/rose/violet/orange，插件=
+                           slate/violet/blue/cyan，管理=blue/cyan/slate/orange/
+                           amber/green/slate/rose，诊断=cyan/slate），同一组内
+                           反复出现两三种色，扫视时是"有条理的彩色"，不是彩虹；
+                        3. 侧栏整块原本就是"灰底 + 灰字"，加色块后重心回到
+                           左侧导航，右侧内容区不再被一整片低对比的灰淹没。
+                      块用 28px（sm）而非 36px：行高 44px 里 36px 的块会压过
+                      文字。选中态仍靠行底色 + 文字墨色区分，块色不参与。 */}
+                  <IconTile icon={<Icon className="icon-md" />} tone={tone} />
                   <span className="min-w-0 flex-1 truncate text-[length:var(--text-body)]">{label}</span>
                 </button>
               ))}
@@ -436,6 +441,7 @@ function ScreenshotSettingsCard() {
     <div className="mt-6 space-y-6">
       <SettingsGroup>
         <SettingsRow
+          icon={<IconTile icon={<Camera className="icon-md" />} tone="orange" />}
           title="启用系统截图"
           description="全局热键或标题栏相机按钮截取屏幕，选区直接进剪贴板。"
           control={

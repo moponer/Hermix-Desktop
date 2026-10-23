@@ -2,6 +2,7 @@ export { Badge, StatusDot, type BadgeTone, type BadgeVariant, type BadgeSize } f
 export { Button, IconButton, type ButtonProps, type ButtonVariant, type ButtonSize, type ButtonShape } from "./Button";
 export { Card, type CardProps } from "./Card";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
+export { IconTile } from "./IconTile";
 export {
   FIELD_BASE_CLASSES,
   fieldStateClasses,

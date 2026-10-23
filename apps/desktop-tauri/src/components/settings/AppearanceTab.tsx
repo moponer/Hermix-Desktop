@@ -1,9 +1,9 @@
-import { RotateCcw, Sun, Moon, Monitor, Check } from "lucide-react";
+import { RotateCcw, Sun, Moon, Monitor, Check, Palette } from "lucide-react";
 
 import { useTheme, SYSTEM_THEME } from "../../hooks/useTheme";
 import { THEMES } from "../../styles/themes/registry";
 import { ACCENT_PALETTE, accentLabel } from "../../styles/themes/accentPalette";
-import { SettingsGroup, SettingsRow, Switch } from "../ui";
+import { SettingsGroup, SettingsRow, Switch, IconTile } from "../ui";
 import { ChoiceCard } from "./ChoiceCard";
 import { cx } from "../../lib/cx";
 import { ThemeToggle } from "../ThemeToggle";
@@ -31,7 +31,7 @@ export function AppearanceTab() {
             label="浅色"
             description="白底深字。白天与明亮环境下对比更舒适。"
             icon={<Sun className="icon-lg" />}
-            tone="warning"
+            tone="amber"
             selected={mode === "light"}
             onSelect={() => setMode("light")}
           />
@@ -39,7 +39,7 @@ export function AppearanceTab() {
             label="深色"
             description="深底亮字。夜间与长时间阅读时更省眼。"
             icon={<Moon className="icon-lg" />}
-            tone="info"
+            tone="violet"
             selected={mode === "dark"}
             onSelect={() => setMode("dark")}
           />
@@ -47,7 +47,7 @@ export function AppearanceTab() {
             label="跟随系统"
             description="自动跟随操作系统的深浅色设置，切换时实时跟随。"
             icon={<Monitor className="icon-lg" />}
-            tone="success"
+            tone="slate"
             selected={mode === SYSTEM_THEME}
             onSelect={() => setMode(SYSTEM_THEME)}
             meta={`当前：${THEMES.find((t) => t.id === resolved)?.label ?? resolved}`}
@@ -61,6 +61,7 @@ export function AppearanceTab() {
         description="影响选中态、主按钮与链接。派生色（悬停/浅底）自动跟随。"
       >
         <SettingsRow
+          icon={<IconTile icon={<Palette className="icon-md" />} tone="violet" />}
           title="主题默认色"
           description="回到当前主题自带的强调色（不注入任何覆盖）。"
           control={

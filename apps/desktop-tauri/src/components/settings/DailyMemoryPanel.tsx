@@ -5,9 +5,10 @@
 // 不依赖 LLM 主动调工具），所以即使模型从不调 daily_memory，这里
 // 也不是空壳。
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Target, TrendingUp, CheckCircle2 } from "lucide-react";
 import * as api from "../../api";
-import { SkeletonCard } from "../ui";
+import { IconTile, SkeletonCard } from "../ui";
 
 export function DailyMemoryPanel() {
   const [days, setDays] = useState<api.DailyMemoryDay[]>([]);
@@ -71,18 +72,33 @@ export function DailyMemoryPanel() {
         ))}
       </div>
       <div className="space-y-3 rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] p-3">
-        <Section title="目标" body={current.goals} />
-        <Section title="进展" body={current.progress} />
-        <Section title="结论" body={current.conclusions} />
+        <Section
+          title="目标"
+          body={current.goals}
+          icon={<IconTile icon={<Target className="icon-md" />} tone="amber" />}
+        />
+        <Section
+          title="进展"
+          body={current.progress}
+          icon={<IconTile icon={<TrendingUp className="icon-md" />} tone="cyan" />}
+        />
+        <Section
+          title="结论"
+          body={current.conclusions}
+          icon={<IconTile icon={<CheckCircle2 className="icon-md" />} tone="green" />}
+        />
       </div>
     </div>
   );
 }
 
-function Section({ title, body }: { title: string; body: string }) {
+function Section({ title, body, icon }: { title: string; body: string; icon?: ReactNode }) {
   return (
     <div>
-      <h4 className="text-[length:var(--text-meta)] font-medium text-[var(--color-text-secondary)]">{title}</h4>
+      <h4 className="flex items-center gap-2 text-[length:var(--text-meta)] font-medium text-[var(--color-text-secondary)]">
+        {icon}
+        {title}
+      </h4>
       <pre className="mt-1 whitespace-pre-wrap rounded-md bg-[var(--color-bg-tertiary)] p-3 text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-primary)]">
         {body.trim() || "（空）"}
       </pre>

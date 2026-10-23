@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArchiveRestore, Loader2 } from "lucide-react";
+import { Archive, ArchiveRestore, Loader2 } from "lucide-react";
 
 import { getSessions } from "../../api/rest";
 import { usePinnedArchived } from "../../hooks/usePinnedArchived";
-import { SettingsGroup, SettingsRow } from "../ui";
+import { SettingsGroup, SettingsRow, IconTile } from "../ui";
 import { LOADING } from "../strings";
 
 interface ArchivedSession {
@@ -69,6 +69,7 @@ export function ArchiveTab() {
           {rows.map((r) => (
             <SettingsRow
               key={r.id}
+              icon={<IconTile icon={<Archive className="icon-md" />} tone="slate" />}
               title={r.title}
               description={`最近更新 ${r.updated}`}
               control={

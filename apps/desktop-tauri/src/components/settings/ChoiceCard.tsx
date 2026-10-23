@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { cx } from "../../lib/cx";
+import { type IconTone } from "../../lib/categoryTone";
 
 /**
  * 设置页的选择卡（外观页明暗三选、通用页工作模式二选共用）。
@@ -16,7 +17,7 @@ import { cx } from "../../lib/cx";
  *   4. 选中指示（底色加深一档 + 单选环填充）—— 不用描边
  * 靠"一彩三灰"的对比建立主次，而不是给每层都上色。
  */
-export type CardTone = "accent" | "success" | "warning" | "error" | "info";
+export type CardTone = IconTone;
 
 /**
  * 2026-10-23：这张表**已删除**（下方说明留档，别再照着恢复）。
@@ -29,9 +30,23 @@ export type CardTone = "accent" | "success" | "warning" | "error" | "info";
  *   3. 同样的「柔和底 + 饱和图标」在 icon-tone.css 里已经有一份实现
  *      （14% color-mix 现算），两份并存就是漂移的开始。
  *
- * 现在改为 `cat-icon--${tone}` 一个类：底色是主题中性实底（--color-bg-tertiary），
- * 图标本身是饱和实色；hover 反馈由 .cat-icon 的 transition 与
- * `.m-lift:hover .cat-icon` 统一给。语义四色与强调色在 icon-tone.css 各有档位。
+ * 现在改为 `cat-tile--${tone}` 一个类：底是身份色实底，字是反白前景
+ * （`--color-on-tone`，分主题：浅色白字 / 深色深墨）。
+ *
+ * ## 色调从语义四色改成身份色（2026-10-23 二次修正）
+ *
+ * 此前这里用 success / warning / info 给「浅色 / 深色 / 跟随系统」上色，
+ * 违反本项目自己的纪律：**语义四色表达「状态」，身份色表达「是什么」**。
+ * 一张选择卡不是状态，是选项 —— 用 success 表示"跟随系统"更是把
+ * "跟随"读成了"成功"。现在统一走 8 档身份色：
+ * 浅色=amber（暖=亮）· 深色=violet（夜）· 跟随系统=slate（中性=跟随）
+ * 编程开发=blue（与 categoryTone 的「开发/运维=blue」一致）
+ * 日常办公=green（与「办公=green」一致）。
+ *
+ * 顺带解掉一个对比度死结：语义四色做实底时，白字在暗色主题只有
+ * 2.30~3.28:1（不达 3:1），在 ink-green 的 warning 上只有 2.46:1；
+ * 身份色 8 档在两套主题下白字全部达标（浅色 3.17~4.82 / 深色改深墨
+ * 6.99~9.14）。
  */
 export interface ChoiceCardProps {
   label: string;
@@ -69,11 +84,11 @@ export function ChoiceCard({
       )}
     >
       <div className="flex w-full items-center gap-2.5">
-        {/* 图标块走共享的 cat-icon（主题中性实底 + 饱和图标色），不再用行内
+        {/* 图标块走共享的 cat-tile（身份色实底 + 反白字形），不再用行内
             样式写死配色 —— 行内样式没有 :hover，且改色要逐处改。 */}
         <span
           aria-hidden
-          className={cx("cat-icon cat-icon--md", `cat-icon--${tone}`)}
+          className={cx("cat-tile cat-tile--md", `cat-tile--${tone}`)}
         >
           {icon}
         </span>

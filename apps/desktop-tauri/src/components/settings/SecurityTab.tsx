@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, Check, Save } from "lucide-react";
+import { FolderOpen, Check, Save, ShieldCheck } from "lucide-react";
 import * as api from "../../api";
 import { openInExplorer } from "../../desktopBridge";
 import { toastError } from "../../hooks/useToast";
 import { useSafeTimeout } from "../../hooks/useSafeTimeout";
-import { Button, Card, Input, SkeletonCard, Switch } from "../ui";
+import { Button, Card, IconTile, Input, SkeletonCard, Switch } from "../ui";
 import { SAVE, SAVED } from "../strings";
 
 interface SecurityState {
@@ -108,11 +108,14 @@ export function SecurityTab() {
     <div className="space-y-5">
       {/* 自动备份开关 */}
       <Card className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-sm text-text-primary">启用自动备份</div>
-            <div className="text-[length:var(--text-meta)] text-text-muted mt-0.5">
-              覆盖写前复制旧版本（best-effort，不影响正常写入）。
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <IconTile icon={<ShieldCheck className="icon-md" />} tone="amber" />
+            <div>
+              <div className="text-sm text-text-primary">启用自动备份</div>
+              <div className="text-[length:var(--text-meta)] text-text-muted mt-0.5">
+                覆盖写前复制旧版本（best-effort，不影响正常写入）。
+              </div>
             </div>
           </div>
           <Switch

@@ -1213,27 +1213,23 @@ export const ChatView = memo(function ChatView({
             <>
               {/* 墨与纸 v4：吉祥物移除、留空 —— hero 标题独当焦点，空白即大气 */}
               <h1 className="text-hero font-semibold text-[var(--color-text-hero)] mb-5">{welcomeGreeting}</h1>
-              {/* 场景切换：独立药丸，接真实机制 domainMode（办公=自动识别 / 开发=钉代码域） */}
+              {/* 场景切换：独立药丸，接真实机制 domainMode（办公=自动识别 / 开发=钉代码域）
+                  走共享的 chip-flat 类族（AGENTS.md：按钮只用 btn-flat / chip-flat），
+                  不用手写一份底色+字色的组合。 */}
               <div className="flex items-center gap-2.5 mb-5">
                 <button
                   type="button"
                   onClick={() => setDomainMode("auto")}
-                  className={`flex items-center gap-1.5 h-7 px-4 rounded-full text-[length:var(--text-ui)] transition-colors ${
-                    domainMode !== "code"
-                      ? "bg-accent text-on-accent font-medium"
-                      : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                  }`}
+                  aria-pressed={domainMode !== "code"}
+                  className="chip-flat chip-flat--md"
                 >
                   <Briefcase className="icon-sm" /> 办公
                 </button>
                 <button
                   type="button"
                   onClick={() => setDomainMode("code")}
-                  className={`flex items-center gap-1.5 h-7 px-4 rounded-full text-[length:var(--text-ui)] transition-colors ${
-                    domainMode === "code"
-                      ? "bg-accent text-on-accent font-medium"
-                      : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                  }`}
+                  aria-pressed={domainMode === "code"}
+                  className="chip-flat chip-flat--md"
                 >
                   <Code2 className="icon-sm" /> 开发
                 </button>
@@ -1248,7 +1244,7 @@ export const ChatView = memo(function ChatView({
                       setInput(c.prompt);
                       textareaRef.current?.focus();
                     }}
-                    className="flex items-center gap-1.5 h-7 px-3.5 rounded-full bg-[var(--color-bg-tertiary)] text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-card-hover)]"
+                    className="chip-flat chip-flat--md"
                     title={`填入「${c.label}」能力模板`}
                   >
                     <c.icon className="icon-sm" /> {c.label}

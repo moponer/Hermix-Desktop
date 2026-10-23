@@ -9,7 +9,7 @@ import {
 } from "../../desktopBridge";
 import { fetchJSON } from "../../api/rest";
 import { toastError, toastSuccess } from "../../hooks/useToast";
-import { Card, EmptyState, Skeleton } from "../ui";
+import { Card, EmptyState, IconTile, Skeleton } from "../ui";
 import { COPIED, COPY_FAILED, failure } from "../strings";
 
 const TAIL_LINE_OPTIONS: number[] = [200, 500, 2000, 10000];
@@ -137,7 +137,7 @@ export function DiagnosticsTab() {
       <Card className="space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2 min-w-0">
-            <FileText className="icon-md text-text-muted shrink-0" />
+            <IconTile icon={<FileText className="icon-md" />} tone="cyan" />
             <span className="text-[length:var(--text-meta)] text-text-muted font-mono truncate" title={info?.dir ?? ""}>
               {info?.dir ?? "（尚未生成日志目录）"}
             </span>

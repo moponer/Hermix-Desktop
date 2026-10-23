@@ -78,7 +78,11 @@
   border: 0;
   border-radius: var(--radius-full);
   background: var(--color-bg-tertiary);
-  color: var(--color-text-secondary);
+  /* 2026-10-23：secondary → primary。药丸是**可点控件**，它的文字属于
+     "读得清才算能用"的那一类；淡灰底（#ededed）配灰字（#565656）虽然
+     6.27:1 达 AA，但同色系挨着 → 观感"发灰"，正是用户说的"偏淡"。
+     提到 primary = 15.17:1，控件文字立刻立住；选中态仍靠实心底色区分。 */
+  color: var(--color-text-primary);
   font-family: var(--font-sans);
   font-size: var(--text-meta);
   font-weight: var(--font-weight-medium);
@@ -95,6 +99,11 @@
   color: var(--color-btn-primary-text);
 }
 .chip-flat--on:hover { background: var(--color-btn-primary-hover); }
+
+/* 大一号药丸（32px 档）：欢迎页的场景切换与能力 chip。
+   此前那里是手写的 h-7(28px) 组合 —— 28 不在控件高度档（24/32/40/44）里，
+   归并到 md 档，顺带把"按钮只用 btn-flat / chip-flat"这条纪律补齐。 */
+.chip-flat--md { height: var(--control-h-md); padding: 0 14px; font-size: var(--text-ui); }
 
 /* ── 列表行（无描边、hover 靠底色）───────────────────────────────── */
 .row-flat {

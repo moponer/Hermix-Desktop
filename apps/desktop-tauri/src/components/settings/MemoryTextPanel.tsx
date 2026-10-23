@@ -5,20 +5,22 @@
 // 说明文案点出与"记忆图谱"的关系：这里是最早的记忆通道，内容
 // 会被注入系统提示；图谱里还能看到会话级与自动提取的记忆。
 
-import { useCallback, useEffect, useState } from "react";
-import { Loader2, Save } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Loader2, Save, FileText, Users } from "lucide-react";
 import * as api from "../../api";
-import { Button, SkeletonCard } from "../ui";
+import { Button, IconTile, SkeletonCard } from "../ui";
 import { LOAD_FAILED, SAVED, SAVING, SAVE, SAVE_FAILED, failure } from "../strings";
 
 interface TextMemoryProps {
   title: string;
   description: string;
+  /** 标题左侧的实心色块图标（身份色）。 */
+  icon?: ReactNode;
   load: () => Promise<api.PersonaTextFile>;
   save: (content: string) => Promise<void>;
 }
 
-function TextMemoryEditor({ title, description, load, save }: TextMemoryProps) {
+function TextMemoryEditor({ title, description, icon, load, save }: TextMemoryProps) {
   const [content, setContent] = useState("");
   const [path, setPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,7 +62,8 @@ function TextMemoryEditor({ title, description, load, save }: TextMemoryProps) {
 
   return (
     <div className="rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] p-3">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2.5">
+        {icon && <span className="shrink-0">{icon}</span>}
         <h3 className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">{title}</h3>
         {path && (
           <span className="truncate text-[length:var(--text-meta)] text-[var(--color-text-muted)]" title={path}>
@@ -96,12 +99,14 @@ export function MemoryTextPanel() {
       <TextMemoryEditor
         title="MEMORY.md（全局长期记忆）"
         description="agent 通过 memory 工具显式写入的记忆文件，会注入系统提示。桌面私聊默认按会话隔离写入，会话结束时自动晋升到记忆库；这里的全局文件对所有会话可见。保存后下一次对话生效。"
+        icon={<IconTile icon={<FileText className="icon-md" />} tone="green" />}
         load={loadMemory}
         save={api.savePersonaMemory}
       />
       <TextMemoryEditor
         title="USER.md（用户画像）"
         description="对用户偏好的结构化画像，随系统提示注入。保存后下一次对话生效。"
+        icon={<IconTile icon={<Users className="icon-md" />} tone="rose" />}
         load={loadUser}
         save={api.savePersonaUser}
       />
