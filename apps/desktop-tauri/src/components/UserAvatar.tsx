@@ -42,12 +42,9 @@ export function UserAvatar({ name, avatarDataUrl, size = 30, className = "" }: U
       className={className}
       style={{
         ...box,
-        background: "var(--color-bg-tertiary)",
-        color: "var(--color-text-secondary)",
         fontSize: Math.max(11, Math.round(size * 0.42)),
         fontWeight: 500,
-        boxShadow: "inset 0 0 0 0.5px var(--color-border-primary)",
-      }}
+        }}
       aria-label={name}
     >
       {initial}

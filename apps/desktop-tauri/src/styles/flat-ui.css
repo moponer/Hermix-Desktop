@@ -113,6 +113,40 @@
   box-shadow: var(--shadow-card);
 }
 
+/* ── 语义淡染底（tint-*）────────────────────────────────────────
+   2026-10-23：把散落在 tsx 里的
+     style={{ background: "color-mix(in srgb, var(--color-info) 12%, transparent)" }}
+   收成类。这类「一档浓度 + 一个语义色」的组合在提示条、错误块、拖放区
+   各写过一遍，浓度值还各不相同（10% / 12% / 14%）。
+
+   统一到两档：**12% 常态 / 18% 强调**。不按语义色分别调浓度 ——
+   同一屏里出现 info 12%、error 14% 时，人眼只会觉得"这两个底色不一样"
+   而读不出任何含义，属于无意义的差异。 */
+.tint-info    { background: color-mix(in srgb, var(--color-info) 12%, transparent); }
+.tint-warning { background: color-mix(in srgb, var(--color-warning) 12%, transparent); }
+.tint-error   { background: color-mix(in srgb, var(--color-error) 12%, transparent); }
+.tint-success { background: color-mix(in srgb, var(--color-success) 12%, transparent); }
+.tint-accent  { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.tint-strong  { background: color-mix(in srgb, var(--color-text-primary) 8%, transparent); }
+
+/* 拖放落点：虚线是**功能提示**（"松手放到这里"），不属于装饰描边，
+   保留但收成一档。 */
+.drop-zone {
+  background: color-mix(in srgb, var(--color-chip-workspace-fg) 10%, transparent);
+  border: 2px dashed color-mix(in srgb, var(--color-chip-workspace-fg) 55%, transparent);
+}
+
+/* 发送钮两态。inverse-surface / bg-quaternary 这对组合只在发送钮上出现，
+   且 Tailwind 未为 inverse-* 生成原子类（全仓 0 处使用），所以这里显式给类。 */
+.send-btn--ready { background: var(--color-inverse-surface); color: var(--color-inverse-on-surface); }
+.send-btn--idle  { background: var(--color-bg-quaternary); color: var(--color-text-faint); }
+
+/* 代码块「展开」遮罩：渐变必须收在代码块底色上，是唯一依赖 --color-bg-code
+   的渐变。放进 CSS 而不是内联，是因为它同时是颜色 + 高度 + 定位三件事。 */
+.code-fade {
+  background: linear-gradient(to bottom, transparent, var(--color-bg-code) 60%);
+}
+
 /* ── 设置内容区 ────────────────────────────────────────────────────
    两条职责合一：
      ① 把 --color-bg-card 重写成 elevated（子页面里的 bg-card 自动变白卡，

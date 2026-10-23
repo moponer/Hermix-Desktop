@@ -1132,14 +1132,8 @@ export const ChatView = memo(function ChatView({
         {/* 工具行必须贴顶 —— 居中只作用于下面的内容区，否则行被 justify-center 拉下去 */}
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center">
         <div className="w-full max-w-md flex flex-col items-center py-12 text-center">
-          <div
-            className="w-14 h-14 rounded-full flex items-center justify-center mb-5"
-            style={{
-              background: "var(--color-warning-bg, rgba(245, 158, 11, 0.12))",
-              color: "var(--color-warning, #d97706)",
-            }}
-          >
-            <AlertTriangle size={24} />
+          <div className="tint-warning mb-5 flex h-14 w-14 items-center justify-center rounded-full">
+            <AlertTriangle className="icon-xl text-[var(--color-warning)]" />
           </div>
           <h2 className="text-lg font-semibold text-text-primary mb-2">
             加载对话失败

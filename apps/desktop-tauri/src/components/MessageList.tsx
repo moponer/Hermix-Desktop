@@ -524,11 +524,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             <button
               type="button"
               onClick={() => scrollToBottom(true)}
-              className="absolute right-6 bottom-0 flex items-center justify-center w-9 h-9 rounded-full shadow-lg transition-transform hover:scale-105 active:scale-95 pointer-events-auto"
+              className="absolute right-6 bottom-0 flex items-center justify-center w-9 h-9 rounded-full shadow-lg transition-transform hover:scale-105 active:scale-95 pointer-events-auto bg-bg-elevated text-text-primary"
               style={{
-                background: "var(--color-bg-elevated)",
-                color: "var(--color-text-primary)",
-                border: "1px solid var(--color-border-subtle)",
                 boxShadow: "var(--shadow-pop)",
               }}
               title="滚动到底部"

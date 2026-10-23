@@ -33,11 +33,7 @@ function AssistantAvatar({ size, className }: { size: number; className: string 
         style={{
           width: size,
           height: size,
-          borderRadius: "50%",
-          background: "var(--color-bg-secondary)",
-          boxShadow: "0 0 0 1px var(--color-border-subtle)",
-          color: "var(--color-text-muted)",
-          fontSize: Math.max(10, size * 0.42),
+          borderRadius: "50%",          fontSize: Math.max(10, size * 0.42),
           fontWeight: 600,
           flexShrink: 0,
         }}
@@ -57,10 +53,7 @@ function AssistantAvatar({ size, className }: { size: number; className: string 
       onError={() => setFailed(true)}
       className={`block object-contain select-none ${className}`}
       style={{
-        borderRadius: "50%",
-        background: "var(--color-bg-secondary)",
-        boxShadow: "0 0 0 1px var(--color-border-subtle)",
-      }}
+        borderRadius: "50%",      }}
     />
   );
 }

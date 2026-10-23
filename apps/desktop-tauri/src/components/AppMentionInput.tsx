@@ -204,11 +204,10 @@ function AppMentionInputImpl({
           <div
             ref={backdropRef}
             aria-hidden
-            className="absolute inset-0 pointer-events-none overflow-hidden whitespace-pre-wrap break-words px-4 pt-3.5 pb-1.5"
+            className="absolute inset-0 pointer-events-none overflow-hidden whitespace-pre-wrap break-words px-4 pt-3.5 pb-1.5 text-text-primary"
             style={{
               fontSize: "var(--font-size-body)",
               lineHeight: 1.5,
-              color: "var(--color-text-primary)",
               boxSizing: "border-box",
             }}
           >
@@ -266,8 +265,6 @@ function AppMentionInputImpl({
             width: 320,
             maxWidth: "calc(100% - 1rem)",
             maxHeight: 260,
-            background: "var(--color-bg-elevated)",
-            border: "1px solid var(--color-border-primary)",
             boxShadow: "var(--shadow-pop)",
           }}
         >
@@ -285,15 +282,14 @@ function AppMentionInputImpl({
                   onMouseDown={(e) => e.preventDefault()}
                   onMouseEnter={() => setSelIdx(i)}
                   onClick={() => selectItem(item)}
-                  className="w-full text-left px-3 py-2 flex flex-col gap-0.5 transition-colors"
-                  style={{
-                    background: i === selIdx ? "var(--color-bg-hover)" : "transparent",
-                    ...(item.isCreate ? { borderBottom: "1px solid var(--color-border-primary)" } : {}),
-                  }}
+                  className={`w-full text-left px-3 py-2 flex flex-col gap-0.5 transition-colors ${
+                    i === selIdx ? "bg-bg-hover" : ""
+                  }`}
                 >
                   <span
-                    className="flex items-center gap-1.5 text-[length:var(--text-ui)] font-medium"
-                    style={{ color: item.isCreate ? "var(--color-accent, #b8860b)" : "var(--color-text-primary)" }}
+                    className={`flex items-center gap-1.5 text-[length:var(--text-ui)] font-medium ${
+                      item.isCreate ? "text-accent" : "text-text-primary"
+                    }`}
                   >
                     {item.isCreate && <Plus className="icon-md" />}
                     {item.isCreate ? "创建新应用" : item.name}

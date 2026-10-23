@@ -78,7 +78,9 @@ export function AppearanceTab() {
                 <span
                   aria-hidden
                   className="inline-block h-4 w-4 rounded-full"
-                  style={{ background: accent, boxShadow: "inset 0 0 0 1px var(--color-border-subtle)" }}
+                  /* design-guard: allow — `accent` 是用户当场选中的颜色值（数据），
+                   不是主题令牌，无法类化。 */
+                style={{ background: accent }}
                 />
                 <span className="font-mono">{accentLabel(accent)}</span>
                 <button

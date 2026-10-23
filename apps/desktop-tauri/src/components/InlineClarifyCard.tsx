@@ -38,7 +38,7 @@ export function InlineClarifyCard({
       <div className="flex-1 min-w-0">
         {/* Header — compact: avatar · name · meta */}
         <div className="flex items-center gap-2 mb-1.5">
-          <div className="approval-avatar" style={{ background: "var(--color-info-soft)", color: "var(--color-text-info)" }}>
+          <div className="approval-avatar bg-info-soft text-text-info">
             <HelpCircle className="icon-sm" />
           </div>
           <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">Hermix 在问</span>

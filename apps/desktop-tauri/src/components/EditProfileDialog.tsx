@@ -111,7 +111,7 @@ export function EditProfileDialog({ current, onSave, onClose }: EditProfileDialo
             >
               用字母自动生成
             </Button>
-            <p style={{ margin: "4px 0 0", fontSize: 11, color: "var(--color-text-tertiary)", lineHeight: 1.5 }}>
+            <p className="mt-1 text-[length:var(--text-tiny)] leading-normal text-text-secondary">
               支持 PNG / JPG，≤2MB，自动裁剪为正方形
             </p>
             <input
@@ -140,7 +140,7 @@ export function EditProfileDialog({ current, onSave, onClose }: EditProfileDialo
         <div style={field}>
           <label style={label} htmlFor="ep-handle">
             本地标识{" "}
-            <span style={{ color: "var(--color-text-tertiary)", fontWeight: 400 }}>
+            <span className="font-normal text-text-secondary">
               （仅用于数据隔离目录名，不可外发）
             </span>
           </label>
@@ -153,7 +153,7 @@ export function EditProfileDialog({ current, onSave, onClose }: EditProfileDialo
         </div>
 
         {error && (
-          <p style={{ margin: "0 0 12px", fontSize: 12, color: "var(--color-text-warning)" }}>{error}</p>
+          <p className="mb-3 text-[length:var(--text-meta)] text-text-warning">{error}</p>
         )}
 
     </Modal>

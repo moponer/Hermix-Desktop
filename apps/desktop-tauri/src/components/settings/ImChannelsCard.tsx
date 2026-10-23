@@ -708,8 +708,10 @@ export function ImChannelsCard({
                 }
               >
                 <span
-                  className="inline-grid place-items-center h-8 w-8 rounded-lg shrink-0"
-                  style={{ background: c.brand, color: "var(--color-on-accent)" }}
+                  className="inline-grid place-items-center h-8 w-8 rounded-lg shrink-0 text-on-accent"
+                  /* design-guard: allow — brand 是渠道自带的品牌色（数据），
+                     不能也不该跟随主题。前景色已移到 text-on-accent 类。 */
+                  style={{ background: c.brand }}
                   aria-hidden="true"
                 >
                   <c.Icon className="icon-md" />
@@ -732,8 +734,9 @@ export function ImChannelsCard({
         <div className="rounded-xl bg-bg-card p-5 min-w-0">
           <div className="flex items-start gap-3">
             <span
-              className="inline-grid place-items-center h-10 w-10 rounded-xl shrink-0"
-              style={{ background: current.brand, color: "var(--color-on-accent)" }}
+              className="inline-grid place-items-center h-10 w-10 rounded-xl shrink-0 text-on-accent"
+              /* design-guard: allow — 同上，品牌色是数据。 */
+              style={{ background: current.brand }}
               aria-hidden="true"
             >
               <current.Icon className="icon-lg" />

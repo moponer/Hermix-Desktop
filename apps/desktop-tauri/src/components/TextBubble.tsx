@@ -50,7 +50,7 @@ export function UserMessage({ message }: { message: ChatMessage }) {
                     i,
                   )
                 }
-                style={{ maxWidth: 180, maxHeight: 180, borderRadius: 8, border: "1px solid var(--color-border-secondary)", objectFit: "cover", cursor: "pointer" }}
+                className="max-h-[180px] max-w-[180px] cursor-pointer rounded-[var(--radius-sm)] object-cover"
                 loading="lazy"
               />
             ))}
@@ -208,10 +208,8 @@ export function AssistantMessage({
             {message.stopReason && <StopReasonChip reason={message.stopReason} meta={message.stopReasonMeta} />}
             {message.compressed && (
               <span
-                className="h-tiny px-1.5 rounded-sm"
+                className="h-tiny px-1.5 rounded-sm bg-bg-tertiary text-text-secondary"
                 style={{
-                  background: "var(--color-bg-tertiary, rgba(255,255,255,0.06))",
-                  color: "var(--color-text-secondary)",
                   fontSize: 10,
                 }}
               >

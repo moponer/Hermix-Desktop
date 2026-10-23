@@ -61,10 +61,16 @@ const push = (file, line, rule, text) =>
      · 换主题时它虽然跟着令牌变，但**换布局/密度/圆角体系时它不跟**。
    历史上这类写法一路涨到 100+ 处，因为没有任何门禁拦它。
 
-   与 G10 同款棘轮：只禁止增加。清理一批后把 BASELINE 调低。
-   注意豁免：运行时几何（拖拽宽度、坐标、进度百分比）与数据自带色
-   （专家色板、渠道品牌色）不在统计里 —— 本规则只数 `var(--color-*)`。 */
-const INLINE_COLOR_BASELINE = 49;
+   2026-10-23 已清零，BASELINE = 0 —— 这条规则现在**是一道硬门禁**，
+   不是棘轮：新增任何「内联写静态配色」都会立刻变红。
+
+   天然豁免（不含 `var(--color-*)`，因此不进统计）：
+     · 运行时几何：`style={{ width: pct + "%" }}`、坐标、表格列宽；
+     · 数据自带色：`style={{ background: c.brand }}`（渠道品牌色）、
+       `style={{ background: accent }}`（用户当场选的颜色）。
+   这两类是「值由数据决定」，确实无法类化；把它们改写成类只会制造
+   假的静态类。判断标准很简单：**值里有没有 var(--color-*)**。 */
+const INLINE_COLOR_BASELINE = 0;
 let inlineColorHits = 0;
 
 for (const file of walk(ROOT)) {

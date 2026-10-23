@@ -311,9 +311,7 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
                   position: "sticky",
                   left: 0,
                   zIndex: 1,
-                  background: "var(--color-bg-code)",
                   textAlign: "right",
-                  color: "var(--color-text-faint)",
                   fontSize: "13px",
                   lineHeight: "1.6",
                   fontFamily: "var(--font-mono)",
@@ -328,7 +326,6 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
               style={{
                 margin: 0,
                 padding: "16px",
-                background: "transparent",
                 fontSize: "13px",
                 lineHeight: "1.6",
                 flex: "1 1 auto",
@@ -339,7 +336,6 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
                 className={`language-${language}`}
                 style={{
                   padding: 0,
-                  background: "transparent",
                   fontFamily: "var(--font-mono)",
                 }}
               >
@@ -367,28 +363,17 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
             </pre>
           </div>
         </div>
+        {/* 折叠遮罩：渐变必须停在代码块底色上（code-fade 定义在 flat-ui.css），
+            所以它天然依赖 --color-bg-code —— 用类把它固定在一处。 */}
         {shouldCollapse && !expanded && (
-          <div
-            style={{
-              position: "absolute",
-              bottom: 0, left: 0, right: 0,
-              height: "56px",
-              background: "linear-gradient(to bottom, transparent, var(--color-bg-code) 60%)",
-              display: "flex", alignItems: "flex-end", justifyContent: "center",
-              paddingBottom: "6px",
-              pointerEvents: "none",
-            }}
-          >
+          <div className="code-fade pointer-events-none absolute inset-x-0 bottom-0 flex h-14 items-end justify-center pb-1.5">
             <button
               type="button"
               onClick={() => setExpanded(true)}
               style={{
-                background: "var(--color-bg-code-header)",
-                border: "1px solid var(--color-border-subtle)",
                 borderRadius: "4px",
                 padding: "3px 14px",
                 fontSize: "var(--text-meta)",
-                color: "var(--color-text-muted)",
                 cursor: "pointer",
                 pointerEvents: "auto",
                 fontFamily: "inherit",
@@ -402,18 +387,12 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
           <div
             style={{
               display: "flex", justifyContent: "center", padding: "4px",
-              borderTop: "1px solid var(--color-border-subtle)",
-              background: "var(--color-bg-code-header)",
             }}
           >
             <button
               type="button"
               onClick={() => setExpanded(false)}
-              style={{
-                background: "transparent", border: "none",
-                fontSize: "var(--text-meta)", color: "var(--color-text-muted)",
-                cursor: "pointer", fontFamily: "inherit",
-              }}
+              className="cursor-pointer bg-transparent font-[inherit] text-[length:var(--text-meta)] text-text-muted"
             >
               收起
             </button>

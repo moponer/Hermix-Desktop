@@ -9,26 +9,23 @@ import { COMPLETED } from "./strings";
  * turn count and estimated cost. Driven by `SubAgentEvent` WS events
  * (see `useStreamChat` → `onSubAgentEvent`).
  *
- * Uses the project's established info/success/error status tokens
- * (no blue/purple per design rules) and gray/zinc surfaces.
- *
- * Light-theme fix: removed `opacity` inline styles that
- * killed contrast on white backgrounds (0.55 opacity on #fafafa =
- * nearly invisible). Now uses explicit CSS variables for muted text
- * (--color-text-muted / --color-text-faint) instead of opacity tricks.
- * Also fixed dark fallback colors in CSS var defaults — these were
- * hard-coded dark values (#1c1c20, #e5e7eb) that would render
- * light-on-light / dark-on-dark if the CSS var failed to resolve.
+ * 2026-10-23：整个组件从**全内联样式**重写为 className。
+ * 此前它 100% 用 `style={{ … }}` 写布局与配色（display/fontSize/padding/
+ * borderRadius/color 全在内联里），后果有三条：
+ *   1. 拿不到 :hover / :focus，面板里的行永远是死的；
+ *   2. 换主题只能改令牌值，改不了这层写死的 `fontSize: 12.5` 之类；
+ *   3. 与全站 `--text-*` 七档、`--radius-*` 四档各走一套，同屏字号不一致。
+ * 现在配色走语义类、字号走 --text-*、圆角走 --radius-*，与其余面板同源。
  */
 
 const PHASE_CONFIG: Record<
   SubAgentPhase,
-  { label: string; bg: string; text: string; icon: typeof Loader2 }
+  { label: string; badge: string; icon: typeof Loader2 }
 > = {
-  spawned: { label: "已启动", bg: "var(--color-accent-soft-strong)", text: "var(--color-accent)", icon: Bot },
-  started: { label: "执行中", bg: "var(--color-accent-soft-strong)", text: "var(--color-accent)", icon: Loader2 },
-  done: { label: COMPLETED, bg: "var(--color-success-soft)", text: "var(--color-text-success)", icon: CheckCircle2 },
-  failed: { label: "失败", bg: "var(--color-error-soft)", text: "var(--color-text-error)", icon: AlertCircle },
+  spawned: { label: "已启动", badge: "bg-accent-soft text-accent", icon: Bot },
+  started: { label: "执行中", badge: "bg-accent-soft text-accent", icon: Loader2 },
+  done: { label: COMPLETED, badge: "bg-success-soft text-text-success", icon: CheckCircle2 },
+  failed: { label: "失败", badge: "bg-error-soft text-text-error", icon: AlertCircle },
 };
 
 const ROLE_LABEL: Record<string, string> = {
@@ -42,123 +39,56 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
   if (list.length === 0) return null;
 
   return (
-    <div
-      className="sub-agent-panel footer-block"
-      style={{
-        background: "var(--color-bg-secondary)",
-        border: "1px solid var(--color-border-secondary)",
-        borderRadius: 12,
-        padding: "10px 12px",
-        // Vertical margin only — horizontal centering + width are
-        // handled by `.footer-block` so all three trailing blocks
-        // share the same horizontal lane.
-        marginTop: 10,
-        marginBottom: 10,
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-        <Sparkles className="icon-md" style={{ color: "var(--color-accent)" }} />
-        <span style={{ fontWeight: 600, fontSize: 13, color: "var(--color-text-primary)" }}>
+    <div className="sub-agent-panel footer-block mb-2.5 mt-2.5 rounded-[var(--radius-lg)] bg-[var(--color-bg-secondary)] px-3 py-2.5">
+      <div className="mb-2 flex items-center gap-1.5">
+        <Sparkles className="icon-md text-accent" />
+        <span className="text-[length:var(--text-ui)] font-semibold text-[var(--color-text-primary)]">
           子代理
         </span>
-        <span style={{ fontSize: 11, color: "var(--color-text-faint)" }}>
+        <span className="text-[length:var(--text-tiny)] text-[var(--color-text-faint)]">
           {list.length}
         </span>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="flex flex-col gap-2">
         {list.map((sa) => {
           const cfg = PHASE_CONFIG[sa.phase];
           const Icon = cfg.icon;
           return (
-            <div
-              key={sa.subAgentId}
-              style={{
-                background: "var(--color-bg-tertiary)",
-                borderRadius: 8,
-                padding: "8px 10px",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                }}
-              >
+            <div key={sa.subAgentId} className="rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] px-2.5 py-2">
+              <div className="flex items-center justify-between gap-2">
                 <span
                   title={sa.task}
-                  style={{
-                    fontSize: 12.5,
-                    color: "var(--color-text-primary)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    flex: 1,
-                    minWidth: 0,
-                  }}
+                  className="min-w-0 flex-1 truncate text-[length:var(--text-meta)] text-[var(--color-text-primary)]"
                 >
                   {sa.task || "（无任务描述）"}
                 </span>
                 <span
-                  className="inline-flex items-center gap-1 rounded-full font-semibold"
-                  style={{
-                    background: cfg.bg,
-                    color: cfg.text,
-                    padding: "2px 8px",
-                    fontSize: 10.5,
-                    flexShrink: 0,
-                  }}
+                  className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[length:var(--text-tiny)] font-semibold ${cfg.badge}`}
                 >
-                  <Icon className={`icon-sm ${sa.phase === "started" ? "animate-spin shrink-0" : undefined}`} />
+                  <Icon className={`icon-sm ${sa.phase === "started" ? "shrink-0 animate-spin" : ""}`} />
                   {cfg.label}
                 </span>
               </div>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  marginTop: 5,
-                  fontSize: 11,
-                  color: "var(--color-text-muted)",
-                }}
-              >
+              <div className="mt-1 flex items-center gap-2.5 text-[length:var(--text-tiny)] text-[var(--color-text-muted)]">
                 {sa.role && <span>{ROLE_LABEL[sa.role] ?? sa.role}</span>}
                 {typeof sa.turns === "number" && <span>轮次 {sa.turns}</span>}
                 {typeof sa.costUsd === "number" && <span>≈ ¥{sa.costUsd.toFixed(4)}</span>}
               </div>
-              {/* Rolling step log — one line per internal action (tool
-                  call / thinking), newest at the bottom. The backend
-                  sends the last N entries (SUB_AGENT_STEP_LOG_CAP = 6);
-                  older rows fall off, giving a terminal-style scroll. */}
+              {/* Rolling step log — one line per internal action (tool call /
+                  thinking), newest at the bottom. The backend sends the last N
+                  entries (SUB_AGENT_STEP_LOG_CAP = 6); older rows fall off,
+                  giving a terminal-style scroll. */}
               {Array.isArray(sa.recentSteps) && sa.recentSteps.length > 0 && (
-                <div
-                  style={{
-                    marginTop: 6,
-                    borderTop: "1px solid var(--color-border-secondary)",
-                    paddingTop: 5,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 2,
-                  }}
-                >
+                <div className="mt-1.5 flex flex-col gap-0.5 pt-1">
                   {sa.recentSteps.map((s, i) => (
                     <div
                       key={`${sa.subAgentId}-step-${i}`}
-                      style={{
-                        fontSize: 10.5,
-                        fontFamily: 'ui-monospace, "Cascadia Code", Menlo, monospace',
-                        color:
-                          i === sa.recentSteps!.length - 1 && sa.phase === "started"
-                            ? "var(--color-accent)"
-                            : "var(--color-text-faint)",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        lineHeight: 1.5,
-                      }}
                       title={s}
+                      className={`truncate font-mono text-[length:var(--text-tiny)] leading-snug ${
+                        i === sa.recentSteps!.length - 1 && sa.phase === "started"
+                          ? "text-accent"
+                          : "text-[var(--color-text-faint)]"
+                      }`}
                     >
                       {s}
                     </div>
@@ -167,15 +97,8 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
               )}
               {sa.phase === "failed" && sa.error && (
                 <div
-                  style={{
-                    marginTop: 5,
-                    fontSize: 11,
-                    color: "var(--color-text-error)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
                   title={sa.error}
+                  className="mt-1 truncate text-[length:var(--text-tiny)] text-[var(--color-text-error)]"
                 >
                   {sa.error}
                 </div>

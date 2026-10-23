@@ -175,11 +175,7 @@ export function Composer(p: ComposerProps) {
     >
       {draggingFiles && (
         <div
-          className="absolute inset-0 z-10 rounded-xl flex items-center justify-center pointer-events-none"
-          style={{
-            background: "color-mix(in srgb, var(--color-chip-workspace-fg) 12%, transparent)",
-            border: "2px dashed color-mix(in srgb, var(--color-chip-workspace-fg) 60%, transparent)",
-          }}
+          className="drop-zone absolute inset-0 z-10 rounded-xl flex items-center justify-center pointer-events-none"
         >
           <div className="text-ui text-[color:var(--color-chip-workspace-fg)] font-medium bg-bg-elevated/90 px-3 py-1.5 rounded-lg">
             松开以添加文件
@@ -630,26 +626,14 @@ export function Composer(p: ComposerProps) {
                     aria-label={canQueue ? "加入队列" : "发送"}
                     /* 墨与纸 v4：发送钮是结构件不是 CTA —— 永不用强调色，
                        主行动靠位置（右下角）表达（WorkBuddy 规律 4）。 */
-                    className="relative flex items-center justify-center w-8 h-8 rounded-full transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
-                    style={{
-                      background: hasContent
-                        ? "var(--color-inverse-surface)"
-                        : "var(--color-bg-quaternary)",
-                      color: hasContent
-                        ? "var(--color-inverse-on-surface)"
-                        : "var(--color-text-faint)",
-                    }}
+                    className={`relative flex items-center justify-center w-8 h-8 rounded-full transition-opacity disabled:opacity-30 disabled:cursor-not-allowed ${
+                      hasContent ? "send-btn--ready" : "send-btn--idle"
+                    }`}
                     title={canQueue ? "加入队列，等当前回复完成后自动发送 (Enter)" : "发送 (Enter)"}
                   >
                     <Send className="icon-md" />
                     {canQueue && (
-                      <Clock
-                        className="icon-xs absolute -top-0.5 -right-0.5 p-[1px] rounded-full"
-                        style={{
-                          background: "var(--color-bg-quaternary)",
-                          color: "var(--color-text-secondary)",
-                        }}
-                      />
+                      <Clock className="icon-xs absolute -top-0.5 -right-0.5 rounded-full bg-bg-quaternary p-[1px] text-text-secondary" />
                     )}
                   </button>
                 )}
@@ -657,12 +641,7 @@ export function Composer(p: ComposerProps) {
                   <button
                     onClick={() => p.onStop?.(p.activeComposerSessionId)}
                     /* R3-2：与发送键同位同尺寸（32px），消除互斥切换时的跳版 */
-                    className="flex items-center justify-center w-8 h-8 rounded-lg transition-opacity hover:opacity-90"
-                    style={{
-                      background:
-                        "color-mix(in srgb, var(--color-error) 14%, transparent)",
-                      color: "var(--color-text-error)",
-                    }}
+                    className="tint-error flex items-center justify-center w-8 h-8 rounded-lg transition-opacity hover:opacity-90 text-text-error"
                     aria-label="停止生成"
                     title="停止生成"
                   >

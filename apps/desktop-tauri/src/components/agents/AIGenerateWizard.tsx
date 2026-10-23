@@ -482,7 +482,9 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
           <div className="space-y-4">
             {generating ? (
               <div className="rounded-xl bg-bg-card p-12 flex flex-col items-center justify-center">
-                <div className="w-10 h-10 rounded-full border-2 border-bg-tertiary" style={{ borderTopColor: "var(--color-text-primary)" }} />
+                {/* 旋转环：`border-t-*` 的任意值语法比内联 borderTopColor 更符合
+                    "样式只有一处出处" —— 环的粗细/尺寸/动画都在类里。 */}
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-bg-tertiary border-t-[color:var(--color-text-primary)]" />
                 <p className="text-[length:var(--text-ui)] text-text-secondary">AI 正在为你设计专家…</p>
                 <p className="text-[length:var(--text-meta)] text-text-faint mt-1">推理 + 生成人设 + 写 system prompt + 想样例对话</p>
               </div>

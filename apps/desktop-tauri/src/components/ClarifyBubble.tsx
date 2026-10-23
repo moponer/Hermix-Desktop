@@ -28,8 +28,7 @@ export function ClarifyCard({
   return (
     <div className="flex gap-2.5 h-enter items-start">
       <div
-        className="shrink-0 mt-0.5 w-[22px] h-[22px] rounded-md flex items-center justify-center"
-        style={{ background: "color-mix(in srgb, var(--color-info) 12%, transparent)" }}
+        className="tint-info shrink-0 mt-0.5 w-[22px] h-[22px] rounded-md flex items-center justify-center"
         title="需要确认"
       >
         <HelpCircle className="icon-sm text-accent" />
