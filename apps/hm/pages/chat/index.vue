@@ -307,6 +307,15 @@ function onFrame(raw: string) {
       applyVoiceConfig(f.voice_stt)
       return
     }
+    if (f?.type === 'session.list') {
+      // 桌面会话列表：落盘给阿黎首页的「电脑上的会话」区块用（不进对话流）。
+      try {
+        uni.setStorageSync('hermix.desktopSessions', JSON.stringify(f.sessions ?? []))
+      } catch {
+        // 存储失败不阻断：下次连上会再推一份。
+      }
+      return
+    }
   } catch {
     // 非 JSON 不可能走到这，但保底按原路径处理
   }

@@ -14,6 +14,8 @@ import { getTasks } from '../../core/tasks'
 import { knownApprovals } from '../../core/approvalQueue'
 
 const sessions = ref<SessionRec[]>([])
+/** 电脑推来的会话列表（桌面会话浏览，slice 1：只读列表）。 */
+const desk = ref<any[]>([])
 const credReady = ref(false)
 const paired = ref(false)
 const running = ref(0)
@@ -25,6 +27,12 @@ onShow(() => {
   credReady.value = !!cfg && (cfg.providers?.length ?? 0) > 0
   paired.value = isPaired()
   approvals.value = knownApprovals().length
+  // 桌面会话列表：电脑连上时经密封帧推来，落在本地存储
+  try {
+    desk.value = JSON.parse(uni.getStorageSync('hermix.desktopSessions') || '[]') || []
+  } catch {
+    desk.value = []
+  }
   // 她在干嘛：running 的会话数。失败按 0——首页不该因一次网络抖动红掉。
   void getTasks()
     .then((list) => {
@@ -54,6 +62,11 @@ function startNew() {
   setChatSource('ali')
   uni.removeStorageSync('hermix.restoreSession')
   uni.switchTab({ url: '/pages/chat/index' })
+}
+
+/** 桌面会话：slice 1 只读列表；完整内容仍在电脑上看（不假装能在手机上翻全文）。 */
+function openDesktop(d: any) {
+  uni.showToast({ title: `「${d.title || '会话'}」共 ${d.message_count || 0} 条 · 到电脑上查看全文`, icon: 'none' })
 }
 
 function goApproval() {
@@ -101,6 +114,28 @@ function confirmDelete(s: SessionRec) {
     <view class="cta" @tap="startNew">
       <text class="cta-t">开始和阿黎说点什么</text>
       <text class="cta-s">新建一条对话</text>
+    </view>
+
+    <!-- 电脑上的会话：她在那边跑过什么。slice 1 只读列表（标题/条数/归属），
+         全文仍在电脑上看——不假装手机能翻全文。 -->
+    <view class="sec-head">
+      <text class="sec-t">电脑上的会话</text>
+      <text v-if="desk.length" class="sec-n">{{ desk.length }}</text>
+    </view>
+
+    <view v-if="desk.length === 0" class="empty">
+      <text class="e-t">还没拿到电脑的会话列表</text>
+      <text class="e-s">电脑连上后自动推过来</text>
+    </view>
+
+    <view v-else class="list">
+      <view v-for="d in desk" :key="d.id" class="row" @tap="openDesktop(d)">
+        <view class="rbody">
+          <text class="r-t">{{ d.title || '会话' }}</text>
+          <text class="r-s">{{ d.message_count || 0 }} 条 · {{ d.workspace ? '项目' : '独立' }}</text>
+        </view>
+        <view class="rdel"><text>电脑</text></view>
+      </view>
     </view>
 
     <view class="sec-head">
