@@ -93,13 +93,16 @@ code ::selection,
   box-shadow: var(--shadow-focus-flat);
   border-radius: var(--radius-sm);
 }
-/* 输入框：光晕换成「底色调亮 + 光晕」—— 输入区本来就是一块面，焦点时把
-   这块面提亮一档比加边框更贴合扁平语言。 */
+/* 输入框：**不加任何焦点环**（2026-10-23）。
+   文本输入有插入符作为焦点指示，再套一圈 2px 光晕，在白色输入面上读起来
+   就是一整圈粗灰边框 —— 用户反复反馈的"难看的粗描边"多半是它。
+   注意：这条覆盖必须写在上面全局 `:focus-visible` 之后，且选择器特异性
+   （元素+伪类）足够高，否则会被全局规则重新加上光晕。 */
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
   outline: none;
-  box-shadow: var(--shadow-focus-flat);
+  box-shadow: none;
 }
 
 /* ── Reduced motion ─────────────────────────────────────────────── */
@@ -145,7 +148,7 @@ select:focus-visible {
 .error-boundary-fallback__actions { display: flex; gap: 12px; }
 .error-boundary-fallback__btn { padding: 8px 20px; border-radius: var(--radius-md); cursor: pointer; font-size: var(--text-body); }
 .error-boundary-fallback__btn--primary { border: none; background: var(--color-bg-tertiary); color: var(--color-text-primary); font-weight: 500; }
-.error-boundary-fallback__btn--secondary { border: 1px solid var(--color-border-secondary); background: transparent; color: var(--color-text-muted); }
+.error-boundary-fallback__btn--secondary {  background: transparent; color: var(--color-text-muted); }
 .error-boundary-fallback__details { margin-top: 24px; max-width: 560px; width: 100%; }
 .error-boundary-fallback__summary { cursor: pointer; font-size: var(--text-meta); color: var(--color-text-faint); }
 .error-boundary-fallback__pre { margin-top: 8px; padding: 12px; background: var(--color-bg-secondary); border-radius: var(--radius-md); font-size: var(--text-meta); overflow: auto; max-height: 200px; white-space: pre-wrap; word-break: break-word; color: var(--color-error); }
@@ -179,7 +182,6 @@ select:focus-visible {
   gap: 7px;
   max-width: min(360px, calc(100vw - 32px));
   padding: 6px 8px 6px 10px;
-  border: 1px solid var(--color-border-subtle);
   border-radius: 8px;
   background: var(--color-bg-elevated);
   box-shadow: var(--shadow-pop);
@@ -255,11 +257,8 @@ select:focus-visible {
 
 /* ── Spreadsheet cell borders ─────────────────────────────────── */
 .cell-border-subtle {
-  border-bottom: 1px solid var(--color-border-subtle);
-  border-right: 1px solid var(--color-border-subtle);
 }
 .cell-border-right-subtle {
-  border-right: 1px solid var(--color-border-subtle);
 }
 .cell-border-right-code {
   border-right: 1px solid var(--color-bg-code-border);

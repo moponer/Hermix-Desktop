@@ -207,7 +207,6 @@
   z-index: 100;
   flex-shrink: 0;
   user-select: none;
-  border-bottom: 1px solid var(--color-border-primary);
   /* 不设 overflow:hidden — 让 titlebar 内下拉（如 ThemeToggle）能向下溢出显示 */
 }
 
@@ -884,7 +883,6 @@ height: 26px;
   padding: 4px;
   border-radius: var(--radius-md);
   background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border-primary);
   box-shadow: var(--shadow-pop);
   z-index: 1000;
   /* tiny enter animation — fade + slide up 4px */
@@ -1126,7 +1124,6 @@ height: 26px;
 
 .groupchat-composer {
   background: var(--color-bg-primary);
-  border: 1px solid var(--color-border-primary);
   border-radius: 12px;
   box-shadow: var(--shadow-card);
   transition: border-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
@@ -1152,7 +1149,6 @@ height: 26px;
   align-items: center;
   gap: 4px;
   padding: 0 8px;
-  border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-bg-secondary);
   /* 40px：与 .sidebar-head、ChatView 标题行同高，三段头部接成一条水平带。 */
   height: 40px;
@@ -1258,7 +1254,6 @@ height: 26px;
   justify-content: center;
   gap: 4px;
   padding: 14px 8px;
-  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
   background: var(--color-bg-secondary);
   color: var(--color-text-primary);
@@ -1296,7 +1291,6 @@ height: 26px;
   gap: 8px;
   flex-shrink: 0;
   padding: 6px 10px;
-  border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-bg-secondary);
   font-size: var(--text-tiny, 11px);
   color: var(--color-text-muted);
@@ -1527,7 +1521,6 @@ height: 26px;
 .user-menu-sub {
   margin: 2px 0 2px 22px;
   padding: 3px;
-  border-left: 1px solid var(--color-border-subtle);
   display: flex;
   flex-direction: column;
   gap: 1px;

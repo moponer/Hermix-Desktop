@@ -31,8 +31,19 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const ROOT = join(process.cwd(), "src");
-const EXT = /\.(tsx|ts)$/;
+/* 2026-10-23：把 .css 纳入扫描。此前只扫 tsx/ts，于是**CSS 层的 129 处
+   `border: 1px solid` 完全在门禁盲区里** —— 这正是「改了很多轮，界面上还是
+   到处有描边」的根因：tsx 侧的 G10 一路在清，CSS 侧从没人管。 */
+const EXT = /\.(tsx|ts|css)$/;
 const SKIP = /(\.test\.|\.d\.ts$)/;
+
+/* 白名单：CSS 里允许保留的描边（功能性，非装饰）：
+   · 2px dashed —— 拖放落点提示（"松手放到这里"）
+   · transparent —— 占位，避免 hover 时跳版
+   · 语义色描边（error/warning/…）—— 状态标识
+   中性结构描边（var(--color-border-*) / var(--twin-line*)）一律不允许多。 */
+const CSS_NEUTRAL_BORDER_BASELINE = 0;
+let cssNeutralBorders = 0;
 
 // 行内出现这些形态视为「已在令牌体系内」，整行豁免 G1 —— 与
 // check-theme-tokens 的差异：豁免条件是**只有令牌**，而不是
@@ -82,7 +93,8 @@ for (const file of walk(ROOT)) {
     const ln = lines[i];
     // 内联样式块起点（多行 style={{ … }} 的配色行也算）
     if (/style=\{\{/.test(ln)) lastStyleStart = i;
-    if (i - lastStyleStart <= 4 && /var\(--color/.test(ln) && /style=\{\{|background|color:|border/.test(ln)) {
+    // 只统计 tsx/ts：CSS 文件里出现 `style={{ … }}` 只可能是注释中的反例写法。
+    if (!/\.css$/.test(file) && i - lastStyleStart <= 4 && /var\(--color/.test(ln) && /style=\{\{|background|color:|border/.test(ln)) {
       // 只有当它确实处于内联样式块里才算（4 行窗口内出现过 style={{）
       if (i >= lastStyleStart && lastStyleStart >= 0 && i - lastStyleStart <= 4) {
         inlineColorHits++;
@@ -96,6 +108,15 @@ for (const file of walk(ROOT)) {
     }
     if (i - lastAllow <= 3) continue;
 
+    // G11 — CSS 层中性结构描边（2026-10-23 新增，基线 0）
+    // 注释行豁免：文档里引用的示例写法不算违规。
+    if (
+      /\.css$/.test(file) &&
+      !/^\s*(\/\*|\*)/.test(ln) &&
+      /border(-top|-bottom|-left|-right)?:\s*1px\s+solid\s+var\(--(?:color-)?(?:border-[a-z]+|twin-line[a-z-]*)/.test(ln)
+    ) {
+      cssNeutralBorders++;
+    }
     // G2 — dark: 变体已废除
     if (/\bdark:[a-z]/.test(ln) && !/^\s*(\/\/|\*|import )/.test(ln)) {
       push(file, i + 1, "G2-dark-variant", ln);
@@ -139,6 +160,14 @@ for (const file of walk(ROOT)) {
       }
     }
   }
+}
+
+if (cssNeutralBorders > CSS_NEUTRAL_BORDER_BASELINE) {
+  violations.push(
+    `[G11-css-border] CSS 层中性结构描边 ${cssNeutralBorders} 处 > 基线 ${CSS_NEUTRAL_BORDER_BASELINE} 处`,
+    "  → 删掉 border，用底色差（--color-bg-primary/secondary/card/elevated）+ 间距分层。",
+    "     功能性描边（dashed 拖放区 / transparent 占位 / 语义色状态框）不在统计内。",
+  );
 }
 
 if (inlineColorHits > INLINE_COLOR_BASELINE) {

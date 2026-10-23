@@ -67,7 +67,6 @@
      两行）+ 操作组，padding 收到 10。 */
   padding: 10px 12px 10px 14px;
   background: var(--color-bg-code-header);
-  border-bottom: 1px solid var(--color-border-subtle);
   font-family: var(--font-sans);
   flex-shrink: 0;
   position: relative;
@@ -218,7 +217,6 @@
   width: 28px;
   height: 28px;
   border-radius: 6px;
-  border: 1px solid var(--color-border-subtle);
   background: var(--color-bg-code-header);
   color: var(--color-text-muted);
   cursor: pointer;
@@ -357,7 +355,6 @@
   height: 22px;
   padding: 0 12px;
   background: var(--color-bg-code-header, var(--color-bg-tertiary));
-  border-top: 1px solid var(--color-border-subtle);
   font-family: var(--font-mono);
   font-size: var(--text-tiny);
   color: var(--color-text-faint);
@@ -487,7 +484,6 @@
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--color-border-subtle);
   background: color-mix(in srgb, var(--color-bg-primary) 94%, var(--color-bg-tertiary));
   flex-shrink: 0;
 }
@@ -532,7 +528,6 @@
   padding: 4px 10px;
   border-radius: 5px;
   background: color-mix(in srgb, var(--color-bg-tertiary) 100%, transparent);
-  border: 1px solid var(--color-border-subtle);
   font-size: var(--text-tiny, 11px);
   line-height: 1.4;
   overflow-x: auto;
@@ -581,7 +576,6 @@
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
-  border: 1px solid var(--color-border-subtle);
   border-radius: 5px;
   padding: 2px;
   background: color-mix(in srgb, var(--color-bg-tertiary) 100%, transparent);
@@ -674,7 +668,6 @@
   color: var(--color-text-muted);
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .computer-detail-row {
@@ -771,7 +764,6 @@
   gap: 8px;
   height: 22px;
   padding: 0 10px;
-  border-top: 1px solid var(--color-border-subtle);
   background: color-mix(in srgb, var(--color-bg-primary) 94%, var(--color-bg-tertiary));
   font-size: var(--text-micro, 10px);
   color: var(--color-text-muted);

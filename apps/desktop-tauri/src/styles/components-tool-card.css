@@ -293,7 +293,6 @@
   flex-shrink: 10;
   margin-left: 5px;
   padding-left: 5px;
-  border-left: 1px solid var(--color-border-secondary);
 }
 
 /* Icon — plain outline glyph, no coloured chip, no background.
@@ -417,7 +416,6 @@
   white-space: nowrap;
   flex-shrink: 0;
   margin-left: 4px;
-  border: 1px solid var(--color-border-secondary);
   background: var(--color-bg-tertiary);
   color: var(--color-text-secondary);
 }
@@ -687,7 +685,6 @@
   margin-top: 4px;
   margin-bottom: 12px;
   border-radius: var(--radius-lg, 10px);
-  border: 1px solid var(--color-border-subtle);
   background: var(--color-bg-secondary);
   box-shadow: var(--shadow-card);
   overflow: hidden;
@@ -1193,7 +1190,6 @@
      margin-left/right 14px 跟 .apv-decision-row (padding 11px 14px)
      的左右内边距对齐 — 同一条隐形垂直线. */
   margin: 12px 14px 14px;
-  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md, 6px);
   background: var(--color-bg-primary);
   overflow: hidden;
@@ -1311,7 +1307,6 @@
   gap: 10px;
   padding: 8px 10px;
   background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
   border-radius: 7px;
 }
 .apv-file-path {
@@ -1361,7 +1356,6 @@
 .apv-diff-content {
   padding: 9px 11px;
   background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
   border-radius: 6px;
   animation: apv-diff-enter var(--duration-fast, 120ms) ease-out both;
 }
@@ -1413,7 +1407,6 @@
   flex-direction: column;
   gap: 5px;
   padding: 9px 11px;
-  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md, 6px);
   background: var(--color-bg-primary);
 }
@@ -1500,7 +1493,6 @@
   font-family: var(--font-mono);
   font-size: var(--text-micro, 10px);
   padding: 1px 5px;
-  border: 1px solid var(--color-border-primary);
   border-bottom-width: 2px;
   border-radius: 4px;
   background: var(--color-bg-primary);

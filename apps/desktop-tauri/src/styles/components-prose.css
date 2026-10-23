@@ -81,7 +81,6 @@
 /* Mermaid 图表块 */
 .md-mermaid {
   margin: 0.9em 0;
-  border: 1px solid var(--color-border-primary);
   border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--color-bg-secondary);
@@ -91,7 +90,6 @@
   align-items: center;
   justify-content: space-between;
   padding: 5px 10px;
-  border-bottom: 1px solid var(--color-border-primary);
   font-size: var(--text-meta);
   color: var(--color-text-muted);
 }
@@ -239,7 +237,6 @@
   height: 14px;
   margin-right: 6px;
   vertical-align: -2px;
-  border: 1px solid var(--color-border-secondary);
   border-radius: 4px;
   color: transparent;
 }
@@ -315,7 +312,6 @@
 .prose td {
   padding: 0.5em 0.7em;
   border: 0;
-  border-bottom: 1px solid var(--color-border-subtle, var(--color-border-secondary));
   vertical-align: top;
 }
 .prose th {
@@ -644,7 +640,6 @@
      值得一圈 1px 细边。这与 .modal / 预览卡是同一套语言。原先「描边就在
      宣告这是内容」的反对理由在这里不成立 —— 它就是内容。 */
   background: var(--color-bg-primary);
-  border: 1px solid var(--color-border-primary);
   overflow: hidden;
 }
 .fcx[data-open="true"] { border-color: var(--color-border-secondary); }
@@ -712,7 +707,6 @@
   flex-direction: column;
   /* 清单与标题行之间一条发丝线：让「标题 / 明细」两层结构在视觉上分开，
      取代原先靠 1px 间隙硬凑的排布。容器顶边，按分割线规则保留。 */
-  border-top: 1px solid var(--color-border-subtle);
 }
 /* 分割线规则（2026-10-11）：清单内逐行线取消——行距 + 文件名等宽字体
    已承担扫描分隔。 */
@@ -920,7 +914,6 @@
   padding: 6px 10px;
   border-radius: var(--radius-md);
   background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
 }
 .memory-update-header {
   display: flex;

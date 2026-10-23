@@ -72,7 +72,8 @@ Key crates:
   - `.tsx` 里**禁止** `style={{ background|color|border|fontSize|borderRadius|boxShadow: … }}` 这类静态样式。只允许两类例外：① 运行时几何（拖拽宽度、坐标、进度百分比、表格列宽、动态 z-index）；② 数据自带色（专家色板、渠道品牌色）。
   - 类目身份色只走 `--color-tone-*`（8 档），状态语义色只走 `--color-{success,warning,error,info}`，**两者不复用**（否则「数据库」会被读成「成功」）。
   - 页面容器只用 `settings/SettingsSection.tsx` 的 `SettingsSection` / `SettingsGrid` / `SettingsStatBar`；列表行只用 `config/ToolListRow`；开关只用 `ToggleSwitch`；按钮只用 `btn-flat` / `chip-flat` 类族。**不要在页面里另写一份同类结构。**
-  - 门禁：`check-design-guard` 的 **G1**（禁字面色值）+ **G6**（内联静态配色棘轮，只减不增，`INLINE_COLOR_BASELINE` 随清理下调）+ `check-theme-tokens` 的 bare-color / contrast 全部阻断。
+  - 门禁：`check-design-guard` 的 **G1**（禁字面色值）+ **G6**（内联静态配色，基线 0）+ **G11**（**CSS 层**中性结构描边，基线 0）+ `check-theme-tokens` 的 bare-color / contrast 全部阻断。
+  - **CSS 层同样受管**（2026-10-23 补）：脚本此前只扫 `tsx/ts`，于是 129 处 `border: 1px solid` 在 CSS 里长期无人管 —— 这是「改了很多轮、界面上还是到处有线」的真正原因。现在 G11 扫 `src/**/*.css`，只放行功能性描边：`2px dashed`（拖放落点）、`transparent`（hover 占位）、语义色描边（error/warning 状态框）。
 - **对比度是硬约束（2026-10-21）** — `check-theme-tokens.mjs` 的 `contrast` 规则实测 29 组前景/背景配对的 WCAG 比值（半透明底**合成**到纸面上再算），<4.5:1 退出 1。语义四色因此各有一个「文字安全档」`--color-text-{success,warning,error,info}`（保持色相、只压暗解出，纸面与各自 `-soft` 底都 ≥4.5:1）—— 12px 以下的小字一律走它，别用原始语义色。
 - **共享预览层纪律（preview-layer gate，2026-10-19）** — `scripts/check-preview-layer.mjs`（进 ci-gate 的 `[4d/14]`）守 `@hermix/preview` 的一致性：共享组件的类名必须在 `packages/preview/src/styles/preview-doc.css` 里有规则（**禁 Tailwind 原子类**——viewer 刻意不装 Tailwind，原子类在那边是空操作），共享 CSS 用到的每个 `var(--token)` 两侧都要定义（`var()` 解析失败 = 整条声明被丢弃）。渲染器样式（image/pdf/pptx/纯文本/状态/头部按钮）必须住在共享包里，桌面端 `code-view.css` 只留 `.code-*` 与桌面外壳。依据：`docs/notes/implemented/architecture/2026-10-19-shared-preview-layer-ownership.md`。
 

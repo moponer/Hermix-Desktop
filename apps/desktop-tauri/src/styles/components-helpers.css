@@ -51,7 +51,6 @@
   font-weight: 500;
   color: var(--color-text-muted);
   background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
   cursor: default;
   transition: border-color var(--duration-fast) ease;
 }
@@ -102,7 +101,6 @@
   font-size: var(--text-tiny);
   color: var(--color-text-muted);
   background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
   max-width: 100%;
   flex-wrap: wrap;
   transition: border-color var(--duration-fast) ease;
@@ -184,7 +182,6 @@
   font-family: var(--font-mono);
   color: var(--color-text-muted);
   background: var(--color-bg-primary);
-  border: 1px solid var(--color-border-subtle);
   white-space: nowrap;
 }
 .thought-stream-event-info { color: var(--color-text-muted); }
@@ -336,7 +333,6 @@
      级别的更淡值。竖线是**配角**：它只负责说「这是一段旁注」，而标签行
      已经在说同一件事。两处都在喊同一句话，竖线一粗就变成主角，
      把真正要读的思考正文压了下去。 */
-  border-left: 1px solid var(--color-border-secondary);
   color: var(--color-text-thinking);
   font-size: var(--text-ui, 13px);
   line-height: var(--leading-reading, 1.75);
@@ -420,7 +416,6 @@
 .tl-text-inner--meta {
   margin-top: 6px;
   padding-top: 8px;
-  border-top: 1px solid var(--color-border-subtle);
 }
 
 /* ── 5a-0b. Process Timeline — the ONE foldable block ──
@@ -804,7 +799,6 @@
    —— AI 生成 UI 的典型标志；全边框同样给出面板分层。） */
 .tw-msg-output {
   background: var(--color-bg-code);
-  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   margin-top: 6px;
@@ -828,7 +822,6 @@
 .tw-msg-output-copy {
   color: var(--color-text-muted);
   background: transparent;
-  border: 1px solid var(--color-border-subtle);
 }
 .tw-msg-output-copy:hover {
   background: var(--color-bg-hover);
@@ -907,7 +900,6 @@
   flex-direction: column;
   border-radius: var(--radius-lg);
   background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
   overflow: hidden;
 }
 .todo-card-header {
@@ -1591,7 +1583,6 @@
   gap: 8px;
   padding: 10px 12px;
   background: var(--color-bg-primary);
-  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md, 6px);
   color: var(--color-text-muted);
   font-size: var(--text-ui);
@@ -1637,7 +1628,6 @@
   font-size: var(--text-meta);
   color: var(--color-text-secondary);
   background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
   cursor: help;
 }
 
@@ -1661,7 +1651,6 @@
   align-items: center;
   gap: 2px;
   padding: 8px 20px 0;
-  border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-bg-secondary);
 }
 
@@ -1712,7 +1701,6 @@
   min-height: 360px;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
-  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md, 6px);
   padding: 14px;
   font-family: "Cascadia Code", "Fira Code", monospace;
@@ -1765,7 +1753,6 @@
   font-size: var(--text-meta);
   font-weight: 500;
   line-height: 1.4;
-  border: 1px solid var(--color-border-subtle);
   background: var(--color-bg-secondary);
   color: var(--color-text-secondary);
 }
@@ -1814,7 +1801,6 @@
 
 .app-detail-readme__section {
   background: var(--color-bg-primary);
-  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg, 8px);
   padding: 16px 20px;
 }

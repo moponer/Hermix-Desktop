@@ -122,7 +122,6 @@
   font-size: var(--text-micro, 10px);
   color: var(--color-text-secondary);
   background: var(--color-bg-primary);
-  border: 1px solid var(--color-border-subtle);
   padding: 3px 7px;
   border-radius: var(--radius-md, 6px);
   overflow: hidden;
@@ -450,7 +449,6 @@
   bottom: calc(100% + 10px);
   z-index: 30;
   background: var(--color-bg-primary);
-  border: 1px solid var(--color-border-primary);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-pop);
   padding: 12px 14px;
@@ -536,7 +534,6 @@
 
 /* ── 命令原样框：即将执行的内容逐字展示（信任核心） ── */
 .approval-drawer__cmd {
-  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md, 6px);
   background: var(--color-bg-inset);
   overflow: hidden;
@@ -564,7 +561,6 @@
 /* 参数详情：原生 details 折叠。命令原样框已给"人话层"，
    JSON 全文只进这个折叠块（一张卡里只出现一次）。 */
 .approval-drawer__args {
-  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md, 6px);
   background: var(--color-bg-secondary);
   overflow: hidden;
@@ -593,7 +589,6 @@
 .approval-drawer__args-pre {
   margin: 0;
   padding: 8px 10px;
-  border-top: 1px solid var(--color-border-subtle);
   font-family: var(--font-mono);
   font-size: var(--text-tiny, 11px);
   line-height: 1.5;
@@ -624,7 +619,6 @@
   overflow: auto;
   border-radius: var(--radius-md, 6px);
   background: var(--color-bg-inset);
-  border: 1px solid var(--color-border-subtle);
   font-family: var(--font-mono);
   font-size: var(--text-meta, 12px);
   line-height: 1.55;
@@ -697,7 +691,6 @@ button.approval-drawer__option:focus-visible {
   min-width: 18px;
   text-align: center;
   padding: 1px 3px;
-  border: 1px solid var(--color-border-secondary);
   border-radius: 4px;
   color: var(--color-text-tertiary);
   background: var(--color-bg-secondary);
@@ -732,7 +725,6 @@ button.approval-drawer__option:focus-visible {
   min-width: 0;
   height: 28px;
   padding: 0 9px;
-  border: 1px solid var(--color-border-secondary);
   border-radius: var(--radius-md, 6px);
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
@@ -768,7 +760,6 @@ button.approval-drawer__option:focus-visible {
 .approval-drawer__hint {
   margin-top: 8px;
   padding-top: 7px;
-  border-top: 1px solid var(--color-border-subtle);
   font-size: var(--text-micro, 10px);
   color: var(--color-text-faint);
 }
