@@ -648,11 +648,18 @@ pub fn normalize_anthropic_response(
                     .unwrap_or("")
                     .to_string();
                 // MiniMax-M3 经 Anthropic 端点返回 tool_use 时，偶发把工具名
-                // 编码成占位字面量 "tool_call"（或 name 留空），真实工具名
-                // 被塞进 input 的顶层 `name`/`tool` 字段（或 input.function.name）。
-                // 这里兜底提取，拿不到才保留原值，交由下游 validator 重试，
-                // 避免会话因工具名退化而直接 finalize 中断。
-                if name.is_empty() || name == "tool_call" {
+                // 留空，真实工具名被塞进 input 的顶层 `name`/`tool` 字段
+                // （或 input.function.name）。这里兜底提取，拿不到才保留原值，
+                // 交由下游 validator 重试，避免会话因工具名退化而直接 finalize
+                // 中断。
+                //
+                // **只处理空名**：`"tool_call"` 是真实存在的桥工具，它的规范
+                // 入参就是 `{"name": X, "arguments": {...}}`，顶层天生带
+                // `name`。把它当占位符会把每一次合法的桥调用改写成"直接调 X
+                // 并把信封当 X 的参数"——X 拿不到自己的字段，回一句
+                // `missing '<param>'`，症状看起来就是"桥的参数通道坏了"。
+                // 信封的解包是桥自己的职责（`ToolCallHandler::extract_arguments`）。
+                if name.is_empty() {
                     if let Some(obj) = block.get("input").and_then(|i| i.as_object()) {
                         for key in ["name", "tool", "function"] {
                             if let Some(v) = obj.get(key) {
@@ -676,12 +683,12 @@ pub fn normalize_anthropic_response(
                     // later at the validator and cost the user a retry
                     // loop. Dumping `input` lets us extend the extractor
                     // when MiniMax nests the name somewhere new.
-                    if name.is_empty() || name == "tool_call" {
+                    if name.is_empty() {
                         tracing::warn!(
                             block_id = block.get("id").and_then(|i| i.as_str()),
                             input = %block.get("input").map(|v| v.to_string()).unwrap_or_default(),
                             "anthropic_adapter: could not recover real tool name from \
-                             degenerate tool_use (name was empty or 'tool_call')"
+                             degenerate tool_use (name was empty)"
                         );
                     }
                 }

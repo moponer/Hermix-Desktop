@@ -1057,11 +1057,37 @@ pub(crate) async fn collect_stream_inner(
     // so streaming turns don't silently finalize into a fragment when the
     // `name` delta never arrives. The real name is delivered inside the
     // tool call's `arguments` JSON (`name` / `tool` / `function.name`).
+    //
+    // **Only an empty name is degenerate.** `tool_call` used to be treated
+    // as a placeholder too (MiniMax encodes nameless calls as that literal),
+    // but `tool_call` is a real resident tool — the deferred-tool bridge —
+    // and its canonical arguments are `{"name": X, "arguments": {...}}`,
+    // i.e. they always carry a top-level `name`. Matching on the name alone
+    // therefore rewrote *every legitimate bridge call* into a direct call to
+    // X while keeping the envelope as X's parameters: X saw `{name,
+    // arguments}` instead of its own fields and answered `missing '<param>'`
+    // (`Missing 'prompt' parameter` / `缺少必填参数 …`). The bridge unwraps
+    // its own envelope (`tool_call.rs::extract_arguments`) and handles both
+    // the nested and the flattened shape, so the right move here is to leave
+    // a call to it completely untouched.
     for tc in &mut tool_calls {
-        if tc.function.name.is_empty() || tc.function.name == "tool_call" {
+        if tc.function.name.is_empty() {
             if let Ok(serde_json::Value::Object(map)) =
                 serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
             {
+                // A bridge envelope whose name was lost: `{"name": X,
+                // "arguments": {...}}`. Route it back to the bridge instead
+                // of guessing X and handing it the wrapper — the wrapper is
+                // not X's parameter shape.
+                let envelope = map
+                    .get("arguments")
+                    .map(|a| a.is_object() || a.is_string())
+                    .unwrap_or(false)
+                    && map.get("name").map(|n| n.is_string()).unwrap_or(false);
+                if envelope {
+                    tc.function.name = "tool_call".to_string();
+                    continue;
+                }
                 for key in ["name", "tool", "function"] {
                     if let Some(v) = map.get(key) {
                         let extracted = if key == "function" {
@@ -1070,7 +1096,11 @@ pub(crate) async fn collect_stream_inner(
                             v.as_str()
                         };
                         if let Some(n) = extracted {
-                            if !n.is_empty() && n != "tool_call" {
+                            // `tool_call` is assignable now (it is the
+                            // bridge); the handler answers a self-call with
+                            // a corrective message instead of a generic
+                            // "unknown tool".
+                            if !n.is_empty() {
                                 tc.function.name = n.to_string();
                                 break;
                             }
@@ -1958,11 +1988,13 @@ mod tests {
     /// pass must backfill `function.name` from `arguments` instead of
     /// silently dropping the call (which would nudge the autonomous loop).
     ///
-    /// Covers both degenerate shapes seen in the wild:
-    /// - `name` absent entirely,
-    /// - `name` delivered as the placeholder `"tool_call"`.
+    /// Only the *absent* shape is recovered here. The `"tool_call"`
+    /// placeholder shape is covered by
+    /// `bridge_tool_call_is_not_rewritten_by_name_recovery`: that literal is
+    /// the name of the real bridge tool, so leaving it alone is the correct
+    /// repair (the bridge unwraps the flattened args itself).
     struct NamelessToolCallProvider {
-        /// `None` → name delta absent; `Some(s)` → degenerate name delta.
+        /// `None` → name delta absent; `Some(s)` → a name delta was sent.
         name_delta: Option<&'static str>,
     }
 
@@ -2025,30 +2057,133 @@ mod tests {
 
     #[tokio::test]
     async fn minimax_m3_missing_name_delta_recovers_from_arguments() {
-        for name_delta in [None, Some("tool_call")] {
-            let provider = Arc::new(NamelessToolCallProvider { name_delta });
-            let outcome = drive_collect(provider, /* stream_overall = */ 5)
-                .await
-                .expect("stream should complete");
-            let outcome = match outcome {
-                StreamCollectOutcome::Complete(resp) => resp,
-                other => panic!("expected Complete, got {:?}", other),
-            };
-            let msg = &outcome.message;
-            let tcs = msg
-                .tool_calls
-                .as_ref()
-                .expect("tool_calls must survive the nameless-name flush");
-            assert_eq!(tcs.len(), 1, "degenerate tool call must not be dropped");
-            assert_eq!(
-                tcs[0].function.name, "read_file",
-                "name must be recovered from the arguments JSON (name_delta={:?})",
-                name_delta
-            );
-            assert_eq!(
-                tcs[0].function.arguments, "{\"name\":\"read_file\",\"path\":\"a.txt\"}",
-                "arguments must be preserved verbatim"
-            );
+        // Absent name → the flattened shape is recoverable: the top-level
+        // `name` really is the tool name here.
+        let provider = Arc::new(NamelessToolCallProvider { name_delta: None });
+        let outcome = drive_collect(provider, /* stream_overall = */ 5)
+            .await
+            .expect("stream should complete");
+        let outcome = match outcome {
+            StreamCollectOutcome::Complete(resp) => resp,
+            other => panic!("expected Complete, got {:?}", other),
+        };
+        let tcs = outcome
+            .message
+            .tool_calls
+            .as_ref()
+            .expect("tool_calls must survive the nameless-name flush");
+        assert_eq!(tcs.len(), 1, "degenerate tool call must not be dropped");
+        assert_eq!(
+            tcs[0].function.name, "read_file",
+            "name must be recovered from the arguments JSON when the delta is absent"
+        );
+        assert_eq!(
+            tcs[0].function.arguments, "{\"name\":\"read_file\",\"path\":\"a.txt\"}",
+            "arguments must be preserved verbatim"
+        );
+
+        // `"tool_call"` is NOT a degenerate name — it is the bridge tool.
+        // Recovery must leave it alone so the bridge can unwrap the
+        // flattened args itself (see the bridge_hijack test below).
+        let provider = Arc::new(NamelessToolCallProvider {
+            name_delta: Some("tool_call"),
+        });
+        let outcome = drive_collect(provider, 5).await.expect("stream completes");
+        let outcome = match outcome {
+            StreamCollectOutcome::Complete(resp) => resp,
+            other => panic!("expected Complete, got {:?}", other),
+        };
+        let tcs = outcome.message.tool_calls.as_ref().expect("tool_calls");
+        assert_eq!(
+            tcs[0].function.name, "tool_call",
+            "the bridge's own name must survive the recovery pass"
+        );
+    }
+
+    /// 回归：退化名恢复不得劫持对桥工具 `tool_call` 的**合法**调用。
+    ///
+    /// 桥的规范入参是 `{"name": X, "arguments": {...}}`，顶层天然带 `name`
+    /// 键。恢复逻辑把这个 `name` 当成"被吞掉的工具名"，于是把 function.name
+    /// 改成 X 却把整个信封原样当 X 的参数派发 —— X 拿不到自己的字段，报
+    /// `Missing '<param>'`／`缺少必填参数`，看起来像"桥的参数通道坏了"。
+    struct BridgeEnvelopeProvider;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for BridgeEnvelopeProvider {
+        async fn chat_completion(
+            &self,
+            _messages: &[hermix_core::Message],
+            _tools: &[hermix_core::ToolSchema],
+            _max_tokens: Option<u32>,
+            _temperature: Option<f64>,
+            _model: Option<&str>,
+            _extra_body: Option<&serde_json::Value>,
+        ) -> Result<LlmResponse, AgentError> {
+            unreachable!("streaming path only")
         }
+
+        fn chat_completion_stream(
+            &self,
+            _messages: &[hermix_core::Message],
+            _tools: &[hermix_core::ToolSchema],
+            _max_tokens: Option<u32>,
+            _temperature: Option<f64>,
+            _model: Option<&str>,
+            _extra_body: Option<&serde_json::Value>,
+        ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+            Box::pin(stream! {
+                yield Ok(StreamChunk {
+                    delta: Some(StreamDelta {
+                        content: None,
+                        tool_calls: Some(vec![ToolCallDelta {
+                            index: 0,
+                            id: Some(String::from("call_bridge_1")),
+                            function: Some(FunctionCallDelta {
+                                name: Some(String::from("tool_call")),
+                                arguments: Some(String::from(
+                                    "{\"name\":\"gpt_image_generate\",\"arguments\":{\"prompt\":\"a cat\"}}",
+                                )),
+                            }),
+                        }]),
+                        extra: None,
+                    }),
+                    finish_reason: None,
+                    usage: None,
+                });
+                yield Ok(StreamChunk {
+                    delta: None,
+                    finish_reason: Some(String::from("tool_calls")),
+                    usage: None,
+                });
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn bridge_tool_call_is_not_rewritten_by_name_recovery() {
+        let provider = Arc::new(BridgeEnvelopeProvider);
+        let outcome = drive_collect(provider, 5)
+            .await
+            .expect("stream should complete");
+        let resp = match outcome {
+            StreamCollectOutcome::Complete(resp) => resp,
+            other => panic!("expected Complete, got {:?}", other),
+        };
+        let tcs = resp
+            .message
+            .tool_calls
+            .as_ref()
+            .expect("bridge call must survive the flush");
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(
+            tcs[0].function.name, "tool_call",
+            "a legitimate bridge call must keep its own name — recovery rewrote it to the \
+             envelope's `name` key, so the target tool got the envelope as its arguments"
+        );
+        assert_eq!(
+            tcs[0].function.arguments,
+            "{\"name\":\"gpt_image_generate\",\"arguments\":{\"prompt\":\"a cat\"}}",
+            "bridge arguments must be passed through untouched"
+        );
     }
 }

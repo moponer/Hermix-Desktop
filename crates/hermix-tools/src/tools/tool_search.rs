@@ -513,7 +513,7 @@ impl ToolHandler for ToolDescribeHandler {
 /// a compliant call is untouched: no `name` / `arguments` key ever leaks
 /// into the target's parameters.
 fn extract_arguments(params: &Value) -> Value {
-    match params.get("arguments") {
+    let mut args = match params.get("arguments") {
         Some(Value::Object(m)) => Value::Object(m.clone()),
         // A JSON-encoded string is what several providers emit for
         // `arguments`; `coerce_args` normally fixes this upstream, but the
@@ -524,7 +524,22 @@ fn extract_arguments(params: &Value) -> Value {
             .filter(|v| v.is_object())
             .unwrap_or_else(|| flatten_into_arguments(params)),
         _ => flatten_into_arguments(params),
+    };
+    // Carry the ambient session into the target call.
+    //
+    // `dispatch_with_context` stamps `_session_id` onto the *bridge's* params
+    // (that is where the session is known). This handler dispatches the target
+    // through `registry.dispatch_async`, which has no `ToolCallContext` and
+    // never injects — so without this copy every tool invoked through the
+    // bridge runs as "no session": `cronjob` cannot stamp its anchor session,
+    // `cua`/browser lose working-directory/session affinity. The nested path
+    // used to silently drop the key; the flatten path keeps it only by
+    // accident (it copies every non-bridge key).
+    if let (Value::Object(map), Some(session)) = (&mut args, params.get("_session_id")) {
+        map.entry("_session_id".to_string())
+            .or_insert_with(|| session.clone());
     }
+    args
 }
 
 /// Collect every top-level key except the bridge's own (`name` and
@@ -600,9 +615,20 @@ impl ToolHandler for ToolCallHandler {
         let arguments = extract_arguments(&params);
 
         if is_core(name) {
-            return Err(ToolError::InvalidParams(format!(
-                "'{name}' is a core tool — call it directly."
-            )));
+            // Calling the bridge on itself is its own mistake: the model put
+            // `tool_call` in `name` instead of the tool it actually wants.
+            // Answering "call it directly" told it to call the very tool it
+            // had just called — a loop, not a correction.
+            let msg = if name == "tool_call" {
+                "`tool_call` is the bridge itself — it cannot invoke itself. \
+                 Put the REAL target tool name in `name` and that tool's \
+                 parameters in `arguments`, e.g. \
+                 tool_call({\"name\": \"gpt_image_generate\", \"arguments\": {\"prompt\": \"…\"}})."
+                    .to_string()
+            } else {
+                format!("'{name}' is a core tool — call it directly.")
+            };
+            return Err(ToolError::InvalidParams(msg));
         }
 
         // Verify the tool exists and is deferrable
@@ -945,6 +971,62 @@ mod tests {
             !nested.contains("no_text"),
             "nested call must not fall through to the flatten path: {nested}"
         );
+    }
+
+    /// The bridge must hand the ambient session to the target it dispatches.
+    ///
+    /// `dispatch_with_context` stamps `_session_id` on the *bridge's* params;
+    /// the target goes out through `dispatch_async`, which never injects. So
+    /// a tool reached through `tool_call` used to be indistinguishable from a
+    /// headless call — `cronjob` could not stamp its anchor session, which is
+    /// the same "参数没到" shape as the pre-fix cronjob bug.
+    #[tokio::test]
+    async fn tool_call_forwards_the_ambient_session_to_the_target() {
+        let reg = crate::ToolRegistry::new();
+        struct SessionEcho;
+        #[async_trait::async_trait]
+        impl ToolHandler for SessionEcho {
+            fn schema(&self) -> ToolSchema {
+                ToolSchema::new(
+                    "bridge_session_probe",
+                    "echo session",
+                    JsonSchema::object(IndexMap::new(), vec![]),
+                )
+            }
+            async fn execute(&self, p: Value) -> Result<String, ToolError> {
+                Ok(format!(
+                    "sid:{}",
+                    p.get("_session_id").and_then(|v| v.as_str()).unwrap_or("<none>")
+                ))
+            }
+        }
+        reg.register_with_risk(
+            "bridge_session_probe",
+            "bridge_session_probe",
+            SessionEcho.schema(),
+            Arc::new(SessionEcho),
+            Arc::new(|| true),
+            vec![],
+            true,
+            "session echo",
+            "s",
+            None,
+            RiskLevel::Safe,
+            true,
+        );
+        register(&reg);
+
+        let out = reg
+            .dispatch_async(
+                "tool_call",
+                serde_json::json!({
+                    "name": "bridge_session_probe",
+                    "arguments": {},
+                    "_session_id": "sess-1",
+                }),
+            )
+            .await;
+        assert!(out.contains("sid:sess-1"), "session lost through the bridge: {out}");
     }
 
     /// A JSON-encoded `arguments` string must be unwrapped, not handed to
