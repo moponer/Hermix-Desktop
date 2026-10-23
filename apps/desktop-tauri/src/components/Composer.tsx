@@ -488,7 +488,16 @@ export function Composer(p: ComposerProps) {
                                   : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                               }`}
                             >
-                              <ProviderIcon providerId={m.provider} size={14} className="shrink-0" title={m.provider} />
+                              {/* 免费模型不用厂商齿轮：`:free` 后缀或所在分组是免费池时
+                                  显示 ✨（与设置页「免费源」徽章同色系），一眼区分收费/免费。 */}
+                              {m.id.toLowerCase().endsWith(":free") || group.isFree ? (
+                                <Sparkles
+                                  className="h-3.5 w-3.5 shrink-0 text-[var(--color-success)]"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <ProviderIcon providerId={m.provider} size={14} className="shrink-0" title={m.provider} />
+                              )}
                               <span className="min-w-0 flex-1 truncate text-[length:var(--text-ui)]">{m.name}</span>
                               {m.info?.supports_reasoning && (
                                 <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">

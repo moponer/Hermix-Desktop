@@ -11,7 +11,7 @@
 // 所有写操作走既有写路径后重新拉取。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Star, Power, Trash2, Pencil, Zap, Loader2 } from "lucide-react";
+import { Plus, Star, Power, PowerOff, Trash2, Pencil, Zap, Loader2 } from "lucide-react";
 import * as api from "../../api";
 import { syncModelConfigLocal, writeModelConfigAndNotify } from "../../hooks/useCurrentModel";
 import { ProviderIcon } from "../ProviderIcon";
@@ -328,7 +328,13 @@ export function ModelListTab() {
                   title={row.isEnabled ? "禁用该模型" : "启用该模型"}
                   onClick={() => void toggleEnabled(row)}
                 >
-                  <Power className={`icon-sm ${row.isEnabled ? "text-accent" : ""}`} />
+                  {/* 两个状态用两个图标 + 语义色：绿=运行中，红=已停。
+                      只换颜色不换图标的话，色弱用户分不出状态。 */}
+                  {row.isEnabled ? (
+                    <Power className="icon-sm text-[var(--color-success)]" />
+                  ) : (
+                    <PowerOff className="icon-sm text-[var(--color-error)]" />
+                  )}
                 </IconBtn>
                 <IconBtn
                   title={row.isDefault ? "当前默认模型" : row.isEnabled ? "设为默认" : "请先启用该模型"}
