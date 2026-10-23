@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
 import { useStreamChatContext } from "../context/StreamChatContext";
-import { IM_SOURCE_LABEL, imSourceOf } from "../utils/time";
+import { IM_SOURCE_LABEL, imSourceOf, type ImSource } from "../utils/time";
 import { PanelRight, PanelLeftOpen, Search, ArrowUp, ArrowUpRight, AlertTriangle, AppWindow, Workflow, Code2, FileText, PenLine, Image as ImageIcon, Briefcase } from "lucide-react";
 import { SidebarRevealRow } from "./SidebarRevealRow";
 import { resolveSessionSelectedModel } from "../utils/sessionModel";
@@ -71,8 +71,8 @@ function ModelStatusBar({
   onExpandSidebar,
   onOpenSearch,
 }: {
-  /** IM 远程会话的来源平台（QQ / 企业微信）—— 从那边发起的对话在头部标出来。 */
-  imSource?: "qq" | "wecom" | null;
+  /** 远程会话的来源（QQ / 企业微信 / 手机）—— 从那边发起的对话在头部标出来。 */
+  imSource?: ImSource | null;
   rightOpen?: boolean;
   onToggleRight?: () => void;
   sidebarCollapsed?: boolean;
@@ -93,7 +93,9 @@ function ModelStatusBar({
     ? imChannel.connected
       ? "通道已连接，可直接在 IM 里继续对话"
       : `通道未连接${imChannel.detail ? `：${imChannel.detail}` : ""}`
-    : "这条对话是从 IM 发起并远程驱动的";
+    : imSource === "device"
+      ? "这条对话来自手机（经中转），在手机上继续即可"
+      : "这条对话是从 IM 发起并远程驱动的";
   const showRightToggle = !!onToggleRight && !rightOpen;
   if (!showLeftActions && !imLabel && !showRightToggle) return null;
   // h-10：与 .sidebar-head、右栏标签条同高（三段头部是一条 40px 水平带，
@@ -133,7 +135,10 @@ function ModelStatusBar({
           title={imTitle}
         >
           <span
-            className={`h-1.5 w-1.5 rounded-full ${imChannel?.connected ? "bg-success" : "bg-error"}`}
+            className={`h-1.5 w-1.5 rounded-full ${
+              // 手机没有"通道网关"，缺条目≠未连接，别误报红色
+              !imChannel ? "bg-bg-active" : imChannel.connected ? "bg-success" : "bg-error"
+            }`}
           />
           {imLabel} 远程
         </span>

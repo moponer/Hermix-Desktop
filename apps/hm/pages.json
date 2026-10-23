@@ -55,6 +55,13 @@
         "navigationStyle": "custom",
         "navigationBarTitleText": "历史会话"
       }
+    },
+    {
+      "path": "pages/ali/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "阿黎"
+      }
     }
   ],
   "globalStyle": {

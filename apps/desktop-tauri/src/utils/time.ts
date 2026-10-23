@@ -60,11 +60,17 @@ export function formatDuration(ms: number): string {
  * （channels/session.rs::session_id）—— 靠 id 前缀就能在侧栏/聊天头部
  * 标出「这条是从 QQ/企业微信发来的」，不必给 Session 表加字段。
  */
-export function imSourceOf(sessionId: string | null | undefined): "qq" | "wecom" | null {
+export type ImSource = "qq" | "wecom" | "device";
+
+export function imSourceOf(sessionId: string | null | undefined): ImSource | null {
   if (!sessionId) return null;
   if (sessionId.startsWith("im:qq:")) return "qq";
   if (sessionId.startsWith("im:wecom:")) return "wecom";
+  // 手机端（Hermix M）的会话：`im:device:{device_id}`
+  // （hermix-server `channels/session.rs::DEVICE_PLATFORM`）。
+  // 不认它的话，手机上那段对话会以「普通本地会话」混在侧栏里，看不出是谁发来的。
+  if (sessionId.startsWith("im:device:")) return "device";
   return null;
 }
 
-export const IM_SOURCE_LABEL = { qq: "QQ", wecom: "企业微信" } as const;
+export const IM_SOURCE_LABEL = { qq: "QQ", wecom: "企业微信", device: "手机" } as const;

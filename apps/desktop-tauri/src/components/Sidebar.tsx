@@ -468,14 +468,22 @@ export function Sidebar({
                       <span
                         className={clsx(
                           "h-2 w-2 rounded-full shrink-0",
-                          st?.connected ? "bg-green-400" : "bg-red-400",
+                          // 手机（device）没有"通道网关"这回事——它经中转连过来。
+                          // 没有通道条目时给中性色，不要误报成红色"未连接"。
+                          !st
+                            ? "bg-bg-active"
+                            : st.connected
+                              ? "bg-success"
+                              : "bg-error",
                         )}
                         title={
                           st
                             ? st.connected
                               ? "通道已连接"
                               : `通道未连接${st.detail ? `：${st.detail}` : ""}`
-                            : "通道状态未知"
+                            : src === "device"
+                              ? "来自手机（经中转）"
+                              : "通道状态未知"
                         }
                       />
                     )}

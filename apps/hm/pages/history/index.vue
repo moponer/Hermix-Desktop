@@ -1,18 +1,42 @@
 <script setup lang="ts">
 /**
- * 历史会话页。
+ * 历史会话页（桌面来源与阿黎来源共用，按来源可筛）。
  *
- * 入口：对话页顶栏的「≡」按钮。
- * 行为：点击一行 → 加载该会话并切到对话页；左滑/长按 → 删除。
+ * 入口：对话页顶栏的「☰」。
+ * 行为：点击一行 → 切到该会话**自己的来源**并载入；右侧删除。
+ *
+ * 归属必须显式：同一条列表里既有"阿黎在手机上答的"，也有"电脑在桌面端跑的"，
+ * 不标来源，用户根本分不清某句话是谁说的、在哪能继续。
  */
-import { ref, onMounted } from 'vue'
-import { listSessions, deleteSession, type SessionRec } from '../../core/history'
+import { computed, ref } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
+import {
+  listSessions,
+  deleteSession,
+  type ChatSource,
+  type SessionRec,
+} from '../../core/history'
+import { setChatSource, SOURCE_META } from '../../core/chatSource'
 
-const sessions = ref<SessionRec[]>([])
+type Filter = 'all' | ChatSource
+const filter = ref<Filter>('all')
+const all = ref<SessionRec[]>([])
 
-onMounted(() => {
-  sessions.value = listSessions()
-})
+const sessions = computed(() =>
+  filter.value === 'all' ? all.value : all.value.filter((s) => s.source === filter.value),
+)
+
+function reload() {
+  all.value = listSessions()
+}
+
+onShow(reload)
+
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: 'all', label: '全部' },
+  { id: 'ali', label: SOURCE_META.ali.name },
+  { id: 'desktop', label: SOURCE_META.desktop.name },
+]
 
 function fmtTime(iso: string) {
   const d = new Date(iso)
@@ -26,7 +50,8 @@ function fmtTime(iso: string) {
 }
 
 function openSession(s: SessionRec) {
-  // 存目标 session id，chat 页 onLoad 时检测并恢复
+  // 先切来源再载入会话：否则阿黎的对话会落在桌面模式里，界面归属就错了。
+  setChatSource(s.source)
   uni.setStorageSync('hermix.restoreSession', s.id)
   uni.switchTab({ url: '/pages/chat/index' })
 }
@@ -40,7 +65,7 @@ function confirmDelete(s: SessionRec) {
     success: (res) => {
       if (!res.confirm) return
       deleteSession(s.id)
-      sessions.value = listSessions()
+      reload()
     },
   })
 }
@@ -48,26 +73,39 @@ function confirmDelete(s: SessionRec) {
 
 <template>
   <hm-shell title="历史会话" back>
+    <!-- 来源筛选：三个片，选中态用主色实底 + 字重 -->
+    <view class="filters">
+      <view
+        v-for="f in FILTERS"
+        :key="f.id"
+        class="f-pill"
+        :class="{ on: filter === f.id }"
+        @tap="filter = f.id"
+      >
+        <text>{{ f.label }}</text>
+      </view>
+    </view>
+
     <!-- 空态 -->
     <view v-if="sessions.length === 0" class="empty">
       <text class="e-t">还没有历史会话</text>
-      <text class="e-s">在对话页发一条消息就会自动保存</text>
+      <text class="e-s">
+        {{ filter === 'all' ? '在对话页发一条消息就会自动保存' : '这个来源下还没有对话' }}
+      </text>
     </view>
 
     <!-- 列表 -->
     <view v-else class="list">
-      <view
-        v-for="s in sessions"
-        :key="s.id"
-        class="row"
-        @tap="openSession(s)"
-      >
+      <view v-for="s in sessions" :key="s.id" class="row" @tap="openSession(s)">
         <view class="rbody">
-          <text class="r-t">{{ s.title }}</text>
-          <text class="r-s">{{ fmtTime(s.updatedAt) }} · {{ s.msgCount }}条消息</text>
+          <view class="r-top">
+            <text class="r-tag" :class="s.source">{{ SOURCE_META[s.source].name }}</text>
+            <text class="r-t">{{ s.title }}</text>
+          </view>
+          <text class="r-s">{{ fmtTime(s.updatedAt) }} · {{ s.msgCount }} 条</text>
         </view>
         <view class="rdel" @tap.stop="confirmDelete(s)">
-          <text>🗑</text>
+          <text>删除</text>
         </view>
       </view>
     </view>
@@ -75,6 +113,24 @@ function confirmDelete(s: SessionRec) {
 </template>
 
 <style lang="scss" scoped>
+.filters {
+  display: flex;
+  gap: 10rpx;
+  padding: 8rpx $gutter 18rpx;
+}
+.f-pill {
+  padding: 12rpx 26rpx;
+  border-radius: $r-pill;
+  background: $card;
+  font-size: $fs-mini;
+  color: $fg2;
+}
+.f-pill.on {
+  background: $accent;
+  color: $on-accent;
+  font-weight: 600;
+}
+
 .empty {
   display: flex;
   flex-direction: column;
@@ -93,13 +149,13 @@ function confirmDelete(s: SessionRec) {
   text-align: center;
 }
 .list {
-  padding: 0 $gutter;
+  padding: 0 $gutter 24rpx;
 }
 .row {
   display: flex;
   align-items: center;
   gap: 16rpx;
-  padding: 28rpx 24rpx;
+  padding: 26rpx 24rpx;
   background: $card;
   border-radius: $r-card;
   margin-bottom: 14rpx;
@@ -111,8 +167,28 @@ function confirmDelete(s: SessionRec) {
   flex: 1;
   min-width: 0;
 }
+.r-top {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  min-width: 0;
+}
+/* 来源标签：阿黎用主色、桌面用中性——同一列表里一眼分出两条通路。 */
+.r-tag {
+  flex: none;
+  padding: 2rpx 12rpx;
+  border-radius: $r-pill;
+  font-size: $fs-mini;
+  background: $raised;
+  color: $fg2;
+}
+.r-tag.ali {
+  background: $accent;
+  color: $on-accent;
+}
 .r-t {
-  display: block;
+  flex: 1;
+  min-width: 0;
   font-size: $fs-sub;
   color: $fg;
   overflow: hidden;
@@ -121,19 +197,16 @@ function confirmDelete(s: SessionRec) {
 }
 .r-s {
   display: block;
+  margin-top: 6rpx;
   font-size: $fs-mini;
   color: $fg4;
-  margin-top: 6rpx;
 }
 .rdel {
   flex: none;
-  width: 64rpx;
-  height: 64rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 32rpx;
-  color: $fg4;
-  font-size: 30rpx;
+  padding: 8rpx 14rpx;
+  border-radius: $r-pill;
+  background: $raised;
+  font-size: $fs-mini;
+  color: $fg2;
 }
 </style>
