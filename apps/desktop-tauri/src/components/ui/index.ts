@@ -14,6 +14,7 @@ export {
 } from "./Input";
 export { Modal, ConfirmDialog, type ModalProps, type ConfirmDialogProps } from "./Modal";
 export { PageHeader, type PageHeaderProps } from "./PageHeader";
+export { PromptDialog, type PromptDialogProps } from "./PromptDialog";
 export { Skeleton, SkeletonText, SkeletonCard } from "./Skeleton";
 export { SegmentedControl, type SegmentedControlProps } from "./SegmentedControl";
 export {

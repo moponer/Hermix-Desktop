@@ -13,7 +13,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import { ConnectionIndicator } from "./ConnectionIndicator";
-import { ConfirmDialog } from "./ui";
+import { ConfirmDialog, PromptDialog } from "./ui";
 import { type ConfigCategory } from "./SettingsDialog";
 import { SessionPickerDialog } from "./SessionPickerDialog";
 import {
@@ -40,7 +40,7 @@ import { UserMenuPopover } from "./UserMenuPopover";
 import { UpdatePanel } from "./UpdatePanel";
 import { useUpdater } from "../hooks/useUpdater";
 import { useChannelsStatus } from "../hooks/useChannelsStatus";
-import { CANCEL, COPY_FAILED, NEW_CHAT, failure } from "./strings";
+import { COPY_FAILED, NEW_CHAT, failure } from "./strings";
 
 interface SidebarProps {
   page: NavPage;
@@ -1003,81 +1003,23 @@ function RenameDialog({
   onConfirm: (next: string) => void;
   onCancel: () => void;
 }) {
-  const [value, setValue] = useState("");
-
-  // Reset input when dialog opens.
-  useEffect(() => {
-    if (state) setValue(state.current);
-  }, [state]);
-
-  if (!state) return null;
-
-  const trimmed = value.trim();
-  const canConfirm = trimmed.length > 0 && trimmed !== state.current;
-
-  return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-      <button
-        type="button"
-        aria-label={CANCEL}
-        onClick={onCancel}
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-      />
-      <div
-        className={clsx(
-          "relative z-10 w-full max-w-base flex flex-col",
-          "rounded-xl border shadow-2xl",
-          "bg-bg-secondary border-border-subtle",
-        )}
-      >
-        <div className="flex items-start gap-3 px-5 py-4 border-b border-border-subtle">
-          {/* 配色走语义类而不是内联 style：内联样式既不能参与 hover/focus，
-              也让「换主题只改令牌」这条约束在门禁外留了口子。 */}
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-accent-soft">
-            <Pencil className="icon-md text-accent" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-body font-bold text-text-primary">{state.title}</h2>
-            <input
-              autoFocus
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && canConfirm) onConfirm(trimmed);
-                if (e.key === "Escape") onCancel();
-              }}
-              placeholder="输入新名称"
-              className="mt-2 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-ui text-text-primary placeholder:text-text-faint outline-none focus:ring-1 focus:ring-accent/30 transition"
-            />
-          </div>
-        </div>
-        <div className="flex items-center gap-2.5 px-5 py-4">
-          <button
-            type="button"
-            onClick={() => onConfirm(trimmed)}
-            disabled={!canConfirm}
-            className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-bold",
-              "text-on-accent bg-accent transition-opacity",
-              canConfirm ? "hover:opacity-90" : "opacity-50 cursor-not-allowed",
-            )}
-          >
-            确认
-          </button>
-          <button
-            type="button"
-            onClick={onCancel}
-            className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-semibold",
-              "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors",
-            )}
-          >
-            取消
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
+  /* 2026-10-23：原来这里是自建遮罩 + 自建容器 + 手写输入框，
+     容器带 border、按钮顺序是「确认 | 取消」（与全站 11 处确认框相反）。
+     现在走 ui/PromptDialog，与 ConfirmDialog 同构。 */
+  const current = state?.current ?? "";
+  return (
+    <PromptDialog
+      open={!!state}
+      title={state?.title ?? ""}
+      label="新名称"
+      placeholder="输入新名称"
+      icon={<Pencil className="icon-md" aria-hidden />}
+      initialValue={current}
+      confirmLabel="重命名"
+      validate={(v) => (v === current ? "名称没有变化" : null)}
+      onSubmit={onConfirm}
+      onCancel={onCancel}
+    />
   );
 }
 

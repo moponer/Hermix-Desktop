@@ -364,8 +364,8 @@ export function ConfirmDialog({
             className={cx(
               "grid size-9 shrink-0 place-items-center rounded-[var(--radius-md)]",
               danger
-                ? "bg-[var(--color-bg-error-soft)] text-[var(--color-text-error)]"
-                : "bg-[var(--color-bg-accent-soft)] text-[var(--color-text-accent)]",
+                ? "bg-error-soft text-error"
+                : "bg-accent-soft text-accent",
             )}
           >
             {icon}
@@ -379,7 +379,7 @@ export function ConfirmDialog({
             {typeof body === "string" ? <p className="whitespace-pre-wrap">{body}</p> : body}
           </div>
           {showIrreversible && (
-            <p className="mt-3 inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--color-bg-error-soft)] px-2 py-1 text-[length:var(--text-tiny)] font-medium text-[var(--color-text-error)]">
+            <p className="mt-3 inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] bg-error-soft px-2 py-1 text-[length:var(--text-tiny)] font-medium text-error">
               <AlertTriangle className="icon-xs" aria-hidden />
               此操作不可恢复
             </p>
