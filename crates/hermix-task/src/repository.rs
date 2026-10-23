@@ -87,11 +87,40 @@ impl TaskRepository {
                 context_json    TEXT NOT NULL DEFAULT '{}',
                 result_refs_json TEXT NOT NULL DEFAULT '[]',
                 created_at      INTEGER NOT NULL,
-                updated_at      INTEGER NOT NULL
+                updated_at      INTEGER NOT NULL,
+                session_id      TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-            CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);"#,
+            CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);"#,
         )?;
+        // Column migration: `CREATE TABLE IF NOT EXISTS` does not add
+        // columns to an existing table, and every install that predates
+        // the session column has a `tasks` table without it.
+        Self::ensure_column(&conn, "tasks", "session_id", "TEXT")?;
+        Ok(())
+    }
+
+    /// Add a column to an existing table if it is not there yet.
+    ///
+    /// `CREATE TABLE IF NOT EXISTS` never adds columns to a table that
+    /// already exists, so a schema change needs its own migration step
+    /// for the installs that predate it.
+    fn ensure_column(
+        conn: &rusqlite::Connection,
+        table: &str,
+        column: &str,
+        ty: &str,
+    ) -> Result<(), TaskRepositoryError> {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                return Ok(());
+            }
+        }
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {ty}"))?;
         Ok(())
     }
 
@@ -115,8 +144,8 @@ impl TaskRepository {
         };
         conn.execute(
             "INSERT INTO tasks (id, title, workspace_path, mode, status, parent_task_id,
-                context_json, result_refs_json, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                context_json, result_refs_json, created_at, updated_at, session_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 task.id,
                 task.title,
@@ -128,6 +157,7 @@ impl TaskRepository {
                 results_json,
                 task.created_at,
                 task.updated_at,
+                task.session_id,
             ],
         )?;
         Ok(())
@@ -139,7 +169,7 @@ impl TaskRepository {
         let task = conn
             .query_row(
                 "SELECT id, title, workspace_path, mode, status, parent_task_id,
-                        context_json, result_refs_json, created_at, updated_at
+                        context_json, result_refs_json, created_at, updated_at, session_id
                  FROM tasks WHERE id = ?1",
                 [id],
                 row_to_task,
@@ -228,42 +258,42 @@ impl TaskRepository {
 
     /// List tasks with optional status filter. Returns tasks ordered
     /// by `updated_at` descending (most recently active first).
+    /// List tasks, optionally filtered by status and by owning session.
+    ///
+    /// With a session id the result is that session's own tasks **plus**
+    /// the still-unclaimed ones (rows written before the session column
+    /// existed). Unclaimed rows stay visible so no task silently
+    /// disappears from the model's view; the caller tells them apart by
+    /// `Task::session_id`.
+    ///
+    /// Without a session id the list is global — the pre-existing
+    /// behaviour, kept for callers that have no session (CLI, cron).
     pub fn list(
         &self,
         status_filter: Option<TaskStatus>,
+        session_id: Option<&str>,
     ) -> Result<Vec<Task>, TaskRepositoryError> {
         let conn = open_with_wal(&self.db_path)?;
         let mut tasks = Vec::new();
-        if let Some(status) = status_filter {
-            let status_str = match status {
-                TaskStatus::Pending => "pending",
-                TaskStatus::Planning => "planning",
-                TaskStatus::InProgress => "in_progress",
-                TaskStatus::Completed => "completed",
-                TaskStatus::Failed => "failed",
-                TaskStatus::Archived => "archived",
-            };
-            let mut stmt = conn.prepare(
-                "SELECT id, title, workspace_path, mode, status, parent_task_id,
-                        context_json, result_refs_json, created_at, updated_at
-                 FROM tasks WHERE status = ?1
-                 ORDER BY updated_at DESC",
-            )?;
-            let rows = stmt.query_map([status_str], row_to_task)?;
-            for row in rows {
-                tasks.push(row?);
-            }
-        } else {
-            let mut stmt = conn.prepare(
-                "SELECT id, title, workspace_path, mode, status, parent_task_id,
-                        context_json, result_refs_json, created_at, updated_at
-                 FROM tasks
-                 ORDER BY updated_at DESC",
-            )?;
-            let rows = stmt.query_map([], row_to_task)?;
-            for row in rows {
-                tasks.push(row?);
-            }
+        let status_str = status_filter.map(|status| match status {
+            TaskStatus::Pending => "pending",
+            TaskStatus::Planning => "planning",
+            TaskStatus::InProgress => "in_progress",
+            TaskStatus::Completed => "completed",
+            TaskStatus::Failed => "failed",
+            TaskStatus::Archived => "archived",
+        });
+        let mut stmt = conn.prepare(
+            "SELECT id, title, workspace_path, mode, status, parent_task_id,
+                    context_json, result_refs_json, created_at, updated_at, session_id
+             FROM tasks
+             WHERE (?1 IS NULL OR status = ?1)
+               AND (?2 IS NULL OR session_id = ?2 OR session_id IS NULL)
+             ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![status_str, session_id], row_to_task)?;
+        for row in rows {
+            tasks.push(row?);
         }
         Ok(tasks)
     }
@@ -273,7 +303,7 @@ impl TaskRepository {
         let conn = open_with_wal(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT id, title, workspace_path, mode, status, parent_task_id,
-                    context_json, result_refs_json, created_at, updated_at
+                    context_json, result_refs_json, created_at, updated_at, session_id
              FROM tasks WHERE parent_task_id = ?1
              ORDER BY created_at ASC",
         )?;
@@ -331,6 +361,7 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         results,
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
+        session_id: row.get(10)?,
     })
 }
 
@@ -402,22 +433,55 @@ mod tests {
         let t2 = Task::new("Task 2", "/ws", TaskMode::Plan);
         repo.create(&t1).unwrap();
         repo.create(&t2).unwrap();
-        let tasks = repo.list(None).unwrap();
+        let tasks = repo.list(None, None).unwrap();
         assert_eq!(tasks.len(), 2);
     }
 
+    /// The `tasks` table is shared by every session of an install, so a
+    /// scoped list must return **that session's** tasks plus the ones
+    /// nobody has claimed yet — and never another session's.
     #[test]
-    fn test_list_by_status() {
+    fn list_scopes_to_the_session_but_keeps_unclaimed_tasks_visible() {
         let (repo, _tmp) = repo();
+        let mut mine = Task::new("Mine", "/ws", TaskMode::Craft);
+        mine.session_id = Some("sess-1".to_string());
+        let mut theirs = Task::new("Theirs", "/ws", TaskMode::Craft);
+        theirs.session_id = Some("sess-2".to_string());
+        let unclaimed = Task::new("Unclaimed", "/ws", TaskMode::Craft);
+
+        repo.create(&mine).unwrap();
+        repo.create(&theirs).unwrap();
+        repo.create(&unclaimed).unwrap();
+
+        let scoped = repo.list(None, Some("sess-1")).unwrap();
+        assert!(
+            scoped.iter().any(|t| t.id == mine.id),
+            "本会话的任务必须在列表里"
+        );
+        assert!(
+            scoped.iter().any(|t| t.id == unclaimed.id),
+            "尚未归属的任务不能凭空消失"
+        );
+        assert!(
+            !scoped.iter().any(|t| t.id == theirs.id),
+            "别的会话的任务不能出现在本会话的列表里"
+        );
+
+        // No session → the global list (CLI / cron callers).
+        assert_eq!(repo.list(None, None).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_list_by_status() {        let (repo, _tmp) = repo();
         let t1 = Task::new("Task 1", "/ws", TaskMode::Craft);
         let t2 = Task::new("Task 2", "/ws", TaskMode::Plan);
         repo.create(&t1).unwrap();
         repo.create(&t2).unwrap();
         repo.update_status(&t1.id, TaskStatus::Completed).unwrap();
-        let completed = repo.list(Some(TaskStatus::Completed)).unwrap();
+        let completed = repo.list(Some(TaskStatus::Completed), None).unwrap();
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].id, t1.id);
-        let pending = repo.list(Some(TaskStatus::Pending)).unwrap();
+        let pending = repo.list(Some(TaskStatus::Pending), None).unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].id, t2.id);
     }

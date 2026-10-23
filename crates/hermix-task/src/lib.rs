@@ -62,6 +62,15 @@ pub struct Task {
     /// Parent task ID for multi-agent subtask trees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_task_id: Option<String>,
+    /// Owning session (conversation) id.
+    ///
+    /// The `tasks` table lives in the one `sessions.db` that every
+    /// session and workspace of an install shares, so without this
+    /// column `task_list` returns every task ever created — the model
+    /// then cannot tell which of them are its own. `None` = a row
+    /// created before this column existed ("unclaimed").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     /// Context — `@`-references, screenshots, attachments, notes.
     #[serde(default)]
     pub context: TaskContext,
@@ -89,6 +98,7 @@ impl Task {
             mode,
             status: TaskStatus::Pending,
             parent_task_id: None,
+            session_id: None,
             context: TaskContext::default(),
             results: Vec::new(),
             created_at: now,

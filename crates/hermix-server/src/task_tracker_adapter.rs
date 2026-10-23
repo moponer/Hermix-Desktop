@@ -33,6 +33,7 @@ fn task_to_info(task: &hermix_task::Task) -> TaskTrackerInfo {
         mode: format!("{:?}", task.mode).to_lowercase(),
         workspace_path: task.workspace_path.clone(),
         parent_task_id: task.parent_task_id.clone(),
+        session_id: task.session_id.clone(),
         created_at: task.created_at,
         updated_at: task.updated_at,
     }
@@ -80,6 +81,7 @@ impl TaskTrackerBackend for TaskTrackerBackendImpl {
         workspace_path: Option<&str>,
         mode: Option<&str>,
         parent_task_id: Option<&str>,
+        session_id: Option<&str>,
     ) -> Result<TaskTrackerInfo, hermix_core::ToolError> {
         let params = CreateTaskParams {
             title: title.to_string(),
@@ -87,6 +89,7 @@ impl TaskTrackerBackend for TaskTrackerBackendImpl {
             mode: parse_mode(mode),
             parent_task_id: parent_task_id.map(String::from),
             context: hermix_core::TaskContext::default(),
+            session_id: session_id.map(String::from),
         };
         let task = self.service.create(params).map_err(map_error)?;
         Ok(task_to_info(&task))
@@ -108,12 +111,13 @@ impl TaskTrackerBackend for TaskTrackerBackendImpl {
     async fn list(
         &self,
         status_filter: Option<&str>,
+        session_id: Option<&str>,
     ) -> Result<Vec<TaskTrackerInfo>, hermix_core::ToolError> {
         let filter = match status_filter {
             Some(s) => Some(parse_status(s).map_err(hermix_core::ToolError::InvalidParams)?),
             None => None,
         };
-        let tasks = self.service.list(filter).map_err(map_error)?;
+        let tasks = self.service.list(filter, session_id).map_err(map_error)?;
         Ok(tasks.iter().map(task_to_info).collect())
     }
 

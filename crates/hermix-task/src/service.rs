@@ -42,6 +42,8 @@ pub struct CreateTaskParams {
     pub mode: TaskMode,
     pub parent_task_id: Option<String>,
     pub context: TaskContext,
+    /// Session (conversation) that owns the task. `None` = unclaimed.
+    pub session_id: Option<String>,
 }
 
 impl Default for CreateTaskParams {
@@ -52,6 +54,7 @@ impl Default for CreateTaskParams {
             mode: TaskMode::Craft,
             parent_task_id: None,
             context: TaskContext::default(),
+            session_id: None,
         }
     }
 }
@@ -90,6 +93,7 @@ impl TaskService {
         }
         let mut task = Task::new(params.title, params.workspace_path, params.mode);
         task.parent_task_id = params.parent_task_id;
+        task.session_id = params.session_id;
         task.context = params.context;
         self.repo.create(&task)?;
         Ok(task)
@@ -174,8 +178,18 @@ impl TaskService {
     }
 
     /// List all tasks, optionally filtered by status.
-    pub fn list(&self, status_filter: Option<TaskStatus>) -> Result<Vec<Task>, TaskServiceError> {
-        self.repo.list(status_filter).map_err(Into::into)
+    /// List tasks, optionally filtered by status and by owning session.
+    ///
+    /// A session sees **its own** tasks plus the still-unclaimed ones
+    /// (rows created before the session column existed). Unclaimed rows
+    /// stay visible so no task silently disappears, and the caller can
+    /// tell them apart via [`Task::session_id`].
+    pub fn list(
+        &self,
+        status_filter: Option<TaskStatus>,
+        session_id: Option<&str>,
+    ) -> Result<Vec<Task>, TaskServiceError> {
+        self.repo.list(status_filter, session_id).map_err(Into::into)
     }
 
     /// List child tasks of a parent.
@@ -458,9 +472,9 @@ mod tests {
             })
             .unwrap();
         svc.start_execution(&t1.id).unwrap();
-        let in_progress = svc.list(Some(TaskStatus::InProgress)).unwrap();
+        let in_progress = svc.list(Some(TaskStatus::InProgress), None).unwrap();
         assert_eq!(in_progress.len(), 1);
-        let pending = svc.list(Some(TaskStatus::Pending)).unwrap();
+        let pending = svc.list(Some(TaskStatus::Pending), None).unwrap();
         assert_eq!(pending.len(), 1);
     }
 }

@@ -569,6 +569,7 @@ First-class Task objects for tracking work units.
 - Same-turn create + complete is valid — the database is always correct even if the UI lags.
 - Keep task titles short and action-oriented; describe the user's outcome, not your investigation steps.
 - Always transition to terminal state — don't leave tasks dangling in `in_progress`.
+- `task_list` returns this session's tasks plus the ones nobody has claimed yet. Only entries with `\"mine\": true` belong to this session — **do not update the ones with `\"mine\": false`**, they belong to another conversation.
 
 ## State invariants
 

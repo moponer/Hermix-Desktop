@@ -40,12 +40,17 @@ use crate::ToolRegistry;
 pub trait TaskTrackerBackend: Send + Sync {
     /// Create a new Task.
     /// Returns the task ID.
+    ///
+    /// `session_id` is the owning session (conversation). The `tasks`
+    /// table is shared by every session of an install, so without it a
+    /// task list cannot be scoped to the session that owns it.
     async fn create(
         &self,
         title: &str,
         workspace_path: Option<&str>,
         mode: Option<&str>,
         parent_task_id: Option<&str>,
+        session_id: Option<&str>,
     ) -> Result<TaskTrackerInfo, ToolError>;
 
     /// Update a Task's status.
@@ -56,9 +61,14 @@ pub trait TaskTrackerBackend: Send + Sync {
     ) -> Result<TaskTrackerInfo, ToolError>;
 
     /// List Tasks, optionally filtered by status.
+    ///
+    /// `session_id` scopes the list to that session plus the tasks not
+    /// yet claimed by any session. `None` lists everything (the
+    /// behaviour for callers that have no session).
     async fn list(
         &self,
         status_filter: Option<&str>,
+        session_id: Option<&str>,
     ) -> Result<Vec<TaskTrackerInfo>, ToolError>;
 
     /// Get a single Task by ID.
@@ -92,6 +102,10 @@ pub struct TaskTrackerInfo {
     pub mode: String,
     pub workspace_path: String,
     pub parent_task_id: Option<String>,
+    /// Owning session (conversation). `None` = not claimed by any
+    /// session yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -223,10 +237,12 @@ impl ToolHandler for TaskCreateHandler {
         let workspace_path = params.get("workspace_path").and_then(|v| v.as_str());
         let mode = params.get("mode").and_then(|v| v.as_str());
         let parent_task_id = params.get("parent_task_id").and_then(|v| v.as_str());
+        // Injected by the dispatcher (`registry.rs::inject_session_id`).
+        let session_id = params.get("_session_id").and_then(|v| v.as_str());
 
         let task = self
             .backend
-            .create(title, workspace_path, mode, parent_task_id)
+            .create(title, workspace_path, mode, parent_task_id, session_id)
             .await?;
 
         Ok(json!({
@@ -354,12 +370,34 @@ struct TaskListHandler {
 impl ToolHandler for TaskListHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
         let status_filter = params.get("status").and_then(|v| v.as_str());
+        let session_id = params.get("_session_id").and_then(|v| v.as_str());
 
-        let tasks = self.backend.list(status_filter).await?;
+        let tasks = self.backend.list(status_filter, session_id).await?;
+
+        // Mark which tasks belong to *this* session. The `tasks` table
+        // is shared by every session of an install, so without the mark
+        // the model cannot tell its own tasks from the ones it merely
+        // sees — and "exactly one in_progress" (the task-state
+        // invariant) becomes uncheckable.
+        let mine: Vec<bool> = tasks
+            .iter()
+            .map(|t| t.session_id.as_deref() == session_id)
+            .collect();
+        let rows: Vec<Value> = tasks
+            .iter()
+            .zip(mine)
+            .map(|(t, is_mine)| {
+                let mut obj = serde_json::to_value(t).unwrap_or(Value::Null);
+                if let Some(map) = obj.as_object_mut() {
+                    map.insert("mine".to_string(), Value::Bool(is_mine));
+                }
+                obj
+            })
+            .collect();
 
         Ok(json!({
-            "tasks": tasks,
-            "total": tasks.len()
+            "tasks": rows,
+            "total": rows.len()
         })
         .to_string())
     }
@@ -591,6 +629,7 @@ mod tests {
             workspace_path: Option<&str>,
             mode: Option<&str>,
             parent_task_id: Option<&str>,
+            session_id: Option<&str>,
         ) -> Result<TaskTrackerInfo, ToolError> {
             let now = chrono::Utc::now().timestamp_millis();
             let task = TaskTrackerInfo {
@@ -600,6 +639,7 @@ mod tests {
                 mode: mode.unwrap_or("craft").to_string(),
                 workspace_path: workspace_path.unwrap_or(".").to_string(),
                 parent_task_id: parent_task_id.map(String::from),
+                session_id: session_id.map(String::from),
                 created_at: now,
                 updated_at: now,
             };
@@ -632,6 +672,7 @@ mod tests {
         async fn list(
             &self,
             status_filter: Option<&str>,
+            _session_id: Option<&str>,
         ) -> Result<Vec<TaskTrackerInfo>, ToolError> {
             let tasks = self.tasks.lock().map_err(|e| {
                 ToolError::ExecutionFailed(e.to_string())
@@ -698,13 +739,13 @@ mod tests {
     async fn test_create_and_list() {
         let backend = Arc::new(TestBackend::new());
         let task = backend
-            .create("Test Task", Some("/ws"), Some("craft"), None)
+            .create("Test Task", Some("/ws"), Some("craft"), None, None)
             .await
             .unwrap();
         assert_eq!(task.title, "Test Task");
         assert_eq!(task.status, "pending");
 
-        let tasks = backend.list(None).await.unwrap();
+        let tasks = backend.list(None, None).await.unwrap();
         assert_eq!(tasks.len(), 1);
     }
 
@@ -712,7 +753,7 @@ mod tests {
     async fn test_update_status() {
         let backend = Arc::new(TestBackend::new());
         let task = backend
-            .create("Task", None, None, None)
+            .create("Task", None, None, None, None)
             .await
             .unwrap();
         let updated = backend
@@ -725,13 +766,13 @@ mod tests {
     #[tokio::test]
     async fn test_list_with_filter() {
         let backend = Arc::new(TestBackend::new());
-        backend.create("T1", None, None, None).await.unwrap();
-        let t2 = backend.create("T2", None, None, None).await.unwrap();
+        backend.create("T1", None, None, None, None).await.unwrap();
+        let t2 = backend.create("T2", None, None, None, None).await.unwrap();
         backend.update_status(&t2.id, "completed").await.unwrap();
 
-        let pending = backend.list(Some("pending")).await.unwrap();
+        let pending = backend.list(Some("pending"), None).await.unwrap();
         assert_eq!(pending.len(), 1);
-        let completed = backend.list(Some("completed")).await.unwrap();
+        let completed = backend.list(Some("completed"), None).await.unwrap();
         assert_eq!(completed.len(), 1);
     }
 
@@ -746,11 +787,11 @@ mod tests {
     async fn test_create_subtask_with_parent() {
         let backend = Arc::new(TestBackend::new());
         let parent = backend
-            .create("Parent Task", Some("/ws"), Some("craft"), None)
+            .create("Parent Task", Some("/ws"), Some("craft"), None, None)
             .await
             .unwrap();
         let child = backend
-            .create("Child Task", Some("/ws"), Some("craft"), Some(&parent.id))
+            .create("Child Task", Some("/ws"), Some("craft"), Some(&parent.id), None)
             .await
             .unwrap();
         assert_eq!(child.parent_task_id.as_deref(), Some(parent.id.as_str()));
@@ -760,19 +801,19 @@ mod tests {
     async fn test_list_children() {
         let backend = Arc::new(TestBackend::new());
         let parent = backend
-            .create("Parent", None, None, None)
+            .create("Parent", None, None, None, None)
             .await
             .unwrap();
         backend
-            .create("Child 1", None, None, Some(&parent.id))
+            .create("Child 1", None, None, Some(&parent.id), None)
             .await
             .unwrap();
         backend
-            .create("Child 2", None, None, Some(&parent.id))
+            .create("Child 2", None, None, Some(&parent.id), None)
             .await
             .unwrap();
         backend
-            .create("Unrelated", None, None, None)
+            .create("Unrelated", None, None, None, None)
             .await
             .unwrap();
 
@@ -787,7 +828,7 @@ mod tests {
         // The frontend panel may lag behind, but the database is always correct.
         let backend = Arc::new(TestBackend::new());
         let task = backend
-            .create("Quick Task", None, Some("craft"), None)
+            .create("Quick Task", None, Some("craft"), None, None)
             .await
             .unwrap();
         let in_progress = backend
@@ -806,15 +847,15 @@ mod tests {
     async fn test_get_returns_children() {
         let backend = Arc::new(TestBackend::new());
         let parent = backend
-            .create("Parent", None, None, None)
+            .create("Parent", None, None, None, None)
             .await
             .unwrap();
         backend
-            .create("Child 1", None, None, Some(&parent.id))
+            .create("Child 1", None, None, Some(&parent.id), None)
             .await
             .unwrap();
         backend
-            .create("Child 2", None, None, Some(&parent.id))
+            .create("Child 2", None, None, Some(&parent.id), None)
             .await
             .unwrap();
 
@@ -832,21 +873,21 @@ mod tests {
 
         // 1. Create parent task
         let parent = backend
-            .create("Implement Feature X", Some("/ws"), Some("craft"), None)
+            .create("Implement Feature X", Some("/ws"), Some("craft"), None, None)
             .await
             .unwrap();
 
         // 2. Create subtasks
         let sub1 = backend
-            .create("Step 1: Research", Some("/ws"), None, Some(&parent.id))
+            .create("Step 1: Research", Some("/ws"), None, Some(&parent.id), None)
             .await
             .unwrap();
         let sub2 = backend
-            .create("Step 2: Implement", Some("/ws"), None, Some(&parent.id))
+            .create("Step 2: Implement", Some("/ws"), None, Some(&parent.id), None)
             .await
             .unwrap();
         let sub3 = backend
-            .create("Step 3: Test", Some("/ws"), None, Some(&parent.id))
+            .create("Step 3: Test", Some("/ws"), None, Some(&parent.id), None)
             .await
             .unwrap();
 
@@ -867,7 +908,7 @@ mod tests {
         assert_eq!(children.len(), 3);
         assert!(children.iter().all(|c| c.status == "completed"));
 
-        let all_completed = backend.list(Some("completed")).await.unwrap();
+        let all_completed = backend.list(Some("completed"), None).await.unwrap();
         assert_eq!(all_completed.len(), 4); // parent + 3 subtasks
     }
 }

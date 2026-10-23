@@ -472,6 +472,10 @@ fn create_automation_task(
         mode: hermix_core::TaskMode::Craft,
         context,
         parent_task_id: None,
+        // The automation's task belongs to the session it will be
+        // delivered to (the anchor), so it shows up in that session's
+        // task list instead of floating unclaimed.
+        session_id: auto.anchor_session_id.clone(),
     };
 
     task_service
@@ -1033,7 +1037,7 @@ mod tests {
             "原始错误文本要留在 run 记录里，实际: {:?}",
             runs[0].error_text
         );
-        let tasks = task_svc.list(None).unwrap();
+        let tasks = task_svc.list(None, None).unwrap();
         assert_eq!(
             tasks[0].status,
             hermix_core::TaskStatus::Failed,
@@ -1226,7 +1230,7 @@ mod tests {
         execute_automation_run(&auto, &run_id, &svc, &agent, &bus, Some(&task_svc), None).await;
 
         // Verify a task was created and completed
-        let tasks = task_svc.list(None).unwrap();
+        let tasks = task_svc.list(None, None).unwrap();
         assert_eq!(tasks.len(), 1);
         assert!(tasks[0].title.contains("Task Test"));
         assert_eq!(tasks[0].status, hermix_core::TaskStatus::Completed);

@@ -284,30 +284,37 @@ spill 原来告诉模型「以上为前 20000 字符」，但唯一的取回通�
 
 `spill.rs` 因此从 `hermix-agent` 移到 `hermix-tools`（工具层要用它），agent 侧保留 `pub use hermix_tools::spill;` 使既有路径不变。
 
-## 待决策：任务列表的作用域（2026-10-23 实施 C2 时发现）
+## 已交付：任务列表按会话隔离（2026-10-23，原「待决策」）
 
 做 C2（压缩摘要 ↔ 任务树）时必须先回答「摘要里该注入哪些任务」，于是去查任务树的数据流，结果发现一件**与 C2 无关、但更要紧**的事：
 
 **`task_list` 工具返回的是全局任务表，没有会话/工作区过滤。**
 
-- `tasks` 表在 `<hermix_home>/data/sessions.db`（**所有会话、所有工作区共用一个文件**），表里有 `workspace_path` 列，但 **`TaskRepository::list()` 既不过滤会话也不过滤工作区**（`hermix-task/src/repository.rs:231`）。
-- 服务端的 `TaskTrackerBackendImpl::list()` 直接透传（`hermix-server/src/task_tracker_adapter.rs:116`），adapter 连 session id 都不持有。
+- `tasks` 表在 `<hermix_home>/data/sessions.db`（**所有会话、所有工作区共用一个文件**），表里有 `workspace_path` 列，但 **`TaskRepository::list()` 既不过滤会话也不过滤工作区**（`hermix-task/src/repository.rs`）。
+- 服务端的 `TaskTrackerBackendImpl::list()` 直接透传，adapter 连 session id 都不持有。
 - 实测本机数据：**73 个任务，3 个工作区**（`.` 50 个、`<repo>` 12 个、`D:\data` 11 个），58 pending / 4 in_progress，标题是用户的个人学习与工作条目。
 
-**两个后果**：
+**后果**：模型调一次 `task_list` 就看到 73 个任务、4 个来自 3 个无关上下文的 in_progress —— 它分不清哪个是「自己的计划」，于是 B2 的不变量（「同一计划内恰好一个 in_progress」）在数据层面根本无法执行。
 
-1. **跨工作区暴露**：任何会话里的模型调 `task_list`，都会看到别的项目/工作区的任务标题。任务标题是模型自己写的用户工作摘要，属于用户内容。
-2. **B2 的不变量被稀释**：B2 写的是「同一计划内恰好一个 `in_progress`」，但模型看到的是 4 个来自 3 个无关上下文的 in_progress，它无法判断哪个属于「当前计划」。
+### 决策：按**会话**隔离（不是工作区）
 
-**为什么不能直接改**（这是需要拍板的产品语义，不是实现细节）：
+- **按会话**与任务树的设计目的不冲突：`TASK_TRACKER_GUIDANCE` 原文是「目标存在于 task_tracker（**跨回合持久**）」——「跨回合」= 同一会话内跨轮次，**不是跨会话**。
+- **按工作区**更符合直觉，但工作区路径现在由**模型自己填**（`task_create` 的 `workspace_path` 参数，默认 `"."`）——实测 73 个任务里 50 个是 `"."`，这个字段不可信。要按工作区切，得先让服务端用会话的真实工作区覆盖模型填的值（另一处改动）。
+- ⇒ 取**会话级**：它不需要可信的外部字段，且直接解决「模型分不清自己的任务」这个真问题。
 
-- **按会话切**与任务树的设计目的冲突：`TASK_TRACKER_GUIDANCE` 明说「目标存在于 task_tracker（**跨回合持久**）」——按会话切会把持久性打破。
-- **按工作区切**是更合理的语义，但工作区路径现在由**模型自己填**（`task_create` 的 `workspace_path` 参数，默认 `"."`）——实测 73 个任务里 50 个是 `"."`，这个字段不可信。要按工作区切，得让**服务端用会话的真实工作区覆盖**模型填的值。
-- 服务端确实知道每个会话的工作区，但 `TaskTrackerBackendImpl` 是全局单例，工具处理器只拿得到 `params`（`_session_id` 由 `registry.rs:721` 注入 ✓）——需要一条「session → workspace」的查表路径。
+### 实现
 
-⇒ **建议的最小可行方案**：① `tasks` 表加 `session_id` 列（`ensure_column` 式迁移，参考 `hermix-automation` 的做法）；② `task_create` 时由服务端用**会话的真实工作区**覆盖模型填的 `workspace_path`；③ `task_list` 默认只列**当前工作区**的任务（跨工作区需要显式参数）。这样既保住「跨回合持久」，又不再跨项目泄漏。
+| 措施 | 做法 |
+|---|---|
+| **S1** `tasks` 表加 `session_id` 列 | 带列迁移（`ensure_column`，`CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列） |
+| **S2** `task_create` 打标 | session id 来自 `params["_session_id"]`——调度器本来就会注入（`registry.rs::inject_session_id`） |
+| **S3** `task_list` 按会话过滤 | `session_id = ?2 OR session_id IS NULL`：**本会话的 + 尚未归属的**。老任务不会凭空消失 |
+| **S4** 每条任务带 `mine` 标记 | 模型据此分辨「哪些是我的」；`TASK_TRACKER_GUIDANCE` 同步加了这条规则 |
+| **S5** 自动化的任务归到锚定会话 | `automation_trigger.rs` 用 `auto.anchor_session_id`，不再留成无主任务 |
 
-**这需要用户拍板**，因为它改变了 `task_list` 的可见范围。**C2 因此暂缓**——在一个作用域未定的任务树上注入摘要，等于把未定义的行为固化进压缩结果。
+**没有 session id 的调用方**（CLI、cron）保持原样返回全局列表——行为不变，不会把既有功能改坏。
+
+回归测试 `list_scopes_to_the_session_but_keeps_unclaimed_tasks_visible`：本会话的任务在列表里、别人的不在、**尚未归属的仍在**（不丢数据）、无 session 时仍是全局。
 
 ## 明确**不**采纳的上游做法（避免盲目照搬）
 | 上游做法 | 不采纳理由 |
