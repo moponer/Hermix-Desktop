@@ -1,35 +1,43 @@
 <script setup lang="ts">
 /**
- * 阿黎 · 专属页面。
- *
- * 这里是「阿黎」的对话归属地：她的历史会话只在这里列（`source === 'ali'`），
- * 与「桌面」那条通路的历史完全分开。
- *
- * 阿黎走的是**手机本地直连**：用电脑推来的凭据直接找云模型，电脑关机也在。
- * 所以这一页不显示"连电脑"的状态——它本来就不依赖电脑；缺的是凭据
- * （电脑端「模型配置推送」默认关闭），缺凭据时这里要说清怎么开，而不是
- * 让用户对着一个发不出去的空对话发呆。
+ * 阿黎 · 首页（列表即首页 + 任务卡优先）：
+ * 打开手机第一眼 = 她在干嘛 / 我能不能开口 / 找回刚才那段对话。
+ * 这一页 = 状态带 + 最近对话 + 常驻新建入口；对话页只负责对话本身。
  */
 import { ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { listSessions, deleteSession, type SessionRec } from '../../core/history'
 import { setChatSource } from '../../core/chatSource'
 import { loadModelConfig } from '../../core/modelStore'
+import { isPaired } from '../../core/pairing'
+import { getTasks } from '../../core/tasks'
+import { knownApprovals } from '../../core/approvalQueue'
 
 const sessions = ref<SessionRec[]>([])
-/** 是否已经拿到电脑推来的凭据（没有就连不了云模型）。 */
 const credReady = ref(false)
+const paired = ref(false)
+const running = ref(0)
+const approvals = ref(0)
 
 onShow(() => {
   sessions.value = listSessions('ali')
   const cfg = loadModelConfig()
   credReady.value = !!cfg && (cfg.providers?.length ?? 0) > 0
+  paired.value = isPaired()
+  approvals.value = knownApprovals().length
+  // 她在干嘛：running 的会话数。失败按 0——首页不该因一次网络抖动红掉。
+  void getTasks()
+    .then((list) => {
+      running.value = list.filter((t: any) => t.state === 'running').length
+    })
+    .catch(() => {
+      running.value = 0
+    })
 })
 
 function fmtTime(iso: string) {
   const d = new Date(iso)
-  const now = new Date()
-  const days = Math.floor((now.getTime() - d.getTime()) / 86400000)
+  const days = Math.floor((Date.now() - d.getTime()) / 86400000)
   if (days === 0) return '今天'
   if (days === 1) return '昨天'
   if (days < 7) return `${days} 天前`
@@ -48,6 +56,10 @@ function startNew() {
   uni.switchTab({ url: '/pages/chat/index' })
 }
 
+function goApproval() {
+  uni.navigateTo({ url: '/pages/approval/index' })
+}
+
 function confirmDelete(s: SessionRec) {
   uni.showModal({
     title: '删除对话',
@@ -62,39 +74,35 @@ function confirmDelete(s: SessionRec) {
   })
 }
 </script>
-
 <template>
   <hm-shell title="阿黎" back>
-    <!-- 身份卡：说清"阿黎是谁、这条对话走哪、什么时候不能用" -->
-    <view class="hero">
-      <view class="hero-row">
-        <view class="avatar"><text>黎</text></view>
-        <view class="hero-info">
-          <text class="hero-name">阿黎</text>
-          <text class="hero-desc">手机直接连云模型 · 电脑关机也能聊</text>
-        </view>
+    <view class="status">
+      <view class="st">
+        <view class="st-dot" :class="paired ? 'on' : 'off'" />
+        <text class="st-t">{{ paired ? '电脑在线' : '电脑未连' }}</text>
       </view>
-      <text class="hero-note">
-        她与「桌面」是两条独立的对话：这里的话不经过电脑，也不会出现在桌面端。
-      </text>
+      <view class="st">
+        <text class="st-n">{{ running }}</text>
+        <text class="st-t">正在跑</text>
+      </view>
+      <view class="st" @tap="goApproval">
+        <text class="st-n" :class="{ alert: approvals > 0 }">{{ approvals }}</text>
+        <text class="st-t">待你审批</text>
+      </view>
     </view>
 
-    <!-- 没有凭据：明确指路，不留一个发不出去的空对话 -->
+    <text class="desc">她在电脑上执行 · 工具 / 工作区 / 派 agent 都在桌面端</text>
+
     <view v-if="!credReady" class="warn">
       <text class="warn-t">阿黎暂时没有可用的模型凭据</text>
-      <text class="warn-s">
-        凭据由电脑推来，且默认关闭。到桌面端「设置 → 手机端 → 模型配置推送」打开一次，手机连上后即可用。
-      </text>
-      <view class="hm-pill ghost warn-btn" @tap="startNew"><text>知道了</text></view>
+      <text class="warn-s">凭据由电脑推来，且默认关闭。到桌面端「设置 → 手机端 → 模型配置推送」打开一次即可。</text>
     </view>
 
-    <!-- 主入口 -->
     <view class="cta" @tap="startNew">
       <text class="cta-t">开始和阿黎说点什么</text>
       <text class="cta-s">新建一条对话</text>
     </view>
 
-    <!-- 她的历史 -->
     <view class="sec-head">
       <text class="sec-t">与阿黎的对话</text>
       <text v-if="sessions.length" class="sec-n">{{ sessions.length }}</text>
@@ -116,181 +124,34 @@ function confirmDelete(s: SessionRec) {
     </view>
   </hm-shell>
 </template>
-
 <style lang="scss" scoped>
-/* 身份卡：阿黎是谁。用底色分层，不用描边（全站约定）。 */
-.hero {
-  margin: 8rpx $gutter 0;
-  padding: 28rpx;
-  background: $card;
-  border-radius: $r-card;
-}
-.hero-row {
-  display: flex;
-  align-items: center;
-  gap: 20rpx;
-}
-.avatar {
-  flex: none;
-  width: 84rpx;
-  height: 84rpx;
-  border-radius: 26rpx;
-  background: $accent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.avatar text {
-  font-size: 36rpx;
-  font-weight: 600;
-  color: $on-accent;
-}
-.hero-info {
-  flex: 1;
-  min-width: 0;
-}
-.hero-name {
-  display: block;
-  font-size: $fs-title;
-  font-weight: 600;
-  color: $fg;
-}
-.hero-desc {
-  display: block;
-  margin-top: 6rpx;
-  font-size: $fs-mini;
-  color: $fg2;
-}
-.hero-note {
-  display: block;
-  margin-top: 20rpx;
-  font-size: $fs-mini;
-  line-height: 1.7;
-  color: $fg4;
-}
-
-/* 缺凭据：可行动的提示，不是一句错误。 */
-.warn {
-  margin: 20rpx $gutter 0;
-  padding: 24rpx;
-  background: $warn-bg;
-  border-radius: $r-card;
-}
-.warn-t {
-  display: block;
-  font-size: $fs-sub;
-  font-weight: 500;
-  color: $fg;
-}
-.warn-s {
-  display: block;
-  margin-top: 8rpx;
-  font-size: $fs-mini;
-  line-height: 1.7;
-  color: $fg2;
-}
-.warn-btn {
-  margin-top: 16rpx;
-  align-self: flex-start;
-  display: inline-flex;
-}
-
-.cta {
-  margin: 20rpx $gutter 0;
-  padding: 28rpx;
-  background: $accent;
-  border-radius: $r-card;
-}
-.cta:active {
-  opacity: 0.85;
-}
-.cta-t {
-  display: block;
-  font-size: $fs-body;
-  font-weight: 600;
-  color: $on-accent;
-}
-.cta-s {
-  display: block;
-  margin-top: 6rpx;
-  font-size: $fs-mini;
-  color: $on-accent;
-  opacity: 0.75;
-}
-
-.sec-head {
-  display: flex;
-  align-items: baseline;
-  gap: 12rpx;
-  margin: 36rpx $gutter 14rpx;
-}
-.sec-t {
-  font-size: $fs-mini;
-  font-weight: 500;
-  color: $fg2;
-}
-.sec-n {
-  font-size: $fs-mini;
-  color: $fg4;
-}
-
-.empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14rpx;
-  padding: 80rpx $gutter;
-}
-.e-t {
-  font-size: $fs-sub;
-  color: $fg2;
-}
-.e-s {
-  font-size: $fs-mini;
-  color: $fg4;
-  text-align: center;
-  line-height: 1.7;
-}
-
-.list {
-  padding: 0 $gutter 24rpx;
-}
-.row {
-  display: flex;
-  align-items: center;
-  gap: 16rpx;
-  padding: 26rpx 24rpx;
-  background: $card;
-  border-radius: $r-card;
-  margin-bottom: 14rpx;
-}
-.row:active {
-  opacity: 0.75;
-}
-.rbody {
-  flex: 1;
-  min-width: 0;
-}
-.r-t {
-  display: block;
-  font-size: $fs-sub;
-  color: $fg;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.r-s {
-  display: block;
-  margin-top: 6rpx;
-  font-size: $fs-mini;
-  color: $fg4;
-}
-.rdel {
-  flex: none;
-  padding: 8rpx 14rpx;
-  border-radius: $r-pill;
-  background: $raised;
-  font-size: $fs-mini;
-  color: $fg2;
-}
+.status { display: flex; gap: 14rpx; margin: 8rpx $gutter 0; }
+.st { flex: 1; padding: 20rpx 16rpx; background: $card; border-radius: $r-card; text-align: center; }
+.st-dot { width: 16rpx; height: 16rpx; border-radius: 50%; margin: 6rpx auto; }
+.st-dot.on { background: $ok; }
+.st-dot.off { background: $fg4; }
+.st-n { display: block; font-size: $fs-title; font-weight: 600; color: $fg; }
+.st-n.alert { color: $err; }
+.st-t { display: block; margin-top: 6rpx; font-size: $fs-mini; color: $fg2; }
+.desc { display: block; margin: 20rpx $gutter 0; font-size: $fs-mini; color: $fg4; }
+.warn { margin: 20rpx $gutter 0; padding: 24rpx; background: $warn-bg; border-radius: $r-card; }
+.warn-t { display: block; font-size: $fs-sub; font-weight: 500; color: $fg; }
+.warn-s { display: block; margin-top: 8rpx; font-size: $fs-mini; line-height: 1.7; color: $fg2; }
+.cta { margin: 20rpx $gutter 0; padding: 28rpx; background: $accent; border-radius: $r-card; }
+.cta:active { opacity: 0.85; }
+.cta-t { display: block; font-size: $fs-body; font-weight: 600; color: $on-accent; }
+.cta-s { display: block; margin-top: 6rpx; font-size: $fs-mini; color: $on-accent; opacity: 0.75; }
+.sec-head { display: flex; align-items: baseline; gap: 12rpx; margin: 36rpx $gutter 14rpx; }
+.sec-t { font-size: $fs-mini; font-weight: 500; color: $fg2; }
+.sec-n { font-size: $fs-mini; color: $fg4; }
+.empty { display: flex; flex-direction: column; align-items: center; gap: 14rpx; padding: 80rpx $gutter; }
+.e-t { font-size: $fs-sub; color: $fg2; }
+.e-s { font-size: $fs-mini; color: $fg4; text-align: center; }
+.list { padding: 0 $gutter 24rpx; }
+.row { display: flex; align-items: center; gap: 16rpx; padding: 26rpx 24rpx; background: $card; border-radius: $r-card; margin-bottom: 14rpx; }
+.row:active { opacity: 0.75; }
+.rbody { flex: 1; min-width: 0; }
+.r-t { display: block; font-size: $fs-sub; color: $fg; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-s { display: block; margin-top: 6rpx; font-size: $fs-mini; color: $fg4; }
+.rdel { flex: none; padding: 8rpx 14rpx; border-radius: $r-pill; background: $raised; font-size: $fs-mini; color: $fg2; }
 </style>

@@ -571,14 +571,6 @@ onUnmounted(() => {
       <view class="call-btn" @tap="goCall"><text>☎</text></view>
       <view class="new-btn" @tap="confirmNew"><text>✛</text></view>
     </template>
-    <!-- 阿黎是谁、在哪干活：她在**电脑上**执行，手机只是入口。
-         这一行常驻——理解这个界面最重要的一件事就是这个。 -->
-    <view class="ali-strip">
-      <view class="ali-dot" />
-      <text class="ali-name">阿黎</text>
-      <text class="ali-desc">在电脑上执行 · 工具 / 工作区 / 派 agent 都在桌面端</text>
-    </view>
-
     <!-- 未连接：主界面里的一张卡片，不是拦截层 -->
     <view v-if="!paired" class="connect">
       <view class="c-top">
@@ -909,38 +901,7 @@ onUnmounted(() => {
   color: $fg2;
 }
 
-/* 阿黎身份条：常驻一行，说清"她在哪干活"。不是装饰，是理解这个界面的前提。 */
-.ali-strip {
-  display: flex;
-  align-items: center;
-  gap: 10rpx;
-  margin: 8rpx $gutter 2rpx;
-  padding: 14rpx 20rpx;
-  background: $card;
-  border-radius: $r-pill;
-}
-.ali-dot {
-  flex: none;
-  width: 14rpx;
-  height: 14rpx;
-  border-radius: 50%;
-  background: $accent;
-}
-.ali-name {
-  flex: none;
-  font-size: $fs-sub;
-  font-weight: 600;
-  color: $fg;
-}
-.ali-desc {
-  flex: 1;
-  min-width: 0;
-  font-size: $fs-mini;
-  color: $fg2;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* 阿黎的身份说明已移到首页（pages/ali）——对话页只负责对话本身。 */
 
 /* 上下文仪表（抄对方「上下文占用持久条」）：细条 + 右侧文案，超过阈值转暖色。 */
 .ctx {
