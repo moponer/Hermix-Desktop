@@ -1419,6 +1419,14 @@ export const refreshModelContext = async (
     body: JSON.stringify({ model }),
   });
 
+/** 上报一个确认 404 下架的免费模型，后端把它从免费渠道清单摘除。
+ *  失败静默（best-effort）：摘不摘都不影响错误卡片本身的展示。 */
+export const reportDeadModel = async (model: string): Promise<{ model: string; removed: boolean }> =>
+  fetchJSON("/api/free-channel/dead-model", {
+    method: "POST",
+    body: JSON.stringify({ model }),
+  });
+
 // ── Persona API（角色提示词 / SOUL / 全局记忆文本）────────────
 
 export interface PersonalitySummary {

@@ -428,6 +428,37 @@ pub async fn refresh_model_context(
     })
 }
 
+/// Request for `POST /api/free-channel/dead-model`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DeadModelRequest {
+    pub model: String,
+}
+
+/// Response for `POST /api/free-channel/dead-model`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeadModelResponse {
+    pub model: String,
+    pub removed: bool,
+}
+
+/// POST /api/free-channel/dead-model —— 前端收到上游 404
+/// `does not exist` 时上报，把死模型从免费渠道清单里摘除。
+///
+/// 这是免费清单「只增不删」策略缺失的另一半闭环：清单靠上游 `/models`
+/// 只增，下架却只体现为调用 404。不摘除的话死模型永远留在列表里，
+/// 用户每次选中都失败（实测 minimax-m3.1-flash:free）。只动免费渠道，
+/// 用户自定义/内置清单不受影响。
+pub async fn report_dead_model(
+    State(state): State<HttpServerState>,
+    Json(body): Json<DeadModelRequest>,
+) -> Json<DeadModelResponse> {
+    let model = body.model;
+    let removed =
+        crate::free_channel::remove_dead_model(&state.hermix_home, &state.agent_service, &model)
+            .await;
+    Json(DeadModelResponse { model, removed })
+}
+
 /// `GET /api/model/list` 的单条模型（启用/可添加通用）。
 ///
 /// 除标识外还带上上游声明的能力（上下文、最大输出、模态、reasoning），

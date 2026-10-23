@@ -213,6 +213,8 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/custom-providers/{id}/model-contexts", put(custom_providers::update_model_contexts))
         // 未落盘配置的连通性测试（添加模型弹窗"填完就测"）
         .route("/api/providers/test", post(custom_providers::test_inline))
+        // 免费渠道死模型摘除（前端收到上游 404 does not exist 时上报）
+        .route("/api/free-channel/dead-model", post(config::report_dead_model))
         // Persona management: SOUL / system prompt / personalities / memory.
         // See `dashboard/persona.rs` for the file layout and the agent-loop
         // code that consumes these files.

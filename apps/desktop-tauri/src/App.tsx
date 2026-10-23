@@ -2648,6 +2648,24 @@ streamPhaseRef.current = null;
             // user always sees a meaningful category instead of
             // "对话因后端错误中断".
             const kind = normalizeStreamErrorKind(code, rawForFriendly);
+            // 免费渠道死模型自愈：上游 404 "does not exist" 意味着该 id 已被
+            // 下架（不是限流/抖动）。抽出 id 上报后端，从免费清单里摘除——
+            // 免费清单「只增不删」，不摘的话死模型永远留在下拉里，
+            // 用户每次选中都 404（实测 minimax-m3.1-flash:free）。
+            // fire-and-forget：摘除成功广播模型配置变更，下拉立即刷新。
+            const deadModel = /404/.test(rawForFriendly)
+              ? rawForFriendly.match(/'([^']{2,120})' does not exist/i)?.[1]
+              : undefined;
+            if (deadModel) {
+              void api
+                .reportDeadModel(deadModel)
+                .then((r) => {
+                  if (r.removed) {
+                    window.dispatchEvent(new CustomEvent("hermix:model-config-changed"));
+                  }
+                })
+                .catch(() => undefined);
+            }
             setStreamPhase(null);
             setSessions((prev) => prev.map((s) => {
               if (s.id !== sessionId) return s;

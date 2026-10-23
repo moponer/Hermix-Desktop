@@ -231,6 +231,71 @@ pub async fn refresh_and_persist(home: &std::path::Path, service: &Arc<dyn Agent
     added_total
 }
 
+/// 把确认 404 下架的模型从免费渠道清单里摘除（调用失败闭环的落地）。
+///
+/// 「只增不删」防的是上游网络抖动误删条目；而 404 `does not exist` 是
+/// 上游明确的"这个 id 不存在"信号，不是抖动——不摘的话死模型会永远
+/// 留在清单里，用户每次选中都 404（实测：`minimax/minimax-m3.1-flash:free`
+/// 被上游下架后持续报错）。只动免费渠道的 provider entry，用户的自定义
+/// 与内置清单不受影响。返回是否发生改动。
+pub async fn remove_dead_model(
+    home: &std::path::Path,
+    service: &Arc<dyn AgentService>,
+    model_id: &str,
+) -> bool {
+    let model_id = model_id.trim();
+    if model_id.is_empty() {
+        return false;
+    }
+    let mut fresh = match hermix_config::load_config(home.to_str()) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "free channel: dead-model removal load config failed");
+            return false;
+        }
+    };
+    if !fresh.free_channel.enabled {
+        return false;
+    }
+    let mut changed = false;
+    for channel in hermix_config::free_channel::FREE_CHANNELS {
+        let Some(entry) = fresh.llm_providers.get_mut(channel.id) else {
+            continue;
+        };
+        if let Some(csv) = entry.model.clone() {
+            let present = csv.split(',').map(str::trim).any(|m| m == model_id);
+            if present {
+                let kept: Vec<&str> = csv
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty() && *s != model_id)
+                    .collect();
+                entry.model = Some(kept.join(","));
+                changed = true;
+            }
+        }
+        if entry.model_contexts.remove(model_id).is_some() {
+            changed = true;
+        }
+        if entry.model_meta.remove(model_id).is_some() {
+            changed = true;
+        }
+    }
+    if !changed {
+        return false;
+    }
+    let path = home.join("config.yaml");
+    if let Err(e) = hermix_config::save_config_yaml(&path, &fresh) {
+        tracing::warn!(error = %e, model = %model_id, "free channel: dead-model removal persist failed");
+        return false;
+    }
+    if let Ok(v) = serde_json::to_value(&fresh) {
+        service.set_config(v);
+    }
+    tracing::info!(model = %model_id, "free channel: dead model removed from list");
+    true
+}
+
 /// 启动后延迟一小段再刷新：让首屏与首次推理先跑，别和启动竞争网络。
 pub fn spawn_startup_refresh(state: &HttpServerState) {
     let cfg: FreeChannelConfig = state.config.free_channel.clone();
