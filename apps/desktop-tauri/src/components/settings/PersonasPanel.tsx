@@ -154,7 +154,7 @@ export function PersonasPanel() {
             onClick={openSoul}
             className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[length:var(--text-meta)] ${
               active === "SOUL.md"
-                ? "bg-[var(--color-bg-active)] text-[var(--color-accent)]"
+                ? "bg-bg-selected text-[var(--color-accent)]"
                 : "text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]"
             }`}
           >
@@ -167,7 +167,7 @@ export function PersonasPanel() {
               onClick={() => openPersona(p.name, p.is_builtin)}
               className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[length:var(--text-meta)] ${
                 active === p.name
-                  ? "bg-[var(--color-bg-active)] text-[var(--color-accent)]"
+                  ? "bg-bg-selected text-[var(--color-accent)]"
                   : "text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]"
               }`}
             >

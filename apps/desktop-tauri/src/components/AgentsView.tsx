@@ -178,7 +178,7 @@ export function AgentsView({
             onClick={() => switchTab("my")}
             className={clsx(
               "px-3 py-1 rounded-md text-[length:var(--text-ui)]",
-              tab === "my" ? "bg-bg-active text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
+              tab === "my" ? "bg-bg-selected text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
             )}
           >
             我的专家
@@ -188,7 +188,7 @@ export function AgentsView({
             onClick={() => switchTab("builtin")}
             className={clsx(
               "px-3 py-1 rounded-md text-[length:var(--text-ui)]",
-              tab === "builtin" ? "bg-bg-active text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
+              tab === "builtin" ? "bg-bg-selected text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
             )}
           >
             内置专家

@@ -576,7 +576,7 @@
   background: var(--color-bg-hover);
 }
 .artifact-card.is-active {
-  background: var(--color-bg-active);
+  background: var(--color-bg-selected);
 }
 
 /* 文件类型 chip — 替代 4 宫格摘要, 文件信息收敛成一行 */

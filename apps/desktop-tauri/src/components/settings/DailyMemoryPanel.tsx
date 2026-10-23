@@ -61,7 +61,7 @@ export function DailyMemoryPanel() {
             onClick={() => setActive(d.date)}
             className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[length:var(--text-meta)] ${
               current.date === d.date
-                ? "bg-[var(--color-bg-active)] text-[var(--color-accent)]"
+                ? "bg-bg-selected text-[var(--color-accent)]"
                 : "text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]"
             }`}
           >

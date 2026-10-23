@@ -103,7 +103,7 @@
   transition: background-color var(--duration-fast) var(--ease-out);
 }
 .row-flat:hover { background: var(--color-bg-hover); }
-.row-flat--on { background: var(--color-bg-active); }
+.row-flat--on { background: var(--color-bg-selected); }
 
 /* ── 面板（卡片）：无描边，层次靠面差 + 极淡投影 ────────────────── */
 .panel-flat {

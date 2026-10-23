@@ -278,13 +278,13 @@
 
 .preview-pane .code-ln:hover {
   color: var(--color-text-secondary);
-  background: color-mix(in srgb, var(--color-text-faint) 8%, transparent);
+  background: var(--color-bg-hover-subtle);
 }
 
 /* 当前激活行高亮 —— CSS only，零 JS */
 .preview-pane .code-viewport[data-active-line] .code-ln[data-active="true"] {
   color: var(--color-text-secondary);
-  background: color-mix(in srgb, var(--color-info) 14%, transparent);
+  background: var(--color-bg-selected);
   font-weight: 500;
 }
 
@@ -510,7 +510,7 @@
   font-family: inherit;
 }
 .computer-nav-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-text-faint) 15%, transparent);
+  background: var(--color-bg-hover-subtle);
   color: var(--color-text-primary);
 }
 .computer-nav-btn:disabled {
@@ -597,10 +597,10 @@
 }
 .computer-view-btn:hover {
   color: var(--color-text-secondary);
-  background: color-mix(in srgb, var(--color-text-faint) 10%, transparent);
+  background: var(--color-bg-hover-subtle);
 }
 .computer-view-btn.is-active {
-  background: color-mix(in srgb, var(--color-info) 18%, transparent);
+  background: var(--color-bg-selected);
   color: var(--color-info);
 }
 
@@ -630,10 +630,10 @@
   user-select: none;
 }
 .computer-list-row:hover {
-  background: color-mix(in srgb, var(--color-text-faint) 10%, transparent);
+  background: var(--color-bg-hover-subtle);
 }
 .computer-list-row.is-selected {
-  background: color-mix(in srgb, var(--color-info) 14%, transparent);
+  background: var(--color-bg-selected);
 }
 
 .computer-list-icon {
@@ -683,10 +683,10 @@
   user-select: none;
 }
 .computer-detail-row:hover {
-  background: color-mix(in srgb, var(--color-text-faint) 10%, transparent);
+  background: var(--color-bg-hover-subtle);
 }
 .computer-detail-row.is-selected {
-  background: color-mix(in srgb, var(--color-info) 14%, transparent);
+  background: var(--color-bg-selected);
 }
 
 .computer-detail-col-name {
@@ -732,11 +732,11 @@
   text-align: center;
 }
 .computer-icon-tile:hover {
-  background: color-mix(in srgb, var(--color-text-faint) 10%, transparent);
+  background: var(--color-bg-hover-subtle);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 .computer-icon-tile.is-selected {
-  background: color-mix(in srgb, var(--color-info) 14%, transparent);
+  background: var(--color-bg-selected);
 }
 
 .computer-icon-img {

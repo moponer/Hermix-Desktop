@@ -239,7 +239,7 @@ function CategoryTab({
       className={clsx(
         "flex items-center gap-1 px-2.5 py-1 rounded-full text-[length:var(--text-meta)] whitespace-nowrap transition-colors",
         active
-          ? "bg-bg-active text-text-primary font-medium"
+          ? "bg-bg-selected text-text-primary font-medium"
           : "bg-bg-tertiary text-text-muted hover:text-text-primary",
       )}
     >

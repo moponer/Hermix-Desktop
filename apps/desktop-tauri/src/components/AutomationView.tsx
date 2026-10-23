@@ -261,7 +261,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
             type="button"
             onClick={() => setTab("auto")}
             className={`px-3 py-1 rounded-md text-[length:var(--text-ui)] transition-colors ${
-              tab === "auto" ? "bg-bg-active text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
+              tab === "auto" ? "bg-bg-selected text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
             }`}
           >
             自动化
@@ -270,7 +270,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
             type="button"
             onClick={() => setTab("flow")}
             className={`px-3 py-1 rounded-md text-[length:var(--text-ui)] transition-colors ${
-              tab === "flow" ? "bg-bg-active text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
+              tab === "flow" ? "bg-bg-selected text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
             }`}
           >
             工作流
@@ -702,7 +702,7 @@ function TaskEditor({
                 onClick={() => update("schedule", expr)}
                 className={`px-2 py-0.5 text-[length:var(--text-ui)] rounded ${
                   draft.schedule === expr
-                    ? "bg-bg-active text-text-primary font-medium"
+                    ? "bg-bg-selected text-text-primary font-medium"
                     : "bg-bg-secondary text-text-secondary hover:bg-bg-hover"
                 }`}
                 title={desc}
@@ -792,7 +792,7 @@ function TaskEditor({
                        底色区分，再加一圈边线是同一件事说两遍。 */
                     className={`px-2 py-1 text-[length:var(--text-ui)] rounded transition-colors ${
                       selected
-                        ? "bg-bg-active text-text-primary font-medium"
+                        ? "bg-bg-selected text-text-primary font-medium"
                         : "bg-bg-secondary text-text-secondary hover:bg-bg-hover"
                     }`}
                   >

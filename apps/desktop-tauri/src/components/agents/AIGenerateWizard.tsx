@@ -248,7 +248,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                 <div className={clsx(
                   "w-6 h-6 rounded-full flex items-center justify-center text-[length:var(--text-meta)] font-medium transition-colors",
                   i < STEP_INDEX ? "bg-green-500 text-white"
-                  : i === STEP_INDEX ? "bg-bg-active text-text-primary"
+                  : i === STEP_INDEX ? "bg-bg-selected text-text-primary"
                   : "bg-bg-tertiary text-text-faint"
                 )}>
                   {i < STEP_INDEX ? <Check className="icon-sm" /> : i + 1}
@@ -401,7 +401,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                       className={clsx(
                         "inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[length:var(--text-meta)] font-medium transition-colors",
                         clarify.domain === o.id
-                          ? "bg-bg-active text-text-primary"
+                          ? "bg-bg-selected text-text-primary"
                           : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
                       )}
                     >
@@ -422,7 +422,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                     className={clsx(
                       "px-2.5 py-1.5 rounded-full text-[length:var(--text-meta)] font-medium transition-colors",
                       clarify.style === o.id
-                        ? "bg-bg-active text-text-primary"
+                        ? "bg-bg-selected text-text-primary"
                         : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
                     )}
                   >
@@ -447,7 +447,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                       className={clsx(
                         "px-2.5 py-1.5 rounded-full text-[length:var(--text-meta)] font-medium transition-colors flex items-center gap-1",
                         on
-                          ? "bg-bg-active text-text-primary"
+                          ? "bg-bg-selected text-text-primary"
                           : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
                       )}
                     >

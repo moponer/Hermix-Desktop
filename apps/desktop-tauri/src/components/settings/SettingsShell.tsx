@@ -230,7 +230,7 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
                        主按钮——导航是位置，不是行动。把强调色铺在导航上，
                        整块侧栏会抢走内容的注意力。 */
                     page === id
-                      ? "bg-[var(--color-bg-active)] text-[var(--color-text-primary)]"
+                      ? "bg-bg-selected text-[var(--color-text-primary)]"
                       : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]",
                   )}
                 >
