@@ -300,8 +300,7 @@ function AppMentionInputImpl({
                   </span>
                   {item.description && (
                     <span
-                      className="text-[length:var(--text-meta)] truncate"
-                      style={{ color: "var(--color-text-muted)" }}
+                      className="text-[length:var(--text-meta)] truncate text-text-muted"
                     >
                       {item.description}
                     </span>

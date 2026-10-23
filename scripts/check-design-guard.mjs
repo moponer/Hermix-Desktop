@@ -64,7 +64,7 @@ const push = (file, line, rule, text) =>
    与 G10 同款棘轮：只禁止增加。清理一批后把 BASELINE 调低。
    注意豁免：运行时几何（拖拽宽度、坐标、进度百分比）与数据自带色
    （专家色板、渠道品牌色）不在统计里 —— 本规则只数 `var(--color-*)`。 */
-const INLINE_COLOR_BASELINE = 62;
+const INLINE_COLOR_BASELINE = 49;
 let inlineColorHits = 0;
 
 for (const file of walk(ROOT)) {

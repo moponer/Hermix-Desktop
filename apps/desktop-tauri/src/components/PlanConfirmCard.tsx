@@ -54,11 +54,7 @@ export function PlanConfirmCard({
               <button
                 type="button"
                 onClick={() => onAcknowledge?.(message.id)}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-meta font-medium transition-colors"
-                style={{
-                  background: "var(--color-accent)",
-                  color: "var(--color-on-accent)",
-                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-meta font-medium transition-colors bg-accent text-on-accent"
               >
                 知道了
               </button>

@@ -163,11 +163,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
           <>
             <button
               onClick={onStartCreateApp}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[length:var(--text-ui)] font-medium transition-colors hover:opacity-90"
-              style={{
-                background: "var(--color-accent)",
-                color: "var(--color-on-accent)",
-              }}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[length:var(--text-ui)] font-medium transition-colors hover:opacity-90 bg-accent text-on-accent"
               title="创建新应用"
             >
               <Plus className="icon-lg" />

@@ -107,12 +107,7 @@ export function ClarifyComposer({
             }
           }}
           placeholder={hasChoices ? "或直接输入自定义回答" : "请输入您的回答"}
-          className="flex-1 px-2.5 py-1.5 rounded-md text-ui outline-none"
-          style={{
-            background: "var(--color-bg-tertiary)",
-            color: "var(--color-text-primary)",
-            border: "1px solid var(--color-border-primary)",
-          }}
+          className="flex-1 px-2.5 py-1.5 rounded-md text-ui outline-none bg-bg-tertiary text-text-primary"
         />
         <button
           type="button"
@@ -122,11 +117,7 @@ export function ClarifyComposer({
             onSubmit(text.trim());
             setText("");
           }}
-          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-meta font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-          style={{
-            background: "var(--color-accent)",
-            color: "var(--color-on-accent)",
-          }}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-meta font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed bg-accent text-on-accent"
         >
           提交
         </button>

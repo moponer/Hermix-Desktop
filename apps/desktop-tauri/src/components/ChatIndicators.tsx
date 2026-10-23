@@ -201,11 +201,7 @@ export function QueueItemRow({
           <div className="flex items-center gap-1.5 mt-1">
             <button
               onClick={commit}
-              className="text-tiny px-1.5 py-0.5 rounded font-medium"
-              style={{
-                background: "var(--color-accent)",
-                color: "var(--color-on-accent)",
-              }}
+              className="text-tiny px-1.5 py-0.5 rounded font-medium bg-accent text-on-accent"
             >
               保存
             </button>
