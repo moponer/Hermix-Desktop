@@ -11,7 +11,7 @@
 // 所有写操作走既有写路径后重新拉取。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Star, Trash2, Pencil, Zap, Loader2 } from "lucide-react";
+import { Plus, Star, Power, Trash2, Pencil, Zap, Loader2 } from "lucide-react";
 import * as api from "../../api";
 import { syncModelConfigLocal, writeModelConfigAndNotify } from "../../hooks/useCurrentModel";
 import { ProviderIcon } from "../ProviderIcon";
@@ -154,13 +154,41 @@ export function ModelListTab() {
 
   const setDefault = useCallback(async (id: string) => {
     try {
-      // 统一写路径：localStorage 镜像 + 事件广播 + 后端落盘一次完成。
-      // 只写「原本就启用」的行 + 本次点星的那一条：整份 rows 里混着
-      // 目录（catalog）行，一并写入会把用户没选过的模型全部启用。
-      const enabled = rows.filter((r) => r.isEnabled || r.id === id);
+      // 只改默认，不碰启用清单：启用 / 默认是两个独立概念。
+      // 星标只负责"设默认"，启用 / 禁用由电源键（toggleEnabled）负责。
+      // 被设为默认的必须是已启用项——前端对未启用行的星标 disable，
+      // 避免 default_model 指向未启用模型。
+      const enabled = rows.filter((r) => r.isEnabled);
       await writeModelConfigAndNotify({
         enabled: enabled.map((r) => ({ providerId: r.providerId, modelId: r.modelId })),
         defaultModel: id,
+      });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [rows, load]);
+
+  // 启用 / 禁用（与"设为默认"是两个独立动作）。
+  // 禁用当前默认模型时，default 顺延到第一个剩余启用项，避免 default
+  // 指向未启用模型。
+  const toggleEnabled = useCallback(async (row: ModelRow) => {
+    try {
+      const willEnable = !row.isEnabled;
+      const enabledRows = rows.filter((r) => r.isEnabled);
+      const nextEnabled = willEnable
+        ? [...enabledRows, row]
+        : enabledRows.filter((r) => r.id !== row.id);
+
+      const currentDefault = rows.find((r) => r.isDefault)?.id ?? "";
+      const nextDefault =
+        !willEnable && currentDefault === row.id
+          ? nextEnabled[0]?.id ?? ""
+          : currentDefault;
+
+      await writeModelConfigAndNotify({
+        enabled: nextEnabled.map((r) => ({ providerId: r.providerId, modelId: r.modelId })),
+        defaultModel: nextDefault,
       });
       await load();
     } catch (e) {
@@ -297,7 +325,14 @@ export function ModelListTab() {
 
               <div className="flex items-center gap-0.5 shrink-0">
                 <IconBtn
-                  title={row.isEnabled ? "设为默认" : "启用并设为默认"}
+                  title={row.isEnabled ? "禁用该模型" : "启用该模型"}
+                  onClick={() => void toggleEnabled(row)}
+                >
+                  <Power className={`icon-sm ${row.isEnabled ? "text-accent" : ""}`} />
+                </IconBtn>
+                <IconBtn
+                  title={row.isDefault ? "当前默认模型" : row.isEnabled ? "设为默认" : "请先启用该模型"}
+                  disabled={!row.isEnabled}
                   onClick={() => void setDefault(row.id)}
                 >
                   <Star className={`icon-sm ${row.isDefault ? "fill-current text-accent" : ""}`} />
@@ -349,17 +384,22 @@ function IconBtn({
   title,
   onClick,
   children,
+  disabled = false,
 }: {
   title: string;
   onClick: () => void;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
       title={title}
       aria-label={title}
-      className="h-7 w-7 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
+      disabled={disabled}
+      className={`h-7 w-7 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-tertiary ${
+        disabled ? "opacity-40 cursor-not-allowed hover:text-text-muted hover:bg-transparent" : ""
+      }`}
     >
       {children}
     </button>
