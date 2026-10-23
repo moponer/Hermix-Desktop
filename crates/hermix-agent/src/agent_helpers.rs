@@ -141,13 +141,27 @@ impl ToolRegistry {
     }
 
     /// Return all registered tool schemas.
+    ///
+    /// **Sorted by name.** The backing store is a `HashMap`, so the raw
+    /// iteration order changes on every process start. That order ends up
+    /// verbatim in the request body's `tools` array, which is part of the
+    /// provider's cached prefix — an unstable order silently invalidates
+    /// the prefix on every restart. Sorting here makes the whole chain
+    /// (router → `assemble_tool_schemas` → provider payload) deterministic
+    /// for a given tool set.
     pub fn schemas(&self) -> Vec<ToolSchema> {
-        self.tools.values().map(|e| e.schema.clone()).collect()
+        let mut out: Vec<ToolSchema> = self.tools.values().map(|e| e.schema.clone()).collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
     }
 
     /// Return all registered tool names.
+    ///
+    /// Sorted by name — same reason as [`Self::schemas`].
     pub fn names(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
+        let mut out: Vec<String> = self.tools.keys().cloned().collect();
+        out.sort();
+        out
     }
 
     /// Return a clone of this registry with the named tools
@@ -207,13 +221,26 @@ impl Default for ToolRegistry {
 // ---------------------------------------------------------------------------
 
 /// Compute a stable hash key for system prompt caching.
-/// Only the config-driven factors that rarely change; excludes
-/// per-turn data (tool list, user message, timestamp).
+///
+/// The key must be a function of **everything the cached text depends
+/// on** — a key that omits an input makes the cache return text that
+/// no longer matches the request.
+///
+/// The stable layer renders a `## Tools` name list (`with_tools_section`),
+/// and the routed tool set is recomputed every turn from the last six
+/// messages. The key therefore **includes the tool names, in order**: a
+/// tool-set change must miss the cache, otherwise the prompt advertises
+/// one tool set while the request's `tools` array carries another.
+///
+/// Per-turn data that is *not* part of the stable layer (user message,
+/// timestamp, session id) is still excluded — those live in other
+/// layers.
 pub fn compute_prompt_cache_key(
     model: &str,
     personality: Option<&str>,
     system_prompt: Option<&str>,
     workspace: Option<&str>,
+    tool_names: &[&str],
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::default();
@@ -221,6 +248,9 @@ pub fn compute_prompt_cache_key(
     personality.unwrap_or("").hash(&mut h);
     system_prompt.unwrap_or("").hash(&mut h);
     workspace.unwrap_or("").hash(&mut h);
+    // Ordered: the rendered `## Tools` list preserves this order, so a
+    // reorder is a content change and must miss the cache.
+    tool_names.hash(&mut h);
     h.finish()
 }
 

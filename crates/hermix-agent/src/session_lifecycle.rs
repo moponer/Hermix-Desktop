@@ -355,6 +355,7 @@ pub(crate) fn process_post_response<F, G>(
     cost_guard: &mut CostGuard,
     route_state: &mut RouteState,
     message_cache: &mut MessageCache,
+    acceptance_gate: &mut crate::acceptance_gate::AcceptanceGate,
     stream_mode: bool,
     cost_degrade_model: F,
     turn_route_cost_guard_fn: G,
@@ -481,6 +482,23 @@ where
         .as_ref()
         .is_some_and(|tc| tc.iter().any(|t| !t.function.name.is_empty()));
 
+    // --- Acceptance gate (advisory) ---
+    //
+    // The gate checks the reply before it is committed. In production
+    // its profile arms **no** Reject check, so this never drops or
+    // rewrites a reply and never spends an extra API call: a warning
+    // is injected into the next turn's context, where the model can
+    // correct itself (the Cursor "self-correct in the next turn"
+    // pattern). The check it does own is the one nothing else covers —
+    // the model asserting an action it never performed.
+    run_acceptance_gate(
+        acceptance_gate,
+        ctx,
+        response,
+        tool_calls_present,
+        total_turns,
+    );
+
     if !tool_calls_present {
         // No tool calls — agent is done. Save the last assistant
         // content for ack-continuation tracking.
@@ -504,6 +522,86 @@ where
 
     // Tool calls present — caller continues to dispatch.
     Ok(crate::agent_loop::PostResponseAction::Continue)
+}
+
+/// Run the acceptance gate over the assistant's reply and inject any
+/// advisory into the context for the next turn.
+///
+/// **Advisory only.** The production profile arms no `Reject` check, so
+/// this function never blocks a reply and never triggers a retry. A
+/// warning becomes a system message in the context, which the model
+/// sees on its next call — enough for it to correct itself, without
+/// paying for an extra round trip.
+///
+/// The gate's own check (the "unbacked completion claim") needs three
+/// signals, so it only fires when the model claimed an action that
+/// nothing in the session could have performed:
+///
+/// 1. the user asked for a mutating action,
+/// 2. the reply asserts that action was done, and
+/// 3. no tool ever ran — no tool result in the history, no tool call
+///    in this turn.
+fn run_acceptance_gate(
+    gate: &mut crate::acceptance_gate::AcceptanceGate,
+    ctx: &mut ContextManager,
+    response: &LlmResponse,
+    tool_calls_present: bool,
+    total_turns: u32,
+) {
+    let visible = crate::python_alignment::strip_think_blocks_for_ack(
+        response.message.content.as_deref().unwrap_or(""),
+    );
+    let user_message = ctx
+        .get_messages()
+        .iter()
+        .rev()
+        .find(|m| m.role == MessageRole::User)
+        .and_then(|m| m.content.clone())
+        .unwrap_or_default();
+    let has_tool_evidence = tool_calls_present
+        || ctx
+            .get_messages()
+            .iter()
+            .any(|m| m.role == MessageRole::Tool);
+
+    let tool_calls_json: Vec<String> = response
+        .message
+        .tool_calls
+        .as_ref()
+        .map(|calls| calls.iter().map(|c| c.function.arguments.clone()).collect())
+        .unwrap_or_default();
+    let thinking_blocks: Vec<String> = response
+        .message
+        .reasoning_content
+        .iter()
+        .filter(|r| !r.trim().is_empty())
+        .cloned()
+        .collect();
+
+    let evidence = crate::acceptance_gate::TurnEvidence {
+        has_tool_evidence,
+        user_requested_action: crate::acceptance_gate::user_requests_action(&user_message),
+        user_message: &user_message,
+    };
+    let report = gate.evaluate_turn(
+        &visible,
+        &tool_calls_json,
+        &thinking_blocks,
+        !user_message.is_empty(),
+        &evidence,
+    );
+    if let Some(advisory) = report.advisory_text() {
+        tracing::warn!(
+            turn = total_turns,
+            advisory = %advisory,
+            "acceptance_gate: advisory queued for the next turn"
+        );
+        ctx.add_message(Message::system(format!(
+            "[验收提醒] {advisory}\n\
+             若上一条回复把尚未执行的动作说成已完成，请先真正执行该动作再汇报；\
+             若确实无法执行，请明确说明无法执行的原因。"
+        )));
+    }
 }
 
 /// .x : consolidate the session-end side effects

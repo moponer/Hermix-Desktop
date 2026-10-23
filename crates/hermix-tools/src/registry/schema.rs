@@ -19,16 +19,25 @@ impl ToolRegistry {
     /// a tool that is capability-broken (missing env) will also be
     /// hidden even if user-enabled. This is used to build the tool
     /// list sent to the LLM.
+    ///
+    /// **Sorted by name.** The backing store is a `HashMap`, so the raw
+    /// iteration order differs between processes. This list reaches the
+    /// LLM verbatim (as the `tools` request parameter), and that
+    /// parameter sits inside the provider's cached prefix — an unstable
+    /// order invalidates the prefix on every restart. Sorting makes the
+    /// order a pure function of the tool *set*.
     pub fn get_definitions(&self) -> Vec<ToolSchema> {
         let inner = self.inner.read().expect("registry rwlock not poisoned");
-        inner
+        let mut out: Vec<ToolSchema> = inner
             .tools
             .values()
             .filter(|entry| {
                 (entry.check_fn)() && entry.is_enabled.load(Ordering::Acquire)
             })
             .map(|entry| entry.schema.clone())
-            .collect()
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
     }
 
     /// Generate a markdown reference file listing all registered tools.
@@ -86,9 +95,11 @@ impl ToolRegistry {
     }
 
     /// List all registered tool entries.
+    ///
+    /// Sorted by name — same determinism reason as [`Self::get_definitions`].
     pub fn list_tools(&self) -> Vec<ToolEntryInfo> {
         let inner = self.inner.read().expect("registry rwlock not poisoned");
-        inner
+        let mut out: Vec<ToolEntryInfo> = inner
             .tools
             .values()
             .map(|e| ToolEntryInfo {
@@ -101,7 +112,9 @@ impl ToolRegistry {
                 env_deps: e.env_deps.clone(),
                 max_result_size_chars: e.max_result_size_chars,
             })
-            .collect()
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
     }
 
     /// List distinct toolset names.
@@ -131,9 +144,10 @@ impl ToolRegistry {
 
     /// Catalog — lightweight tool directory for agent startup.
     /// Returns only enabled+available tools, ~50 bytes per entry.
+    /// Sorted by name — same determinism reason as [`Self::get_definitions`].
     pub fn catalog(&self) -> Vec<ToolCatalogEntry> {
         let inner = self.inner.read().expect("registry rwlock not poisoned");
-        inner.tools.values()
+        let mut out: Vec<ToolCatalogEntry> = inner.tools.values()
             .filter(|e| e.is_enabled.load(Ordering::Acquire) && (e.check_fn)())
             .map(|e| hermix_core::ToolCatalogEntry {
                 name: e.name.clone(),
@@ -141,7 +155,9 @@ impl ToolRegistry {
                 risk_level: format!("{:?}", e.risk_level).to_lowercase(),
                 tags: vec![e.toolset.clone()],
             })
-            .collect()
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
     }
 
     /// Look up the full schema for a single tool, so the agent can

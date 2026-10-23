@@ -125,21 +125,96 @@ pub struct GateConfig {
     pub reject_truncated_json: bool,
     /// Whether to warn on PII-like patterns.
     pub warn_on_pii_patterns: bool,
+    /// Whether to reject an empty reply to a user query.
+    pub reject_empty_response: bool,
+    /// Whether to warn on a reply shorter than 20 characters.
+    pub warn_on_short_response: bool,
     /// Maximum duplicate paragraph ratio before warning (0.0-1.0).
     pub duplicate_ratio_threshold: f64,
+    /// Whether to warn when the model asserts a completed action that
+    /// no tool call backs. See [`TurnEvidence`] for the three signals
+    /// this needs.
+    pub check_unbacked_completion_claim: bool,
 }
 
 impl Default for GateConfig {
+    /// **Production profile.** Every check that another layer already
+    /// owns is off, so the gate cannot duplicate an existing decision
+    /// or spend an extra API call re-deciding it:
+    ///
+    /// | check | off because |
+    /// |---|---|
+    /// | `reject_unclosed_thinking` | `ThinkBlockParser::flush` already routes an unclosed `<think>` into reasoning, which empties the visible text and lands in `empty_response_handler`. The generic XML scan also false-positives on prose containing `<x>`. |
+    /// | `reject_truncated_json` | `tool_call_validator` rejects unparseable tool arguments before they reach the gate. |
+    /// | `warn_on_pii_patterns` | The email/SSN heuristics fire on legitimate output — this agent routinely writes email addresses and `@`-bearing paths. |
+    /// | `reject_empty_response` | `empty_response_handler::decide_empty_response` owns the empty-reply case (Codex ack continuation, autonomous nudge, empty-stop retry). Two owners for one decision means the gate could reject a reply the loop was about to handle. |
+    /// | `warn_on_short_response` | A short reply is often the *right* reply — the report discipline explicitly allows "极简单行回复直接说人话". Flagging every "好的" would fire on most short exchanges and bury the real advisory. |
+    ///
+    /// What stays on is the check nothing else owns: the model
+    /// asserting an action it never performed.
+    ///
+    /// **The production profile has no `Reject` check enabled** — the
+    /// gate is advisory there. It never drops a reply, never rewrites
+    /// one, and never spends an extra API call re-deciding something
+    /// another layer already decided.
     fn default() -> Self {
+        Self {
+            max_rejections: 2,
+            reject_unclosed_thinking: false,
+            warn_on_duplicates: true,
+            reject_truncated_json: false,
+            warn_on_pii_patterns: false,
+            reject_empty_response: false,
+            warn_on_short_response: false,
+            duplicate_ratio_threshold: 0.5,
+            check_unbacked_completion_claim: true,
+        }
+    }
+}
+
+impl GateConfig {
+    /// The strict profile: every check armed, including the ones the
+    /// production profile leaves off because another layer owns them.
+    ///
+    /// Kept as a reference implementation and for the unit tests that
+    /// exercise the individual checks. **Do not wire this into the
+    /// agent loop** — it would re-decide decisions
+    /// `tool_call_validator` and `empty_response_handler` already made,
+    /// and its unclosed-tag scan false-positives on ordinary prose.
+    pub fn strict() -> Self {
         Self {
             max_rejections: 2,
             reject_unclosed_thinking: true,
             warn_on_duplicates: true,
             reject_truncated_json: true,
             warn_on_pii_patterns: true,
+            reject_empty_response: true,
+            warn_on_short_response: true,
             duplicate_ratio_threshold: 0.5,
+            check_unbacked_completion_claim: false,
         }
     }
+}
+
+/// Evidence about the turn that the gate cannot see from the reply
+/// text alone.
+///
+/// The "unbacked completion claim" check needs three independent
+/// signals before it fires. Requiring all three is what keeps its
+/// false-positive rate near zero: any one of them alone is common.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TurnEvidence<'a> {
+    /// Did any tool actually run — a tool result in the session
+    /// history, or a tool call in this turn? Without it the model
+    /// cannot have performed anything, whatever it says.
+    pub has_tool_evidence: bool,
+    /// The user's message asked for a mutating action (delete,
+    /// create, send, …). If the user only asked a question, a
+    /// completion-sounding sentence is not a claim about the agent's
+    /// own work.
+    pub user_requested_action: bool,
+    /// The user's message text (kept for the advisory wording).
+    pub user_message: &'a str,
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +268,11 @@ impl AcceptanceGate {
     /// - `tool_calls_json`: Raw JSON strings of any tool calls made.
     /// - `thinking_blocks`: The content of thinking blocks (for structural check).
     /// - `has_user_query`: Whether there was a user query in this turn.
+    ///
+    /// Equivalent to [`Self::evaluate_turn`] with empty evidence — i.e.
+    /// "no tool ran, the user asked for nothing". Use
+    /// [`Self::evaluate_turn`] in production so the claim check sees
+    /// what actually happened.
     pub fn evaluate(
         &mut self,
         visible_text: &str,
@@ -200,7 +280,26 @@ impl AcceptanceGate {
         thinking_blocks: &[String],
         has_user_query: bool,
     ) -> GateReport {
-        let behavioral = self.evaluate_behavioral(visible_text, has_user_query);
+        self.evaluate_turn(
+            visible_text,
+            tool_calls_json,
+            thinking_blocks,
+            has_user_query,
+            &TurnEvidence::default(),
+        )
+    }
+
+    /// Evaluate an LLM output through both splits, with turn-level
+    /// evidence for the claim check.
+    pub fn evaluate_turn(
+        &mut self,
+        visible_text: &str,
+        tool_calls_json: &[String],
+        thinking_blocks: &[String],
+        has_user_query: bool,
+        evidence: &TurnEvidence<'_>,
+    ) -> GateReport {
+        let behavioral = self.evaluate_behavioral(visible_text, has_user_query, evidence);
         let structural = self.evaluate_structural(visible_text, tool_calls_json, thinking_blocks);
 
         let overall = Self::worse_verdict(&behavioral, &structural);
@@ -227,7 +326,12 @@ impl AcceptanceGate {
     // Behavioral split
     // -----------------------------------------------------------------------
 
-    fn evaluate_behavioral(&self, text: &str, has_user_query: bool) -> GateVerdict {
+    fn evaluate_behavioral(
+        &self,
+        text: &str,
+        has_user_query: bool,
+        evidence: &TurnEvidence<'_>,
+    ) -> GateVerdict {
         // 1. PII pattern check (warning only).
         if self.config.warn_on_pii_patterns && contains_pii_patterns(text) {
             return GateVerdict::Warn {
@@ -237,7 +341,7 @@ impl AcceptanceGate {
         }
 
         // 2. Empty response when user asked a question.
-        if has_user_query && text.trim().is_empty() {
+        if self.config.reject_empty_response && has_user_query && text.trim().is_empty() {
             return GateVerdict::Reject {
                 split: GateSplit::Behavioral,
                 reason: "Empty response to a user query".into(),
@@ -247,10 +351,41 @@ impl AcceptanceGate {
 
         // 3. Very short response that seems like an acknowledgment but
         // should contain more substance (heuristic: < 20 chars).
-        if has_user_query && text.trim().len() < 20 && !text.trim().is_empty() {
+        if self.config.warn_on_short_response
+            && has_user_query
+            && text.trim().len() < 20
+            && !text.trim().is_empty()
+        {
             return GateVerdict::Warn {
                 split: GateSplit::Behavioral,
                 reason: "Very short response to a user query — may not be substantive enough".into(),
+            };
+        }
+
+        // 4. Completion claim with nothing behind it.
+        //
+        // Three independent signals must all hold (see [`TurnEvidence`]):
+        // the user asked for a mutating action, the reply asserts that
+        // action was performed, and no tool ever ran. Any one alone is
+        // ordinary; together they mean the model narrated an outcome it
+        // could not have produced.
+        //
+        // Advisory only — the reply is not rewritten and no extra API
+        // call is spent. The advisory goes into the next turn's context
+        // so the model can correct itself.
+        if self.config.check_unbacked_completion_claim
+            && !evidence.has_tool_evidence
+            && evidence.user_requested_action
+            && claims_completed_action(text)
+        {
+            return GateVerdict::Warn {
+                split: GateSplit::Behavioral,
+                // Chinese, to match the rest of the system prompt — this
+                // string is injected verbatim into the model's context.
+                reason: format!(
+                    "回复声称已完成某个动作，但本次会话**没有任何工具执行过**，该声明没有工具结果支撑（用户原话：{}）",
+                    truncate_for_advisory(evidence.user_message)
+                ),
             };
         }
 
@@ -460,6 +595,87 @@ fn duplicate_paragraph_ratio(text: &str) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
+// Action-claim detection
+// ---------------------------------------------------------------------------
+
+/// Mutating verbs (Chinese). These name an action that changes the
+/// world, so "已经做了" is a factual assertion about what happened —
+/// not a description of the subject matter.
+const ACTION_VERBS_ZH: &[&str] = &[
+    "删除", "重命名", "改名", "创建", "新建", "写入", "保存", "发送", "部署", "修改", "更新", "修复",
+    "生成", "下载", "安装", "配置", "发布", "提交", "移动", "复制",
+];
+
+/// Mutating verbs (English, base form) — used to detect that the
+/// *user* asked for an action.
+const ACTION_VERBS_EN: &[&str] = &[
+    "delete", "create", "send", "save", "update", "modify", "deploy", "install", "configure",
+    "rename", "generate", "download", "commit", "publish", "copy", "move",
+];
+
+/// Past-tense forms (English) — used to detect a *claim* that the
+/// action was performed.
+const ACTION_PAST_EN: &[&str] = &[
+    "deleted", "created", "sent", "saved", "updated", "modified", "deployed", "installed",
+    "configured", "renamed", "generated", "downloaded", "committed", "published", "copied", "moved",
+];
+
+/// Does the user's message ask for a mutating action?
+pub fn user_requests_action(text: &str) -> bool {
+    if ACTION_VERBS_ZH.iter().any(|v| text.contains(v)) {
+        return true;
+    }
+    let words = ascii_words(text);
+    ACTION_VERBS_EN.iter().any(|v| words.iter().any(|w| w == v))
+}
+
+/// Does the reply assert that such an action was performed?
+///
+/// Chinese frames: `已{verb}` / `已经{verb}` / `{verb}了`.
+/// English frames: `successfully {past}` / `i've {past}` /
+/// `i have {past}` / `has been {past}` / `{past} successfully`.
+pub fn claims_completed_action(text: &str) -> bool {
+    for verb in ACTION_VERBS_ZH {
+        if text.contains(&format!("已{verb}"))
+            || text.contains(&format!("已经{verb}"))
+            || text.contains(&format!("{verb}了"))
+        {
+            return true;
+        }
+    }
+    let lower = text.to_lowercase();
+    for past in ACTION_PAST_EN {
+        if lower.contains(&format!("successfully {past}"))
+            || lower.contains(&format!("i've {past}"))
+            || lower.contains(&format!("i have {past}"))
+            || lower.contains(&format!("has been {past}"))
+            || lower.contains(&format!("{past} successfully"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Split ASCII words out of arbitrary text for token comparison.
+fn ascii_words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_lowercase())
+        .collect()
+}
+
+/// Cap the user-message excerpt used in an advisory line.
+fn truncate_for_advisory(text: &str) -> String {
+    let t = text.trim();
+    if t.chars().count() <= 60 {
+        return t.to_string();
+    }
+    let head: String = t.chars().take(60).collect();
+    format!("{}…", head)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -482,7 +698,9 @@ mod tests {
 
     #[test]
     fn gate_rejects_empty_response_to_query() {
-        let mut gate = AcceptanceGate::new();
+        // Empty-reply rejection belongs to `empty_response_handler` in
+        // production; the strict profile still exercises the check.
+        let mut gate = AcceptanceGate::with_config(GateConfig::strict());
         let report = gate.evaluate("", &[], &[], true);
         assert!(!report.is_accepted());
         assert!(matches!(report.overall, GateVerdict::Reject { .. }));
@@ -490,7 +708,7 @@ mod tests {
 
     #[test]
     fn gate_warns_on_short_response() {
-        let mut gate = AcceptanceGate::new();
+        let mut gate = AcceptanceGate::with_config(GateConfig::strict());
         let report = gate.evaluate("ok", &[], &[], true);
         assert!(report.is_accepted()); // Warn still accepts
         assert!(matches!(report.overall, GateVerdict::Warn { .. }));
@@ -498,7 +716,7 @@ mod tests {
 
     #[test]
     fn gate_rejects_truncated_json() {
-        let mut gate = AcceptanceGate::new();
+        let mut gate = AcceptanceGate::with_config(GateConfig::strict());
         let truncated = r#"{"tool": "shell", "command": "ls"#.to_string();
         let report = gate.evaluate(
             "Running command...",
@@ -516,7 +734,7 @@ mod tests {
 
     #[test]
     fn gate_rejects_unclosed_thinking_tags() {
-        let mut gate = AcceptanceGate::new();
+        let mut gate = AcceptanceGate::with_config(GateConfig::strict());
         let thinking = "Let me think <analysis>about this problem".to_string();
         let report = gate.evaluate(
             "Here is my answer.",
@@ -529,7 +747,7 @@ mod tests {
 
     #[test]
     fn gate_warns_on_pii_email() {
-        let mut gate = AcceptanceGate::new();
+        let mut gate = AcceptanceGate::with_config(GateConfig::strict());
         let report = gate.evaluate(
             "Contact john@example.com for details.",
             &[],
@@ -561,7 +779,7 @@ mod tests {
 
     #[test]
     fn gate_tracks_consecutive_rejections() {
-        let mut gate = AcceptanceGate::new();
+        let mut gate = AcceptanceGate::with_config(GateConfig::strict());
         assert_eq!(gate.consecutive_rejections(), 0);
 
         // First rejection.
@@ -577,7 +795,7 @@ mod tests {
 
     #[test]
     fn gate_resets_on_acceptance() {
-        let mut gate = AcceptanceGate::new();
+        let mut gate = AcceptanceGate::with_config(GateConfig::strict());
         gate.evaluate("", &[], &[], true);
         assert_eq!(gate.consecutive_rejections(), 1);
 
@@ -587,9 +805,131 @@ mod tests {
 
     #[test]
     fn gate_report_advisory_text() {
-        let mut gate = AcceptanceGate::new();
+        let mut gate = AcceptanceGate::with_config(GateConfig::strict());
         let report = gate.evaluate("ok", &[], &[], true);
         assert!(report.advisory_text().is_some());
+    }
+
+    // --- unbacked completion claim --------------------------------------
+
+#[test]
+    fn warns_on_completion_claim_without_tool_evidence() {
+        let mut gate = AcceptanceGate::new();
+        let evidence = TurnEvidence {
+            has_tool_evidence: false,
+            user_requested_action: true,
+            user_message: "帮我把桌面上的临时文件删除",
+        };
+        let report = gate.evaluate_turn(
+            "已删除桌面上的临时文件，共 3 个。",
+            &[],
+            &[],
+            true,
+            &evidence,
+        );
+        assert!(report.is_accepted(), "advisory must not drop the reply");
+        if let GateVerdict::Warn { split, .. } = &report.behavioral {
+            assert_eq!(*split, GateSplit::Behavioral);
+        } else {
+            panic!("expected Warn, got {:?}", report.behavioral);
+        }
+        assert!(report.advisory_text().is_some());
+    }
+
+    #[test]
+    fn no_warning_when_a_tool_actually_ran() {
+        // Same reply, but a tool ran — the claim is backed.
+        let mut gate = AcceptanceGate::new();
+        let evidence = TurnEvidence {
+            has_tool_evidence: true,
+            user_requested_action: true,
+            user_message: "帮我把桌面上的临时文件删除",
+        };
+        let report = gate.evaluate_turn(
+            "已删除桌面上的临时文件，共 3 个。",
+            &[],
+            &[],
+            true,
+            &evidence,
+        );
+        assert!(matches!(report.behavioral, GateVerdict::Pass));
+    }
+
+    #[test]
+    fn no_warning_when_user_only_asked_a_question() {
+        // The user asked about project state, not for an action.
+        let mut gate = AcceptanceGate::new();
+        let evidence = TurnEvidence {
+            has_tool_evidence: false,
+            user_requested_action: false,
+            user_message: "这个项目已完成的功能有哪些？",
+        };
+        let report = gate.evaluate_turn(
+            "已完成的功能包括登录、导出和同步。",
+            &[],
+            &[],
+            true,
+            &evidence,
+        );
+        assert!(matches!(report.behavioral, GateVerdict::Pass));
+    }
+
+    #[test]
+    fn no_warning_when_reply_makes_no_completion_claim() {
+        let mut gate = AcceptanceGate::new();
+        let evidence = TurnEvidence {
+            has_tool_evidence: false,
+            user_requested_action: true,
+            user_message: "帮我删除 a.txt",
+        };
+        let report = gate.evaluate_turn(
+            "我需要先确认文件存在，请提供完整路径。",
+            &[],
+            &[],
+            true,
+            &evidence,
+        );
+        assert!(matches!(report.behavioral, GateVerdict::Pass));
+    }
+
+    #[test]
+    fn detects_english_completion_claim() {
+        assert!(claims_completed_action("I have deleted the temp files."));
+        assert!(claims_completed_action("Successfully created the report."));
+        assert!(claims_completed_action("The file was successfully renamed."));
+        assert!(!claims_completed_action("I will delete the temp files."));
+    }
+
+    #[test]
+    fn detects_action_requests_in_both_languages() {
+        assert!(user_requests_action("帮我删除这些文件"));
+        assert!(user_requests_action("请创建一份报告"));
+        assert!(user_requests_action("please delete the temp files"));
+        assert!(!user_requests_action("这个项目是做什么的？"));
+    }
+
+    #[test]
+    fn production_profile_has_no_enabled_reject_check() {
+        // The production profile must never reject: it is advisory
+        // only, so it cannot drop a reply or spend a retry.
+        let config = GateConfig::default();
+        assert!(!config.reject_empty_response);
+        assert!(!config.reject_unclosed_thinking);
+        assert!(!config.reject_truncated_json);
+        assert!(!config.warn_on_pii_patterns);
+        // A short reply is often the right reply — flagging every "好的"
+        // would bury the advisory that actually matters.
+        assert!(!config.warn_on_short_response);
+    }
+
+    #[test]
+    fn production_profile_does_not_flag_short_replies() {
+        // Regression guard: a terse but correct answer must not produce
+        // an advisory (the report discipline allows one-line replies).
+        let mut gate = AcceptanceGate::new();
+        let report = gate.evaluate("好的", &[], &[], true);
+        assert!(matches!(report.behavioral, GateVerdict::Pass));
+        assert!(report.advisory_text().is_none());
     }
 
     #[test]

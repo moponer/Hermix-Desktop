@@ -19,9 +19,36 @@ const CORE_TOOLS: &[&str] = DEFAULT_RESIDENT_TOOLS;
 
 pub const BRIDGE_TOOL_NAMES: &[&str] = &["tool_search", "tool_describe", "tool_call"];
 
-/// Threshold: when deferred tool count exceeds this, activate bridge.
-/// This is a count-based threshold; token-based is future work.
-pub(crate) const DEFERRED_THRESHOLD: usize = 25;
+/// Character budget for the deferred tool schemas.
+///
+/// The trigger used to be a tool *count* (25), which measures nothing
+/// that matters: a dozen verbose schemas cost more request body than
+/// thirty tiny ones. What gets paid for is characters, so budget
+/// characters.
+///
+/// The budget is deliberately above the deferred set a **routed** turn
+/// produces (the router caps the tool set at 50, of which most are
+/// resident, so the deferred tail is a few thousand characters) and
+/// below what an **un-routed** turn produces (every non-resident tool
+/// in the registry — tens of thousands of characters). The bridge
+/// therefore stays dormant on the routed path (no behaviour change)
+/// and engages on the path that would otherwise ship the whole
+/// registry's schemas.
+pub(crate) const DEFERRED_SCHEMA_CHAR_BUDGET: usize = 12_000;
+
+/// Serialized size of a set of schemas, in characters.
+///
+/// This is what the request body actually carries, so it is the right
+/// thing to budget against. Takes an iterator because the two callers
+/// hold the schemas differently — one by reference, one by value.
+pub(crate) fn schemas_char_size<'a>(
+    schemas: impl IntoIterator<Item = &'a ToolSchema>,
+) -> usize {
+    schemas
+        .into_iter()
+        .map(|s| serde_json::to_string(s).map(|v| v.len()).unwrap_or(0))
+        .sum()
+}
 
 // ── Classification ──────────────────────────────────────────────────
 
@@ -122,7 +149,7 @@ pub fn assemble_tool_schemas(all: Vec<ToolSchema>) -> AssemblyResult {
         }
     }
     let (visible, deferred) = classify_tools(&incoming);
-    if deferred.len() < DEFERRED_THRESHOLD {
+    if schemas_char_size(deferred.iter().copied()) <= DEFERRED_SCHEMA_CHAR_BUDGET {
         let mut tool_schemas = incoming;
         tool_schemas.extend(existing_bridges);
         return AssemblyResult {
@@ -670,6 +697,19 @@ pub fn register(registry: &ToolRegistry) {
 mod tests {
     use super::*;
 
+    /// A tool description with realistic length — the registry's schemas
+    /// average ~290 characters. The assembly trigger budgets characters,
+    /// so tests must use descriptions of the size production actually
+    /// produces, not one-word placeholders.
+    fn realistic_description(i: usize) -> String {
+        let base = "Search a connected service, read structured results, and return a compact \
+                    summary that another tool can act on. Prefer this over guessing at the \
+                    remote state; call it with explicit identifiers whenever the caller knows \
+                    them, and fall back to a listing query only when nothing else is known. \
+                    The result is plain data — no side effects happen until a follow-up call.";
+        format!("{base} (variant {i})")
+    }
+
     /// `tool_call` 的参数包装：合规形态（对象）必须原样透传。
     #[test]
     fn extract_arguments_passes_object_through() {
@@ -996,22 +1036,34 @@ mod tests {
 
     #[test]
     fn assembly_activates_when_threshold_exceeded() {
-        // 26 deferred + 3 core = 29 tools, threshold is 25
+        // 3 core + a deferred set large enough to cross the character
+        // budget. The count is derived, not hardcoded: the trigger is
+        // the deferred schemas' **size**, so a fixed count would go
+        // stale the moment the budget or the schema shapes change.
         let mut schemas: Vec<ToolSchema> = vec![
             ToolSchema::new("read_file", "Read file", JsonSchema::new("object")),
             ToolSchema::new("terminal", "Run terminal", JsonSchema::new("object")),
             ToolSchema::new("memory", "Memory", JsonSchema::new("object")),
         ];
-        for i in 0..26 {
-            schemas.push(ToolSchema::new(
+        let mut deferred: Vec<ToolSchema> = Vec::new();
+        while schemas_char_size(deferred.iter()) <= DEFERRED_SCHEMA_CHAR_BUDGET {
+            let i = deferred.len() + 1;
+            deferred.push(ToolSchema::new(
                 format!("plugin_tool_{i}"),
-                format!("Plugin tool {i} description"),
+                realistic_description(i),
                 JsonSchema::new("object"),
             ));
         }
+        let deferred_count = deferred.len();
+        schemas.extend(deferred);
+        assert!(
+            deferred_count > 20,
+            "the deferred set should be substantial, got {deferred_count}"
+        );
+
         let result = assemble_tool_schemas(schemas);
         assert!(result.activated);
-        assert_eq!(result.deferred_count, 26);
+        assert_eq!(result.deferred_count, deferred_count);
         // 3 core + 3 bridge = 6
         assert_eq!(result.tool_schemas.len(), 6);
         let names: Vec<&str> = result.tool_schemas.iter().map(|s| s.name.as_str()).collect();
@@ -1020,7 +1072,39 @@ mod tests {
         assert!(names.contains(&"tool_describe"));
         assert!(names.contains(&"tool_call"));
         // deferred tools should NOT be in the result
-        assert!(!names.contains(&"plugin_tool_0"));
+        assert!(!names.contains(&"plugin_tool_1"));
+    }
+
+    /// A routed turn caps the tool set at 50, most of them resident, so
+    /// the deferred tail is small. The bridge must stay **dormant**
+    /// there — engaging it would hide a handful of tools behind a
+    /// discovery hop for no material saving, and the model would lose
+    /// direct access to them.
+    #[test]
+    fn bridge_stays_dormant_on_the_routed_path() {
+        let mut schemas: Vec<ToolSchema> = vec![
+            ToolSchema::new("read_file", "Read file", JsonSchema::new("object")),
+            ToolSchema::new("terminal", "Run terminal", JsonSchema::new("object")),
+            ToolSchema::new("memory", "Memory", JsonSchema::new("object")),
+        ];
+        // 11 deferred, realistic size — comfortably under the budget.
+        // The headroom is explicit so the test cannot drift across the
+        // boundary if schema shapes change.
+        let mut deferred: Vec<ToolSchema> = Vec::new();
+        while schemas_char_size(deferred.iter()) + 2_000 <= DEFERRED_SCHEMA_CHAR_BUDGET {
+            let i = deferred.len() + 1;
+            deferred.push(ToolSchema::new(
+                format!("plugin_tool_{i}"),
+                realistic_description(i),
+                JsonSchema::new("object"),
+            ));
+        }
+        let deferred_count = deferred.len();
+        schemas.extend(deferred);
+        let result = assemble_tool_schemas(schemas);
+        assert!(!result.activated, "routed path must not activate the bridge");
+        assert_eq!(result.deferred_count, 0);
+        assert_eq!(result.tool_schemas.len(), 3 + deferred_count);
     }
 
     #[test]
@@ -1030,13 +1114,16 @@ mod tests {
             ToolSchema::new("read_file", "Read", JsonSchema::new("object")),
             ToolSchema::new("tool_search", "Bridge", JsonSchema::new("object")),
         ];
-        for i in 0..30 {
-            schemas.push(ToolSchema::new(
+        let mut deferred: Vec<ToolSchema> = Vec::new();
+        while schemas_char_size(deferred.iter()) <= DEFERRED_SCHEMA_CHAR_BUDGET {
+            let i = deferred.len() + 1;
+            deferred.push(ToolSchema::new(
                 format!("deferred_{i}"),
-                format!("Deferred {i}"),
+                realistic_description(i),
                 JsonSchema::new("object"),
             ));
         }
+        schemas.extend(deferred);
         let result = assemble_tool_schemas(schemas);
         assert!(result.activated);
         let names: Vec<&str> = result.tool_schemas.iter().map(|s| s.name.as_str()).collect();
@@ -1050,7 +1137,7 @@ mod tests {
     ///
     /// The old `assemble_tool_schemas` filtered bridge tools out of the
     /// incoming list and only re-added them on the *activated* branch. A
-    /// registry under `DEFERRED_THRESHOLD` therefore shipped a schema list
+    /// registry below the trigger therefore shipped a schema list
     /// with no bridge at all — while `directions.rs` still advertised the
     /// bridge. Turn 1 crossed the threshold (bridge visible, call succeeds),
     /// turn 2 didn't (bridge gone, `tool_call_validator` rejects it). That
@@ -1063,7 +1150,7 @@ mod tests {
             ToolSchema::new("tool_describe", "Bridge", JsonSchema::new("object")),
             ToolSchema::new("tool_call", "Bridge", JsonSchema::new("object")),
         ];
-        // 3 deferred — below DEFERRED_THRESHOLD (25).
+        // 3 deferred — far below the character budget.
         for i in 0..3 {
             schemas.push(ToolSchema::new(
                 format!("deferred_{i}"),

@@ -4094,6 +4094,10 @@ mod override_tests {
     /// 只要 `extra_body` 里已有别的键（`reasoning_effort` 之类），旧写法
     /// `map["enable_thinking"] = …` 就 100% 崩。真实 panic 日志：
     /// 2026-10-21 08:46，连续三次，全在 `local_agent_service.rs:1307`。
+    ///
+    /// 注：开关现在按 provider 翻译到各家认识的字段
+    /// （`inject_thinking_directive`，见 `84e1293e`），所以断言的是
+    /// **翻译后的目标字段**，而不是写死的 `enable_thinking`。
     #[test]
     fn apply_overrides_merges_enable_thinking_into_existing_extra_body() {
         let base = AgentConfig {
@@ -4106,8 +4110,44 @@ mod override_tests {
         };
         let (cfg, _) = LocalAgentService::apply_overrides(base, &overrides);
         let eb = cfg.extra_body.expect("extra_body must survive");
+        // 原有键不能被丢掉（这里恰好被翻译逻辑写回同一个值）
         assert_eq!(eb["reasoning_effort"], "high", "原有键不能被丢掉");
-        assert_eq!(eb["enable_thinking"], true, "新键必须被合并进去");
+        // 默认 model 是 gpt-4o → 走 ChatCompletions 的 o/gpt 系列映射，
+        // 落到 `reasoning_effort`，而不是写死 `enable_thinking`。
+        assert_eq!(
+            eb["reasoning_effort"], "high",
+            "思考开关必须翻译到 provider 认识的字段"
+        );
+        assert!(
+            eb.get("enable_thinking").is_none(),
+            "OpenAI 系通道不应再写 enable_thinking"
+        );
+    }
+
+    /// 国内原生厂商（火山/豆包、直连 DeepSeek 等）仍然用
+    /// `enable_thinking`——这条断言保住原测试想覆盖的那个分支。
+    #[test]
+    fn apply_overrides_uses_enable_thinking_for_domestic_providers() {
+        let base = AgentConfig {
+            model: "doubao-pro-32k".to_string(),
+            extra_body: Some(serde_json::json!({"reasoning_effort": "high"})),
+            ..AgentConfig::default()
+        };
+        let overrides = AgentOverrides {
+            enable_thinking: Some(true),
+            ..AgentOverrides::default()
+        };
+        let (cfg, _) = LocalAgentService::apply_overrides(base, &overrides);
+        let eb = cfg.extra_body.expect("extra_body must survive");
+        assert_eq!(
+            eb["enable_thinking"], true,
+            "非 OpenAI 系通道必须写 enable_thinking"
+        );
+        // 切换开关时旧字段要清干净，不能串台
+        assert!(
+            eb.get("reasoning_effort").is_none(),
+            "切换后不应残留上一个 provider 的字段"
+        );
     }
 
     #[test]

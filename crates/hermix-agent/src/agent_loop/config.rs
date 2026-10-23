@@ -551,6 +551,7 @@ impl AgentLoop {
         cost_guard: &mut CostGuard,
         route_state: &mut RouteState,
         message_cache: &mut MessageCache,
+        acceptance_gate: &mut crate::acceptance_gate::AcceptanceGate,
         stream_mode: bool,
     ) -> Result<PostResponseAction, AgentError> {
         crate::session_lifecycle::process_post_response(
@@ -564,6 +565,7 @@ impl AgentLoop {
             cost_guard,
             route_state,
             message_cache,
+            acceptance_gate,
             stream_mode,
             || self.resolve_cost_degrade_model(),
             |model| self.turn_route_cost_guard(model),

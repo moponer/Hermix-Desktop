@@ -3062,6 +3062,7 @@ let u = UsageStats {
                 &mut cost_guard,
                 &mut route_state,
                 &mut message_cache,
+                &mut crate::acceptance_gate::AcceptanceGate::default(),
                 false, // stream_mode
             )
             .unwrap();
@@ -3131,6 +3132,7 @@ let u = UsageStats {
                 &mut cost_guard,
                 &mut route_state,
                 &mut message_cache,
+                &mut crate::acceptance_gate::AcceptanceGate::default(),
                 false,
             )
             .unwrap();
@@ -3204,6 +3206,7 @@ let u = UsageStats {
                 &mut cost_guard,
                 &mut route_state,
                 &mut message_cache,
+                &mut crate::acceptance_gate::AcceptanceGate::default(),
                 false,
             )
             .unwrap();

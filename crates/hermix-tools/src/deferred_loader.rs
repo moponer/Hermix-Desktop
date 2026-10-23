@@ -31,10 +31,7 @@
 use hermix_core::ToolSchema;
 
 use crate::tool_meta::ToolMetaRegistry;
-use crate::tools::tool_search::{
-    bridge_tool_schemas, is_bridge, AssemblyResult,
-    DEFERRED_THRESHOLD,
-};
+use crate::tools::tool_search::{bridge_tool_schemas, is_bridge, AssemblyResult};
 
 // ---------------------------------------------------------------------------
 // Metadata-aware assembly
@@ -89,7 +86,9 @@ pub fn assemble_tool_schemas_with_meta(
         (vis, def)
     };
 
-    if deferred.len() < DEFERRED_THRESHOLD {
+    if crate::tools::tool_search::schemas_char_size(deferred.iter())
+        <= crate::tools::tool_search::DEFERRED_SCHEMA_CHAR_BUDGET
+    {
         let mut tool_schemas = incoming;
         tool_schemas.extend(existing_bridges);
         return AssemblyResult {
@@ -197,6 +196,18 @@ mod tests {
         ToolSchema::new(name, "test", JsonSchema::new("object"))
     }
 
+    /// A description with realistic length — the registry's schemas
+    /// average ~290 characters, and the assembly trigger budgets
+    /// characters, so tests must not use one-word placeholders.
+    fn realistic_description(i: usize) -> String {
+        let base = "Search a connected service, read structured results, and return a compact \
+                    summary that another tool can act on. Prefer this over guessing at the \
+                    remote state; call it with explicit identifiers whenever the caller knows \
+                    them, and fall back to a listing query only when nothing else is known. \
+                    The result is plain data — no side effects happen until a follow-up call.";
+        format!("{base} (variant {i})")
+    }
+
     /// Regression guard for the meta-path twin of the bridge-visibility bug
     /// fixed in `assemble_tool_schemas`: pre-existing bridge tools were
     /// filtered out and only restored on the activated branch, so a
@@ -248,25 +259,34 @@ mod tests {
 
     #[test]
     fn test_assemble_with_meta_activates_when_threshold_exceeded() {
-        let meta = ToolMetaRegistry::new();
-        // Mark 26 tools as deferred (threshold is 25)
-        for i in 0..26 {
+        let mut meta = ToolMetaRegistry::new();
+        // The deferred set is grown until it crosses the character
+        // budget — the count is derived, not hardcoded, because the
+        // trigger measures schema size.
+        let mut schemas = vec![dummy_schema("read_file")];
+        let mut deferred_count = 0usize;
+        while crate::tools::tool_search::schemas_char_size(schemas.iter().skip(1))
+            <= crate::tools::tool_search::DEFERRED_SCHEMA_CHAR_BUDGET
+        {
+            deferred_count += 1;
+            let name = format!("plugin_{deferred_count}");
             meta.register(crate::tool_meta::ToolMeta::deferred(
-                format!("plugin_{i}"),
-                format!("Plugin {i}"),
+                name.clone(),
+                format!("Plugin {deferred_count}"),
                 "test",
             ));
+            schemas.push(ToolSchema::new(
+                name,
+                realistic_description(deferred_count),
+                JsonSchema::new("object"),
+            ));
         }
+        assert!(deferred_count > 20, "expected a substantial deferred set");
         meta.register(crate::tool_meta::ToolMeta::resident("read_file", "Read", "file"));
-
-        let mut schemas = vec![dummy_schema("read_file")];
-        for i in 0..26 {
-            schemas.push(dummy_schema(&format!("plugin_{i}")));
-        }
 
         let result = assemble_tool_schemas_with_meta(schemas, &meta);
         assert!(result.activated);
-        assert_eq!(result.deferred_count, 26);
+        assert_eq!(result.deferred_count, deferred_count);
         // 1 resident + 3 bridge = 4
         assert_eq!(result.tool_schemas.len(), 4);
 
@@ -311,26 +331,34 @@ mod tests {
 
     #[test]
     fn test_deferred_tool_loader_with_meta_registry() {
-        let meta = ToolMetaRegistry::new();
-        for i in 0..30 {
+        let mut meta = ToolMetaRegistry::new();
+        let mut schemas = vec![dummy_schema("read_file")];
+        // Grown until the deferred set crosses the character budget —
+        // the count is derived, not hardcoded.
+        let mut deferred_count = 0usize;
+        while crate::tools::tool_search::schemas_char_size(schemas.iter().skip(1))
+            <= crate::tools::tool_search::DEFERRED_SCHEMA_CHAR_BUDGET
+        {
+            deferred_count += 1;
+            let name = format!("heavy_{deferred_count}");
             meta.register(crate::tool_meta::ToolMeta::deferred(
-                format!("heavy_{i}"),
-                format!("Heavy {i}"),
+                name.clone(),
+                format!("Heavy {deferred_count}"),
                 "ai",
+            ));
+            schemas.push(ToolSchema::new(
+                name,
+                realistic_description(deferred_count),
+                JsonSchema::new("object"),
             ));
         }
         meta.register(crate::tool_meta::ToolMeta::resident("read_file", "Read", "file"));
 
         let loader = DeferredToolLoader::with_meta(meta);
 
-        let mut schemas = vec![dummy_schema("read_file")];
-        for i in 0..30 {
-            schemas.push(dummy_schema(&format!("heavy_{i}")));
-        }
-
         let result = loader.assemble(schemas);
         assert!(result.activated);
-        assert_eq!(result.deferred_count, 30);
+        assert_eq!(result.deferred_count, deferred_count);
         // 1 resident + 3 bridge = 4
         assert_eq!(result.tool_schemas.len(), 4);
     }

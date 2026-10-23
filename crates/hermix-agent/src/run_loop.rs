@@ -416,6 +416,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 &mut state.cost_guard,
                 &mut state.route_state,
                 &mut state.message_cache,
+                &mut state.acceptance_gate,
                 false, // stream_mode
             )? {
                 PostResponseAction::CostGuardTripped => {
@@ -1292,6 +1293,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 &mut state.cost_guard,
                 &mut state.route_state,
                 &mut state.message_cache,
+                &mut state.acceptance_gate,
                 true, // stream_mode
             )? {
                 PostResponseAction::CostGuardTripped => {

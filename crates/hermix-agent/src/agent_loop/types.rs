@@ -139,6 +139,13 @@ pub(crate) struct LoopState {
     /// `do_tool_turn` to subtract non-listed tools before dispatch.
     /// Recomputed every turn in `do_pre_turn_setup`; never persisted.
     pub(crate) active_skill_tools: Option<std::collections::HashSet<String>>,
+    /// Acceptance gate — advisory check on the assistant's reply.
+    ///
+    /// Production profile: no `Reject` check is armed, so the gate
+    /// never drops or rewrites a reply and never spends a retry. Its
+    /// warnings are injected into the next turn's context so the model
+    /// can correct itself.
+    pub(crate) acceptance_gate: crate::acceptance_gate::AcceptanceGate,
 }
 
 impl LoopState {

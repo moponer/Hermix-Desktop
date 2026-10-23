@@ -856,6 +856,12 @@ fn build_stable_layer(
         config.personality.as_deref(),
         config.system_prompt.as_deref(),
         config.workspace.as_deref(),
+        // The stable layer renders a `## Tools` name list from this
+        // slice, so the tool set is part of what the cached text
+        // depends on. Leaving it out let the cache serve a stale tool
+        // list — the prompt would advertise one tool set while the
+        // request's `tools` array carried another.
+        &tool_schemas.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
     );
 
     // Hot-path read: peek the cache without re-rendering. The lookup
