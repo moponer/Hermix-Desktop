@@ -993,7 +993,30 @@ always_include: vec![
                 assembly.deferred_count,
             );
         }
-        assembly.tool_schemas
+        // ★ Sort the final array by name.
+        //
+        // The provider's prefix cache is keyed on the request bytes, and
+        // the `tools` array is part of the request. The router returns
+        // schemas in **score** order, and the score depends on the last
+        // user message — so the same tool *set* can arrive in a
+        // different order from one turn to the next, and the array's
+        // bytes change for no reason the model can observe.
+        //
+        // Measured against the kilo gateway on 2026-10-23 (system
+        // prompt sent the way this app sends it — as a `system` role
+        // entry in `messages`): the tool array sits at the **end** of
+        // the cacheable region, so a reshuffled array costs its own
+        // ~512 tokens and nothing else. Sorting by name makes the
+        // array a pure function of the tool *set*: same set → same
+        // bytes → that ~512 tokens stays cached across turns.
+        //
+        // The score order had no meaning of its own — it was a side
+        // effect of the truncation that decides set membership, and
+        // PriorityBoost's job (keeping priority tools inside the cut)
+        // is done before this point.
+        let mut tool_schemas = assembly.tool_schemas;
+        tool_schemas.sort_by(|a, b| a.name.cmp(&b.name));
+        tool_schemas
     }
 
     /// Queue mid-run user guidance (Python `AIAgent.steer`).

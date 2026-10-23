@@ -3071,6 +3071,94 @@ let u = UsageStats {
     }
 
     #[test]
+    pub(crate) fn route_tools_returns_a_name_sorted_array() {
+        // The `tools` array is part of the request body, and the
+        // provider's prefix cache is keyed on the request bytes. The
+        // router returns schemas in *score* order — and the score
+        // carries an LRU bonus, so the array was reshuffled on every
+        // tool call of a turn. The final array must therefore be
+        // sorted by name: the bytes have to be a function of the tool
+        // *set*, not of the score order.
+        use hermix_core::{JsonSchema, ToolSchema};
+        use hermix_intelligence::{RoutedSchema, ToolSchemaRouter, TurnContext};
+        use futures::stream::BoxStream;
+
+        struct ShuffledRouter;
+        impl ToolSchemaRouter for ShuffledRouter {
+            fn route(
+                &self,
+                _ctx: &TurnContext,
+                candidates: Vec<ToolSchema>,
+            ) -> Vec<RoutedSchema> {
+                // Reverse order — deliberately not name-sorted.
+                candidates
+                    .into_iter()
+                    .rev()
+                    .map(|schema| RoutedSchema {
+                        schema,
+                        score: 0.0,
+                        source: "test".to_string(),
+                        force_included: false,
+                    })
+                    .collect()
+            }
+            fn name(&self) -> &str {
+                "ShuffledRouter"
+            }
+        }
+
+        struct NeverCalledProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for NeverCalledProvider {
+            async fn chat_completion(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<hermix_core::LlmResponse, AgentError> {
+                Err(AgentError::LlmApi("test stub: should not be called".into()))
+            }
+
+            fn chat_completion_stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+                futures::stream::empty().boxed()
+            }
+        }
+
+        let cfg = AgentConfig::default();
+        let agent = AgentLoop::new(
+            cfg,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(NeverCalledProvider),
+        )
+        .with_tool_router(Arc::new(ShuffledRouter));
+
+        let candidates: Vec<ToolSchema> = ["zeta_tool", "alpha_tool", "mid_tool"]
+            .iter()
+            .map(|n| ToolSchema::new(*n, "desc", JsonSchema::new("object")))
+            .collect();
+        let messages = vec![Message::user("hello")];
+
+        let routed = agent.route_tools(candidates, &messages);
+        let names: Vec<&str> = routed.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["alpha_tool", "mid_tool", "zeta_tool"],
+            "the tools array must be name-sorted regardless of the router's order"
+        );
+    }
+
+    #[test]
     pub(crate) fn p1_3a_process_post_response_cost_guard_trips_when_limit_exceeded() {
         // `session_cost_usd` already over `max_cost_usd` → CostGuardTripped
         // (caller should return finalize with finished_naturally=false).

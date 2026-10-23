@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_assemble_with_meta_activates_when_threshold_exceeded() {
-        let mut meta = ToolMetaRegistry::new();
+        let meta = ToolMetaRegistry::new();
         // The deferred set is grown until it crosses the character
         // budget — the count is derived, not hardcoded, because the
         // trigger measures schema size.
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_deferred_tool_loader_with_meta_registry() {
-        let mut meta = ToolMetaRegistry::new();
+        let meta = ToolMetaRegistry::new();
         let mut schemas = vec![dummy_schema("read_file")];
         // Grown until the deferred set crosses the character budget —
         // the count is derived, not hardcoded.

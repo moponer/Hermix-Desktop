@@ -582,7 +582,7 @@ pub fn build_system_prompt_with_tool_errors(
     // MultiStepTask) were removed from DirRoute along with the guidance
     // they gated (see directions.rs "the verbose rules ... have been
     // removed").
-    let mut directions_text = {
+    let directions_text = {
         use crate::context::{RouteContext, SystemPromptBuilder};
         let route_ctx = RouteContext {
             user_message,
@@ -622,18 +622,31 @@ pub fn build_system_prompt_with_tool_errors(
         b.build().to_string()
     };
 
-    //append the tool-error demotion block as a separate
-    // `## Tool Failures` section after the directions. Empty when
+    // ★ The tool-error demotion block, kept OUT of the directions layer.
+    //
+    // It is a separate `## Tool Failures` section. Empty when
     // `tool_error_counts` is None or no tool has reached the configured
     // threshold. Capped at the configured max rows.
+    //
+    // It used to be appended to the END of the directions layer — which
+    // sits in the *middle* of the system message, ahead of the context
+    // layer (35K characters). A tool failing mid-turn therefore
+    // invalidated everything after it, context layer included, on every
+    // later call of the turn. The provider's prefix cache bills by
+    // position (measured 2026-10-23: a change at the end of the system
+    // message keeps the earlier prefix cached, a change at the start
+    // wipes it), so a mutating block belongs at the **tail**. It is also
+    // the right place for it: it is feedback about the most recent tool
+    // call, and recency is what makes it readable.
+    let mut tool_failures_text = String::new();
     if let Some(counts) = tool_error_counts {
         if let Some(block) = crate::tool_error_demotion::build_tool_error_demotion_block(
             counts,
             config.tool_error_demotion_threshold,
             config.tool_error_demotion_max_items,
         ) {
-            directions_text.push_str("\n\n## Tool Failures\n\n");
-            directions_text.push_str(&block);
+            tool_failures_text.push_str("\n\n## Tool Failures\n\n");
+            tool_failures_text.push_str(&block);
         }
     }
 
@@ -665,7 +678,7 @@ pub fn build_system_prompt_with_tool_errors(
     };
 
     let prompt = format!(
-        "{stable_text}{directions_text}{context_text}{suffix_text}{tools_text}"
+        "{stable_text}{directions_text}{context_text}{suffix_text}{tools_text}{tool_failures_text}"
     );
     tracing::Span::current().record("out_chars", prompt.len());
 
@@ -1404,6 +1417,51 @@ mod tests {
     /// Why it matters: the per-turn region is the part a provider's
     /// prefix cache cannot reuse. ~10K characters of compile-time
     /// constants living there meant paying for them on every turn.
+    /// The tool-failure demotion block mutates mid-turn (a tool fails)
+    /// and must therefore sit at the **tail** of the system message.
+    ///
+    /// It used to be appended to the end of the directions layer, which
+    /// sits ahead of the 35K-character context layer — so one failing
+    /// tool invalidated the context layer's cache on every later call of
+    /// the turn. The provider bills the prefix cache by position, so a
+    /// mutating block belongs last.
+    #[test]
+    fn tool_failure_block_sits_at_the_tail() {
+        use hermix_core::{JsonSchema, ToolSchema};
+        use std::collections::HashMap;
+        let cfg = AgentConfig::default();
+        let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+        let mut counts: HashMap<String, u32> = HashMap::new();
+        counts.insert("read_file".to_string(), 9);
+        let tools = vec![ToolSchema::new("read_file", "Read", JsonSchema::new("object"))];
+
+        let prompt = build_system_prompt_with_tool_errors(
+            &cfg,
+            &slot,
+            None,
+            "hello",
+            &tools,
+            &cfg.model,
+            0,
+            Some(&counts),
+            0,
+        );
+
+        let failures_at = prompt
+            .find("## Tool Failures")
+            .expect("the demotion block must be present when a tool keeps failing");
+        let tools_at = prompt
+            .find("For detailed parameters")
+            .expect("the tool list must be present");
+        assert!(
+            failures_at > tools_at,
+            "the mutating tool-failure block must come after the tool list (tail), \
+             not in the middle of the prompt"
+        );
+    }
+
+    /// The always-on guidance blocks live in the stable layer.
     #[test]
     fn always_on_guidance_is_rendered_into_the_stable_layer() {
         let cfg = AgentConfig::default();
