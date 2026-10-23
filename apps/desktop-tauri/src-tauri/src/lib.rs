@@ -630,23 +630,34 @@ pub fn run() {
     //
     // 注意：参数用空格分隔，多个 flag 之间也是空格。
     // 完整 Chromium flag 列表：https://peter.sh/experiments/chromium-command-line-switches/
+    //
+    // 2026-10-23：这里是 WebView2 浏览器参数的**唯一来源**。
+    // 此前有三份：① 本环境变量 ② tauri.conf.json 的 additionalBrowserArgs
+    // ③ 截图覆盖窗自己传的 additional_browser_args。三份不一致时 WebView2
+    // 建窗直接失败 0x8007139F（ERROR_INVALID_STATE）——"截图打不开"的根因。
+    // 同一 user data folder 下所有 webview 必须共享同一套浏览器参数，
+    // 所以现在只留这一份：conf 里的 additionalBrowserArgs 与覆盖窗的
+    // additional_browser_args 全部删除（见 2026-10-23 决策笔记）。
+    //
+    // `--disable-features` 只能出现一次：Chromium 取最后一次出现的值，
+    // 分散写多个等于前面的全丢（此前 NetworkService 覆盖掉了前两项）。
     let webview_args = concat!(
         // ── 内存优化 ──
         "--disable-gpu-vsync",
-        " --disable-features=CalculateNativeWinOcclusion",
-        " --disable-renderer-backgrounding",
-        " --disable-features=IntensiveWakeUpThrottling",
+        // ── 所有要关的 feature 写进同一个开关（多次出现只有最后一次生效）──
+        "--disable-features=msSmartScreenProtection,EdgeFeed,CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,RendererCodeIntegrity",
+        "--disable-renderer-backgrounding",
+        "--disable-background-timer-throttling",
         // ── 缓存优化（关键：默认无上限能涨到 GB） ──
-        " --disk-cache-size=20971520",
-        " --media-cache-size=2097152",
-        " --disable-features=NetworkService",
+        "--disk-cache-size=20971520",
+        "--media-cache-size=2097152",
         // ── 性能优化 ──
         // 256MB 会让长会话 V8 频繁 full GC（全 UI 卡顿的主因之一），放宽到 1GB
-        " --js-flags=--max-old-space-size=1024",
-        " --no-pings",
-        " --disable-background-networking",
-        " --disable-component-update",
-        " --disable-domain-reliability",
+        "--js-flags=--max-old-space-size=1024",
+        "--no-pings",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-domain-reliability",
     );
     // set_var 在多线程下需要 unsafe，且必须在创建 WebView 之前调用。
     // 我们的 portable_env::install_portable_env 已经会在 setup 里跑，
@@ -988,7 +999,8 @@ pub fn run() {
             commands::file_assoc_set,
             screenshot_controller::start_screenshot,
             screenshot_controller::screenshot_frame_data,
-            screenshot_controller::screenshot_crop_data,
+            screenshot_controller::screenshot_select,
+            screenshot_controller::screenshot_overlay_ready,
             screenshot_controller::screenshot_commit_edited,
             screenshot_controller::screenshot_window_at,
             screenshot_controller::screenshot_cancel,

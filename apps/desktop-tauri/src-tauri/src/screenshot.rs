@@ -1,7 +1,22 @@
 // 截图核心：抓屏 → 覆盖窗选区 → 裁剪 → 剪贴板。
 // 方案：docs/notes/implemented/feature/2026-10-07-screenshot-tool.md
+// 重写：docs/notes/implemented/feature/2026-10-23-screenshot-rewrite.md
+//
 // 关键模型：先抓后盖——进入覆盖窗前完成抓屏，用户在"照片"上画框，
 // 覆盖窗自身永远不会被截入。
+//
+// 2026-10-23 结构重写（三处根修）：
+// ① 抓屏换掉 xcap。xcap 逐显示器抓帧（~200ms）+ RGBA↔BGRA 全帧转换，
+//    且只覆盖光标所在的那台显示器——多屏时其余区域天然是黑的。
+//    现在一次 GDI BitBlt 抓整块虚拟桌面（SRCCOPY|CAPTUREBLT，~10ms）：
+//    - 位图像素与虚拟桌面物理像素 1:1（原点对齐，零换算）；
+//    - 多显示器一次覆盖，屏与屏之间没有黑缝;
+//    - CAPTUREBLT 把分层窗口（半透明 UI）一并抓进来，缺它那些区域是黑块。
+// ② 缩放换算不再由 Rust 猜（xcap 的 scale_factor 与 Windows 实际 DPI
+//    未必一致，猜错就是「照片和屏幕对不齐」的黑边）。改由网页自己报
+//    `devicePixelRatio`——它就是 WebView2 实际用的那个值。
+// ③ 窗口吸附的 rect 与标题一并返回（原来只有 rect，界面上无法说明
+//    「吸到的是哪个窗口」）。
 //
 // 平台：Windows-only（项目纪律，无跨平台目标）。非 Windows 编译为
 // NotFound 桩，与 commands_cua 同一模式。
@@ -24,11 +39,9 @@ pub struct CaptureSession {
     pub pixels: Vec<u8>,
     pub width: u32,
     pub height: u32,
-    /// 该位图对应显示器左上角在虚拟屏幕坐标系的位置
+    /// 该位图对应虚拟桌面左上角在虚拟屏幕坐标系的位置（物理像素）
     pub origin_x: i32,
     pub origin_y: i32,
-    /// 该显示器的 DPI 缩放（逻辑→物理换算），主窗缩放不代表覆盖屏
-    pub scale: f64,
 }
 
 static SESSION: once_cell::sync::OnceCell<std::sync::Mutex<Option<CaptureSession>>> =
@@ -53,7 +66,7 @@ pub fn crop_rgba(session: &CaptureSession, sel: Selection) -> Option<Vec<u8>> {
     }
     let (w, h) = (ex - sx, ey - sy);
     let mut out = Vec::with_capacity((w * h * 4) as usize);
-    // xcap 位图为 BGRA top-down；裁剪同时交换 R/B → RGBA。
+    // 位图为 BGRA top-down；裁剪同时交换 R/B → RGBA。
     for row in sy..ey {
         let row_start = ((row * session.width + sx) * 4) as usize;
         for px in 0..w {
@@ -77,65 +90,115 @@ pub fn bgra_to_rgba(pixels: &[u8]) -> Vec<u8> {
     out
 }
 
-// ── 抓屏 ─────────────────────────────────────────────────────────
+// ── 抓屏（整块虚拟桌面）──────────────────────────────────────────
 
+/// 虚拟桌面矩形（物理像素，左上角 + 尺寸）。多显示器时是所有显示器的
+/// 并集——抓屏与覆盖窗都用这一个矩形，两者天然对齐。
 #[cfg(windows)]
-pub fn capture_monitor_at_cursor() -> Result<CaptureSession, String> {
-    // 光标所在显示器优先；取不到光标则用主显示器。
-    // xcap 0.9 的 getter 全部返回 XCapResult，失败视为不可用跳过。
-    let monitors = xcap::Monitor::all().map_err(|e| format!("枚举显示器失败: {e}"))?;
-    let cursor = cursor_pos();
-    let monitor = monitors
-        .iter()
-        .find(|m| {
-            let (Ok(mx), Ok(my)) = (m.x(), m.y()) else {
-                return false;
-            };
-            let (Ok(mw), Ok(mh)) = (m.width(), m.height()) else {
-                return false;
-            };
-            cursor.is_some_and(|(cx, cy)| {
-                cx >= mx && cx < mx + mw as i32 && cy >= my && cy < my + mh as i32
-            })
-        })
-        .or_else(|| monitors.first())
-        .ok_or("没有可用显示器")?
-        .clone();
-
-    let image = monitor
-        .capture_image()
-        .map_err(|e| format!("抓屏失败: {e}"))?;
-    // xcap 返回 RGBA（RgbaImage）；统一转 BGRA 存缓存，裁剪时再转回，
-    // 保持 crop_rgba 单一数据通路（BGRA ↔ RGBA 换算只在这一对函数里）。
-    let mut pixels = Vec::with_capacity(image.as_raw().len());
-    for px in image.as_raw().chunks_exact(4) {
-        pixels.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
-    }
-    let (Ok(ox), Ok(oy)) = (monitor.x(), monitor.y()) else {
-        return Err("显示器坐标获取失败".into());
+pub fn virtual_screen_rect() -> (i32, i32, u32, u32) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN,
     };
-    let scale = monitor
-        .scale_factor()
-        .map(|s| s as f64)
-        .ok()
-        .filter(|s| *s > 0.0)
-        .unwrap_or(1.0);
-    Ok(CaptureSession {
-        width: image.width(),
-        height: image.height(),
-        origin_x: ox,
-        origin_y: oy,
-        scale,
-        pixels,
-    })
+    unsafe {
+        let x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let w = GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1);
+        let h = GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1);
+        (x, y, w as u32, h as u32)
+    }
 }
 
+/// 抓整块虚拟桌面 → BGRA 像素（top-down，物理像素）。
+///
+/// 一次 BitBlt 覆盖所有显示器：比「逐台显示器抓 + 拼接」少一次拷贝，
+/// 也少一次坐标系拼接（拼接错位就是黑缝）。
 #[cfg(windows)]
-fn cursor_pos() -> Option<(i32, i32)> {
-    use windows::Win32::Foundation::POINT;
-    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-    let mut p = POINT::default();
-    unsafe { GetCursorPos(&mut p).ok().map(|_| (p.x, p.y)) }
+pub fn capture_desktop() -> Result<CaptureSession, String> {
+    use std::ffi::c_void;
+    use windows::Win32::Foundation::{HANDLE, HWND};
+    use windows::Win32::Graphics::Gdi::{
+        BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
+        SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS,
+        ROP_CODE, SRCCOPY,
+    };
+
+    let (ox, oy, w, h) = virtual_screen_rect();
+    let (wi, hi) = (w as i32, h as i32);
+
+    unsafe {
+        // NULL = 整屏 DC。
+        let screen_dc = GetDC(HWND::default());
+        if screen_dc.is_invalid() {
+            return Err("GetDC 取屏幕设备上下文失败".into());
+        }
+        let mem_dc = CreateCompatibleDC(screen_dc);
+        if mem_dc.is_invalid() {
+            ReleaseDC(HWND::default(), screen_dc);
+            return Err("CreateCompatibleDC 失败".into());
+        }
+
+        // 负 biHeight = top-down，行序与屏幕一致，省一次翻转。
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: wi,
+                biHeight: -hi,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            bmiColors: [Default::default(); 1],
+        };
+        let mut bits: *mut c_void = std::ptr::null_mut();
+        let dib = match CreateDIBSection(
+            mem_dc,
+            &bmi,
+            DIB_RGB_COLORS,
+            &mut bits,
+            HANDLE::default(),
+            0,
+        ) {
+            Ok(d) if !d.is_invalid() => d,
+            _ => {
+                let _ = DeleteDC(mem_dc);
+                ReleaseDC(HWND::default(), screen_dc);
+                return Err("CreateDIBSection 失败（内存不足或权限不足）".into());
+            }
+        };
+        let old = SelectObject(mem_dc, dib);
+
+        // CAPTUREBLT 必须带：否则分层窗口（半透明 UI）区域抓回来是黑块。
+        let rop = ROP_CODE(SRCCOPY.0 | CAPTUREBLT.0);
+        let copied = BitBlt(mem_dc, 0, 0, wi, hi, screen_dc, ox, oy, rop).is_ok();
+
+        let mut pixels = Vec::new();
+        if copied && !bits.is_null() {
+            let len = (w as usize) * (h as usize) * 4;
+            pixels.extend_from_slice(std::slice::from_raw_parts(bits as *const u8, len));
+        }
+
+        SelectObject(mem_dc, old);
+        let _ = DeleteObject(dib);
+        let _ = DeleteDC(mem_dc);
+        ReleaseDC(HWND::default(), screen_dc);
+
+        if !copied {
+            return Err("BitBlt 抓屏失败（锁屏 / 受保护桌面？）".into());
+        }
+        if pixels.len() != (w as usize) * (h as usize) * 4 {
+            return Err("抓屏像素长度异常".into());
+        }
+
+        Ok(CaptureSession {
+            width: w,
+            height: h,
+            origin_x: ox,
+            origin_y: oy,
+            pixels,
+        })
+    }
 }
 
 // ── 窗口识别（几何法：光标下顶层 HWND 的 rect）──────────────────
@@ -146,6 +209,8 @@ pub struct WindowRect {
     pub y: i32,
     pub width: i32,
     pub height: i32,
+    /// 窗口标题（空 = 无标题窗口）
+    pub title: String,
 }
 
 #[cfg(windows)]
@@ -153,7 +218,8 @@ pub fn window_rect_at(cursor: (i32, i32), exclude: isize) -> Option<WindowRect> 
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowRect, IsIconic, IsWindowVisible,
+        EnumWindows, GetWindowRect, IsIconic,
+        IsWindowVisible,
     };
 
     // EnumWindows 按 Z 序（顶到底）枚举顶层窗口：跳过覆盖窗自身（全屏置顶，
@@ -197,7 +263,13 @@ pub fn window_rect_at(cursor: (i32, i32), exclude: isize) -> Option<WindowRect> 
         if ctx.pt.x < l || ctx.pt.x >= r || ctx.pt.y < t || ctx.pt.y >= b {
             return true.into();
         }
-        ctx.result = Some(WindowRect { x: l, y: t, width: r - l, height: b - t });
+        ctx.result = Some(WindowRect {
+            x: l,
+            y: t,
+            width: r - l,
+            height: b - t,
+            title: window_title(hwnd),
+        });
         false.into() // 命中即停
     }
 
@@ -209,6 +281,48 @@ pub fn window_rect_at(cursor: (i32, i32), exclude: isize) -> Option<WindowRect> 
         };
         let _ = EnumWindows(Some(probe), LPARAM(&mut ctx as *mut Ctx as isize));
         ctx.result
+    }
+}
+
+/// 窗口标题（UTF-16 → UTF-8，失败/空标题返回空串）。
+#[cfg(windows)]
+fn window_title(hwnd: windows::Win32::Foundation::HWND) -> String {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
+    unsafe {
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return String::new();
+        }
+        let mut buf = vec![0u16; len as usize + 1];
+        let n = GetWindowTextW(hwnd, &mut buf);
+        if n <= 0 {
+            return String::new();
+        }
+        String::from_utf16_lossy(&buf[..n as usize])
+    }
+}
+
+/// 当前前台窗口句柄（截图结束后把焦点还给原窗口）。
+#[cfg(windows)]
+pub fn foreground_window() -> Option<isize> {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    unsafe {
+        let h = GetForegroundWindow();
+        if h.0.is_null() {
+            None
+        } else {
+            Some(h.0 as isize)
+        }
+    }
+}
+
+/// 把焦点还给指定窗口（截完图回到原工作流，别让用户手动切回去）。
+#[cfg(windows)]
+pub fn restore_foreground(hwnd: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+    unsafe {
+        let _ = SetForegroundWindow(HWND(hwnd as *mut std::ffi::c_void));
     }
 }
 
@@ -377,7 +491,6 @@ mod tests {
             height: 2,
             origin_x: 100,
             origin_y: 200,
-            scale: 1.0,
         }
     }
 

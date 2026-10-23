@@ -72,7 +72,11 @@ done
 # 等内部包），与 `crates/`（Rust crate）、`apps/`（应用）同级，是 2026-10-13
 # 起就在的基线树，不是某次工作引入的「新建顶层目录」。漏掉它会让这条门禁
 # 在干净仓库上恒红，久而久之大家就学会忽略它的输出。
-TOP_ALLOWED="^(crates|apps|packages|docs|scripts|sdk|skills|assets|release|target|node_modules|\.git|\.github|\.vscode|\.idea|\.worktrees|third_party)$"
+# `branding/`（品牌素材）、`patches/`（第三方补丁）、`hermix-logo-concepts_assets/`
+# （logo 概念图）都是 HEAD 里已跟踪的既有目录（2026-10-23 补进白名单）——
+# 白名单落后于仓库现状时，门禁会一直红，而"一直红"的门禁等于没有门禁；
+# 新增顶层目录仍会被这条检查抓住。
+TOP_ALLOWED="^(crates|apps|packages|docs|scripts|sdk|skills|assets|release|target|node_modules|\.git|\.github|\.vscode|\.idea|\.worktrees|third_party|branding|patches|hermix-logo-concepts_assets)$"
 for d in */; do
   [ -e "$d" ] || continue
   name=$(basename "$d")

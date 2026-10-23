@@ -7,7 +7,7 @@
 // 任一步失败 exit 1 —— cargo tauri build 绝不能拿着陈旧 sidecar 打包
 // （10-06 / 10-08 两次「安装包内嵌旧二进制」交付事故的根治）。
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, utimesSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,6 +48,14 @@ function refresh(binName, destName) {
     process.exit(1);
   }
   copyFileSync(src, dst);
+  // copyFileSync 会**保留源文件的时间戳**（Windows CopyFileEx 的行为），
+  // 于是"刚拷贝过来"的 sidecar 可能带着几个月前的时间戳，
+  // check-sidecar-freshness.sh 的 mtime 比较就会误判 STALE。
+  // 拷贝完成 + sha256 逐字节校验通过后，把落地文件的 mtime 打到"现在" ——
+  // 此刻 cargo 刚刚按当前源码重新构建过，内容与当前树一致，
+  // 所以"现在"就是名副其实的"这份 sidecar 是新的"。
+  const now = new Date();
+  utimesSync(dst, now, now);
   const a = createHash("sha256").update(readFileSync(src)).digest("hex");
   const b = createHash("sha256").update(readFileSync(dst)).digest("hex");
   if (a !== b) {

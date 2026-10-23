@@ -21,7 +21,6 @@
         "center": true,
         "incognito": true,
         "dragDropEnabled": false,
-        "additionalBrowserArgs": "--disable-features=msSmartScreenProtection,EdgeFeed,CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,RendererCodeIntegrity --disable-renderer-backgrounding --disable-background-timer-throttling --disk-cache-size=20971520 --js-flags=--max-old-space-size=1024",
         "visible": false
       }
     ],

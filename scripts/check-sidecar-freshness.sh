@@ -57,12 +57,23 @@ if [ -n "$stray" ]; then
 fi
 
 # --- Check 2: mtime vs the Rust workspace ---------------------------------
-# What decides the sidecar's contents: the Rust workspace. Deliberately NOT
+# What decides the sidecar's contents: the Rust **workspace crates** (the
+# sidecar IS hermix-server, built from crates/). Deliberately NOT
 # `apps/desktop-tauri/src` — frontend .ts/.tsx changes do not go into the
 # sidecar (they go into the Tauri bundle), so counting them here would raise a
 # false STALE on every UI-only commit and train people to ignore the gate.
-stale=$(find crates apps/desktop-tauri/src-tauri/src \
+#
+# 2026-10-23: `apps/desktop-tauri/src-tauri/src` was dropped from the compare
+# set for the same reason — that tree builds **hermix-desktop.exe**（Tauri 主
+# 程序），**不**进 sidecar；`cargo tauri build` 每次都会重编主程序，它的
+# 新鲜度不归这条检查管。把两棵互不相干的树放在一起比，会让"改一次桌面端
+# Rust"都要求重编一整遍 hermix-server —— 而 sidecar 的内容其实没变。
+# 真正喂给 sidecar 的输入 = crates/ + workspace 的 Cargo.toml/Cargo.lock。
+stale=$(find crates \
          -name '*.rs' -newer "$SIDECAR" -print -quit 2>/dev/null | head -1)
+if [ -z "$stale" ]; then
+  stale=$(find Cargo.toml Cargo.lock -newer "$SIDECAR" -print -quit 2>/dev/null | head -1)
+fi
 
 if [ -n "$stale" ]; then
   echo "  STALE: source changes postdate the packaged sidecar"
@@ -109,8 +120,14 @@ res_check() { # $1 = sentinel file, $2 = dir to compare against, $3 = 源码目�
 }
 res_check "apps/desktop-tauri/src-tauri/builtin-soul/SOUL.md" "apps/desktop-tauri/src-tauri/builtin-soul"
 res_check "apps/desktop-tauri/src-tauri/resources/loader/hx-shell.exe" "apps/desktop-tauri/src-tauri/resources/loader" "apps/hx-shell/src"
-res_check "apps/desktop-tauri/src-tauri/resources/loader/WebView2Loader.dll" "apps/desktop-tauri/src-tauri/resources/loader"
-res_check "apps/desktop-tauri/src-tauri/resources/loader/esbuild.exe" "apps/desktop-tauri/src-tauri/resources/loader"
+# WebView2Loader.dll / esbuild.exe 是**外来上游二进制**，本仓没有它们的源码
+# （"源"在 Microsoft / esbuild 上游）。拿它们跟**同一个目录里的兄弟文件**比
+# 毫无意义：只要同目录里任何一个文件比它新（比如 hx-shell.exe），它就被判
+# STALE —— 而它自己跟这条检查毫无关系。2026-10-23：改为只校验"存在"。
+for f in "apps/desktop-tauri/src-tauri/resources/loader/WebView2Loader.dll" \
+         "apps/desktop-tauri/src-tauri/resources/loader/esbuild.exe"; do
+  [ -f "$f" ] || { echo "  MISSING: bundled resource $f"; RES_STALE=1; }
+done
 
 if [ -n "$RES_STALE" ]; then
   echo "         Rebuild the bundle so the fresh copy is compiled/packaged in."

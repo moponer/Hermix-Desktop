@@ -1,18 +1,22 @@
 // 截图会话控制器：覆盖窗生命周期 + Tauri 命令。
 // 数据通路见 screenshot.rs（抓屏/裁剪/剪贴板）与
-// docs/notes/implemented/feature/2026-10-07-screenshot-tool.md。
+// docs/notes/implemented/feature/2026-10-23-screenshot-rewrite.md。
 //
-// 2026-10-10 结构修复（"启动慢 + 全屏白启动屏"回归）：
-// ① 窗口在抓屏后（~200ms）即创建，幕布 JPEG 编码移到后台线程——与页面
-//    加载并行；前端轮询 screenshot_frame_data 到 Ready 才 show 窗口。
-//    感知等待从「编码+加载+IPC 串行」降为 max(编码, 加载)，且页面
-//    首帧即有「正在截取屏幕…」反馈（index.html #overlay-boot 静态占位）。
-// ② 旧的 3s 兜底 show() 已废除：页面没加载完就亮窗会把 #splash（静态
-//    HTML，启动屏样式）糊成全屏——9945d406 只在 JS 层删 splash，兜底
-//    路径没堵住，这是"修好了又回去"的根因。现改 30s 兜底「关窗+报错」：
-//    窗口要么在 Ready 后被前端 show（正常），要么 30s 关闭，绝不留白屏。
-// ③ 幕布走 JPEG（photo of screen，体积/编码/传输全小）；编辑底按需
-//    走 screenshot_crop_data（选区无损 PNG，比整帧 PNG 小且更清晰）。
+// 2026-10-23 结构重写（"打不开 / 慢 / 黑底 / 选多大不显示多大"四件套根修）：
+// ① **覆盖窗只创建一次、反复复用**。原来每次截图都新建一个 WebView2
+//    窗口（含页面加载），第二次起每次都白扔一次建窗 + 加载开销。现在
+//    首开建窗，之后截图只是「定位 + 显示 + 推帧」。
+// ② **幕布帧改事件推送**（hermix:screenshot-frame），删掉原来 150ms
+//    一次的轮询——轮询粒度本身就是感知的等待下限。
+// ③ **亮窗时机交给页面**：页面把幕布解码完再回报 screenshot_overlay_ready，
+//    Rust 才 show。窗口要么显示已就绪的画面，要么根本不出现，没有黑屏。
+// ④ **选区即窗口**：选完区 Rust 把覆盖窗缩到选区大小，编辑器只显示
+//    选中的那部分（原设计是全屏黑底 + 中间一小块图）。
+// ⑤ **WebView2 参数单一来源**：覆盖窗不再单独传 additional_browser_args。
+//    同一 user data folder 下所有 webview 的浏览器参数必须一致，不一致
+//    建窗直接 0x8007139F（ERROR_INVALID_STATE）——此前主窗走 conf 的
+//    参数、覆盖窗走另一份、进程环境变量还有第三份，三份不一致就是
+//    "截图打不开"。现在统一由 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 提供。
 
 use crate::screenshot;
 use base64::Engine as _;
@@ -20,13 +24,8 @@ use serde::Serialize;
 use tauri::{Emitter, Manager};
 
 const OVERLAY_LABEL: &str = "screenshot-overlay";
-
-/// 覆盖窗的 WebView2 环境参数。必须与 tauri.conf.json 主窗口的
-/// additionalBrowserArgs **逐字一致**：同一 user data folder 下所有
-/// webview 共享一个浏览器进程，环境级选项不一致时创建直接报
-/// 0x8007139F（ERROR_INVALID_STATE）——覆盖窗此前没带这份参数，
-/// 就是「覆盖窗创建失败」的根因。改主窗参数时这里必须同步。
-const OVERLAY_BROWSER_ARGS: &str = "--disable-features=msSmartScreenProtection,EdgeFeed,CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,RendererCodeIntegrity --disable-renderer-backgrounding --disable-background-timer-throttling --disk-cache-size=20971520 --js-flags=--max-old-space-size=1024";
+/// 幕布帧事件名（页面订阅它拿新帧）。
+const FRAME_EVENT: &str = "hermix:screenshot-frame";
 /// setup 默认注册的热键，与 lib.rs 保持一致；前端回放配置前的兜底。
 const DEFAULT_HOTKEY: &str = "alt+Q";
 /// 会话总兜底：编码 + 页面加载正常以秒计，30s 没就绪即判异常收尾。
@@ -41,18 +40,18 @@ static REGISTERED_HOTKEY: std::sync::Mutex<Option<String>> = std::sync::Mutex::n
 pub struct FramePayload {
     /// 全屏照片的 JPEG data URL，覆盖窗直接铺 <img>
     data_url: String,
-    /// 位图原点（虚拟屏幕坐标）——覆盖窗把本地坐标换算回去用
+    /// 位图原点（虚拟屏幕坐标，物理像素）——覆盖窗把本地坐标换算回去用
     origin_x: i32,
     origin_y: i32,
-    /// 物理像素尺寸（= 覆盖窗逻辑尺寸 × scale factor）
+    /// 物理像素尺寸（= 虚拟桌面尺寸）
     width: u32,
     height: u32,
-    /// 显示器 scale factor（光标坐标逻辑→物理换算）
-    scale: f64,
+    /// 会话序号：页面据此丢弃上一轮残留的迟到事件
+    seq: u64,
 }
 
-/// 幕布帧状态机：None = 编码中（前端继续轮询）；Ready = 渲染并 show；
-/// Failed = 前端显示错误 UI（ESC / Rust 兜底监视仍可退出）。
+/// 幕布帧状态机：None = 编码中（页面等事件）；Ready = 渲染并 show；
+/// Failed = 页面显示错误 UI（ESC / Rust 兜底监视仍可退出）。
 /// untagged 序列化：Ready 平铺为 FramePayload，Failed 为 {"error": …}。
 #[derive(Serialize, Clone)]
 #[serde(untagged)]
@@ -61,11 +60,30 @@ pub enum FrameState {
     Failed { error: String },
 }
 
-static FRAME: once_cell::sync::OnceCell<std::sync::Mutex<Option<FrameState>>> =
+/// 覆盖窗会话状态（全局单例）。
+struct OverlayState {
+    /// 当前幕布帧（None = 编码中）
+    frame: Option<FrameState>,
+    /// 是否有一个进行中的截图会话（ESC 监视 / 兜底收尾据此判断）
+    active: bool,
+    /// 会话序号（每开一轮 +1）
+    seq: u64,
+    /// 截图前的前台窗口（截完把焦点还回去）
+    fg_hwnd: Option<isize>,
+}
+
+static STATE: once_cell::sync::OnceCell<std::sync::Mutex<OverlayState>> =
     once_cell::sync::OnceCell::new();
 
-fn frame() -> &'static std::sync::Mutex<Option<FrameState>> {
-    FRAME.get_or_init(|| std::sync::Mutex::new(None))
+fn state() -> &'static std::sync::Mutex<OverlayState> {
+    STATE.get_or_init(|| {
+        std::sync::Mutex::new(OverlayState {
+            frame: None,
+            active: false,
+            seq: 0,
+            fg_hwnd: None,
+        })
+    })
 }
 
 /// 入口命令：异步包装——抓屏 + 建窗放阻塞线程池，主线程零阻塞。
@@ -76,80 +94,98 @@ pub async fn start_screenshot(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("截图任务调度失败: {e}"))?
 }
 
-/// 会话主流程（快：抓屏 ~200ms + 建窗 + 起三个后台线程即返回）。
-/// 感知「出画面」= 抓屏 + max(后台 JPEG 编码, 页面加载)，不再是串行和。
+/// 会话主流程（快：抓屏 ~10ms + 定位窗口 + 推帧）。
+/// 感知「出画面」= 抓屏 + 后台 JPEG 编码 + 页面解码，不再有建窗与页面加载。
 pub fn run_session(app: &tauri::AppHandle) -> Result<(), String> {
     if !ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("截图功能已在设置 → 图像中关闭".into());
     }
-    // 重入：先关旧覆盖窗（正常路径不会出现，热键连按兜底）。
-    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
-        let _ = win.close();
-    }
+    // 重入：结束上一轮（覆盖窗复用，不销毁）。
+    end_session(app, false);
 
-    let session = screenshot::capture_monitor_at_cursor()?;
-    // 窗口几何（逻辑坐标）在 move 进缓存前先拷出。
-    let (pos_x, pos_y, vw, vh, scale) = (
-        session.origin_x as f64,
-        session.origin_y as f64,
-        session.width as f64,
-        session.height as f64,
-        session.scale,
+    // 一次抓整块虚拟桌面：多显示器一次覆盖，屏间无黑缝。
+    let session = screenshot::capture_desktop()?;
+    let (ox, oy, w, h) = (
+        session.origin_x,
+        session.origin_y,
+        session.width,
+        session.height,
     );
+    let fg = screenshot::foreground_window();
     *screenshot::session().lock().unwrap() = Some(session);
-    *frame().lock().unwrap() = None; // 编码中；前端轮询
 
-    // 全屏覆盖窗：无边框、置顶、跳任务栏。仍先建后亮（hidden）——前端
-    // 拉到 Ready 才 show，"白屏/启动屏"不可能被看到；页面没就绪时窗口
-    // 保持隐藏，由 30s 兜底收尾，而不是 3s 亮出半就绪页面。
-    // M1 范围：单显示器（光标所在屏），builder.position 为逻辑坐标，
-    // 主屏原点 (0,0) 下与虚拟屏坐标一致；多屏混排 DPI 留 M3。
+    // 覆盖窗：首次创建，之后复用（省掉 WebView2 建窗 + 页面加载）。
+    let win = ensure_overlay(app)?;
+    place_window(&win, ox, oy, w, h);
 
-    let built = tauri::WebviewWindowBuilder::new(
-        app,
-        OVERLAY_LABEL,
-        tauri::WebviewUrl::App("index.html#/screenshot-overlay".into()),
-    )
-    .title("Screenshot")
-    .additional_browser_args(OVERLAY_BROWSER_ARGS)
-    // 主窗是 InPrivate（conf incognito: true），覆盖窗对齐——截图内容不该
-    // 落进任何持久化 profile。这是 controller 级选项，不影响环境共享。
-    .incognito(true)
-    .position(pos_x, pos_y)
-    .inner_size(vw / scale, vh / scale)
-    .decorations(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .resizable(false)
-    .visible(false)
-    .focused(true)
-    .build();
-
-    if let Err(e) = built {
-        *screenshot::session().lock().unwrap() = None;
-        *frame().lock().unwrap() = None;
-        return Err(format!("覆盖窗创建失败: {e}"));
+    {
+        let mut st = state().lock().unwrap();
+        st.frame = None; // 编码中
+        st.active = true;
+        st.seq += 1;
+        st.fg_hwnd = fg;
     }
+    let seq = state().lock().unwrap().seq;
 
-    spawn_encoder(app.clone());
+    spawn_encoder(app.clone(), seq);
     spawn_esc_watcher(app.clone());
     spawn_session_fallback(app.clone());
 
     Ok(())
 }
 
-/// 后台编码线程：BGRA→RGBA → JPEG(q80) → base64 → FrameState。
+/// 取/建覆盖窗。已存在就复用——这是"第二次起快一个数量级"的关键。
+fn ensure_overlay(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
+    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
+        return Ok(win);
+    }
+    let built = tauri::WebviewWindowBuilder::new(
+        app,
+        OVERLAY_LABEL,
+        tauri::WebviewUrl::App("index.html#/screenshot-overlay".into()),
+    )
+    .title("Screenshot")
+    // 主窗是 InPrivate（conf incognito: true），覆盖窗对齐——截图内容不该
+    // 落进任何持久化 profile。这是 controller 级选项，不影响环境共享。
+    .incognito(true)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .visible(false)
+    // 隐藏状态下不抢焦点；真正显示时再 set_focus。
+    .focused(false)
+    .build();
+
+    built.map_err(|e| {
+        // 覆盖窗建不出来最常见的原因是 WebView2 浏览器参数与主窗不一致
+        // （0x8007139F）。参数现在统一来自环境变量，这里补一句可读提示。
+        format!("覆盖窗创建失败: {e}（若为 0x8007139F，说明 WebView2 参数不一致）")
+    })
+}
+
+/// 把窗口放到虚拟桌面矩形上（物理像素）。
+/// 用 Physical 坐标而不是 Logical：虚拟桌面跨不同缩放的显示器时，
+/// 逻辑坐标换算由 Windows 决定，我们无法预期；而物理坐标是唯一
+/// 能与「抓到的位图像素」严格对齐的坐标系。
+fn place_window(win: &tauri::WebviewWindow, x: i32, y: i32, w: u32, h: u32) {
+    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+    let _ = win.set_size(tauri::PhysicalSize::new(w, h));
+}
+
+/// 后台编码线程：BGRA→RGBA → JPEG(q80) → base64 → FrameState → 事件推送。
 /// 先 take 出 session 独占（像素量级 10-30MB，不 clone）；完成后归还，
-/// 供编辑器按需裁剪（screenshot_crop_data）。若期间窗口已关（用户 ESC /
-/// 确认走了 cancel），直接清空不留残。
-fn spawn_encoder(app: tauri::AppHandle) {
+/// 供选区按需裁剪（screenshot_select）。若期间会话已结束，直接清空。
+///
+/// `seq` 是会话号：**上一轮的编码线程晚到时不得回填位图**，否则会把旧屏
+/// 塞回新一轮的会话，裁出来的是上一张截图。
+fn spawn_encoder(app: tauri::AppHandle, seq: u64) {
     std::thread::spawn(move || {
         let Some(session) = screenshot::session().lock().unwrap().take() else {
-            *frame().lock().unwrap() =
-                Some(FrameState::Failed { error: "截图会话不存在".into() });
+            set_failed("截图会话不存在");
             return;
         };
-        let payload = (|| {
+        let payload: Result<FramePayload, String> = (|| {
             let rgba = screenshot::bgra_to_rgba(&session.pixels);
             let jpeg = screenshot::encode_jpeg(&rgba, session.width, session.height)?;
             Ok(FramePayload {
@@ -161,42 +197,54 @@ fn spawn_encoder(app: tauri::AppHandle) {
                 origin_y: session.origin_y,
                 width: session.width,
                 height: session.height,
-                scale: session.scale,
+                seq,
             })
         })();
 
-        // 归还 session（或会话已结束则清空）。
-        let alive = app.get_webview_window(OVERLAY_LABEL).is_some();
+        // 归还 session（会话仍在**且仍是同一轮**就留着给裁剪用，否则清空）。
+        let alive = {
+            let st = state().lock().unwrap();
+            st.active && st.seq == seq
+        };
         *screenshot::session().lock().unwrap() = alive.then_some(session);
 
-        *frame().lock().unwrap() = match payload {
-            Ok(p) if alive => Some(FrameState::Ready(p)),
-            Ok(_) => None,
-            Err(e) => Some(FrameState::Failed { error: e }),
-        };
+        match payload {
+            Ok(p) if alive => {
+                state().lock().unwrap().frame = Some(FrameState::Ready(p.clone()));
+                let _ = app.emit(FRAME_EVENT, p);
+            }
+            Ok(_) => {}
+            Err(e) => set_failed(&e),
+        }
     });
 }
 
-/// 会话兜底（替代旧 3s 兜底 show）：30s 后窗口仍存在且前端没亮（is_visible
-/// = false）即判页面/编码异常——报错回主窗 toast 并关窗。前端已 show 的
-/// 会话（用户在选区/编辑中）不动。
+fn set_failed(error: &str) {
+    let st = FrameState::Failed {
+        error: error.to_string(),
+    };
+    state().lock().unwrap().frame = Some(st);
+}
+
+/// 会话兜底：30s 后会话仍在进行且窗口没亮（页面/编码异常）即报错收尾。
 fn spawn_session_fallback(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(SESSION_FALLBACK_SECS));
-        let Some(win) = app.get_webview_window(OVERLAY_LABEL) else {
+        if !state().lock().unwrap().active {
             return; // 会话已正常结束
-        };
-        if win.is_visible().unwrap_or(false) {
-            return; // 前端已就绪，用户在正常交互
         }
-        let failed = !matches!(frame().lock().unwrap().as_ref(), Some(FrameState::Ready(_)));
-        if failed {
-            let _ = app.emit(
-                "hermix:screenshot-error",
-                "截图覆盖层 30s 未就绪，已关闭。若反复出现请重启应用。",
-            );
+        let visible = app
+            .get_webview_window(OVERLAY_LABEL)
+            .and_then(|w| w.is_visible().ok())
+            .unwrap_or(false);
+        if visible {
+            return; // 页面已就绪，用户在正常交互
         }
-        let _ = win.close();
+        let _ = app.emit(
+            "hermix:screenshot-error",
+            "截图覆盖层 30s 未就绪，已关闭。若反复出现请重启应用。",
+        );
+        end_session(&app, false);
     });
 }
 
@@ -214,12 +262,12 @@ fn spawn_esc_watcher(app: tauri::AppHandle) {
         let mut prev = false;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(40));
-            if app.get_webview_window(OVERLAY_LABEL).is_none() {
-                break; // 会话已结束（确认/取消/兜底关闭）
+            if !state().lock().unwrap().active {
+                break; // 会话已结束
             }
             let pressed = screenshot::esc_pressed();
             if pressed && !prev {
-                cancel_session(&app);
+                end_session(&app, true);
                 break;
             }
             prev = pressed;
@@ -227,70 +275,38 @@ fn spawn_esc_watcher(app: tauri::AppHandle) {
     });
 }
 
-fn cancel_session(app: &tauri::AppHandle) {
+/// 结束会话：清状态 + 隐藏覆盖窗（不销毁，下次复用）。
+/// restore_focus = true 时把焦点还给截图前的前台窗口。
+fn end_session(app: &tauri::AppHandle, restore_focus: bool) {
+    let fg = {
+        let mut st = state().lock().unwrap();
+        st.frame = None;
+        st.active = false;
+        st.fg_hwnd.take()
+    };
     *screenshot::session().lock().unwrap() = None;
-    *frame().lock().unwrap() = None;
     if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
-        let _ = win.close();
+        let _ = win.hide();
+    }
+    if restore_focus {
+        if let Some(h) = fg {
+            screenshot::restore_foreground(h);
+        }
     }
 }
 
-/// 覆盖窗轮询幕布帧。返回 None = 仍在编码（继续轮询）；Ready = 渲染 +
-/// show；Failed = 错误 UI（前端有独立超时兜底）。
+/// 覆盖窗查询幕布帧（页面挂载时拉一次，兜住"帧先到、页面后到"的时序）。
+/// 之后的新帧一律走事件推送。
 #[tauri::command]
 pub fn screenshot_frame_data() -> Option<FrameState> {
-    frame().lock().unwrap().clone()
+    state().lock().unwrap().frame.clone()
 }
 
-/// 编辑器按需取选区：帧图局部物理像素 → 裁出无损 PNG data URL。
-/// 幕布是 JPEG（体积小、供选区交互），编辑底走本命令从 RAW 会话位图
-/// 无损裁剪——传输更小（只传选区不传整帧）、输出更清晰（不走幕布质量）。
+/// 覆盖窗查询光标下窗口 rect（窗口吸附高亮）。
+/// 入参：虚拟屏幕物理坐标。排除覆盖窗自身——全屏置顶窗不排除的话
+/// 任何命中都是覆盖窗自己，吸附永远高亮整屏。
 #[tauri::command]
-pub fn screenshot_crop_data(x: i32, y: i32, width: i32, height: i32) -> Result<String, String> {
-    use crate::screenshot::Selection;
-    // guard 必须绑定到局部变量活过整个函数体（锁临时值句尾释放会让 s 悬空）。
-    let guard = screenshot::session().lock().unwrap();
-    let s = guard
-        .as_ref()
-        .ok_or("截图会话已结束（幕布仍在编码或已被取消）")?;
-
-    // 入参为帧图局部物理像素；先钳出真实裁切尺寸（越界部分截去），
-    // 再换回虚拟屏坐标喂给 crop_rgba（它按 session 原点平移 + 再钳位）。
-    let sx = x.clamp(0, s.width as i32);
-    let sy = y.clamp(0, s.height as i32);
-    let ex = (x + width).clamp(sx, s.width as i32);
-    let ey = (y + height).clamp(sy, s.height as i32);
-    let (cw, ch) = (ex - sx, ey - sy);
-    if cw <= 0 || ch <= 0 {
-        return Err("选区在帧图之外，无法裁剪".into());
-    }
-
-    let rgba = screenshot::crop_rgba(
-        s,
-        Selection {
-            x: s.origin_x + sx,
-            y: s.origin_y + sy,
-            width: cw,
-            height: ch,
-        },
-    )
-    .ok_or("选区在帧图之外，无法裁剪")?;
-    let png = screenshot::encode_png(&rgba, cw as u32, ch as u32)?;
-    Ok(format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(png)
-    ))
-}
-
-/// 覆盖窗查询光标下窗口 rect（窗口模式 hover 高亮）。
-/// 入参：物理坐标（覆盖窗端换算好）。排除覆盖窗自身——全屏置顶窗
-/// 不排除的话任何命中都是覆盖窗自己，窗口模式永远高亮整屏。
-#[tauri::command]
-pub fn screenshot_window_at(
-    app: tauri::AppHandle,
-    x: i32,
-    y: i32,
-) -> Option<screenshot::WindowRect> {
+pub fn screenshot_window_at(app: tauri::AppHandle, x: i32, y: i32) -> Option<screenshot::WindowRect> {
     let exclude = app
         .get_webview_window(OVERLAY_LABEL)
         .and_then(|w| w.hwnd().ok())
@@ -299,8 +315,75 @@ pub fn screenshot_window_at(
     screenshot::window_rect_at((x, y), exclude)
 }
 
+/// 选区确认：裁出选区（无损 PNG data URL），并把覆盖窗缩到选区大小。
+/// 返回裁剪结果；页面据此进入编辑态（只显示选中的那部分）。
+#[tauri::command]
+pub fn screenshot_select(
+    app: tauri::AppHandle,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<String, String> {
+    use crate::screenshot::Selection;
+    // guard 必须绑定到局部变量活过整个函数体（锁临时值句尾释放会让 s 悬空）。
+    let guard = screenshot::session().lock().unwrap();
+    let s = guard
+        .as_ref()
+        .ok_or("截图会话已结束（幕布仍在编码或已被取消）")?;
+
+    // 选区与位图求交集（越界部分截去），实际裁切尺寸以交集为准——
+    // 窗口也跟着缩到交集大小，页面显示的和用户框的始终一致。
+    let bx0 = s.origin_x;
+    let by0 = s.origin_y;
+    let bx1 = s.origin_x + s.width as i32;
+    let by1 = s.origin_y + s.height as i32;
+    let cx0 = x.max(bx0);
+    let cy0 = y.max(by0);
+    let cx1 = (x + width).min(bx1);
+    let cy1 = (y + height).min(by1);
+    let cw = cx1 - cx0;
+    let ch = cy1 - cy0;
+    if cw <= 0 || ch <= 0 {
+        return Err("选区在屏幕之外，无法裁剪".into());
+    }
+
+    let rgba = screenshot::crop_rgba(
+        s,
+        Selection {
+            x: cx0,
+            y: cy0,
+            width: cw,
+            height: ch,
+        },
+    )
+    .ok_or("选区在屏幕之外，无法裁剪")?;
+    let png = screenshot::encode_png(&rgba, cw as u32, ch as u32)?;
+    drop(guard);
+
+    // 窗口缩到选区：编辑态只显示选中的那部分，底下没有黑底。
+    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
+        place_window(&win, cx0, cy0, cw as u32, ch as u32);
+    }
+
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    ))
+}
+
+/// 页面回报「幕布已解码完毕」——此刻才亮窗，避免黑屏/半就绪画面。
+#[tauri::command]
+pub fn screenshot_overlay_ready(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+    Ok(())
+}
+
 /// 编辑器提交：前端把编辑后的画布导出为 PNG data URL 回传，
-/// 解码 → 剪贴板 → 关覆盖窗。选区裁剪已在前端画布完成，Rust 只收成品。
+/// 解码 → 剪贴板 → 收尾。选区裁剪已在前端画布完成，Rust 只收成品。
 #[tauri::command]
 pub fn screenshot_commit_edited(app: tauri::AppHandle, data_url: String) -> Result<(), String> {
     const PREFIX: &str = "data:image/png;base64,";
@@ -317,9 +400,7 @@ pub fn screenshot_commit_edited(app: tauri::AppHandle, data_url: String) -> Resu
 
     match screenshot::copy_png_to_clipboard(img.as_raw(), width, height) {
         Ok(()) => {
-            *screenshot::session().lock().unwrap() = None;
-            *frame().lock().unwrap() = None;
-            close_overlay(&app);
+            end_session(&app, true);
             let _ = app.emit("hermix:screenshot-copied", ());
             Ok(())
         }
@@ -330,10 +411,10 @@ pub fn screenshot_commit_edited(app: tauri::AppHandle, data_url: String) -> Resu
     }
 }
 
-/// 取消：清会话、关覆盖窗。
+/// 取消：清会话、隐藏覆盖窗。
 #[tauri::command]
 pub fn screenshot_cancel(app: tauri::AppHandle) -> Result<(), String> {
-    cancel_session(&app);
+    end_session(&app, true);
     Ok(())
 }
 
@@ -376,10 +457,4 @@ pub fn screenshot_apply_config(
         }
     }
     Ok(())
-}
-
-fn close_overlay(app: &tauri::AppHandle) {
-    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
-        let _ = win.close();
-    }
 }

@@ -1,19 +1,18 @@
 // 截图编辑器：选区确认后的画布编辑（矩形/画笔/文本/涂抹/裁剪/撤销 + 色板）。
-// 基底图经 Rust 按需无损裁剪（screenshot_crop_data，只传选区、不出幕布
-// JPEG 质量），显示 = 逻辑尺寸（/scale）。提交 → PNG data URL →
-// screenshot_commit_edited → 剪贴板。基底画布(base)存"已提交"像素，
-// 可见画布 = base + 进行中预览；撤销栈存 pre-op 快照（PNG dataURL，限 12 步）。
+// 基底图由 Rust 按选区无损裁好（screenshot_select 返回 PNG data URL），
+// 覆盖窗此时已被缩到选区大小 → 画布即选中的那部分，底下没有黑底。
+// 显示尺寸 = 逻辑尺寸（/scale，scale = devicePixelRatio），物理 1:1。
+// 提交 → PNG data URL → screenshot_commit_edited → 剪贴板。
+// 基底画布(base)存"已提交"像素，可见画布 = base + 进行中预览；
+// 撤销栈存 pre-op 快照（PNG dataURL，限 12 步）。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { cx } from "../lib/cx";
 
 export interface EditorSource {
-  /** 选区在帧图内的物理像素矩形（Rust 端裁剪坐标系，已钳帧内） */
-  sx: number;
-  sy: number;
-  sw: number;
-  sh: number;
-  /** 显示缩放（物理→逻辑） */
+  /** 选区无损 PNG data URL（Rust 端裁好并返回） */
+  src: string;
+  /** 屏缩放（物理→CSS）：笔宽/字号随屏缩放，4K 屏不至于细成发丝 */
   scale: number;
 }
 
@@ -55,14 +54,15 @@ export function ScreenshotEditor({
   const [err, setErr] = useState<string | null>(null);
   const [textBox, setTextBox] = useState<{ x: number; y: number; value: string } | null>(null);
 
-  // 显示尺寸：物理/scale 后若超窗（多屏 DPI 混排等边界），等比缩进窗内。
+  // 显示尺寸：物理/scale = CSS 尺寸（1:1 物理）。覆盖窗已被 Rust 缩到
+  // 选区大小，正常情况 k=1（画布正好铺满窗口）；窗口比画布小时等比缩进。
   // 必须精确内联宽高——canvas 上 object-fit/max-* 的 letterbox 会破坏
   // getBoundingClientRect 坐标映射。
   const disp = (() => {
     if (!dims.w || !dims.h) return { w: 0, h: 0, k: 0 };
     const natW = dims.w / source.scale;
     const natH = dims.h / source.scale;
-    const k = Math.min(1, (window.innerWidth - 48) / natW, (window.innerHeight - 140) / natH);
+    const k = Math.min(1, window.innerWidth / natW, window.innerHeight / natH);
     return { w: Math.round(natW * k), h: Math.round(natH * k), k: (natW * k) / dims.w };
   })();
 
@@ -108,44 +108,31 @@ export function ScreenshotEditor({
     }
   }, []);
 
-  // 挂载：向 Rust 取选区无损裁剪 → 载图建基底画布（尺寸 = 裁剪实际像素，
-  // Rust 端已按帧边界钳位）→ 重建涂抹源 → 首绘。取图前显示「正在准备图像…」。
+  // 挂载：载入选区无损 PNG → 建基底画布（尺寸 = 图片实际像素）→ 重建涂抹源
+  // → 首绘。载入前显示「正在准备图像…」。
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      try {
-        const dataUrl = await invoke<string>("screenshot_crop_data", {
-          x: source.sx,
-          y: source.sy,
-          width: source.sw,
-          height: source.sh,
-        });
-        if (cancelled) return;
-        const img = new Image();
-        img.onload = () => {
-          if (cancelled) return;
-          const base = document.createElement("canvas");
-          base.width = img.naturalWidth;
-          base.height = img.naturalHeight;
-          base.getContext("2d")?.drawImage(img, 0, 0);
-          baseRef.current = base;
-          buildMosaic(base);
-          const canvas = canvasRef.current;
-          if (canvas) {
-            canvas.width = base.width;
-            canvas.height = base.height;
-          }
-          setDims({ w: base.width, h: base.height });
-          redraw();
-        };
-        img.onerror = () => {
-          if (!cancelled) setErr("截图图像加载失败，请重新截图。");
-        };
-        img.src = dataUrl;
-      } catch (e) {
-        if (!cancelled) setErr(`截图处理失败：${e instanceof Error ? e.message : String(e)}，请重新截图。`);
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      const base = document.createElement("canvas");
+      base.width = img.naturalWidth;
+      base.height = img.naturalHeight;
+      base.getContext("2d")?.drawImage(img, 0, 0);
+      baseRef.current = base;
+      buildMosaic(base);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.width = base.width;
+        canvas.height = base.height;
       }
-    })();
+      setDims({ w: base.width, h: base.height });
+      redraw();
+    };
+    img.onerror = () => {
+      if (!cancelled) setErr("截图图像加载失败，请重新截图。");
+    };
+    img.src = source.src;
     return () => {
       cancelled = true;
     };

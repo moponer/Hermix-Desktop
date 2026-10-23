@@ -58,8 +58,9 @@ image = { version = "0.25", features = ["png", "jpeg"] }
 
 # 索引遍历线程降为 BELOW_NORMAL 优先级：全盘扫描不抢 UI 线程。
 [target.'cfg(windows)'.dependencies]
-# xcap：截图抓屏（GDI 一次性抓帧，方案见 docs/notes/implemented/feature/2026-10-07-screenshot-tool.md）
-xcap = "0.9"
+# 截图抓屏走 GDI BitBlt（screenshot.rs），不引 xcap：
+# xcap 逐显示器抓帧（~200ms）+ RGBA↔BGRA 全帧转换，且只覆盖光标所在
+# 那台显示器（多屏其余区域是黑的）。直连 GDI 一次抓整块虚拟桌面 ~10ms。
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_Security",

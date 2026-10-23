@@ -82,6 +82,33 @@
   pointer-events: none;
 }
 
+/* 窗口吸附高亮：绿色边框（用户明确要求「绿色截图边框」）。
+   照片底色深浅不定，所以外圈加一道暗描边 + 绿色柔光，两种底色都看得见。 */
+.so-snap {
+  position: absolute;
+  border: 2px solid #22c55e;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.45),
+    0 0 14px rgba(34, 197, 94, 0.45);
+  pointer-events: none;
+}
+
+/* 吸附窗口的标题（贴在框上方） */
+.so-snap-label {
+  position: absolute;
+  max-width: 40vw;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #14532d;
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* 尺寸标签（物理像素口径） */
 .so-size-tag {
   position: absolute;
@@ -95,17 +122,29 @@
   white-space: nowrap;
 }
 
-/* 模式/确认工具条：右下角悬浮，不遮内容中心 */
+/* 模式/确认工具条：底部居中悬浮，不遮内容中心 */
 .so-toolbar {
   position: absolute;
-  right: 16px;
+  left: 50%;
   bottom: 16px;
+  transform: translateX(-50%);
   display: flex;
-  gap: 6px;
-  padding: 6px;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 24px);
+  padding: 6px 10px;
   border-radius: 8px;
   background: rgba(24, 24, 28, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* 操作提示（把「现在能做什么」写清楚，别让用户猜） */
+.so-hint {
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .so-toolbar button {
@@ -139,14 +178,15 @@
 
 /* ── 编辑器（ScreenshotEditor.tsx）────────────────────────────── */
 
-/* 编辑态根：全屏压暗，画布居中 */
+/* 编辑态根：画布铺满整窗（窗口已被缩到选区大小），底下不垫黑底 */
 .se-root {
   position: fixed;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.85);
+  overflow: hidden;
+  background: transparent;
   user-select: none;
   cursor: default;
 }
@@ -154,8 +194,7 @@
 .se-canvas-wrap {
   position: relative;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.65);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: #000;
+  background: transparent;
 }
 
 .se-canvas {
@@ -198,18 +237,20 @@
   word-break: break-all;
 }
 
-/* 编辑工具条：底部居中悬浮 */
+/* 编辑工具条：底部居中悬浮（窗口=选区大小，工具条可能很窄 → 可横向滚动） */
 .se-toolbar {
   position: fixed;
-  bottom: 28px;
+  bottom: 8px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 8px 10px;
+  max-width: calc(100% - 12px);
+  overflow-x: auto;
+  padding: 6px 8px;
   border-radius: 10px;
-  background: rgba(24, 24, 28, 0.95);
+  background: rgba(24, 24, 28, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.08);
   z-index: 10;
 }

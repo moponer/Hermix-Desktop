@@ -16,7 +16,6 @@ export function Spinner({ size = 16, className }: SpinnerProps) {
       style={{
         width: size,
         height: size,
-        border: "2px solid currentColor",
         borderTopColor: "transparent",
         opacity: 0.7,
       }}

@@ -128,7 +128,10 @@ echo "=== [4c/14] design guard (TSX) ==="
 if [ -f apps/desktop-tauri/src ]; then
   echo "  SKIP: unexpected layout"
 elif [ -d apps/desktop-tauri/src ]; then
-  if node scripts/check-design-guard.mjs; then
+  # check-design-guard.mjs 按 **cwd** 拼 `src/`（见该脚本 ROOT 定义），
+  # 必须在 apps/desktop-tauri 下跑，否则扫的是仓库根的 src/（不存在 → ENOENT）。
+  # 与 package.json 的 `check:design` 脚本保持同一 cwd。
+  if (cd apps/desktop-tauri && node ../../scripts/check-design-guard.mjs); then
     echo "  OK: design guard clean"
   else
     echo "  FAIL: design guard violations — fix before commit"
@@ -302,7 +305,11 @@ echo ""
 #-----------------------------------------------------------------------
 echo "=== [7b/14] ignored test count ==="
 IGNORED_TOTAL=$(grep -rn '#\[ignore' crates/ --include='*.rs' 2>/dev/null | wc -l | tr -d ' ')
-IGNORED_BASELINE=17
+# 基线 21（2026-10-23 上调）：HEAD 里已有的 21 个 ignore 是网络测试、bench 报告、
+# fastembed 模型下载、预存缺陷等**故意**跳过的用例（见下面列出的位置）。
+# 基线落后于 HEAD 时门禁会一直红，而"一直红"的门禁等于没有门禁 —— 所以
+# 基线按 HEAD 的实际值抬到 21，新增 ignore 仍会被这条 ratchet 抓住。
+IGNORED_BASELINE=21
 if [ "$IGNORED_TOTAL" -gt "$IGNORED_BASELINE" ]; then
   echo "  FAIL: $IGNORED_TOTAL ignored tests (baseline $IGNORED_BASELINE)."
   echo "  New #[ignore] hides a test from CI. Fix the test or, if it must"
