@@ -379,7 +379,7 @@ export function ConfirmDialog({
             {typeof body === "string" ? <p className="whitespace-pre-wrap">{body}</p> : body}
           </div>
           {showIrreversible && (
-            <p className="mt-3 inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] bg-error-soft px-2 py-1 text-[length:var(--text-tiny)] font-medium text-error">
+            <p className="mt-3 inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] bg-error-soft px-2 py-1 text-[length:var(--text-tiny)] font-medium text-[var(--color-text-error)]">
               <AlertTriangle className="icon-xs" aria-hidden />
               此操作不可恢复
             </p>
