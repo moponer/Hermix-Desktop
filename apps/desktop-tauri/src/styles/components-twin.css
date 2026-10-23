@@ -1339,24 +1339,24 @@
 }
 
 /* ── 任务条 ── */
-.twin-tasks {
+.twin-jobs {
   display: flex;
   flex-direction: column;
   gap: 12px;
   overflow: auto;
   min-height: 0;
 }
-.twin-task {
+.twin-job {
   display: flex;
   flex-direction: column;
   gap: 5px;
 }
-.twin-task__line {
+.twin-job__line {
   display: flex;
   align-items: baseline;
   gap: 8px;
 }
-.twin-task__name {
+.twin-job__name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -1365,18 +1365,18 @@
   font-size: var(--text-ui);
   color: var(--color-text-primary);
 }
-.twin-task__st {
+.twin-job__st {
   font-size: var(--text-tiny);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
-.twin-task__st.is-run {
+.twin-job__st.is-run {
   color: var(--color-accent);
 }
-.twin-task__st.is-ok {
+.twin-job__st.is-ok {
   color: var(--color-success);
 }
-.twin-task__st.is-error {
+.twin-job__st.is-error {
   color: var(--color-error);
 }
 .twin-track {
@@ -1390,7 +1390,7 @@
   width: calc(var(--p, 0) * 100%);
   background: var(--color-accent);
 }
-.twin-task__meta {
+.twin-job__meta {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -1398,17 +1398,17 @@
   color: var(--color-text-faint);
   font-variant-numeric: tabular-nums;
 }
-.twin-task__meta code {
+.twin-job__meta code {
   font-size: var(--text-tiny);
   color: var(--color-text-tertiary);
 }
-.twin-task__pct {
+.twin-job__pct {
   color: var(--color-text-secondary);
 }
 .twin-spacer {
   flex: 1;
 }
-.twin-task__err {
+.twin-job__err {
   font-size: var(--text-tiny);
   line-height: 1.6;
   color: var(--color-error);
@@ -1590,7 +1590,9 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
+  margin: 0;
   padding: 9px 11px;
   border: 1px solid var(--color-warning);
   background: var(--color-warning-soft);

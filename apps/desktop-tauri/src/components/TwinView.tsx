@@ -369,18 +369,18 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
                 还没有启用的任务。在「自动化」页或直接跟她说一句就能建。
               </p>
             ) : null}
-            <div className="twin-tasks">
+            <div className="twin-jobs">
               {enabledTasks.map((t) => {
                 const ratio =
                   t.max_runs && t.max_runs > 0
                     ? Math.min(1, t.run_count / t.max_runs)
                     : null;
                 return (
-                  <div key={t.id} className="twin-task">
-                    <div className="twin-task__line">
-                      <span className="twin-task__name">{t.name}</span>
+                  <div key={t.id} className="twin-job">
+                    <div className="twin-job__line">
+                      <span className="twin-job__name">{t.name}</span>
                       <span
-                        className={`twin-task__st${statusClass(t.last_status)}`}
+                        className={`twin-job__st${statusClass(t.last_status)}`}
                       >
                         {t.last_status ? (STATUS_TEXT[t.last_status] ?? t.last_status) : "未运行"}
                       </span>
@@ -391,8 +391,8 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
                         style={{ "--p": ratio ?? 0 } as React.CSSProperties}
                       />
                     </div>
-                    <div className="twin-task__meta">
-                      <span className="twin-task__pct">
+                    <div className="twin-job__meta">
+                      <span className="twin-job__pct">
                         {ratio != null ? `${Math.round(ratio * 100)}%` : "—"}
                       </span>
                       <span>
@@ -402,7 +402,7 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
                       <code>{t.schedule_label ?? t.schedule}</code>
                     </div>
                     {t.last_error ? (
-                      <p className="twin-task__err">{t.last_error}</p>
+                      <p className="twin-job__err">{t.last_error}</p>
                     ) : null}
                   </div>
                 );
