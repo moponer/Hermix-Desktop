@@ -32,7 +32,7 @@ import {
   listSessions,
   type ChatSource,
 } from '../../core/history'
-import { getChatSource, setChatSource, SOURCE_META } from '../../core/chatSource'
+// 阿黎是手机上唯一的对话对象，不再有"来源切换"。
 import { interruptSession } from '../../core/tasks'
 import { loadModelConfig, saveModelConfig, clearModelConfig } from '../../core/modelStore'
 import { streamLocalChat, type LocalTurn } from '../../core/localChat'
@@ -190,8 +190,8 @@ onMounted(() => {
       scrollToTail()
     }
   } else {
-    // 没有指定会话：接着该来源最近一条往下聊，而不是每次进来都是一片空白。
-    restoreLatest(source.value)
+    // 没有指定会话：接着最近一条往下聊，而不是每次进来都是一片空白。
+    restoreLatest()
   }
 })
 
@@ -252,17 +252,6 @@ onShow(() => {
   // 来自阿黎页 / 历史页的跳转：来源与目标会话都靠存储传（tab 页不收 query）。
   // 来源变了就把界面清干净——两个来源的历史分开存，把 A 的气泡留在 B 的
   // 界面上，用户会以为"刚才和阿黎说的话被电脑看到了"。
-  const nextSource = getChatSource()
-  if (nextSource !== source.value) {
-    // 先按**旧来源**把当前会话存下来，再改 source——顺序反了就会把桌面的
-    // 对话存进阿黎的桶里，来源标签从此骗人。
-    persistSession()
-    source.value = nextSource
-    messages.value = []
-    chat.value = initialChatState()
-    currentSid.value = null
-    typedText.value = ''
-  }
   const pending = uni.getStorageSync('hermix.restoreSession') as string | ''
   if (pending) {
     uni.removeStorageSync('hermix.restoreSession')
@@ -487,78 +476,23 @@ function confirmNew() {
   })
 }
 
-// ── 对话来源：阿黎 / 桌面 ────────────────────────────────────────────
-//
-// 两条通路**不同源**，必须让用户一眼看出这句话是谁答的、在哪能找回：
-// - `ali`     阿黎：手机拿电脑推来的凭据直接连云模型（不经 relay、不经电脑）；
-// - `desktop` 桌面：经 relay 遥控那台电脑，由桌面端执行。
-//
-// 这里**取消了旧的「自动回落」**：以前电脑不在线会自动改走本地直连，于是
-// "桌面会话"可能被悄悄发给云端——归属就乱了，历史也串了。现在来源由用户
-// 显式选择，走不通就明说走不通。
-const source = ref<ChatSource>(getChatSource())
-const sourceMeta = computed(() => SOURCE_META[source.value])
+/**
+ * 手机上只有一个对话对象：**阿黎**。
+ *
+ * 她在**电脑上**执行——工具、工作区、记忆，以及随时派 agent 角色干活，全都
+ * 发生在桌面端；手机只是她的遥控入口，**不在手机上跑模型**。所以这里没有
+ * 「来源切换」：换来源就等于换人，而用户要的就是她。
+ */
+const source = ref<ChatSource>('ali')
 
-/** 阿黎要用的配置（与电脑推来的那份同源，已存在手机本地）。 */
-const localConfig = computed<ModelConfig>(() => ({
-  models: chat.value.models,
-  providers: chat.value.providers,
-  defaultModel: chat.value.defaultModel,
-  updatedAt: 0,
-}))
-/** 阿黎有没有可用的凭据（电脑端「模型配置推送」默认关闭，关着就没有）。 */
-const canLocal = computed(() => chat.value.providers.length > 0 && !!chat.value.defaultModel)
-
-/** 恢复某来源最近一条会话（没有就留空）。 */
-function restoreLatest(src: ChatSource) {
-  const latest = listSessions(src)[0]
+/** 恢复最近一条会话（没有就留空）。 */
+function restoreLatest() {
+  const latest = listSessions('ali')[0]
   if (!latest) return
   const msgs = loadSession(latest.id)
   if (!msgs.length) return
   messages.value = msgs
   currentSid.value = latest.id
-}
-
-/**
- * 切来源：先存当前会话，再清空，避免两条通路的对话串到一起。
- *
- * 清空是必须的：两个来源各自的历史是分开存的，把 A 的气泡留在 B 的界面上，
- * 用户会以为"刚才和阿黎说的话被电脑看到了"。
- */
-function switchSource(next: ChatSource) {
-  if (next === source.value) return
-  persistSession()
-  setChatSource(next)
-  source.value = next
-  messages.value = []
-  chat.value = initialChatState()
-  currentSid.value = null
-  typedText.value = ''
-  restoreLatest(next)
-  if (next === 'desktop' && paired.value) void ensureSession()
-  scrollToTail()
-}
-
-/**
- * 跑一轮本地直连。
- *
- * 增量**转成同名 App 事件喂给 onFrame** —— 于是打字机、淡入、markdown 渲染、
- * 气泡落定全部复用现有管线，不写第二套渲染。
- */
-function runLocalChat(history: LocalTurn[]) {
-  const model = chat.value.defaultModel
-  if (!model) {
-    uni.showToast({ title: '没有可用的默认模型', icon: 'none' })
-    return
-  }
-  streamLocalChat(localConfig.value, model, history, {
-    onDelta: (d) => onFrame(JSON.stringify({ type: 'assistant.message', content: d })),
-    onDone: () => onFrame(JSON.stringify({ type: 'turn.done' })),
-    onError: (msg) => {
-      onFrame(JSON.stringify({ type: 'turn.error', message: msg }))
-      uni.showToast({ title: msg, icon: 'none' })
-    },
-  })
 }
 
 function send() {
@@ -575,25 +509,6 @@ function sendText(t: string) {
     saveSession(currentSid.value, [], source.value)
   }
   void (async () => {
-    // 阿黎：用电脑推来的凭据直接问云模型。**不等 ensureSession** —— 这条路
-    // 不需要电脑，也就没有"连不上"这回事。
-    if (source.value === 'ali') {
-      if (!canLocal.value) {
-        uni.showToast({ title: '电脑端未启用模型配置推送，本地对话不可用', icon: 'none' })
-        return
-      }
-      // 先落用户气泡：历史里要带上它（云端要看到这轮的问题）
-      if (!messages.value.some((m) => m.role === 'user' && m.text === text && m.viaVoice)) {
-        messages.value.push({ id: String(Date.now()), role: 'user', text, sending: true })
-      }
-      const history: LocalTurn[] = messages.value
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.text }))
-      runLocalChat(history)
-      persistSession()
-      scrollToTail()
-      return
-    }
     // 等连接真正就绪（hello + key.exchange 完成）再发，否则 send() 返回 false
     // 导致消息「发出去没回」而用户以为是网络慢。
     await ensureSession()
@@ -601,10 +516,10 @@ function sendText(t: string) {
     // 比直接不落更糟——用户会以为电脑收到了。
     const ok = (await session?.send(text)) ?? false
     if (!ok) {
-      // 桌面走不通就明说，并给出"另一条路"——**不静默改投阿黎**，
-      // 否则用户以为话发给了电脑，其实发给了云模型。
+      // 发不出去就明说。**不静默改投任何别的通路**：用户以为话发给了
+      // 阿黎（她跑在电脑上），实际发去别处，比发不出去严重得多。
       uni.showToast({
-        title: linkMsg.value || '桌面没连上——可切到「阿黎」继续',
+        title: linkMsg.value || '没连上电脑，正在重连',
         icon: 'none',
       })
       return
@@ -644,7 +559,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <hm-shell :title="sourceMeta.name" :scroll-into-view="anchor" :class="{ 'kb-open': kbHeight > 120 }">
+  <hm-shell title="阿黎" :scroll-into-view="anchor" :class="{ 'kb-open': kbHeight > 120 }">
     <template #end>
       <hm-model-picker
         :models="chat.models"
@@ -656,27 +571,16 @@ onUnmounted(() => {
       <view class="call-btn" @tap="goCall"><text>☎</text></view>
       <view class="new-btn" @tap="confirmNew"><text>✛</text></view>
     </template>
-    <!-- 来源：这一屏的每一句话都归属于选中的那一个。
-         常驻在顶部（不是一次性设置），因为它决定「谁答的、历史在哪找」。 -->
-    <view class="src-bar">
-      <view class="src-seg">
-        <view class="src-opt" :class="{ on: source === 'ali' }" @tap="switchSource('ali')">
-          <text>阿黎</text>
-        </view>
-        <view class="src-opt" :class="{ on: source === 'desktop' }" @tap="switchSource('desktop')">
-          <text>桌面</text>
-        </view>
-      </view>
-      <text class="src-desc">{{ sourceMeta.desc }}</text>
-    </view>
-    <!-- 阿黎不需要电脑，缺的是凭据。缺凭据时给一条明确的开启路径，
-         而不是让她看起来"连不上"。 -->
-    <view v-if="source === 'ali' && !canLocal" class="hm-notice warn notice-line">
-      <text>阿黎还没有可用的模型凭据 · 到电脑端「设置 → 手机端 → 模型配置推送」打开一次</text>
+    <!-- 阿黎是谁、在哪干活：她在**电脑上**执行，手机只是入口。
+         这一行常驻——理解这个界面最重要的一件事就是这个。 -->
+    <view class="ali-strip">
+      <view class="ali-dot" />
+      <text class="ali-name">阿黎</text>
+      <text class="ali-desc">在电脑上执行 · 工具 / 工作区 / 派 agent 都在桌面端</text>
     </view>
 
-    <!-- 未连接：主界面里的一张卡片，不是拦截层（只在桌面来源下有意义） -->
-    <view v-if="source === 'desktop' && !paired" class="connect">
+    <!-- 未连接：主界面里的一张卡片，不是拦截层 -->
+    <view v-if="!paired" class="connect">
       <view class="c-top">
         <view class="c-dot" />
         <text class="c-title">还没有连接电脑</text>
@@ -695,7 +599,7 @@ onUnmounted(() => {
     </view>
 
     <!-- 链路状态：连不上时对话区照常在，只是明确说清为什么发不出去 -->
-    <view v-if="source === 'desktop' && paired && link !== 'online'" class="link-bar">
+    <view v-if="paired && link !== 'online'" class="link-bar">
       <view class="link-dot" />
       <text class="link-txt">{{ linkMsg || '正在连电脑…' }}</text>
       <!-- 凭据被中转拒绝是终态（不再自动重连），必须给一条出路：
@@ -1005,37 +909,37 @@ onUnmounted(() => {
   color: $fg2;
 }
 
-/* 来源切换：两段式常驻在对话区顶部。
-   选中态用主色实底——颜色 + 字重双通道区分，不只靠颜色。 */
-.src-bar {
-  margin: 8rpx $gutter 6rpx;
-}
-.src-seg {
+/* 阿黎身份条：常驻一行，说清"她在哪干活"。不是装饰，是理解这个界面的前提。 */
+.ali-strip {
   display: flex;
-  gap: 6rpx;
-  padding: 6rpx;
+  align-items: center;
+  gap: 10rpx;
+  margin: 8rpx $gutter 2rpx;
+  padding: 14rpx 20rpx;
   background: $card;
   border-radius: $r-pill;
 }
-.src-opt {
-  flex: 1;
-  padding: 14rpx 0;
-  text-align: center;
-  border-radius: $r-pill;
-  font-size: $fs-sub;
-  color: $fg2;
-}
-.src-opt.on {
+.ali-dot {
+  flex: none;
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
   background: $accent;
-  color: $on-accent;
-  font-weight: 600;
 }
-.src-desc {
-  display: block;
-  margin-top: 10rpx;
-  padding: 0 6rpx;
+.ali-name {
+  flex: none;
+  font-size: $fs-sub;
+  font-weight: 600;
+  color: $fg;
+}
+.ali-desc {
+  flex: 1;
+  min-width: 0;
   font-size: $fs-mini;
-  color: $fg4;
+  color: $fg2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 上下文仪表（抄对方「上下文占用持久条」）：细条 + 右侧文案，超过阈值转暖色。 */

@@ -413,10 +413,10 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
 
       <form className="twin-dock" onSubmit={submit}>
         <div className="twin-dock__hint">
-          <span>阿黎的对话通道待接通</span>
+          <span>在电脑上执行 · 工具 / 工作区 / 派 agent 都可用</span>
           <span>·</span>
           <kbd>Enter</kbd>
-          <span>先切到对话页</span>
+          <span>发送</span>
         </div>
         <div className="twin-dock__row">
           <span className="twin-dock__caret" aria-hidden>

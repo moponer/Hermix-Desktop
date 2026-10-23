@@ -154,6 +154,11 @@ export function Sidebar({
     for (const s of sessions) {
       // 工作台归属：会话绑了 workbench_id 就只在该工作台内可见。
       if (s.workbench_id) continue;
+      // 阿黎（Twin）的会话只在她自己的页面里出现，**不进对话/项目列表**。
+      // 她是一个助手入口，不是一条"普通对话"。放进来就会出现实机截图那种
+      // 「侧栏既有『助手阿黎』入口、又有一条叫『助手阿黎』的对话」——
+      // 用户分不清点哪个才是她。会话 id 统一以 `twin:` 开头（桌面与手机共用）。
+      if (s.id.startsWith("twin:")) continue;
       // IM 远程会话不进对话/项目列表：它们有专属的「远程助手」分组。
       // 混在普通列表里既看不出通道死活，入口也不显性（见
       // docs/notes/implemented/feature/2026-10-04-im-remote-assistant-sidebar.md）。

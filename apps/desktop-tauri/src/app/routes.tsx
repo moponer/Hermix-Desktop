@@ -15,6 +15,15 @@ const WorkbenchView = lazy(() => import("../components/WorkbenchView").then((m) 
 const VaultPanel = lazy(() => import("../components/VaultPanel").then((m) => ({ default: m.VaultPanel })));
 const TwinView = lazy(() => import("../components/TwinView").then((m) => ({ default: m.TwinView })));
 
+/**
+ * 阿黎（Twin）的会话 id。
+ *
+ * - 桌面：她的页面读写这一条；侧栏按 `twin:` 前缀把它排除在对话列表之外。
+ * - 手机：将来经设备通道带 `target` 打到同一条上（同一份历史）。
+ * - PC：这一轮的 `session_id` 用它，历史落库与两边视图同源。
+ */
+export const TWIN_SESSION_ID = "twin:ali";
+
 /** 渲染各非 chat 页面所需的 App 级依赖。chat 页面 props 复杂，
  *  由 App 预先渲染为 `chatNode` 元素传入，保持逻辑零改写。 */
 export interface RouteContext {
@@ -51,7 +60,13 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
       // 输入口降级为切回对话页 —— 见 TwinView 顶部注释。
       return (
         <Suspense fallback={<RouteLoading />}>
-          <TwinView sessions={ctx.sessions} onOpenChat={ctx.openChat} />
+          {/* 她的输入口不再"跳页"：切到 `twin:ali` 这条会话再回对话页，
+              于是她说的话真的跑在电脑上（工具 / 工作区 / 派 agent 全都在），
+              历史也落在这条会话里。 */}
+          <TwinView
+            sessions={ctx.sessions}
+            onOpenChat={() => ctx.handleSelectSession(TWIN_SESSION_ID)}
+          />
         </Suspense>
       );
     case "automation":
