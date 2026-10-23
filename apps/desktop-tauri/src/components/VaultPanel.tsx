@@ -377,7 +377,13 @@ export function VaultPanel() {
                   <div
                     key={e.id}
                     onClick={() => setSelectedId(e.id)}
-                    className={`flex cursor-pointer items-center gap-2 rounded-xl px-4 py-3 transition-colors hover:bg-bg-card-hover ${ isSelected ? "border-accent bg-bg-card-hover" : "border-border-primary bg-bg-card" }`}
+                    /* 选中态此前是 `border-accent`（**没写宽度，等于没生效**）+ 与
+                       未选中只差一档 hover 底色，屏幕上分不出选中了谁。
+                       现在用 accent 淡染底把"当前项"说出来 —— 淡染是选中语义，
+                       不需要描边也不需要阴影。 */
+                    className={`flex cursor-pointer items-center gap-2 rounded-xl px-4 py-3 transition-colors ${
+                      isSelected ? "bg-accent-soft" : "bg-bg-card hover:bg-bg-card-hover"
+                    }`}
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">

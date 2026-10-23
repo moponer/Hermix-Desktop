@@ -1220,7 +1220,7 @@ export const ChatView = memo(function ChatView({
                   onClick={() => setDomainMode("auto")}
                   className={`flex items-center gap-1.5 h-7 px-4 rounded-full text-[length:var(--text-ui)] transition-colors ${
                     domainMode !== "code"
-                      ? "bg-[var(--color-bg-card)] text-[var(--color-text-primary)] font-medium shadow-[var(--shadow-card)]"
+                      ? "bg-accent text-on-accent font-medium"
                       : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                   }`}
                 >
@@ -1231,7 +1231,7 @@ export const ChatView = memo(function ChatView({
                   onClick={() => setDomainMode("code")}
                   className={`flex items-center gap-1.5 h-7 px-4 rounded-full text-[length:var(--text-ui)] transition-colors ${
                     domainMode === "code"
-                      ? "bg-[var(--color-bg-card)] text-[var(--color-text-primary)] font-medium shadow-[var(--shadow-card)]"
+                      ? "bg-accent text-on-accent font-medium"
                       : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                   }`}
                 >
@@ -1248,7 +1248,7 @@ export const ChatView = memo(function ChatView({
                       setInput(c.prompt);
                       textareaRef.current?.focus();
                     }}
-                    className="flex items-center gap-1.5 h-7 px-3.5 rounded-full border-[var(--color-border-secondary)] bg-[var(--color-bg-tertiary)] text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-card-hover)]"
+                    className="flex items-center gap-1.5 h-7 px-3.5 rounded-full bg-[var(--color-bg-tertiary)] text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-card-hover)]"
                     title={`填入「${c.label}」能力模板`}
                   >
                     <c.icon className="icon-sm" /> {c.label}
