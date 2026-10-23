@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { Send, Square, FolderOpen, ChevronDown, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText, Brain, BrainCircuit, Settings } from "lucide-react";
+import { Send, Square, FolderOpen, ChevronDown, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText, Settings } from "lucide-react";
 import type { DomainModeChoice } from "../hooks/useExpert";
 import { usePopover } from "../hooks/usePopover";
 import { PopoverShell, PopoverBody } from "./PopoverShell";
@@ -10,7 +10,7 @@ import { VisionButton } from "./VisionButton";
 import { PolishButton } from "./PolishButton";
 import { EnhanceButton } from "./EnhanceButton";
 import { ProviderIcon } from "./ProviderIcon";
-import { Badge } from "./ui";
+import { Badge, Switch } from "./ui";
 import {
   formatContextTokens,
   type ModelChoice,
@@ -526,44 +526,31 @@ export function Composer(p: ComposerProps) {
                   )}
                 </PopoverBody>
 
-                {/* 附加信息：上下文 + 思考开关，免责独占一行。
-                    放在同一行时开关会被挤成竖排（"思/考"两字换行），
-                    长免责文案也会把整行撑出弹层。 */}
+                {/* 附加信息：上下文 + 思考开关，免责独占一行。 */}
                 {p.byProvider && p.byProvider.length > 0 && (() => {
                   const currentModelId = p.selectedModel;
                   const ctxEntry = currentModelId ? p.contextWindows?.[currentModelId] : undefined;
-                  const ctxTokens = ctxEntry?.value ?? 0;
-                  const ctxLabel = formatContextTokens(ctxTokens) ?? "未知";
+                  const ctxLabel = formatContextTokens(ctxEntry?.value ?? 0) ?? "未知";
                   const showThinkingToggle = p.supportsReasoning === true;
                   const selectedInfo = p.models.find((m) => m.id === currentModelId)?.info;
                   return (
-                    /* 无描边：这一行改成淡染底（--color-bg-tertiary）的独立块，
-                       靠面差而不是边线与上面的列表分开。 */
-                    <div className="mt-1 rounded-md bg-bg-tertiary px-2.5 py-1.5">
-                      <div className="flex items-center gap-3 text-[length:var(--text-meta)]">
-                        <span className="shrink-0 whitespace-nowrap text-text-muted">
-                          上下文 <span className="font-mono text-text-secondary">{ctxLabel}</span>
+                    <div className="mt-1 space-y-2 rounded-md bg-bg-tertiary px-2.5 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[length:var(--text-meta)] text-text-muted">
+                          上下文{" "}
+                          <span className="font-mono text-text-secondary">{ctxLabel}</span>
                         </span>
                         {showThinkingToggle && (
-                          <button
-                            type="button"
-                            onClick={() => p.onEnableThinkingChange?.(!(p.enableThinking === true))}
-                            className={`ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-0.5 text-[length:var(--text-tiny,11px)] transition-colors ${
-                              p.enableThinking === true
-                                ? "bg-[color:var(--color-chip-model-bg)] text-[color:var(--color-chip-model-fg)]"
-                                : "text-text-muted hover:bg-bg-hover"
-                            }`}
-                            title="开启/关闭深度思考（对支持 reasoning 的模型生效；切换后随下一条消息下发）"
-                          >
-                            {p.enableThinking === true
-                              ? <Brain className="icon-sm shrink-0" aria-hidden="true" />
-                              : <BrainCircuit className="icon-sm shrink-0 opacity-50" aria-hidden="true" />}
-                            思考 {p.enableThinking === true ? "开" : "关"}
-                          </button>
+                          <Switch
+                            label="深度思考"
+                            checked={p.enableThinking === true}
+                            onChange={(v) => p.onEnableThinkingChange?.(v)}
+                            size="sm"
+                          />
                         )}
                       </div>
                       {selectedInfo?.is_free && (
-                        <p className="mt-1 truncate text-[length:var(--text-meta)] text-text-faint">
+                        <p className="truncate text-[length:var(--text-meta)] text-text-faint">
                           {selectedInfo.trains_on_prompts
                             ? "免费源 · 提示词会被上游用于训练，敏感内容不要发送"
                             : "免费源 · 可能随时失效"}
