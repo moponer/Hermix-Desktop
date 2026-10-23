@@ -481,7 +481,7 @@
 
      为什么不能直接 `outline: none` 了事：WCAG 2.4.7 要求键盘焦点可见。
      光晕满足「可见且非描边」，是本方案里唯一同时满足两条的路径。 */
-  --shadow-focus-flat: 0 0 0 4px color-mix(in srgb, var(--color-accent) 20%, transparent);
+  --shadow-focus-flat: 0 0 0 2px color-mix(in srgb, var(--color-accent) 26%, transparent);
 
   /* Tailwind 原生色槽 → 语义令牌重定向（L0，2026-10-01）──────────
      101 处组件写着 `text-red-400` / `bg-emerald-500` 这类 Tailwind

@@ -178,7 +178,7 @@
   --shadow-modal: 0 32px 72px -16px rgba(0, 0, 0, 0.6), 0 12px 28px -14px rgba(0, 0, 0, 0.5);
   /* 扁平化焦点淡晕（无描边）：暗底上把扩散半径加到 5px 才看得见，
      浓度同比下调，避免变成一圈亮环。 */
-  --shadow-focus-flat: 0 0 0 5px color-mix(in srgb, var(--color-accent) 26%, transparent);
+  --shadow-focus-flat: 0 0 0 2px color-mix(in srgb, var(--color-accent) 34%, transparent);
 
   /* Scene surfaces — 画布最深、外壳反提（WorkBuddy 暗色同向） */
   --theme-bg-app: #1a1a1a;

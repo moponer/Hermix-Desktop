@@ -50,8 +50,12 @@
   --color-tone-rose: #d1546e;
   --color-tone-violet: #7c5cd6;
   /* 扁平化焦点：无硬边描边，用强调色淡晕（与主程序 base.css 同机制）。
-     WCAG 2.4.7 要求键盘焦点可见，光晕是「可见」与「无描边」的唯一交点。 */
-  --shadow-focus-flat: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent);
+     WCAG 2.4.7 要求键盘焦点可见，光晕是「可见」与「无描边」的唯一交点。
+
+     2026-10-23 修正：原为 4px / 20%。在白色输入框（地址栏、搜索框）上，
+     4px 的浅墨绿环读起来就是**一圈粗灰边框** —— 用户看到的"难看描边"
+     正是它。现在收窄到 2px 并把浓度提到 26%：细而清晰，不再像框。 */
+  --shadow-focus-flat: 0 0 0 2px color-mix(in srgb, var(--accent) 26%, transparent);
 
   --font-sans: "Segoe UI Variable", "Segoe UI", -apple-system,
     BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC", "Source Han Sans SC",
@@ -163,6 +167,11 @@
   --danger: #e06b52;
   --info: #8a9aa8;
   --success: #84b383;
+
+  /* 暗色主题此前**漏定义**这个令牌：`box-shadow: var(--shadow-focus-flat)`
+     因 var() 解析失败而整条声明被丢弃 → 键盘焦点在暗色下完全不可见。
+     这里补上，并比亮色略强（暗底上同等浓度更不明显）。 */
+  --shadow-focus-flat: 0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent);
 
   --color-tone-slate: #9aa4b2;
   --color-tone-blue: #6aa9f0;
@@ -451,9 +460,15 @@ html, body, #root {
 
    为什么不能直接删掉焦点样式：键盘用户靠焦点定位，去掉全部焦点指示
    会让整个查看器无法用键盘操作。 */
+/* 文本框类（地址栏 / 搜索 / AI 输入）**不加焦点环**：
+   文本输入的插入符本身就是焦点指示，再套一圈环在白色底上只会变成
+   用户口中的"粗边框"。其余可聚焦控件仍走淡晕。 */
 .path-input:focus-visible,
 .search-input:focus-visible,
-.ai-input:focus-visible,
+.ai-input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
 .resizer:focus-visible {
   outline: none;
   box-shadow: var(--shadow-focus-flat);
@@ -1075,7 +1090,7 @@ html, body, #root {
    布局元素，不画环——真正需要指示的是菜单项。 */
 .ctxmenu:focus { outline: none; }
 .ctxmenu-item:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: none; box-shadow: var(--shadow-focus-flat);
   outline-offset: -2px;
 }
 .ctxmenu-item[aria-disabled="true"] {
@@ -1506,7 +1521,7 @@ html, body, #root {
 /* 编辑区常态不描边，但键盘 Tab 进来必须看得见焦点在哪——否则
    Tab 遍历时用户不知道光标落在哪个编辑区。 */
 .text-editor-area:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: none; box-shadow: var(--shadow-focus-flat);
   outline-offset: -2px;
 }
 
@@ -1571,7 +1586,7 @@ html, body, #root {
 }
 .set-textarea { resize: vertical; min-height: 70px; line-height: 1.6; }
 .set-input:focus-visible, .set-select:focus-visible, .set-textarea:focus-visible {
-  outline: 2px solid var(--accent); outline-offset: -2px;
+  outline: none; box-shadow: var(--shadow-focus-flat);
 }
 .set-check { display: flex; align-items: center; gap: 8px; font-size: var(--text-ui); color: var(--text-primary); }
 .set-check input { accent-color: var(--accent); }
@@ -1651,7 +1666,7 @@ html, body, #root {
 .dx-doc .dx-editable { border-radius: 4px; }
 .dx-doc .dx-editable:hover { background: var(--bg-hover); }
 .dx-doc .dx-editable:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: none; box-shadow: var(--shadow-focus-flat);
   outline-offset: 2px;
   background: var(--bg-primary);
 }
@@ -1692,8 +1707,7 @@ html, body, #root {
   border-radius: 6px;
 }
 .dx-text:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 0;
+  outline: none; box-shadow: var(--shadow-focus-flat);
   background: var(--bg-primary);
 }
 .dx-row[data-kind="heading"] .dx-text { font-weight: 600; font-size: 16px; }
@@ -1714,7 +1728,7 @@ html, body, #root {
   font-size: var(--text-meta);
   font-family: inherit;
 }
-.dx-filter input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.dx-filter input:focus-visible { outline: none; box-shadow: var(--shadow-focus-flat); }
 
 /* ─── PDF 文档工具对话框 ────────────────────────────────────────────
    与设置面板同一套外壳（遮罩 + 卡片 + 左导航），层次靠底色差与阴影。 */
@@ -1751,7 +1765,7 @@ html, body, #root {
   font-size: var(--text-body);
   font-family: inherit;
 }
-.pdf-tools-field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.pdf-tools-field input:focus-visible { outline: none; box-shadow: var(--shadow-focus-flat); }
 .pdf-tools-row { display: flex; gap: 10px; flex-wrap: wrap; }
 .pdf-tools-row .pdf-tools-field { flex: 1 1 120px; }
 .pdf-tools-error {
@@ -1896,7 +1910,7 @@ html, body, #root {
   font-size: var(--text-meta);
   font-family: inherit;
 }
-.pin-preset:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.pin-preset:focus-visible { outline: none; box-shadow: var(--shadow-focus-flat); }
 .pin-body {
   flex: 1 1 auto; min-height: 0;
   display: flex; flex-direction: column;

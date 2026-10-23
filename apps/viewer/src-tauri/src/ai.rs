@@ -181,6 +181,61 @@ pub struct ChatTurn {
 }
 
 /// 问一轮（非流式）。返回模型的回复正文。
+/// OpenAI 兼容端点的完整 URL。
+///
+/// 绝大多数供应商的 `base_url` 写成 `https://api.xxx.com`（不带版本段），
+/// 而真实路径是 `/v1/chat/completions`。此前一律拼 `/chat/completions`，
+/// 于是「配了 key 却 404 / 对话失败」——这是最高频的一类误配。
+/// 规则：末段已经是 `v1` / `v2` 之类版本号就直拼；已经写全了就不动；
+/// 否则补 `/v1`。
+fn completions_url(base_url: &str) -> String {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.ends_with("/chat/completions") || base.ends_with("/completions") {
+        return base.to_string();
+    }
+    let last = base.rsplit('/').next().unwrap_or("");
+    let mut cs = last.chars();
+    let is_version = matches!(cs.next(), Some('v')) && last.len() > 1 && cs.all(|c| c.is_ascii_digit());
+    if is_version {
+        format!("{base}/chat/completions")
+    } else {
+        format!("{base}/v1/chat/completions")
+    }
+}
+
+/// 发一次请求，返回（状态码, 原始响应文本）。
+/// 刻意返回文本而不是直接 `json()`：解析失败时调用方要能把原文展示出来。
+async fn send_once(
+    client: &reqwest::Client,
+    url: &str,
+    body: &Value,
+    api_key: Option<&str>,
+) -> Result<(u16, String), String> {
+    let mut req = client.post(url).json(body);
+    if let Some(key) = api_key {
+        req = req.bearer_auth(key);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("连接 AI 端点失败（{url}）：{e}"))?;
+    let status = resp.status().as_u16();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取 AI 响应失败（{url}）：{e}"))?;
+    Ok((status, text))
+}
+
+/// 400 是否因为「不支持的参数」而非真的请求错误。
+/// 只认明确的参数类关键字，避免把真正的错误请求误判成"方言不同"而重试。
+fn looks_like_param_reject(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    ["temperature", "max_tokens", "max_completion_tokens", "unsupported", "unrecognized"]
+        .iter()
+        .any(|k| t.contains(k))
+}
+
 pub async fn chat(
     endpoint: &ResolvedEndpoint,
     system_prompt: &str,
@@ -233,29 +288,44 @@ pub async fn chat(
         .build()
         .map_err(|e| format!("HTTP client 构建失败: {e}"))?;
 
-    let url = format!("{}/chat/completions", endpoint.info.base_url);
-    let mut req = client.post(&url).json(&body);
-    if let Some(key) = &endpoint.api_key {
-        req = req.bearer_auth(key);
-    }
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("连接 AI 端点失败（{}）: {e}", endpoint.info.base_url))?;
-    let status = resp.status().as_u16();
-    let raw: Value = resp.json().await.unwrap_or(Value::Null);
+    let url = completions_url(&endpoint.info.base_url);
+    let (status, text) = send_once(&client, &url, &body, endpoint.api_key.as_deref()).await?;
+
+    // 400 兼容重试：o1/o3/deepseek-reasoner 这类推理模型不接受 temperature
+    // 与 max_tokens（有的只认 max_completion_tokens），会把整个请求直接打回
+    // 400。这不是配置错误，是同一件事的两种方言 —— 去掉这两个可选参数重发
+    // 一次即可，用户不该为此去改配置。
+    let (status, text) = if status == 400 && looks_like_param_reject(&text) {
+        let mut relaxed = body.clone();
+        if let Some(obj) = relaxed.as_object_mut() {
+            obj.remove("temperature");
+            obj.remove("max_tokens");
+        }
+        send_once(&client, &url, &relaxed, endpoint.api_key.as_deref()).await?
+    } else {
+        (status, text)
+    };
+
+    let raw: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     if status != 200 {
         let detail = raw
             .get("error")
             .and_then(|v| v.get("message").and_then(|m| m.as_str()))
             .or_else(|| raw.get("error").and_then(|v| v.as_str()))
             .or_else(|| raw.get("message").and_then(|v| v.as_str()))
-            .unwrap_or("(无详情)");
+            .map(|s| s.to_string())
+            // 解不出 JSON 时把原文前 300 字带上：最常见的是网关返回 HTML 错误页
+            // 或 SSE 流，以前统一显示「(无详情)」，等于把唯一线索扔掉了。
+            .unwrap_or_else(|| {
+                let t = text.trim();
+                if t.is_empty() { "(响应体为空)".to_string() }
+                else { format!("{}…", t.chars().take(300).collect::<String>()) }
+            });
         return Err(match status {
             401 | 403 => format!("AI 端点拒绝了请求（{status}）：{detail}"),
-            404 => format!("AI 端点路径不对（{status}）：{detail}"),
+            404 => format!("AI 端点路径不对（{url}）：{detail}"),
             429 => format!("AI 端点限流了（{status}）：{detail}"),
-            _ => format!("AI 端点返回 {status}：{detail}"),
+            _ => format!("AI 端点返回 {status}（{url}）：{detail}"),
         });
     }
     let content = raw
@@ -273,7 +343,32 @@ pub async fn chat(
         .unwrap_or("")
         .to_string();
     if content.trim().is_empty() {
-        return Err("AI 端点返回了空回复".into());
+        // 推理模型（deepseek-reasoner / o 系列）有时把正文放在 reasoning_content，
+        // content 为空。直接报「空回复」会让用户以为模型没反应。
+        let reasoning = raw
+            .get("choices")
+            .and_then(|v| v.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("reasoning_content"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if !reasoning.is_empty() {
+            return Ok(reasoning);
+        }
+        // 空回复也把 finish_reason 带出来：length 表示被 max_tokens 截断，
+        // content_filter 表示被安全策略拦了，二者处理方式完全不同。
+        let finish = raw
+            .get("choices")
+            .and_then(|v| v.get(0))
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        return Err(format!(
+            "AI 端点返回了空回复（finish_reason={finish}，模型 {}）",
+            endpoint.info.model
+        ));
     }
     Ok(content)
 }
