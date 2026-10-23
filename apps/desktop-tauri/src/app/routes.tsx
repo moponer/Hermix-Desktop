@@ -3,6 +3,7 @@
 // 的映射集中为一张路由表，App 主区只需调用 renderRoutes 即可。
 import { lazy, Suspense, type ReactNode } from "react";
 import type { NavPage, Session } from "../types";
+import type { StreamErrorKind } from "./streamEvents";
 import { Skeleton, SkeletonCard } from "../components/ui";
 
 // 重视图（ECharts / 大表单 / 全量列表）懒加载：首次进入才求值模块并挂载，
@@ -24,6 +25,14 @@ const TwinView = lazy(() => import("../components/TwinView").then((m) => ({ defa
  */
 export const TWIN_SESSION_ID = "twin:ali";
 
+/** 内联对话随这一轮下发的两项设置（都来自她那页的可见控件）。 */
+export interface TwinSendOptions {
+  /** 顶部「权限」开关：默认会为高风险操作弹审批。 */
+  permissionLevel: "default" | "full";
+  /** 底部动作模式（盯住 / 派活 / 总结）对应的这一轮指令。 */
+  systemPrompt?: string;
+}
+
 /** 渲染各非 chat 页面所需的 App 级依赖。chat 页面 props 复杂，
  *  由 App 预先渲染为 `chatNode` 元素传入，保持逻辑零改写。 */
 export interface RouteContext {
@@ -32,6 +41,19 @@ export interface RouteContext {
   handleSelectSession: (id: string) => void;
   /** 只切会话，不动当前页面 —— 工作台页面用这个。 */
   selectSessionOnly: (id: string) => void;
+  /**
+   * 「助手阿黎」页的内联对话：把这一轮投到 `twin:ali`。
+   *
+   * 复用 App 的完整发送链路（审批 / 澄清 / 工具时间线），只是不切
+   * activeSessionId、不跳页；返回 false 表示这一轮没发出去。
+   */
+  sendToTwin: (text: string, opts: TwinSendOptions) => Promise<boolean>;
+  /** `twin:ali` 这一轮的错误（由 App 的 streamErrors 按会话取）。 */
+  twinStreamError: { message: string; detail?: string; kind?: StreamErrorKind } | null;
+  /** `twin:ali` 正在流式 —— 她那页显示"正在执行"而不是空白。 */
+  twinStreaming: boolean;
+  /** 另一条会话正在流式：内联口禁用（发送器是进程级单流）。 */
+  anotherSessionStreaming: boolean;
   /**
    * 把会话登记进宿主的会话表，已存在的跳过。
    *
@@ -56,16 +78,18 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
     case "chat":
       return ctx.chatNode;
     case "twin":
-      // 阿黎吃宿主已有的会话表（避免再拉一次全量），会话通道未接通前
-      // 输入口降级为切回对话页 —— 见 TwinView 顶部注释。
+      // 阿黎吃宿主已有的会话表（避免再拉一次全量）。输入口直接投到
+      // `twin:ali`：她说的话真的跑在电脑上（工具 / 工作区 / 派 agent 全在），
+      // 回复就地显示在她自己页面里 —— 不再把用户踢去对话页。
       return (
         <Suspense fallback={<RouteLoading />}>
-          {/* 她的输入口不再"跳页"：切到 `twin:ali` 这条会话再回对话页，
-              于是她说的话真的跑在电脑上（工具 / 工作区 / 派 agent 全都在），
-              历史也落在这条会话里。 */}
           <TwinView
             sessions={ctx.sessions}
             onOpenChat={() => ctx.handleSelectSession(TWIN_SESSION_ID)}
+            onSend={ctx.sendToTwin}
+            streamError={ctx.twinStreamError}
+            streaming={ctx.twinStreaming}
+            anotherSessionStreaming={ctx.anotherSessionStreaming}
           />
         </Suspense>
       );

@@ -1091,3 +1091,74 @@
 
 /* 栏体滚动区与栏头之间不要硬切，留一点呼吸 */
 .twin-col__body { padding: 4px 4px 16px; gap: 10px; }
+
+/* ── 内联对话：她的最近几条就地显示（输入后不用跳去对话页）──────────
+   色值/字号/圆角全部走令牌：这一块是信息板的一部分，不属于对话气泡体系，
+   所以用「案」底而不是气泡色。文本最多两行——她的回复常常成段，一行截断
+   会让用户看不出她在说什么。 */
+.twin-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px var(--space-5) 0;
+  padding: 10px 12px;
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+  max-height: 180px;
+  overflow-y: auto;
+}
+.twin-transcript__empty {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-meta);
+  text-align: center;
+  padding: 8px 0;
+}
+.twin-transcript__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--text-meta);
+  line-height: 1.6;
+}
+.twin-transcript__who {
+  flex: none;
+  min-width: 28px;
+  color: var(--color-accent);
+  font-weight: 600;
+}
+.twin-transcript__row.is-user .twin-transcript__who {
+  color: var(--color-text-secondary);
+}
+.twin-transcript__text {
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* 正在执行：一个安静的状态行，不是假消息——它没有内容，只有"还在跑"这个事实。 */
+.twin-transcript__text--live {
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+
+/* 等她拍板：一行说明 + 出口按钮。放在输入口上方，视线必经。 */
+.twin-need {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px var(--space-5) 0;
+  padding: 8px 12px;
+  background: var(--color-warning-soft);
+  border-radius: var(--radius-md);
+}
+.twin-need__text {
+  font-size: var(--text-ui);
+  color: var(--color-text-warning);
+}
+.twin-error--inline {
+  margin: 8px var(--space-5) 0;
+}

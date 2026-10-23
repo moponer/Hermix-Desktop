@@ -12,7 +12,7 @@ import { TitleBar } from "./components/TitleBar";
 import { SessionPickerDialog } from "./components/SessionPickerDialog";
 import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
-import { renderRoutes, type RouteContext } from "./app/routes";
+import { renderRoutes, TWIN_SESSION_ID, type RouteContext, type TwinSendOptions } from "./app/routes";
 import { SettingsDialog, type ConfigCategory } from "./components/SettingsDialog";
 
 import { useAppBootstrap } from "./app/useAppBootstrap";
@@ -1986,9 +1986,33 @@ setPage("chat");
     _projectId?: string,
     overrides?: import("./hooks/useStreamChat").ChatOverrides,
     attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[]; attachedFiles?: QueuedFile[] },
+    /**
+     * 投递到指定会话，而不是当前激活会话。「助手阿黎」页的内联对话用它：
+     * 这一轮仍走同一条完整链路（审批 / 澄清 / 工具时间线全在），但**不切
+     * activeSessionId、不跳页** —— 消息与回复都落在 `twin:ali` 这一条会话上，
+     * 她那页就地渲染，用户不必离开。
+     */
+    targetSessionId?: string,
   ) => {
-    let sessionId = activeSessionId;
-    if (sessionId && !sessions.some((s) => s.id === sessionId)) { sessionId = null; setActiveSessionId(null); }
+    let sessionId = targetSessionId ?? activeSessionId;
+    if (targetSessionId) {
+      // 宿主会话表里没有这条会话时先补一条占位：下面的乐观插入（flushSync）
+      // 与所有流式回调都按 `sessionId` 匹配，缺了它回复会"发出去了但界面不显示"。
+      // 后端 `persist_session` 会在这一轮结束后把真实行落库（INSERT … ON CONFLICT）。
+      if (!sessionsRef.current.some((s) => s.id === targetSessionId)) {
+        const now = new Date().toISOString();
+        const placeholder: Session = {
+          id: targetSessionId,
+          title: "助手阿黎",
+          messages: [],
+          created_at: now,
+          updated_at: now,
+        };
+        setSessions((prev) => (prev.some((s) => s.id === targetSessionId) ? prev : [placeholder, ...prev]));
+        // 同步镜像：本函数后面几处用 sessionsRef 判空/取当前会话，不等下一轮 render。
+        sessionsRef.current = [placeholder, ...sessionsRef.current.filter((s) => s.id !== targetSessionId)];
+      }
+    } else if (sessionId && !sessions.some((s) => s.id === sessionId)) { sessionId = null; setActiveSessionId(null); }
     // Clear any previous stream error for the *current* session — the
     // user is starting a new turn, so the old error is stale. If this
     // turn also fails the error will be re-set by the onError callback
@@ -2096,7 +2120,8 @@ streamPhaseRef.current = null;
     // a session-list reload (e.g. on next app launch) keeps the title the
     // user just gave it via their first message — instead of resetting to
     // the placeholder "新建对话" the createSession() call seeded.
-    const currentSession = sessions.find((s) => s.id === sessionId);
+    // 指定会话（twin:ali）不改标题：她的名字是这个入口的标识，不是对话摘要。
+    const currentSession = targetSessionId ? undefined : sessions.find((s) => s.id === sessionId);
     if (currentSession) {
       const newTitle = computeAutoTitle(currentSession, content);
       if (newTitle !== currentSession.title) {
@@ -2680,7 +2705,9 @@ streamPhaseRef.current = null;
               };
             }));
             currentAssistantIdRef.current = null;
-            if (sessionId === activeSessionId) {
+            // 指定会话（twin:ali）的错误也要落到它自己的槽位：TwinView 读它
+            // 显示在输入口上方，否则她那页只会看到"没反应"。
+            if (sessionId === activeSessionId || sessionId === targetSessionId) {
               // Keep the friendly localized message as the primary
               // text; stash the raw backend error as `detail` so the
               // error card can show it as a collapsible "技术详情".
@@ -3591,7 +3618,7 @@ return {
       // render a synthetic error row if the optimistic assistant
       // placeholder was filtered out (e.g. the WS rejected the
       // handshake before any chunk landed).
-      if (sessionId === activeSessionId) {
+      if (sessionId === activeSessionId || sessionId === targetSessionId) {
         const eMsg = e instanceof Error ? e.message : String(e);
         setStreamError(sessionId, {
           message: localizeStreamError(eMsg),
@@ -3601,6 +3628,31 @@ return {
       return false;
     }
   }, [activeSessionId, sessions, sendStream]);
+
+  /**
+   * 「助手阿黎」页的内联对话：把这一轮投到 `twin:ali`。
+   *
+   * 复用 handleSendMessage 而不是另开一条 WS 发送通道 —— 审批 / 澄清 /
+   * 工具时间线都在那条链路上，自建通道会让需要确认的工具调用在内联页
+   * 静默空等（服务端 600s 后自动拒绝）。
+   */
+  const sendToTwin = useCallback(
+    // 人格固定为 `ali`：这一条会话在桌面与手机两个入口看到的是同一个她。
+    // 不依赖服务端按会话注入 —— 桌面 WS 帧走的是另一条分支，显式带更稳。
+    (text: string, opts: TwinSendOptions) =>
+      handleSendMessage(
+        text,
+        undefined,
+        {
+          personality: "ali",
+          permissionLevel: opts.permissionLevel,
+          ...(opts.systemPrompt ? { systemPromptOverride: opts.systemPrompt } : {}),
+        },
+        undefined,
+        TWIN_SESSION_ID,
+      ),
+    [handleSendMessage],
+  );
 
   // pop a queued item out of turn and dispatch it
   // immediately. Defined here (after `handleSendMessage`) so the
@@ -3980,6 +4032,13 @@ return {
     startCreateWorkflowFlow,
     chatNode: chatViewNode,
     activeSessionId,
+    sendToTwin,
+    twinStreamError: streamErrors.get(TWIN_SESSION_ID) ?? null,
+    twinStreaming: streamingSessionId === TWIN_SESSION_ID,
+    // 单流约束：useStreamChat 的发送状态是进程级的（pendingResolveRef 等
+    // 单例），另一条会话正在跑时再发会把两边的回调打乱。内联口据此禁用并
+    // 说明原因，而不是静默串台。
+    anotherSessionStreaming: streamingSessionId !== null && streamingSessionId !== TWIN_SESSION_ID,
     // 运行工作流后的跳转：落到新对话空屏，不落在可能早已过期的激活会话
     // （如工作台会话）。跑起来的会话出现在侧栏，用户自行点入。
     openChat: () => {

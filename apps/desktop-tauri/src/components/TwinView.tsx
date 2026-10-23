@@ -13,23 +13,47 @@
  *   - 自动化任务（`GET /api/automation/tasks`）→ 正在执行
  *   - 在途运行数（`GET /api/automation/active-count`）→ 顶栏读数
  *   - 最近会话（宿主 sessions prop）→ 新鲜情报栏的补充，标明是替代源
+ *
+ * 内联对话（2026-10-23）：输入口投到 `twin:ali` 这一条会话，回复就地显示，
+ * 不把用户踢去对话页。数据两条来源合并——宿主会话表里那条（本轮乐观插入
+ * 与流式增量，App 的发送链路写入）+ 一次轻轮询拉到的落库历史（覆盖手机
+ * 投递进来的轮次、以及 App 重启后的旧历史）。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle, BookOpen, Brain, Clock3, ListChecks, Radio, Sparkles,
 } from "lucide-react";
 
 import * as api from "../api";
 import type { AutomationTask, Session } from "../types";
+import type { StreamErrorKind } from "../app/streamEvents";
 import { PageHeader, SkeletonCard } from "./ui";
 import { AliCharacter, type AliState } from "./twin/AliCharacter";
 import { toneClass, type IconTone } from "../lib/categoryTone";
+import { TWIN_SESSION_ID, type TwinSendOptions } from "../app/routes";
+import {
+  mergeTranscript,
+  toTranscriptRows,
+  TRANSCRIPT_CAP,
+  type TranscriptRow,
+} from "../lib/twinTranscript";
+
+/** 落库历史的轮询间隔。流式期间暂停，避免和 App 的增量抢同一块显示。 */
+const HISTORY_POLL_MS = 8000;
 
 interface TwinViewProps {
   /** 宿主会话表 —— 「最近活跃」用它，避免额外一次全量拉取。 */
   sessions: Session[];
-  /** 会话通道接通前的降级：把用户送去对话页。 */
+  /** 去看 `twin:ali` 的完整对话（工具时间线、审批卡片在那边的对话页里）。 */
   onOpenChat: () => void;
+  /** 投递这一轮到 `twin:ali`；false = 没发出去（错误已由 App 落到 streamError）。 */
+  onSend: (text: string, opts: TwinSendOptions) => Promise<boolean>;
+  /** 这条会话的错误（按会话隔离，不串到别的对话）。 */
+  streamError: { message: string; detail?: string; kind?: StreamErrorKind } | null;
+  /** `twin:ali` 正在跑这一轮。 */
+  streaming: boolean;
+  /** 另一条会话正在流式：发送器是进程级单流，此时内联口不能发。 */
+  anotherSessionStreaming: boolean;
 }
 
 type Mode = "watch" | "dispatch" | "summary";
@@ -44,6 +68,18 @@ const STATUS_TEXT: Record<string, string> = {
   ok: "上次成功",
   failed: "上次失败",
   running: "运行中",
+};
+
+/**
+ * 动作模式 → 这一轮的指令。
+ *
+ * 三个 chip 是控件，不是装饰：不落到请求里就是假按钮。用 `systemPrompt`
+ * （前置块）而不是替换人格提示 —— 模式调的是这一轮的重心，不是她是谁。
+ */
+const MODE_PROMPT: Record<Mode, string> = {
+  watch: "这一轮以「盯住」为主：只报新变化与异常，不扩大范围，不主动起新任务。",
+  dispatch: "这一轮以「派活」为主：把事派出去执行（能派子 agent 就派），完成后汇总结果与还差什么。",
+  summary: "这一轮以「总结」为主：先给结论，再列依据；不展开无关细节。",
 };
 
 /**
@@ -65,7 +101,7 @@ function ColHead({
   return (
     <div className="twin-col__head">
       <span className="twin-col__label">
-        <span className={["cat-icon cat-icon--sm", toneClass(tone)].join(" ")}>
+        <span className={["cat-tile cat-tile--sm", toneClass(tone, "cat-tile")].join(" ")}>
           <Icon className="icon-sm" />
         </span>
         <span className="twin-col__title">{title}</span>
@@ -75,11 +111,88 @@ function ColHead({
   );
 }
 
-export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
+export function TwinView({
+  sessions,
+  onOpenChat,
+  onSend,
+  streamError,
+  streaming,
+  anotherSessionStreaming,
+}: TwinViewProps) {
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
   const [activeRuns, setActiveRuns] = useState(0);
   /** 最近的工作日志（daily_memory）—— 三栏右侧的真实数据源之一。 */
   const [workDays, setWorkDays] = useState<api.DailyMemoryDay[]>([]);
+  /** 落库历史（轮询拿到）。手机投递进来的轮次只有这条路能看见。 */
+  const [history, setHistory] = useState<TranscriptRow[]>([]);
+  /** 内联口自己的提示：没发出去的原因 / 单流约束。 */
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // 流式标志进 ref：轮询 effect 只挂一次，闭包里读不到最新 prop。
+  const streamingRef = useRef(streaming);
+  useEffect(() => {
+    streamingRef.current = streaming;
+  }, [streaming]);
+
+  // 落库历史：进入拉一次，之后低频轮询。流式期间跳过——这一轮的内容由
+  // App 的增量写在宿主会话表里，轮询结果此时落后于屏幕，覆盖会造成回跳。
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      if (streamingRef.current) return;
+      try {
+        const res = await api.getSessionMessages(TWIN_SESSION_ID, { limit: 12 });
+        if (!alive) return;
+        setHistory(toTranscriptRows(res.messages).slice(-TRANSCRIPT_CAP));
+      } catch {
+        /* 保留上一份内容：抖动不该清空面板 */
+      }
+    };
+    void load();
+    const t = setInterval(() => void load(), HISTORY_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  const twinSession = useMemo(
+    () => sessions.find((s) => s.id === TWIN_SESSION_ID),
+    [sessions],
+  );
+  /** 本轮在内存里的消息（乐观 user + 流式 assistant），App 的发送链路写入。 */
+  const liveRows = useMemo(
+    () => toTranscriptRows(twinSession?.messages ?? []),
+    [twinSession?.messages],
+  );
+  const transcript = useMemo(
+    () => mergeTranscript(history, liveRows),
+    [history, liveRows],
+  );
+
+  /**
+   * 等她拍板的事：未决审批 / 未答澄清。
+   *
+   * 内联面板不渲染审批卡片（那是对话页的完整组件），但**必须显示**——
+   * 否则工具调用会在服务端空等到超时自动拒绝，用户只看到"她卡住了"。
+   */
+  const waitingFor = useMemo(() => {
+    const msgs = twinSession?.messages ?? [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role === "clarify" && !m.clarify?.answer) return "澄清";
+      for (const step of m.unified_steps ?? []) {
+        if (
+          (step.kind === "approval_request" || step.kind === "approval_request_batch") &&
+          !step.meta?.decision
+        ) {
+          return step.kind === "approval_request" ? "审批" : "批量审批";
+        }
+      }
+    }
+    return null;
+  }, [twinSession?.messages]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState<"default" | "full">("default");
@@ -125,35 +238,41 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
 
   const recentSessions = useMemo(
     () =>
-      [...sessions]
+      // 排除她自己的会话：`twin:ali` 一旦发过消息就进了宿主会话表，混进
+      // 「最近活跃」会变成"她自己的对话出现在她的近期情报里"。
+      sessions
+        .filter((s) => !s.id.startsWith("twin:"))
         .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))
         .slice(0, 5),
     [sessions],
   );
 
-  const stateText =
-    activeRuns > 0
+  const stateText = streaming
+    ? "正在执行 · 你刚交代的这一轮"
+    : activeRuns > 0
       ? `运行中 · ${activeRuns} 个任务在跑`
       : `静默观察 · ${enabledTasks.length} 个任务待触发`;
 
   // 角色姿态与"她在干什么"是同一件事的两个表达，必须同源。
   const aliState: AliState = error
     ? "alert"
-    : loading
-      ? "thinking"
-      : activeRuns > 0
-        ? "running"
+    : streaming || activeRuns > 0
+      ? "running"
+      : loading
+        ? "thinking"
         : "idle";
 
   const presenceLine = error
     ? "核对任务状态时出错，右侧「正在执行」里是原始报错"
-    : loading
-      ? "正在核对任务状态"
-      : activeRuns > 0
-        ? `盯着 ${activeRuns} 个在跑的任务，异常才出声`
-        : enabledTasks.length > 0
-          ? `${enabledTasks.length} 个任务待触发，暂时没有要打扰你的事`
-          : "还没有启用的任务，我这儿暂时没什么可盯的";
+    : streaming
+      ? "正在电脑上跑你刚交代的这一轮，回复会直接出现在下面"
+      : loading
+        ? "正在核对任务状态"
+        : activeRuns > 0
+          ? `盯着 ${activeRuns} 个在跑的任务，异常才出声`
+          : enabledTasks.length > 0
+            ? `${enabledTasks.length} 个任务待触发，暂时没有要打扰你的事`
+            : "还没有启用的任务，我这儿暂时没什么可盯的";
 
   const checkedText =
     checkedAt == null
@@ -162,14 +281,33 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
         ? "刚刚核对"
         : `${Math.round((Date.now() - checkedAt) / 60_000)} 分钟前核对`;
 
+  /** 发自这一轮。失败不吞：把原因留在输入口上方，草稿已清空可重打。 */
+  const sendDraft = useCallback(async () => {
+    const text = draft.trim();
+    if (!text) return;
+    if (anotherSessionStreaming) {
+      setNotice("另一条对话正在执行——她这儿一次只跑一轮，等它结束再发");
+      return;
+    }
+    if (streaming) {
+      setNotice("她正在跑上一轮，等这次结束再发");
+      return;
+    }
+    setDraft("");
+    setNotice(null);
+    const ok = await onSend(text, {
+      permissionLevel: level,
+      systemPrompt: MODE_PROMPT[mode],
+    });
+    if (!ok) setNotice("这一轮没发出去（原因见下方错误）");
+  }, [draft, anotherSessionStreaming, streaming, onSend, level, mode]);
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    // 阿黎的会话通道尚未接通：先降级到对话页，不假装发出去。
-    if (draft.trim().length > 0) {
-      setDraft("");
-      onOpenChat();
-    }
+    void sendDraft();
   };
+
+  const sendDisabled = anotherSessionStreaming || streaming || draft.trim().length === 0;
 
   return (
     <div className="twin-view">
@@ -411,9 +549,53 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
         </section>
       </div>
 
+      {/* 内联对话：她的最近几条就地显示——输入后不用跳去对话页看她说了什么。 */}
+      <div className="twin-transcript" aria-live="polite">
+        {transcript.length === 0 && !streaming ? (
+          <div className="twin-transcript__empty">她还没有说过话 · 在下面跟她说一句</div>
+        ) : (
+          transcript.map((m, i) => (
+            <div key={i} className={`twin-transcript__row${m.role === "user" ? " is-user" : ""}`}>
+              <span className="twin-transcript__who">{m.role === "user" ? "你" : "阿黎"}</span>
+              <span className="twin-transcript__text">{m.text}</span>
+            </div>
+          ))
+        )}
+        {streaming ? (
+          <div className="twin-transcript__row is-live">
+            <span className="twin-transcript__who">阿黎</span>
+            <span className="twin-transcript__text twin-transcript__text--live">正在执行</span>
+          </div>
+        ) : null}
+      </div>
+
+      {/* 等她拍板：内联面板不渲染审批/澄清卡片，但必须把人送到能处理的地方 ——
+          否则工具调用在服务端空等到超时自动拒绝。 */}
+      {waitingFor ? (
+        <div className="twin-need" role="status">
+          <span className="twin-need__text">她卡在一步需要你{waitingFor}的操作上</span>
+          <button type="button" className="chip-flat" onClick={onOpenChat}>
+            去对话页处理
+          </button>
+        </div>
+      ) : null}
+
+      {streamError || notice ? (
+        <p className="twin-error twin-error--inline" role="alert">
+          <AlertTriangle className="icon-md" />
+          <span>{streamError?.message ?? notice}</span>
+        </p>
+      ) : null}
+
       <form className="twin-dock" onSubmit={submit}>
         <div className="twin-dock__hint">
-          <span>在电脑上执行 · 工具 / 工作区 / 派 agent 都可用</span>
+          <span>
+            {anotherSessionStreaming
+              ? "另一条对话正在执行 · 她这儿一次只跑一轮"
+              : streaming
+                ? "这一轮在电脑上执行中 · 工具 / 工作区 / 派 agent 都在跑"
+                : "在电脑上执行 · 工具 / 工作区 / 派 agent 都可用"}
+          </span>
           <span>·</span>
           <kbd>Enter</kbd>
           <span>发送</span>
@@ -426,8 +608,11 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
             className="twin-dock__input"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="跟她说点什么，或者直接派活"
+            placeholder={
+              anotherSessionStreaming ? "等另一条对话跑完再发" : "跟她说点什么，或者直接派活"
+            }
             aria-label="给助手阿黎发消息"
+            disabled={streaming || anotherSessionStreaming}
           />
           <div className="twin-dock__chips" role="group" aria-label="动作模式">
             {MODES.map((m) => (
@@ -442,7 +627,7 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
               </button>
             ))}
           </div>
-          <button type="submit" className="twin-send" aria-label="发送">
+          <button type="submit" className="twin-send" aria-label="发送" disabled={sendDisabled}>
             ↑
           </button>
         </div>
