@@ -62,8 +62,10 @@ interface PageDef {
   /** 侧栏搜索命中用；同时作为内容区页头的说明文案。 */
   hint: string;
   icon: React.ElementType;
-  /** 图标色调：按类目给图标上色，色相本身承担「这是什么」的第一线索。
-      值来自 lib/categoryTone，颜色由 --color-tone-* 供给（主题自动跟随）。 */
+  /** 预留的类目色相（8 档 `--color-tone-*`）。**导航当前不上色**
+   *  （2026-10-24 用户复核后维持 2026-10-23 的单色方案），所以这个字段
+   *  暂不参与渲染；留在这里是为了记录"每个设置页属于哪一类"，
+   *  内容区将来若需要按类目着色不必再推一遍。 */
   tone: IconTone;
   /** 搜索命中用；不写就只能靠标题字面匹配。 */
   keywords?: string;
@@ -219,7 +221,7 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
               <div className="px-3 pb-1 pt-4 text-[length:var(--text-meta)] font-medium text-[var(--color-text-faint)]">
                 {g.label}
               </div>
-              {g.items.map(({ id, label, icon: Icon, tone }) => (
+              {g.items.map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
                   onClick={() => go(id)}
@@ -234,20 +236,19 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
                       : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]",
                   )}
                 >
-                  {/* 导航图标：实心身份色块（2026-10-23 改）。
-                      此处此前是单色描边图标，理由是「侧栏是位置，不是内容，
-                      17 项彩色底会变成一条彩虹」。现在改成实心块，理由有三：
-                        1. 用户明确要求参照的「彩色方块 + 标题」样式；
-                        2. 18 项里的色相**不是随机彩虹**——每个页面的色相是
-                           按类目定的（偏好=slate/rose/violet/orange，插件=
-                           slate/violet/blue/cyan，管理=blue/cyan/slate/orange/
-                           amber/green/slate/rose，诊断=cyan/slate），同一组内
-                           反复出现两三种色，扫视时是"有条理的彩色"，不是彩虹；
-                        3. 侧栏整块原本就是"灰底 + 灰字"，加色块后重心回到
-                           左侧导航，右侧内容区不再被一整片低对比的灰淹没。
-                      块用 28px（sm）而非 36px：行高 44px 里 36px 的块会压过
-                      文字。选中态仍靠行底色 + 文字墨色区分，块色不参与。 */}
-                  <IconTile icon={<Icon className="icon-md" />} tone={tone} />
+                  {/* 导航图标**不上色**（2026-10-23 决定，2026-10-24 用户复核后维持）：
+                      侧栏是"位置"，不是"内容"。18 项各带一块彩色底时，整条侧栏
+                      变成一条彩虹，抢夺右内容区的注意力，而且彩色块本身比文字重，
+                      扫视时先看到色块再读字，反而更慢。
+                      改为随文字色的单色描边图标：选中态跟 primary、未选中
+                      跟 secondary，与文字一起进退，侧栏退成背景。
+                      彩色身份色只留在**内容区**（类目卡片 / 功能行的实心块），
+                      那里才需要"这是什么"的线索。
+
+                      （2026-10-23 曾按"参照样式"把它改成实心彩色块，实测截图后
+                      用户明确要求"这个菜单的图标不要颜色"，故回退到本方案。彩色
+                      块保留在内容区的设置行与配置页列表上。） */}
+                  <Icon className="icon-md shrink-0" aria-hidden />
                   <span className="min-w-0 flex-1 truncate text-[length:var(--text-body)]">{label}</span>
                 </button>
               ))}

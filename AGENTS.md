@@ -73,7 +73,7 @@ Key crates:
   - 类目身份色只走 `--color-tone-*`（8 档），状态语义色只走 `--color-{success,warning,error,info}`，**两者不复用**（否则「数据库」会被读成「成功」）。
   - 页面容器只用 `settings/SettingsSection.tsx` 的 `SettingsSection` / `SettingsGrid` / `SettingsStatBar`；列表行只用 `config/ToolListRow`；开关只用 `ToggleSwitch`；按钮只用 `btn-flat` / `chip-flat` 类族。**不要在页面里另写一份同类结构。**
   - 门禁：`check-design-guard` 的 **G1**（禁字面色值）+ **G6**（内联静态配色，基线 0）+ **G11**（**CSS 层**中性结构描边，基线 0）+ `check-theme-tokens` 的 bare-color / contrast 全部阻断。
-- **列表行图标走实心色块（2026-10-23）** — 列表行 / 设置行 / 导航项的图标一律用 `components/ui/IconTile.tsx`（共享层 `.cat-tile`：身份色实底 + 反白字形，28/36/48 三档）。**不要新写第三种形态**：`.cat-icon`（中性底 + 彩字）只留给**字母**（头像）与**品牌 logo** —— 字母是文字，8 档色相里没有任何单一前景能让它在所有实底上过 4.5:1；品牌 logo 自带多色，铺在同色实底上是"logo 压 logo"。
+- **列表行图标走实心色块（2026-10-23）** — 列表行 / 设置行 / 卡片图标一律用 `components/ui/IconTile.tsx`（共享层 `.cat-tile`：身份色实底 + 反白字形，28/36/48 三档）。**导航是例外**：主侧栏与设置左导航的图标保持**单色描边**（随文字色）—— 侧栏是"位置"不是"内容"，18 项各带彩色底会变成一条彩虹（2026-10-24 用户复核后维持 2026-10-23 的方案）。**不要新写第三种形态**：`.cat-icon`（中性底 + 彩字）只留给**字母**（头像）与**品牌 logo** —— 字母是文字，8 档色相里没有任何单一前景能让它在所有实底上过 4.5:1；品牌 logo 自带多色，铺在同色实底上是"logo 压 logo"。
   - 字形前景一律 `--color-on-tone`（浅色白字 / 深色深墨），**不写死白色** —— 深色主题的 tone 是"暗底提亮档"，白字只有 2.0~2.6:1。该配对（8 档 tone × 3 主题）已进 `check-theme-tokens` 的 contrast 规则。
   - 只给**功能/能力型**的行配图标，参数型行（数值、下拉、状态表）不给。
   - 依据：`docs/notes/implemented/architecture/2026-10-23-solid-icon-tile-list.md`。
