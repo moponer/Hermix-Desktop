@@ -17,6 +17,24 @@ use hermix_intelligence::auxiliary::{
 
 use super::*;
 
+/// Remove a previously injected task-tree section from a summary body.
+///
+/// A second compaction re-summarizes the *previous summary* (which
+/// already carries the section), so without this the tree would appear
+/// twice.
+fn strip_task_tree_section(body: &str) -> String {
+    let Some(start) = body.find(crate::compression::TASK_TREE_HEADING) else {
+        return body.to_string();
+    };
+    let mut out = body[..start].trim_end().to_string();
+    // The section runs to the end of the body; drop the separator that
+    // preceded it.
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
 impl ContextCompressor {
     //summary budget + serialisation.
     // ------------------------------------------------------------------
@@ -176,6 +194,13 @@ Write only the summary body. Do not include any preamble or prefix."
                     self.arm_cooldown();
                     Ok(None)
                 } else {
+                    // ★ Append the authoritative task tree (C2). The LLM
+                    // summary only *recollects* the task state; after a
+                    // compaction the model must not lose track of which
+                    // task it is on. The tree is read through the
+                    // `task_list` tool — the same path the model uses —
+                    // so it sees exactly the list it would get itself.
+                    let body = self.append_task_tree(body).await;
                     self.previous_summary = Some(body.clone());
                     Ok(Some(with_summary_prefix(&body)))
                 }
@@ -192,6 +217,74 @@ Write only the summary body. Do not include any preamble or prefix."
                 Err(CompressionError::Auxiliary(err))
             }
         }
+    }
+
+    /// Append the session's task tree to a compaction summary.
+    ///
+    /// The section is **appended verbatim**, not asked of the
+    /// summarising LLM: the task tree is authoritative state, and a
+    /// model that re-derives it can drop or garble it. Appending also
+    /// means the tree survives even when the summary call is degraded.
+    ///
+    /// Idempotent: a previously injected section is stripped first, so
+    /// a second compaction does not carry two copies.
+    async fn append_task_tree(&self, body: String) -> String {
+        let Some(source) = self.task_source.as_ref() else {
+            return body;
+        };
+        let Some(section) = self.render_task_tree(source).await else {
+            return body;
+        };
+        let stripped = strip_task_tree_section(&body);
+        if stripped.trim().is_empty() {
+            section
+        } else {
+            format!("{stripped}\n\n{section}")
+        }
+    }
+
+    /// Read the task tree through the `task_list` tool and render it.
+    async fn render_task_tree(&self, source: &TaskTreeSource) -> Option<String> {
+        use hermix_tools::context::ToolCallContext;
+        let ctx = ToolCallContext::for_session(source.session_id.clone());
+        let raw = source
+            .registry
+            .dispatch_async_with_context("task_list", serde_json::json!({}), &ctx)
+            .await;
+        let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        let tasks = parsed.get("tasks")?.as_array()?;
+        let mut lines = Vec::new();
+        for t in tasks {
+            let status = t.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            // Terminal-and-successful tasks carry no forward-looking
+            // state; the summary is about what is still to do.
+            if matches!(status, "completed" | "archived") {
+                continue;
+            }
+            let title = t.get("title").and_then(|v| v.as_str()).unwrap_or("(untitled)");
+            let id = t.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let mine = t.get("mine").and_then(|v| v.as_bool()).unwrap_or(false);
+            lines.push(format!(
+                "- [{status}]{} {title} (id={id})",
+                if mine { "[本会话]" } else { "" }
+            ));
+            if lines.len() >= crate::compression::TASK_TREE_MAX_ROWS {
+                break;
+            }
+        }
+        if lines.is_empty() {
+            return None;
+        }
+        let mut out = String::from(crate::compression::TASK_TREE_HEADING);
+        out.push_str(
+            "\n以下是该会话任务树的**当前真实状态**（不是对话里的回忆）。\
+只有标注「本会话」的任务属于本次对话；未标注的属于别的会话，不要改动。\n",
+        );
+        for l in lines {
+            out.push_str(&l);
+            out.push('\n');
+        }
+        Some(out.trim_end().to_string())
     }
 
     /// Arm the summary-failure cooldown.

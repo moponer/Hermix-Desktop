@@ -846,9 +846,40 @@ impl CompressorConfig {
 
 /// Compresses conversation context when approaching the model's context
 /// limit. Mirrors `agent.context_compressor.ContextCompressor`.
+/// Where a compaction summary gets the session's task tree from.
+///
+/// The summary is written by an LLM **from the conversation**, so the
+/// task state it carries is a *recollection*. After a compaction the
+/// model can lose track of which task it is working on — and then
+/// either repeat finished work or claim completion of something it
+/// never started. The task tracker is the authoritative state, so it
+/// is appended to the summary verbatim instead of being re-derived.
+///
+/// The tree is read through the **`task_list` tool** — the very same
+/// path the model itself uses — so the summary shows the model exactly
+/// the list it would get on its own.
+#[derive(Clone)]
+pub struct TaskTreeSource {
+    pub(crate) registry: Arc<hermix_tools::ToolRegistry>,
+    pub(crate) session_id: String,
+}
+
+/// Heading of the injected task-tree section. Also the marker used to
+/// strip a previously injected section before appending a fresh one
+/// (a second compaction would otherwise carry two copies).
+pub const TASK_TREE_HEADING: &str = "## Task Tree (authoritative)";
+
+/// Cap on the number of task rows in the injected section. The
+/// section must not eat the summary's token budget, which is sized for
+/// the conversation recap.
+pub const TASK_TREE_MAX_ROWS: usize = 30;
+
 pub struct ContextCompressor {
     pub(crate) config: CompressorConfig,
     pub(crate) auxiliary: Arc<AuxiliaryClient>,
+    /// Where the session's task tree comes from, when the caller wired
+    /// one up. See [`TaskTreeSource`].
+    pub(crate) task_source: Option<TaskTreeSource>,
 
     // Derived budgets, fixed at construction time.
     pub(crate) threshold_tokens: u64,

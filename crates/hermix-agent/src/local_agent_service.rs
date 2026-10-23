@@ -1167,7 +1167,11 @@ impl LocalAgentService {
                     comp_cfg,
                     aux.clone(),
                 )
-                .with_breaker_config(breaker_threshold, breaker_cooldown_secs);
+                .with_breaker_config(breaker_threshold, breaker_cooldown_secs)
+                // C2: the summary gets the session's task tree appended,
+                // read through the same `task_list` tool the model
+                // itself uses.
+                .with_task_source(self.tool_registry.clone(), session_id.to_string());
                 // validate that the LLM-powered summariser
                 // actually has a model to call. Without this, every
                 // compression attempt would silently fail at runtime
@@ -1966,6 +1970,8 @@ impl AgentService for LocalAgentService {
             message_id: Some(upcoming_assistant_id.clone()),
             stdout_cb: std::sync::Arc::new(std::sync::Mutex::new(None)),
             active_call_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            progress_cb: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            active_tool: std::sync::Arc::new(std::sync::Mutex::new(None)),
             // §5.5 第 5 层：桌面 WS 路径固定 Local。HTTP 路径走独立 dispatcher
             // （handler 从 axum Extension<Origin> 取出来覆盖）；这里不加分支，
             // 等配对 / TLS 落地后再扩。
@@ -2216,6 +2222,10 @@ impl AgentService for LocalAgentService {
         // code (written but never read by any tool) — removed.
         let _ = tool_ctx.stdout_cb.lock().map(|mut g| *g = None);
         let _ = tool_ctx.active_call_id.lock().map(|mut g| *g = None);
+        // progress_cb 持有 on_chunk（Arc 链到 WS），回合结束必须断掉，
+        // 否则一个已结束的会话还挂着发送端。
+        let _ = tool_ctx.progress_cb.lock().map(|mut g| *g = None);
+        let _ = tool_ctx.active_tool.lock().map(|mut g| *g = None);
 
         Ok(AgentReply {
             text: reply_text,
@@ -2418,6 +2428,8 @@ impl AgentService for LocalAgentService {
             message_id: Some(upcoming_assistant_id.clone()),
             stdout_cb: std::sync::Arc::new(std::sync::Mutex::new(None)),
             active_call_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            progress_cb: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            active_tool: std::sync::Arc::new(std::sync::Mutex::new(None)),
             // §5.5 第 5 层：桌面 WS 路径固定 Local。HTTP 路径走独立 dispatcher
             // （handler 从 axum Extension<Origin> 取出来覆盖）；这里不加分支，
             // 等配对 / TLS 落地后再扩。
@@ -2647,6 +2659,40 @@ impl AgentService for LocalAgentService {
                 }
             },
         ));
+        // 通用工具进度（2026-10-23）：任何 opt-in ContextAware 的工具都能在
+        // 执行中推一行文本，前端那张卡片实时显示（例如"正在下载引擎 48%"）。
+        // 与上面的 code_execution stdout 同形事件（tool_stdout），但 tool 名
+        // 与 call id 取**当前活跃工具**，且刻意不写 timeline_buffer ——
+        // 进度在会话回放里只是噪音。
+        let progress_call_id = tool_ctx.active_call_id.clone();
+        let progress_active_tool = tool_ctx.active_tool.clone();
+        let progress_forwarder = on_chunk.clone();
+        *tool_ctx.progress_cb.lock().unwrap() = Some(Box::new(move |line: &str| {
+            let tool_call_id = progress_call_id
+                .lock()
+                .ok()
+                .and_then(|g| g.clone())
+                .unwrap_or_else(|| "tool-unknown".to_string());
+            let tool = progress_active_tool
+                .lock()
+                .ok()
+                .and_then(|g| g.clone())
+                .unwrap_or_else(|| "tool".to_string());
+            progress_forwarder(StreamChunk {
+                delta: Some(StreamDelta {
+                    content: None,
+                    tool_calls: None,
+                    extra: Some(serde_json::json!({
+                        "event": "tool_stdout",
+                        "tool_call_id": tool_call_id,
+                        "tool": tool,
+                        "content": line,
+                    })),
+                }),
+                finish_reason: None,
+                usage: None,
+            });
+        }));
         // Hand each `move` closure its own Arc clone so the outer
         // `timeline_buffer` binding survives until the post-stream
         // drain at line 1561. A `move` closure captures by value,
@@ -2661,6 +2707,7 @@ impl AgentService for LocalAgentService {
         //the global registry .
         let active_call_id_for_start = tool_ctx.active_call_id.clone();
         let active_call_id_for_complete = tool_ctx.active_call_id.clone();
+        let active_tool_for_start = tool_ctx.active_tool.clone();
         // Shared set of tool_call_ids the user manually approved via the
         // approval card. `on_pre_tool_approved` (a field below) inserts into
         // it; the agent loop reads it to tell the LLM "this ran because the
@@ -2754,13 +2801,15 @@ impl AgentService for LocalAgentService {
                     );
                     t.set_active_tools(t.recent(0).len() as u32 + 1);
                 }
-                // when `code_execution` starts, store the
-                // tool_call_id so the stdout callback can emit `tool_stdout`
-                // events with the correct ID.
-                if tool_name == "code_execution" {
-                    let _ = active_call_id_for_start
-                        .lock()
-                        .map(|mut g| *g = Some(tool_call_id.to_string()));
+                // 记录当前活跃工具与其 call id：code_execution 的 stdout
+                // 回调用它打事件，任何工具通过 `progress_cb` 推的进度也用它 ——
+                // 否则前端不知道这行进度该落到哪张卡片上。此前只给
+                // code_execution 写，其它工具想报进度就没有可对齐的 id。
+                if let Ok(mut g) = active_call_id_for_start.lock() {
+                    *g = Some(tool_call_id.to_string());
+                }
+                if let Ok(mut g) = active_tool_for_start.lock() {
+                    *g = Some(tool_name.to_string());
                 }
 
                 // File-write tools execute almost instantly, so the
@@ -3497,6 +3546,10 @@ impl AgentService for LocalAgentService {
         // code (written but never read by any tool) — removed.
         let _ = tool_ctx.stdout_cb.lock().map(|mut g| *g = None);
         let _ = tool_ctx.active_call_id.lock().map(|mut g| *g = None);
+        // progress_cb 持有 on_chunk（Arc 链到 WS），回合结束必须断掉，
+        // 否则一个已结束的会话还挂着发送端。
+        let _ = tool_ctx.progress_cb.lock().map(|mut g| *g = None);
+        let _ = tool_ctx.active_tool.lock().map(|mut g| *g = None);
 
         Ok(AgentReply {
             text: reply_text,

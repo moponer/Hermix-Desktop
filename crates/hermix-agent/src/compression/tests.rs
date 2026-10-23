@@ -433,6 +433,169 @@ use hermix_core::types::ContentPart;
         assert!(block.len() < huge.len());
     }
 
+    // ---------- task tree injection (C2) ----------
+
+    /// A `TaskTrackerBackend` stub that returns two tasks: one owned by
+    /// the session, one not.
+    struct StubTaskBackend;
+
+    #[async_trait]
+    impl hermix_tools::tools::task_tracker::TaskTrackerBackend for StubTaskBackend {
+        async fn create(
+            &self,
+            _title: &str,
+            _workspace_path: Option<&str>,
+            _mode: Option<&str>,
+            _parent_task_id: Option<&str>,
+            _session_id: Option<&str>,
+        ) -> Result<hermix_tools::tools::task_tracker::TaskTrackerInfo, hermix_core::ToolError> {
+            unreachable!("the summary only lists tasks")
+        }
+
+        async fn update_status(
+            &self,
+            _task_id: &str,
+            _status: &str,
+        ) -> Result<hermix_tools::tools::task_tracker::TaskTrackerInfo, hermix_core::ToolError> {
+            unreachable!("the summary only lists tasks")
+        }
+
+        async fn list(
+            &self,
+            _status_filter: Option<&str>,
+            session_id: Option<&str>,
+        ) -> Result<Vec<hermix_tools::tools::task_tracker::TaskTrackerInfo>, hermix_core::ToolError> {
+            let now = 0i64;
+            Ok(vec![
+                hermix_tools::tools::task_tracker::TaskTrackerInfo {
+                    id: "mine-1".into(),
+                    title: "收尾验收".into(),
+                    status: "in_progress".into(),
+                    mode: "craft".into(),
+                    workspace_path: ".".into(),
+                    parent_task_id: None,
+                    session_id: session_id.map(String::from),
+                    created_at: now,
+                    updated_at: now,
+                },
+                hermix_tools::tools::task_tracker::TaskTrackerInfo {
+                    id: "theirs-1".into(),
+                    title: "别的会话的任务".into(),
+                    status: "pending".into(),
+                    mode: "craft".into(),
+                    workspace_path: ".".into(),
+                    parent_task_id: None,
+                    session_id: Some("other-session".into()),
+                    created_at: now,
+                    updated_at: now,
+                },
+            ])
+        }
+
+        async fn get(
+            &self,
+            _task_id: &str,
+        ) -> Result<hermix_tools::tools::task_tracker::TaskTrackerInfo, hermix_core::ToolError> {
+            unreachable!("the summary only lists tasks")
+        }
+
+        async fn list_children(
+            &self,
+            _parent_task_id: &str,
+        ) -> Result<Vec<hermix_tools::tools::task_tracker::TaskTrackerInfo>, hermix_core::ToolError> {
+            Ok(Vec::new())
+        }
+
+        async fn add_result(
+            &self,
+            _task_id: &str,
+            _path: &str,
+            _artifact_type: &str,
+            _summary: Option<&str>,
+        ) -> Result<hermix_tools::tools::task_tracker::TaskTrackerInfo, hermix_core::ToolError> {
+            unreachable!("the summary only lists tasks")
+        }
+    }
+
+    /// The compaction summary must carry the session's **authoritative**
+    /// task tree, not just the summariser's recollection of it.
+    #[tokio::test]
+    async fn summary_carries_the_task_tree() {
+        use hermix_tools::ToolRegistry;
+        let registry = ToolRegistry::new();
+        hermix_tools::tools::task_tracker::register(
+            &registry,
+            Arc::new(StubTaskBackend),
+        );
+
+        let provider = CannedSummaryProvider::new("Goal: build it.");
+        let aux = aux_with_provider(provider);
+        let mut compressor = ContextCompressor::new(quiet_config(), aux)
+            .with_task_source(Arc::new(registry), "sess-1");
+
+        let turns = vec![msg(MessageRole::User, "first turn")];
+        let summary = compressor.generate_summary(&turns).await.unwrap().unwrap();
+
+        assert!(
+            summary.contains(TASK_TREE_HEADING),
+            "摘要必须带任务树小节，实际：{summary}"
+        );
+        assert!(
+            summary.contains("收尾验收"),
+            "任务树必须列出本会话的任务"
+        );
+        assert!(
+            summary.contains("别的会话的任务"),
+            "未归属/他会话的任务也要列出（模型才能分辨）"
+        );
+        assert!(
+            summary.contains("本会话"),
+            "必须标出哪些是本会话的"
+        );
+    }
+
+    /// A second compaction re-summarizes the previous summary (which
+    /// already carries the tree) — the section must not be duplicated.
+    #[tokio::test]
+    async fn task_tree_section_is_not_duplicated_across_compressions() {
+        use hermix_tools::ToolRegistry;
+        let registry = ToolRegistry::new();
+        hermix_tools::tools::task_tracker::register(
+            &registry,
+            Arc::new(StubTaskBackend),
+        );
+
+        let provider = CannedSummaryProvider::new("Goal: build it.");
+        let aux = aux_with_provider(provider);
+        let mut compressor = ContextCompressor::new(quiet_config(), aux)
+            .with_task_source(Arc::new(registry), "sess-1");
+
+        let turns = vec![msg(MessageRole::User, "first turn")];
+        let first = compressor.generate_summary(&turns).await.unwrap().unwrap();
+        let second = compressor.generate_summary(&turns).await.unwrap().unwrap();
+
+        let count = second.matches(TASK_TREE_HEADING).count();
+        assert_eq!(
+            count, 1,
+            "任务树小节只能出现一次，实际 {count} 次：\n{second}"
+        );
+        assert!(first.contains(TASK_TREE_HEADING));
+    }
+
+    /// No task source wired → the summary is unchanged (the feature is
+    /// opt-in, and a headless caller must not grow a section it never
+    /// asked for).
+    #[tokio::test]
+    async fn summary_without_task_source_is_unchanged() {
+        let provider = CannedSummaryProvider::new("Goal: build it.");
+        let aux = aux_with_provider(provider);
+        let mut compressor = ContextCompressor::new(quiet_config(), aux);
+
+        let turns = vec![msg(MessageRole::User, "first turn")];
+        let summary = compressor.generate_summary(&turns).await.unwrap().unwrap();
+        assert!(!summary.contains(TASK_TREE_HEADING));
+    }
+
     // ---------- generate_summary ----------
 
     #[tokio::test]

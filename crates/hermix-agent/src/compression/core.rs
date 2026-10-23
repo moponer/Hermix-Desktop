@@ -36,6 +36,7 @@ impl ContextCompressor {
                 ..config
             },
             auxiliary,
+            task_source: None,
             threshold_tokens,
             tail_token_budget: target_tokens,
             max_summary_tokens,
@@ -148,6 +149,23 @@ impl ContextCompressor {
         if cooldown_secs > 0 {
             self.breaker_cooldown = Duration::from_secs(cooldown_secs);
         }
+        self
+    }
+
+    /// Wire the session's task tree into the summary.
+    ///
+    /// Without this the compaction summary carries only the
+    /// summariser's *recollection* of the task state, and after a
+    /// compaction the model can lose track of which task it is on.
+    pub fn with_task_source(
+        mut self,
+        registry: Arc<hermix_tools::ToolRegistry>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        self.task_source = Some(TaskTreeSource {
+            registry,
+            session_id: session_id.into(),
+        });
         self
     }
 
