@@ -198,7 +198,7 @@ pub async fn sync_once(
         state.snapshot_dirty.store(true, Ordering::Release);
     }
 
-    mark_sync_success(state, synced_at, notify_on_success);
+    mark_sync_success(state, synced_at, notify_on_success, changed);
     let message = if changed {
         "同步完成。".to_string()
     } else {
@@ -370,13 +370,19 @@ fn mark_syncing(state: &VolumeState) -> bool {
     notify_on_success
 }
 
-fn mark_sync_success(state: &VolumeState, synced_at: u64, notify: bool) {
+fn mark_sync_success(state: &VolumeState, synced_at: u64, notify: bool, changed: bool) {
     let snapshot = {
         let Ok(mut status) = state.monitor.write() else {
             return;
         };
         status.monitor_state = MonitorState::Watching;
-        status.last_sync_at = Some(synced_at);
+        // **只有真的应用了变更**才算「上次同步」。USN 每秒轮询一次，
+        // 若每次都刷新时间戳，界面上「上次同步」永远是「刚刚」——
+        // 用户看不出索引到底有没有在保鲜。轮询时间另记 last_checked_at。
+        if changed {
+            status.last_sync_at = Some(synced_at);
+        }
+        status.last_checked_at = Some(synced_at);
         status.last_sync_error = None;
         status.clone()
     };
@@ -405,6 +411,8 @@ fn set_monitor_status(
         status.monitor_state = monitor_state;
         if last_sync_at.is_some() {
             status.last_sync_at = last_sync_at;
+            // 传入同步时间 = 刚刚确实检查过（建索引完成、状态切换时）。
+            status.last_checked_at = last_sync_at;
         }
         status.last_sync_error = last_sync_error;
         (changed, status.clone())
@@ -461,5 +469,24 @@ mod tests {
         assert!(!snapshot_is_due(true, SNAPSHOT_INTERVAL_MS - 1, 0));
         assert!(snapshot_is_due(true, SNAPSHOT_INTERVAL_MS, 0));
         assert!(snapshot_is_due(true, SNAPSHOT_INTERVAL_MS * 2, SNAPSHOT_INTERVAL_MS));
+    }
+
+    /// 「上次同步」只在真有变更时前进：否则每秒轮询一次 → 永远「刚刚」。
+    #[test]
+    fn last_sync_at_only_moves_on_real_changes() {
+        let state = VolumeState::new("C:");
+
+        mark_sync_success(&state, 1_000, false, false);
+        {
+            let status = state.monitor.read().expect("monitor");
+            assert_eq!(status.last_sync_at, None, "无变更不刷新上次同步");
+            assert_eq!(status.last_checked_at, Some(1_000), "但检查时间照常推进");
+        }
+
+        mark_sync_success(&state, 2_000, false, true);
+        {
+            let status = state.monitor.read().expect("monitor");
+            assert_eq!(status.last_sync_at, Some(2_000), "有变更才推进上次同步");
+        }
     }
 }

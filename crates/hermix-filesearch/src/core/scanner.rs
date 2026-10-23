@@ -79,6 +79,9 @@ pub fn scan_directory(root: PathBuf) -> Result<(Vec<FileEntry>, BuildIndexSummar
         journal_id: 0,
         next_usn: 0,
         snapshot_saved: false,
+        // walkdir 降级路径逐条 stat 已知体积，不走 MFT file record。
+        size_files: files,
+        size_files_total: files,
     };
 
     Ok((entries, summary))

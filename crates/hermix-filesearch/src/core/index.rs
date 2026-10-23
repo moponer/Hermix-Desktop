@@ -19,8 +19,8 @@ use windows_sys::Win32::System::Ioctl::{USN_REASON_FILE_DELETE, USN_REASON_RENAM
 
 use super::{
     model::{
-        ChangeStats, FileEntry, FilterRules, IndexEntry, IndexSnapshot, IndexStatus, NtfsRecord,
-        SearchResponse, VolumeIndexState, SNAPSHOT_VERSION,
+        BuildPhase, ChangeStats, FileEntry, FilterRules, IndexEntry, IndexSnapshot, IndexStatus,
+        NtfsRecord, SearchResponse, VolumeIndexState, SNAPSHOT_VERSION,
     },
     search::compare_hits,
 };
@@ -37,6 +37,11 @@ pub struct SearchIndex {
     snapshot_path: Option<String>,
     needs_rebuild: bool,
     status_message: Option<String>,
+    /// 索引内文件体积之和（字节）——「已索引体积」就是它。
+    ///
+    /// **为什么缓存而不是每次现算**：状态面板每 2 秒轮询一次，
+    /// 每次现算就是每秒扫一遍百万条；增删改时顺手维护即可。
+    total_bytes: u64,
 }
 
 impl SearchIndex {
@@ -51,6 +56,7 @@ impl SearchIndex {
         last_scan_ms: u64,
         snapshot_path: Option<String>,
     ) {
+        self.total_bytes = sum_file_bytes(&entries);
         self.volume_state = Some(volume_state);
         self.entries = entries;
         self.last_scan_ms = Some(last_scan_ms);
@@ -62,6 +68,7 @@ impl SearchIndex {
     }
 
     pub fn replace_snapshot(&mut self, snapshot: IndexSnapshot, snapshot_path: String) {
+        self.total_bytes = sum_file_bytes(&snapshot.entries);
         self.volume_state = Some(snapshot.volume_state);
         self.entries = snapshot.entries;
         self.last_scan_ms = None;
@@ -228,6 +235,14 @@ impl SearchIndex {
             monitor_state: super::model::MonitorState::Idle,
             last_sync_at: None,
             last_sync_error: None,
+            indexed_bytes: self.total_bytes,
+            indexed_at: self.volume_state.as_ref().map(|state| state.indexed_at),
+            // 建索引进度由 `VolumeState` 的进度对象提供（service 层合并），
+            // 这里给的是「没有正在进行的建索引」。
+            build_phase: BuildPhase::Idle,
+            build_scanned: 0,
+            build_total: 0,
+            build_error: None,
         }
     }
 
@@ -336,6 +351,12 @@ impl SearchIndex {
                     entry.is_dir = is_dir;
                     entry.last_usn = record.usn;
                     entry.attributes = record.attributes;
+                    // USN 增量里没有体积（size = 0）：只有真带体积的记录
+                    // 才调整总量，否则会把已知体积抹成 0。
+                    if record.size > 0 && record.size != entry.size {
+                        self.total_bytes = self.total_bytes + record.size - entry.size;
+                        entry.size = record.size;
+                    }
                     stats.updated += 1;
                 }
                 None => {
@@ -348,6 +369,7 @@ impl SearchIndex {
                     }
                     self.by_ref
                         .insert(record.file_ref, self.entries.len() as u32);
+                    self.total_bytes += record.size;
                     self.entries.push(IndexEntry {
                         file_ref: record.file_ref,
                         parent_ref: record.parent_ref,
@@ -382,6 +404,7 @@ impl SearchIndex {
         let Some(index) = self.by_ref.remove(&file_ref) else {
             return false;
         };
+        self.total_bytes = self.total_bytes.saturating_sub(self.entries[index as usize].size);
         let last = self.entries.len() - 1;
         if index as usize != last {
             self.entries.swap_remove(index as usize);
@@ -415,6 +438,15 @@ impl SearchIndex {
         }
         out
     }
+}
+
+/// 索引内文件体积之和（目录体积为 0，目录的体积由父子关系累加）。
+fn sum_file_bytes(entries: &[IndexEntry]) -> u64 {
+    entries
+        .iter()
+        .filter(|entry| !entry.is_dir)
+        .map(|entry| entry.size)
+        .sum()
 }
 
 /// 全量构建：MFT 记录 → 紧凑索引条目。**不拼路径**（Everything 也不拼）。
@@ -670,6 +702,7 @@ mod tests {
         index.replace_volume(
             VolumeIndexState {
                 volume: "C:".to_string(),
+                volume_serial: 0,
                 journal_id: 1,
                 first_usn: 0,
                 next_usn: 0,
@@ -781,6 +814,33 @@ mod tests {
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].name, "app");
         assert_eq!(children[0].bytes, 300);
+    }
+
+    /// 「已索引体积」必须跟着条目走：建索引时算一次，之后增删同步维护。
+    #[test]
+    fn indexed_bytes_follows_entries() {
+        let mut entries = vec![entry(5, 5, "", true), entry(6, 5, "a.bin", false)];
+        entries[1].size = 100;
+        let mut index = index_with(entries);
+        assert_eq!(index.status().indexed_bytes, 100);
+
+        // 删除文件 → 体积同步扣减（否则「已索引体积」只增不减）。
+        let stats = index.apply_changes(
+            vec![super::NtfsRecord {
+                file_ref: 6,
+                parent_ref: 5,
+                name: "a.bin".to_string(),
+                attributes: 0,
+                usn: 11,
+                timestamp: 0,
+                reason: USN_REASON_FILE_DELETE,
+                size: 0,
+            }],
+            11,
+            1,
+        );
+        assert_eq!(stats.deleted, 1);
+        assert_eq!(index.status().indexed_bytes, 0);
     }
 
     #[test]

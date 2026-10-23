@@ -53,7 +53,15 @@ const RECORD_BUFFER: usize = 4096;
 ///
 /// 失败一律降级（返回空 map），绝不因为拿不到体积就让整个索引失败——
 /// 体积只影响"磁盘占用"这个视图，不影响搜索。
-pub fn read_file_sizes(volume: &str, file_refs: &[u64], threads: usize) -> HashMap<u64, FileSize> {
+///
+/// `progress` 非空时逐个文件上报进度：百万文件下这一步是几秒级的
+/// 等待，界面必须能显示「读到第几个了」。
+pub fn read_file_sizes(
+    volume: &str,
+    file_refs: &[u64],
+    threads: usize,
+    progress: Option<&crate::core::model::BuildProgress>,
+) -> HashMap<u64, FileSize> {
     let mut out = HashMap::new();
     if file_refs.is_empty() {
         return out;
@@ -65,6 +73,9 @@ pub fn read_file_sizes(volume: &str, file_refs: &[u64], threads: usize) -> HashM
         let mut handles = Vec::new();
         for part in file_refs.chunks(chunk) {
             let volume = volume.to_string();
+            // `Option<&BuildProgress>` 是 Copy：直接带进每个线程。
+            // `thread::scope` 允许非 'static 借用，生命周期覆盖整个 scope。
+            let progress = progress;
             handles.push(scope.spawn(move || {
                 let Ok(handle) = open_volume(&volume) else {
                     return Vec::new();
@@ -73,6 +84,9 @@ pub fn read_file_sizes(volume: &str, file_refs: &[u64], threads: usize) -> HashM
                 for file_ref in part {
                     if let Some(size) = read_one(handle, *file_ref) {
                         local.push((*file_ref, size));
+                    }
+                    if let Some(progress) = progress {
+                        progress.add_scanned(1);
                     }
                 }
                 local

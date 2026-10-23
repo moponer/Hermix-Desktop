@@ -5,6 +5,7 @@
 //!   请求：{"id":1,"method":"search","params":{"query":"...","limit":100}}
 //!         {"id":2,"method":"status"}
 //!         {"id":3,"method":"setFilter","params":{...FilterRules...}}
+//!         {"id":4,"method":"rebuild","params":{"volumes":["C:"]}}   // 可选 params
 //!   响应：{"id":N,"result":...} 或 {"id":N,"error":"..."}
 //! stdin EOF = 退出信号（刷盘后结束）。
 
@@ -96,18 +97,22 @@ fn main() {
     }
 
     eprintln!("[filesearch] 服务已启动，等待 stdio 指令。");
-    // 单线程读+写：请求全部由同步方法处理（搜索/状态/改规则），无并发写 stdout。
-    let stdin = std::io::stdin();
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
-        if line.trim().is_empty() {
-            continue;
+    // 读指令的循环**必须在运行时上下文里**：`rebuild` 会 `tokio::spawn`
+    // 后台建索引任务，在运行时外调用会直接 panic。
+    // （多线程运行时的驱动跑在 worker 上，这里的阻塞读 stdin 不会卡住定时器。）
+    runtime.block_on(async {
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            let Ok(line) = line else { break };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let response = handle(&service, &line, None);
+            let mut stdout = std::io::stdout().lock();
+            let _ = writeln!(stdout, "{response}");
+            let _ = stdout.flush();
         }
-        let response = handle(&service, &line, None);
-        let mut stdout = std::io::stdout().lock();
-        let _ = writeln!(stdout, "{response}");
-        let _ = stdout.flush();
-    }
+    });
 
     eprintln!("[filesearch] stdin 关闭，刷盘退出。");
     service.flush_all();
@@ -261,7 +266,7 @@ fn generate_token() -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn handle(service: &SearchService, line: &str, expected_token: Option<&str>) -> String {
+fn handle(service: &Arc<SearchService>, line: &str, expected_token: Option<&str>) -> String {
     let Ok(request) = serde_json::from_str::<serde_json::Value>(line) else {
         return error_response(None, "请求不是合法 JSON");
     };
@@ -288,6 +293,24 @@ fn handle(service: &SearchService, line: &str, expected_token: Option<&str>) -> 
             json_response(id, &service.search(query, limit))
         }
         "status" => json_response(id, &service.status()),
+        // 重建索引：忽略现有快照重新扫 MFT。
+        // **立即返回**（一次全盘扫描要几十秒到几分钟，协议读取超时只有 15s），
+        // 进度走 status 轮询。
+        "rebuild" => {
+            let params = request.get("params").cloned().unwrap_or_default();
+            let volumes = params
+                .get("volumes")
+                .and_then(|value| value.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|value| value.as_str().map(|text| text.to_string()))
+                        .collect::<Vec<String>>()
+                });
+            match service.rebuild(volumes) {
+                Ok(message) => json_response(id, &serde_json::json!({"ok": true, "message": message})),
+                Err(error) => error_response(id, &error),
+            }
+        }
         "diskUsage" => {
             let params = request.get("params").cloned().unwrap_or_default();
             let volume = params

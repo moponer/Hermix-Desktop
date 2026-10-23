@@ -2,7 +2,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use super::{
     index::build_entries_from_records,
-    model::{BuildIndexSummary, FilterRules, IndexEntry, NtfsRecord, VolumeIndexState, VolumeInfo},
+    model::{
+        BuildIndexSummary, BuildPhase, BuildProgress, FilterRules, IndexEntry, NtfsRecord,
+        VolumeIndexState, VolumeInfo,
+    },
 };
 
 pub struct NtfsIndexBuild {
@@ -55,8 +58,8 @@ mod imp {
     };
 
     use super::{
-        build_entries_from_records, now_ms, BuildIndexSummary, FilterRules, Instant, NtfsIndexBuild,
-        NtfsRecord, UsnChanges, VolumeIndexState, VolumeInfo,
+        build_entries_from_records, now_ms, BuildIndexSummary, BuildPhase, BuildProgress,
+        FilterRules, Instant, NtfsIndexBuild, NtfsRecord, UsnChanges, VolumeIndexState, VolumeInfo,
     };
 
     const BUFFER_SIZE: usize = 1024 * 1024;
@@ -67,7 +70,7 @@ mod imp {
         // 每卷一个探测线程：个别卷设备的 GetVolumeInformationW 会永不返回
         //（本机实测），不能让一个坏卷拖死整个枚举。
         let (tx, rx) = mpsc::channel::<VolumeInfo>();
-        let mut probes = 0usize;
+        let mut pending: Vec<String> = Vec::new();
 
         for index in 0..26 {
             if mask & (1 << index) == 0 {
@@ -76,7 +79,7 @@ mod imp {
             let letter = (b'A' + index as u8) as char;
             let name = format!("{letter}:");
             let tx = tx.clone();
-            probes += 1;
+            pending.push(name.clone());
             std::thread::spawn(move || {
                 let _ = tx.send(probe_volume(&name));
             });
@@ -85,15 +88,34 @@ mod imp {
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut volumes = Vec::new();
-        for _ in 0..probes {
+        while !pending.is_empty() {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
                 break;
             }
             match rx.recv_timeout(remaining) {
-                Ok(info) => volumes.push(info),
+                Ok(info) => {
+                    pending.retain(|name| name != &info.name);
+                    volumes.push(info);
+                }
                 Err(_) => break,
             }
+        }
+        // 没在期限内应答的卷**不能当成不存在**：它要么设备无响应，要么
+        // GetVolumeInformationW 卡死（本机实测约一半概率）。
+        // 之前直接丢掉它 → 这个盘既不建索引、也不出现在界面里，
+        // 用户只看到「索引是空的」。现在明确报出来。
+        for name in pending {
+            volumes.push(VolumeInfo {
+                display_name: format!("{name}\\"),
+                name: name.clone(),
+                label: String::new(),
+                file_system: String::new(),
+                drive_type: String::new(),
+                is_supported: false,
+                reason: Some("卷设备无响应（探测超时）".to_string()),
+                serial: 0,
+            });
         }
         volumes.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(volumes)
@@ -105,8 +127,8 @@ mod imp {
         let drive_type_code = unsafe { GetDriveTypeW(root_wide.as_ptr()) };
         let drive_type = drive_type_label(drive_type_code).to_string();
 
-        let (label, file_system) =
-            volume_information(&root).unwrap_or_else(|_| (String::new(), String::new()));
+        let (label, file_system, serial) =
+            volume_information(&root).unwrap_or_else(|_| (String::new(), String::new(), 0));
         let is_local = drive_type_code == DRIVE_FIXED;
         let is_ntfs = file_system.eq_ignore_ascii_case("NTFS");
         let is_supported = is_local && is_ntfs;
@@ -128,16 +150,22 @@ mod imp {
             drive_type,
             is_supported,
             reason,
+            serial,
         }
     }
 
-    pub fn build_volume_index(volume: String, filter: &FilterRules) -> Result<NtfsIndexBuild> {
+    pub fn build_volume_index(
+        volume: String,
+        filter: &FilterRules,
+        progress: &BuildProgress,
+    ) -> Result<NtfsIndexBuild> {
         let volume = normalize_volume(&volume)?;
         ensure_supported_volume(&volume)?;
         let start = Instant::now();
         let handle = VolumeHandle::open(&volume)?;
         let journal = query_usn_journal(handle.raw())?;
-        let records = enum_mft_records(handle.raw(), journal.NextUsn)?;
+        progress.set_phase(BuildPhase::Enumerating);
+        let records = enum_mft_records(handle.raw(), journal.NextUsn, progress)?;
         // 体积：USN 记录里没有大小，逐个 FRN 读 file record 的 `$DATA`
         // （多线程，每线程一个卷句柄）。拿不到就留 0——体积只影响"磁盘
         // 占用"视图，不影响搜索，不能因此让整次建索引失败。
@@ -147,7 +175,10 @@ mod imp {
             .map(|record| record.file_ref)
             .collect();
         let mut records = records;
-        let sizes = crate::core::mft_size::read_file_sizes(&volume, &file_refs, 8);
+        progress.set_phase(BuildPhase::ReadingSizes);
+        progress.reset_scanned();
+        progress.set_total(file_refs.len() as u64);
+        let sizes = crate::core::mft_size::read_file_sizes(&volume, &file_refs, 8, Some(progress));
         for record in &mut records {
             if let Some(size) = sizes.get(&record.file_ref) {
                 record.size = size.bytes;
@@ -158,6 +189,7 @@ mod imp {
             sizes.len(),
             file_refs.len()
         );
+        progress.set_phase(BuildPhase::Writing);
         let entries = build_entries_from_records(&volume, records, filter);
         // 这里**不做** `hydrate_file_metadata`：它对每个条目 fs::metadata，
         // 全盘百万级文件就是百万次同步文件系统调用——实测把磁盘打到 100%、
@@ -166,8 +198,10 @@ mod imp {
         let files = entries.iter().filter(|entry| !entry.is_dir).count();
         let directories = entries.iter().filter(|entry| entry.is_dir).count();
         let now = now_ms();
+        let serial = volume_serial(&volume);
         let state = VolumeIndexState {
             volume: volume.clone(),
+            volume_serial: serial,
             journal_id: journal.UsnJournalID,
             first_usn: journal.FirstUsn,
             next_usn: journal.NextUsn,
@@ -184,6 +218,8 @@ mod imp {
             journal_id: state.journal_id,
             next_usn: state.next_usn,
             snapshot_saved: false,
+            size_files: sizes.len(),
+            size_files_total: file_refs.len(),
         };
 
         Ok(NtfsIndexBuild {
@@ -227,7 +263,7 @@ mod imp {
             );
         }
 
-        let (_, file_system) = volume_information(&root)?;
+        let (_, file_system, _) = volume_information(&root)?;
         if !file_system.eq_ignore_ascii_case("NTFS") {
             bail!("当前卷文件系统是 {file_system}，MFT/USN MVP 仅支持 NTFS。");
         }
@@ -235,7 +271,15 @@ mod imp {
         Ok(())
     }
 
-    fn volume_information(root: &str) -> Result<(String, String)> {
+    /// 卷序列号：卷实例的身份（换盘后盘符不变但序列号会变）。
+    fn volume_serial(volume: &str) -> u32 {
+        let root = format!("{volume}\\");
+        volume_information(&root)
+            .map(|(_, _, serial)| serial)
+            .unwrap_or(0)
+    }
+
+    fn volume_information(root: &str) -> Result<(String, String, u32)> {
         let root_wide = wide_null(root);
         let mut label = vec![0u16; 260];
         let mut fs_name = vec![0u16; 32];
@@ -263,10 +307,15 @@ mod imp {
         Ok((
             utf16_buffer_to_string(&label),
             utf16_buffer_to_string(&fs_name),
+            serial,
         ))
     }
 
-    fn enum_mft_records(handle: HANDLE, high_usn: i64) -> Result<Vec<NtfsRecord>> {
+    fn enum_mft_records(
+        handle: HANDLE,
+        high_usn: i64,
+        progress: &BuildProgress,
+    ) -> Result<Vec<NtfsRecord>> {
         let mut input = MFT_ENUM_DATA {
             StartFileReferenceNumber: 0,
             LowUsn: 0,
@@ -305,7 +354,10 @@ mod imp {
             }
 
             let next_file_ref = unsafe { std::ptr::read_unaligned(buffer.as_ptr() as *const u64) };
+            let before = records.len();
             parse_records(&buffer[size_of::<u64>()..returned as usize], &mut records)?;
+            // 进度：每批 MFT 记录报一次，界面才知道「扫到哪了」。
+            progress.add_scanned((records.len() - before) as u64);
             input.StartFileReferenceNumber = next_file_ref;
         }
 
@@ -535,13 +587,17 @@ mod imp {
 mod imp {
     use anyhow::{bail, Result};
 
-    use super::{FilterRules, NtfsIndexBuild, UsnChanges, VolumeIndexState, VolumeInfo};
+    use super::{BuildProgress, FilterRules, NtfsIndexBuild, UsnChanges, VolumeIndexState, VolumeInfo};
 
     pub fn list_volumes() -> Result<Vec<VolumeInfo>> {
         Ok(Vec::new())
     }
 
-    pub fn build_volume_index(_volume: String, _filter: &FilterRules) -> Result<NtfsIndexBuild> {
+    pub fn build_volume_index(
+        _volume: String,
+        _filter: &FilterRules,
+        _progress: &BuildProgress,
+    ) -> Result<NtfsIndexBuild> {
         bail!("MFT/USN 索引仅支持 Windows。")
     }
 

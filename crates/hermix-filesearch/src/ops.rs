@@ -19,17 +19,31 @@ pub async fn build_and_save(
     let _operation = state.operation_gate.lock().await;
     let volume_owned = volume.to_string();
     let filter_owned = filter.clone();
+    // 进度从「枚举 MFT」开始；失败原因落到进度对象上，界面能直接显示。
+    state.progress.begin();
     let build = match tokio::time::timeout(
         BUILD_TIMEOUT,
-        tokio::task::spawn_blocking(
-            move || windows_ntfs::build_volume_index(volume_owned, &filter_owned),
-        ),
+        tokio::task::spawn_blocking({
+            let progress = state.progress.clone();
+            move || windows_ntfs::build_volume_index(volume_owned, &filter_owned, &progress)
+        }),
     )
     .await
     {
-        Ok(Ok(result)) => result.map_err(|error| error.to_string())?,
-        Ok(Err(error)) => return Err(format!("建立索引任务失败：{error}")),
-        Err(_) => return Err(format!("建立索引超时（{:?}），该卷已放弃。", BUILD_TIMEOUT)),
+        Ok(Ok(result)) => result.map_err(|error| {
+            state.progress.fail(error.to_string());
+            error.to_string()
+        })?,
+        Ok(Err(error)) => {
+            let message = format!("建立索引任务失败：{error}");
+            state.progress.fail(message.clone());
+            return Err(message);
+        }
+        Err(_) => {
+            let message = format!("建立索引超时（{:?}），该卷已放弃。", BUILD_TIMEOUT);
+            state.progress.fail(message.clone());
+            return Err(message);
+        }
     };
 
     let mut summary = build.summary;
@@ -37,6 +51,7 @@ pub async fn build_and_save(
         .map(|path| path.display().to_string())
         .ok();
 
+    state.progress.set_phase(crate::core::model::BuildPhase::Writing);
     {
         let mut index = state
             .index
@@ -47,6 +62,9 @@ pub async fn build_and_save(
     }
 
     // 借引用落盘（不 clone 整份索引），与 monitor 的周期刷盘同一路径。
+    state
+        .progress
+        .set_phase(crate::core::model::BuildPhase::Saving);
     let state_owned = state.clone();
     let data_dir_owned = data_dir.to_path_buf();
     let saved_path = tokio::task::spawn_blocking(move || {
@@ -61,7 +79,11 @@ pub async fn build_and_save(
             .map_err(|error| error.to_string())
     })
     .await
-    .map_err(|error| format!("保存索引快照任务失败：{error}"))??;
+    .map_err(|error| format!("保存索引快照任务失败：{error}"))?
+    .map_err(|error| {
+        state.progress.fail(error.clone());
+        error
+    })?;
 
     {
         let mut index = state
@@ -76,5 +98,6 @@ pub async fn build_and_save(
     state.last_snapshot_saved_at.store(now_ms(), Ordering::Release);
     summary.snapshot_saved = true;
     monitor::mark_index_ready(state);
+    state.progress.finish();
     Ok(summary)
 }
