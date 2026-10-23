@@ -10,6 +10,16 @@
 //! 判定就是「sid 是否等于本设备的会话 id」。
 
 use axum::extract::{Extension, Path, State};
+
+/// 阿黎（Twin）的会话 id 与人格 slug。
+///
+/// 她是一个**常驻桌面端的执行主体**（工具 / 工作区 / 派 agent），不是某台
+/// 手机的私有会话——桌面 TwinView 与手机端两个入口读写同一条 `twin:ali`，
+/// 所以历史只有一份，两边看到的是同一个她。手机帧照常走自己的设备通道
+/// （`im:device:{id}`，E2EE 不动），到达后由 ws.rs 把这一轮投到这条会话。
+pub(crate) const TWIN_SESSION_ID: &str = "twin:ali";
+/// 阿黎的人格（`hermix_agent::context::BUILTIN_PERSONALITIES` 里的 slug）。
+pub(crate) const TWIN_PERSONALITY: &str = "ali";
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
