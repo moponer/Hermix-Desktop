@@ -27,7 +27,6 @@ import { toastError, toastSuccess } from "../../hooks/useToast";
 import { Button, ConfirmDialog, Modal } from "../ui";
 import { LOADING } from "../strings";
 import { ToolCardIcon } from "./ToolCardIcon";
-import type { IconTone } from "../../lib/categoryTone";
 
 const CATEGORY_ICON: Record<string, React.ReactNode> = {
   办公: <Blocks className="icon-md" />,
@@ -39,18 +38,13 @@ const CATEGORY_ICON: Record<string, React.ReactNode> = {
   其它: <Terminal className="icon-md" />,
 };
 
-/** 目录类目 → 图标色调。此前这一页走「实色主按钮块 + 主按钮阴影」，
- *  与插件 / 技能 / 工具集三页的淡染块对不上（一处已知漂移），且实色块在
- *  网格里堆叠会发脏。现在与那三页共用 ToolCardIcon，只多带一个色调。 */
-const CATEGORY_TONE: Record<string, IconTone> = {
-  办公: "green",
-  开发: "violet",
-  检索: "cyan",
-  通讯: "rose",
-  数据: "cyan",
-  通用: "slate",
-  其它: "slate",
-};
+/** 目录类目 → 图标色调。
+ *
+ *  2026-10-23：这里原本有一张**本地** CATEGORY_TONE 表，其中「开发」写的是
+ *  violet。而 categoryTone.ts 的统一口径里「开发 / 编程 / software-development」
+ *  一律是 blue —— 同义类目在两个地方给了两个色相，就是漂移本身。
+ *  本地表已删除，改由 categoryTone 单点决定，四页 + 本页必然一致。
+ *  这也顺带修掉「工具集卡片是蓝、MCP 目录同名词条是紫」的错位。 */
 
 type EnvMap = Record<string, string>;
 
@@ -211,7 +205,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
               <div className="flex items-start gap-2.5">
                 {/* 与插件 / 技能 / 工具集三页共用 ToolCardIcon（此前这里自写一套
                     实色块 + 阴影，是四页里唯一漂出去的一处）。 */}
-                <ToolCardIcon tone={CATEGORY_TONE[item.category] ?? "slate"}>
+                <ToolCardIcon category={item.category}>
                   {CATEGORY_ICON[item.category] ?? CATEGORY_ICON["其它"]}
                 </ToolCardIcon>
                 <div className="min-w-0 flex-1">

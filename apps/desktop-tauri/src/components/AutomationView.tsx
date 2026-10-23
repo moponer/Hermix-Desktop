@@ -9,9 +9,18 @@ import {
   AlertTriangle,
   Info,
   Clock,
+  Megaphone,
+  ShieldAlert,
+  ClipboardList,
+  FileText,
+  Repeat2,
+  type LucideIcon,
 } from "lucide-react";
 import * as api from "../api";
 import type { AutomationTask } from "../types";
+import type { IconTone } from "../lib/categoryTone";
+import { toneForCategory } from "../lib/categoryTone";
+import { ToolCardIcon } from "./config/ToolCardIcon";
 import { AiGenerateButton } from "./AiGenerateButton";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "../desktopBridge";
@@ -33,9 +42,15 @@ const CRON_PRESETS: Array<[string, string, string]> = [
   ["每月 1 日 10:00", "0 10 1 * *", "Monthly report"],
 ];
 
-/** 定时任务模板（对齐 ZCode 工作流页）：一键预填编辑器，存档前可再改。 */
+/** 定时任务模板（对齐 ZCode 工作流页）：一键预填编辑器，存档前可再改。
+ *
+ *  2026-10-23：`icon` 从 emoji 字符串改成 lucide 组件 + 色调。
+ *  emoji 的问题不是"不好看"，而是**不可控**：字形由系统字体决定（Win10/Win11
+ *  两套风格）、尺寸跟着字号走、颜色写死在字体里、无法跟随主题，且与旁边
+ *  lucide 的描边图标根本不是一个视觉体系。四个模板给四个不同色相，一眼能分。 */
 interface TaskTemplate {
-  icon: string;
+  icon: LucideIcon;
+  tone: IconTone;
   name: string;
   description: string;
   schedule: string;
@@ -45,7 +60,8 @@ interface TaskTemplate {
 
 const TEMPLATES: TaskTemplate[] = [
   {
-    icon: "📣",
+    icon: Megaphone,
+    tone: "amber",
     name: "晨会动态",
     description:
       "汇总上一个工作日以来的提交、模块变化、CI 状态和待跟进事项，最终生成不超过 6 条的晨会口述摘要。只读分析，不做任何修改。",
@@ -58,7 +74,8 @@ const TEMPLATES: TaskTemplate[] = [
 3) 每条一句话，按重要性排序，末尾标出今天最需要关注的一件事。`,
   },
   {
-    icon: "⚠️",
+    icon: ShieldAlert,
+    tone: "rose",
     name: "风险扫描",
     description:
       "检查最近 24 小时的代码变更，识别运行错误、数据丢失、权限绕过、资源泄漏及跨端兼容等高置信风险，并附代码位置。",
@@ -70,7 +87,8 @@ const TEMPLATES: TaskTemplate[] = [
 3) 只读分析：不修改文件；没有发现风险就明确说"未发现高置信风险"。`,
   },
   {
-    icon: "📋",
+    icon: ClipboardList,
+    tone: "cyan",
     name: "发布简报",
     description:
       "整理本周合并的 PR 和 commit，按功能、修复、体验及工程改进分类，同时生成团队版和面向用户的精简发布说明。",
@@ -82,7 +100,8 @@ const TEMPLATES: TaskTemplate[] = [
 3) 引用具体 PR / commit 标题作为依据，不编造条目。`,
   },
   {
-    icon: "📑",
+    icon: FileText,
+    tone: "green",
     name: "文档同步检查",
     description:
       "对照最近 7 天的代码、配置、接口与文档变更，识别已改变公开行为但文档尚未同步的高置信差异，并附文件路径。",
@@ -100,7 +119,8 @@ function templateToTask(t: TaskTemplate): AutomationTask {
     ...blankDraft(),
     name: t.name,
     description: t.description,
-    icon: t.icon,
+    /* 不再写 emoji 图标：卡片的图形由 category 推导的色调 + lucide 图标承担。 */
+    icon: "",
     schedule: t.schedule,
     schedule_label: t.scheduleLabel,
     prompt: t.prompt,
@@ -347,24 +367,29 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
         {/* 定时任务模板：一键预填编辑器，保存前可自由改。 */}
         <p className="text-[length:var(--text-ui)] text-text-muted mb-2">定时任务模板</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          {TEMPLATES.map((t) => (
-            <button
-              key={t.name}
-              onClick={() => setCreating(templateToTask(t))}
-              className="text-left rounded-xl bg-bg-card p-3.5 hover:bg-bg-hover transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-base shrink-0">{t.icon}</span>
-                <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">
-                  {t.name}
-                </span>
-              </div>
-              <p className="mt-1 text-[length:var(--text-ui)] text-text-muted leading-snug line-clamp-2">
-                {t.description}
-              </p>
-              <p className="mt-1.5 text-[length:var(--text-ui)] text-text-faint">{t.scheduleLabel}</p>
-            </button>
-          ))}
+          {TEMPLATES.map((t) => {
+            /* 大写化再渲染：JSX 里 `<t.icon />` 会被当成名为 "t.icon" 的
+               HTML 标签（小写开头），React 会静默渲染成空元素。 */
+            const Glyph = t.icon;
+            return (
+              <button
+                key={t.name}
+                onClick={() => setCreating(templateToTask(t))}
+                className="m-lift text-left rounded-xl bg-bg-card p-3.5 hover:bg-bg-hover"
+              >
+                <div className="flex items-center gap-2">
+                  <ToolCardIcon tone={t.tone}><Glyph className="icon-md" /></ToolCardIcon>
+                  <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">
+                    {t.name}
+                  </span>
+                </div>
+                <p className="mt-1 text-[length:var(--text-ui)] text-text-muted leading-snug line-clamp-2">
+                  {t.description}
+                </p>
+                <p className="mt-1.5 text-[length:var(--text-ui)] text-text-faint">{t.scheduleLabel}</p>
+              </button>
+            );
+          })}
         </div>
           </>
         )}
@@ -424,7 +449,8 @@ function blankDraft(): AutomationTask {
     schedule: "0 9 * * 1-5",
     enabled: false,
     category: "工作",
-    icon: "✨",
+    /* 保留字段以兼容后端落库契约，但前端不再渲染 emoji（见 TaskCard）。 */
+    icon: "",
     run_count: 0,
     history: [],
     created_at: "",
@@ -454,9 +480,16 @@ function TaskCard({
       }`}
     >
       <div className="flex items-start gap-2.5">
-        <span className="text-base shrink-0 mt-0.5 leading-none">
-          {task.icon ?? "⏰"}
-        </span>
+        {/* 2026-10-23：此前这里渲染 `task.icon`（一个 emoji 字符串），
+            缺省还兜底 "⏰"。emoji 的四个硬伤：字形由系统字体决定（Win10 /
+            Win11 两套风格）、尺寸跟随字号、颜色写死在字体里不跟主题、
+            与旁边 lucide 描边图标不是同一视觉体系。改为按 category 推导
+            色调的彩色图标块 + 固定的 Clock 图标（定时任务的语义恒等于时钟，
+            不需要靠用户填字符串来表达）。旧任务里的 emoji 数据仍在库里，
+            只是不再渲染。 */}
+        <ToolCardIcon tone={task.category ? toneForCategory(task.category) : "amber"}>
+          <Clock className="icon-md" />
+        </ToolCardIcon>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">
@@ -689,23 +722,16 @@ function TaskEditor({
             placeholder="0 9 * * 1-5"
           />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Input
-            label="分类"
-            hint="（可选）用于卡片分组"
-            value={draft.category ?? ""}
-            onChange={(e) => update("category", e.target.value)}
-            placeholder="工作"
-          />
-          <Input
-            label="图标"
-            hint="（可选）emoji"
-            value={draft.icon ?? ""}
-            onChange={(e) => update("icon", e.target.value)}
-            maxLength={2}
-            placeholder="✨"
-          />
-        </div>
+        {/* 原先这里并排「分类」与「图标 emoji」两个输入框。emoji 输入已删除：
+            卡片图标改由分类推导色调（见 categoryTone），用户不必再手填一个
+            字形怪异的字符。字段本身保留在数据层，不影响后端契约。 */}
+        <Input
+          label="分类"
+          hint="（可选）决定卡片图标的色调"
+          value={draft.category ?? ""}
+          onChange={(e) => update("category", e.target.value)}
+          placeholder="工作"
+        />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Input
             label="模型"
@@ -1086,7 +1112,9 @@ function WorkflowCard({
   return (
     <div className="flex flex-col gap-2 p-3.5 rounded-xl bg-bg-card">
       <div className="flex items-start gap-2.5">
-        <span className="text-base shrink-0 mt-0.5 leading-none">🔁</span>
+        {/* 与定时任务卡（Clock / amber）区分：工作流是「可复跑的流程」，
+            用 Repeat2 + violet，两族卡片在混排时靠色相即可分辨。 */}
+        <ToolCardIcon tone="violet"><Repeat2 className="icon-md" /></ToolCardIcon>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">

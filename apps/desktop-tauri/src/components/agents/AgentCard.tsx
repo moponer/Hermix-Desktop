@@ -74,8 +74,7 @@ export function AgentCard({ agent, onEdit, onDelete, onTest }: AgentCardProps) {
         <button
           onClick={onTest}
           title="快速测试"
-          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[length:var(--text-meta)] font-medium transition-[color,background-color,border-color,opacity] hover:opacity-90"
-          style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
+          className="btn-flat btn-flat--secondary btn-flat--sm flex-1"
         >
           <Play className="icon-sm" />
           测试
@@ -83,16 +82,14 @@ export function AgentCard({ agent, onEdit, onDelete, onTest }: AgentCardProps) {
         <button
           onClick={onEdit}
           title="编辑"
-          className="p-1.5 rounded-lg hover:bg-bg-hover"
-          style={{ color: "var(--color-btn-ghost-text)" }}
+          className="p-1.5 rounded-lg text-[color:var(--color-btn-ghost-text)] hover:bg-bg-hover"
           aria-label="编辑">
           <Edit3 className="icon-sm" />
         </button>
         <button
           onClick={onDelete}
           title={DELETE}
-          className="p-1.5 rounded-lg hover:bg-error-soft"
-          style={{ color: "var(--color-btn-ghost-text)" }}
+          className="p-1.5 rounded-lg text-[color:var(--color-btn-ghost-text)] hover:bg-error-soft"
           aria-label={DELETE}>
           <Trash2 className="icon-sm" />
         </button>
