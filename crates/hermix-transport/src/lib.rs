@@ -1475,6 +1475,7 @@ mod tests {
             image: None,
             image_mime_type: None,
             skills: Some(vec!["git".into(), "code-review".into()]),
+            target: None,
         };
         let value = serde_json::to_value(&msg).expect("serialize");
         assert_eq!(value["type"], "send");
@@ -1482,6 +1483,7 @@ mod tests {
         assert_eq!(value["permission"], "full");
         // None fields should be skipped
         assert!(value.get("provider").is_none());
+        assert!(value.get("target").is_none());
 
         let parsed: WsClientMessage = serde_json::from_value(value).expect("deserialize");
         assert_eq!(parsed, msg);
