@@ -321,6 +321,37 @@ mod tests {
         }
     }
 
+    /// 端到端验证"用户能看到进度"：下载 → 校验 → 解压各阶段是否真的调了
+    /// 回调，文案是否是前端要显示的那几句。默认忽略（71MB 网络）。
+    /// 跑法（把 HERMIX_HOME 指到空目录，模拟新用户首次）：
+    /// `$env:HERMIX_HOME='<TMPDIR>/dsh-verify'; cargo test -p hermix-tools --lib engine_progress_end_to_end -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "网络：下载 71MB 引擎包"]
+    async fn engine_progress_end_to_end() {
+        if is_complete(&package_dir()) {
+            eprintln!("skip: 引擎已就位（不会触发下载）—— 换一个空的 HERMIX_HOME 再跑");
+            return;
+        }
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let recorder = seen.clone();
+        let cb = move |msg: &str| {
+            recorder.lock().unwrap().push(msg.to_string());
+        };
+        let (pkg, downloaded) = ensure_engine(Some(&cb)).await.expect("按需下载失败");
+        assert!(is_complete(&pkg));
+        assert!(downloaded, "首次安装应报告 downloaded=true");
+        let msgs = seen.lock().unwrap().clone();
+        println!("收到 {} 条进度:\n{}", msgs.len(), msgs.join("\n"));
+        assert!(
+            msgs.iter().any(|m| m.contains("正在下载内置转换引擎")),
+            "缺下载进度: {msgs:?}"
+        );
+        assert!(
+            msgs.iter().any(|m| m.contains("正在解压内置转换引擎")),
+            "缺解压进度: {msgs:?}"
+        );
+    }
+
     /// 端到端：真实下载 → sha512 校验 → tar 解压 → 结构断言。
     /// 默认忽略（71MB 网络）；验一条发布链路时手动跑：
     /// `cargo test -p hermix-tools --lib engine_download_end_to_end -- --ignored --nocapture`
