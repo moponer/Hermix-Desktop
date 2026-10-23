@@ -10,6 +10,7 @@ pub mod artifacts;
 pub mod browser;
 pub mod cdp;
 pub mod cleanup;
+pub mod cleanup_ai;
 pub mod clipboard;
 pub mod commands;
 pub mod docx_edit;
@@ -26,6 +27,7 @@ pub mod pdf_ocr;
 /// 扫描件 OCR 的 Tauri 命令（纯逻辑在 pdf_ocr.rs 里）。
 pub mod pdf_ops;
 pub mod pin_window;
+pub mod procclean;
 pub mod markitdown;
 pub mod settings;
 pub mod sysmon;
@@ -267,8 +269,11 @@ pub fn main() {
             sysmon::sysmon_processes,
             sysmon::sysmon_kill_process,
             sysmon::sysmon_disks,
+            procclean::sysmon_cleanup_scan,
+            procclean::sysmon_cleanup_execute,
             cleanup::cleanup_scan,
             cleanup::cleanup_execute,
+            cleanup_ai::cleanup_ai_advise,
             drive_scan::cleanup_scan_drive,
             drive_scan::cleanup_remove_entries,
             webview_host::web_open,

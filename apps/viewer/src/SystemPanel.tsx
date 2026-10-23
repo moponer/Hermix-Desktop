@@ -27,10 +27,19 @@ import {
   RefreshCw,
   Search,
   ShieldAlert,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import { Treemap, type TreemapNode } from "./Treemap";
+import { ProcessCleanupPane } from "./ProcessCleanupPane";
+import {
+  adviseCleanup,
+  fetchAiStatus,
+  verdictMap,
+  type AiAdviceReport,
+  type AiEndpointInfo,
+} from "./cleanupAi";
 
 // ── 与 Rust 侧 serde(camelCase) 对齐的类型 ────────────────────────────
 
@@ -82,6 +91,12 @@ interface CleanItem {
   files: number;
   risky: boolean;
   needsAdmin: boolean;
+  /** 本地评分（0-100）：纯缓存高分、涉及用户数据低分。 */
+  score: number;
+  /** 分档：safe（默认勾选）/ review（看一眼）/ risky（高风险）。 */
+  bucket: string;
+  /** 删掉之后怎么恢复。 */
+  recoverable: string;
   roots: string[];
   available: boolean;
 }
@@ -265,7 +280,7 @@ async function copyText(text: string) {
 // ── 弹窗外壳 ──────────────────────────────────────────────────────────
 
 export function SystemPanel({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<"processes" | "cleanup">("processes");
+  const [tab, setTab] = useState<"processes" | "cleanup" | "index">("processes");
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -309,13 +324,29 @@ export function SystemPanel({ onClose }: { onClose: () => void }) {
               <Trash2 size={13} aria-hidden="true" />
               磁盘清理
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "index"}
+              className={`syspanel-tab${tab === "index" ? " is-active" : ""}`}
+              onClick={() => setTab("index")}
+            >
+              <HardDrive size={13} aria-hidden="true" />
+              文件索引
+            </button>
           </div>
           <button type="button" className="syspanel-close" onClick={onClose} aria-label="关闭">
             <X size={16} />
           </button>
         </header>
         <div className="syspanel-body">
-          {tab === "processes" ? <ProcessPane /> : <CleanupPane />}
+          {tab === "processes" ? (
+            <ProcessPane />
+          ) : tab === "cleanup" ? (
+            <CleanupPane />
+          ) : (
+            <IndexPane />
+          )}
         </div>
       </div>
     </div>
@@ -447,6 +478,8 @@ function ProcessPane() {
   return (
     <div className="pane">
       {snapshot && <StatHeader overview={snapshot.overview} />}
+
+      <ProcessCleanupPane />
 
       <div className="pane-bar">
         <label className="pane-search">
@@ -696,6 +729,11 @@ function CleanupPane() {
   const [deepConfirm, setDeepConfirm] = useState(false);
   /** Treemap 当前下钻到的目录（null = 盘根）。 */
   const [treemapPath, setTreemapPath] = useState<string | null>(null);
+  // —— AI 辅助清理（LLM 只裁决建议，禁区仍由本地规则锁死）——
+  const [aiStatus, setAiStatus] = useState<AiEndpointInfo | null>(null);
+  const [aiReport, setAiReport] = useState<AiAdviceReport | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
   // —— MFT 快速分析（读 MFT，秒级；walkdir 要几十秒） ——
   const [mft, setMft] = useState<DiskUsageResult | null>(null);
   const [mftPath, setMftPath] = useState<{ ref: number; label: string }[]>([]);
@@ -707,6 +745,61 @@ function CleanupPane() {
       .then(setDisks)
       .catch((cause) => setError(errorText(cause)));
   }, []);
+
+  // AI 后端是否可用：没配置就把按钮置灰并把原因写在 title 上，
+  // 而不是让人点了才报错（清理功能本身不依赖 AI）。
+  useEffect(() => {
+    void fetchAiStatus()
+      .then(setAiStatus)
+      .catch(() => setAiStatus(null));
+  }, []);
+
+  /** 一键把候选清单交给 AI 裁决，回来后按裁决更新勾选与标注。 */
+  const askAi = useCallback(async () => {
+    if (!report) return;
+    const candidates = report.items.filter((item) => item.bytes > 0 && item.available);
+    if (candidates.length === 0) {
+      setAiError("当前没有可交给 AI 判断的清理项（先扫描出有体积的项）。");
+      return;
+    }
+    setAiBusy(true);
+    setAiError(null);
+    try {
+      const advice = await adviseCleanup(
+        candidates.map((item) => ({
+          id: item.id,
+          title: item.title,
+          group: item.group,
+          bytes: item.bytes,
+          files: item.files,
+          risky: item.risky,
+          needsAdmin: item.needsAdmin,
+          hint: item.hint,
+        })),
+      );
+      setAiReport(advice);
+      // 裁决只影响**勾选**，不扩大删除范围：AI 说 clean 的项勾上，
+      // 说 keep / unsure 的项取消勾选（服务端仍会按规则重新展开执行）。
+      const verdicts = verdictMap(advice);
+      setSelected(
+        new Set(
+          candidates
+            .filter((item) => {
+              const verdict = verdicts.get(item.id);
+              return verdict ? verdict.decision === "clean" : item.bucket === "safe";
+            })
+            .map((item) => item.id),
+        ),
+      );
+    } catch (cause) {
+      setAiError(errorText(cause));
+      // 失败时**不动**勾选，也不显示任何 AI 标注 —— 不能让用户误以为
+      // AI 认可了什么。
+      setAiReport(null);
+    } finally {
+      setAiBusy(false);
+    }
+  }, [report]);
 
   // 进度事件：Rust 每完成一条规则推一次，用来画确定进度条。
   useEffect(() => {
@@ -732,13 +825,16 @@ function CleanupPane() {
     try {
       const next = await invoke<ScanReport>("cleanup_scan", { drive: target });
       setReport(next);
+      // 默认勾选"安全档"（本地评分 ≥ 80 且非高风险）；其余交给人判断。
       setSelected(
         new Set(
           next.items
-            .filter((item) => item.bytes > 0 && item.available && !item.risky)
+            .filter((item) => item.bytes > 0 && item.available && item.bucket === "safe")
             .map((item) => item.id),
         ),
       );
+      setAiReport(null);
+      setAiError(null);
     } catch (cause) {
       setError(errorText(cause));
     } finally {
@@ -973,6 +1069,12 @@ function CleanupPane() {
     return Array.from(map.entries());
   }, [items]);
 
+  const aiVerdicts = useMemo(() => verdictMap(aiReport), [aiReport]);
+  const aiCleanCount = useMemo(
+    () => (aiReport?.verdicts ?? []).filter((v) => v.decision === "clean").length,
+    [aiReport],
+  );
+
   const busy = scanning || cleaning || deepBusy;
   // 盘内扫描的 total 是"目录数上限"，拿它算百分比会永远贴近 0——那种进度
   // 不如不显示，退回不定条 + 已扫目录数。
@@ -1036,7 +1138,32 @@ function CleanupPane() {
           {scanning ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
           {scanning ? "扫描中…" : "重新扫描"}
         </button>
+        <button
+          type="button"
+          className="pane-btn"
+          onClick={() => void askAi()}
+          disabled={busy || aiBusy || !report || (aiStatus !== null && !aiStatus.ready)}
+          title={
+            aiStatus && !aiStatus.ready
+              ? (aiStatus.problem ?? "AI 后端未配置")
+              : "把清理项清单交给 AI 判断，自动勾选可安全清理的项"
+          }
+        >
+          {aiBusy ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+          {aiBusy ? "AI 判断中…" : "AI 智能判断"}
+        </button>
       </div>
+
+      {aiReport && (
+        <p className="pane-hint">
+          AI 判断了 {aiReport.considered} 项，建议清理 {aiCleanCount} 项
+          {aiReport.blocked > 0 && `；模型有 ${aiReport.blocked} 条越权建议已被规则拦截`}
+          {aiReport.dropped > 0 && `；${aiReport.dropped} 条无效建议已丢弃`}
+          {aiReport.truncated && "；候选过多，只看了体积最大的若干项"}
+          {aiReport.notes && `。${aiReport.notes}`}
+        </p>
+      )}
+      {aiError && <p className="pane-error">{aiError}</p>}
 
       {(scanning || cleaning || deepBusy) && (
         <div className="progress-wrap">
@@ -1157,8 +1284,28 @@ function CleanupPane() {
                         </span>
                       )}
                       {item.needsAdmin && <span className="clean-tag">需管理员</span>}
+                      {aiVerdicts.get(item.id)?.decision === "clean" && (
+                        <span className="ai-badge">
+                          <Sparkles size={11} aria-hidden="true" />
+                          AI 推荐
+                        </span>
+                      )}
+                      {aiVerdicts.get(item.id)?.decision === "keep" && (
+                        <span className="ai-badge is-keep">AI 建议保留</span>
+                      )}
+                      {aiVerdicts.get(item.id)?.decision === "unsure" && (
+                        <span className="ai-badge is-unsure">AI 待确认</span>
+                      )}
                     </span>
-                    <span className="clean-hint">{item.hint}</span>
+                    <span className="clean-hint">
+                      {item.hint}
+                      <span className="dim"> · 删后：{item.recoverable}</span>
+                    </span>
+                    {aiVerdicts.get(item.id)?.reason && (
+                      <span className="ai-reason">
+                        AI：{aiVerdicts.get(item.id)!.reason}
+                      </span>
+                    )}
                     <span className="clean-bar" aria-hidden="true">
                       <span className="clean-bar-fill" style={{ width: `${share}%` }} />
                     </span>
@@ -1405,6 +1552,308 @@ function CleanupPane() {
           {confirming ? "确认清理（不可恢复）" : "清理选中项"}
         </button>
       </footer>
+    </div>
+  );
+}
+
+// ── 文件索引 ──────────────────────────────────────────────────────────
+
+/** 单卷索引状态（对应 hermix-filesearch 的 IndexStatus，serde camelCase）。 */
+interface IndexVolumeStatus {
+  volume: string | null;
+  totalEntries: number;
+  isIndexed: boolean;
+  snapshotLoaded: boolean;
+  needsRebuild: boolean;
+  statusMessage: string | null;
+  monitorState: string;
+  lastSyncAt: number | null;
+  lastSyncError: string | null;
+  /** 已索引体积（字节）。 */
+  indexedBytes: number;
+  /** 索引建立时间（unix 毫秒）。 */
+  indexedAt: number | null;
+  /** 建索引阶段：idle/enumerating/readingSizes/writing/saving/ready/failed。 */
+  buildPhase: string;
+  /** 已扫描条目数（枚举阶段 = 已读到的 MFT 记录数）。 */
+  buildScanned: number;
+  /** 已知总量（读体积阶段才有）。 */
+  buildTotal: number;
+  buildError: string | null;
+}
+
+/** 多卷汇总状态（对应 hermix-filesearch 的 ServiceStatus）。 */
+interface IndexServiceStatus {
+  volumes: IndexVolumeStatus[];
+  skipped: Record<string, string>;
+  totalEntries: number;
+  totalBytes: number;
+  /** idle / scanning / indexing / ready / failed。 */
+  state: string;
+  message: string;
+  /** helper 能不能读 MFT（= 有没有提权）。 */
+  mftReadable: boolean;
+}
+
+/** 查看器侧的统一返回：running=false 时带 reason。 */
+interface IndexStatusResponse {
+  running: boolean;
+  reason?: string;
+  message?: string;
+  status?: IndexServiceStatus;
+}
+
+/** 汇总状态 → 中文标签。 */
+const INDEX_STATE_LABEL: Record<string, string> = {
+  idle: "未建立",
+  scanning: "扫描中",
+  indexing: "索引中",
+  ready: "已就绪",
+  failed: "失败",
+};
+
+/** 单卷建索引进度 → 中文标签。 */
+const INDEX_PHASE_LABEL: Record<string, string> = {
+  idle: "未建立",
+  enumerating: "扫描中",
+  readingSizes: "读取体积",
+  writing: "写入索引",
+  saving: "保存快照",
+  ready: "已就绪",
+  failed: "失败",
+};
+
+/** 「上次同步」用相对时间：真的发生过变更才会前进，不会永远「刚刚」。 */
+function formatAgo(ms: number | null): string {
+  if (!ms) return "—";
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  return new Date(ms).toLocaleString();
+}
+
+function IndexPane() {
+  const [data, setData] = useState<IndexStatusResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"start" | "rebuild" | null>(null);
+  /** 自动流程的说明文案（用户要知道程序正在干什么）。 */
+  const [autoNote, setAutoNote] = useState<string | null>(null);
+  /** 自动流程只跑一次（提权启动 → 建索引），避免每 2 秒轮询重复触发。 */
+  const autoRan = useRef(false);
+
+  const load = useCallback(async () => {
+    try {
+      const next = await invoke<IndexStatusResponse>("viewer_filesearch_status", {
+        action: "status",
+      });
+      setData(next);
+      setError(null);
+    } catch (cause) {
+      setError(errorText(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+  // 状态每 2 秒刷新一次：建索引进度必须看得见（否则用户以为没反应）。
+  useInterval(() => void load(), 2000);
+
+  const run = useCallback(
+    async (action: "start" | "rebuild") => {
+      setBusy(action);
+      setError(null);
+      setNotice(null);
+      try {
+        const next = await invoke<IndexStatusResponse>("viewer_filesearch_status", { action });
+        setNotice(next.message ?? (action === "start" ? "索引服务已就绪。" : "已开始重建索引。"));
+        // 动作返回后立刻拉一次状态：不等下一次 2 秒轮询。
+        await load();
+      } catch (cause) {
+        setError(errorText(cause));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [load],
+  );
+
+  // 进入页面自动建立索引：没起服务就提权起，起了但没数据就重建一次。
+  useEffect(() => {
+    if (!data || autoRan.current) return;
+    if (!data.running) {
+      autoRan.current = true;
+      setAutoNote("正在自动启动索引服务（如弹出管理员授权窗口，请点「是」）。");
+      void run("start");
+      return;
+    }
+    const volumes = data.status?.volumes ?? [];
+    if (volumes.some((volume) => volume.totalEntries > 0)) return;
+    autoRan.current = true;
+    setAutoNote("正在自动建立索引…（全盘枚举约 1–3 分钟，之后秒开）");
+    void run("rebuild");
+  }, [data, run]);
+
+  const service = data?.status;
+  const volumes = service?.volumes ?? [];
+  const building = volumes.some(
+    (volume) =>
+      volume.buildPhase !== "idle" &&
+      volume.buildPhase !== "ready" &&
+      volume.buildPhase !== "failed",
+  );
+  const failed = volumes.filter((volume) => volume.buildPhase === "failed");
+  const skipped = Object.entries(service?.skipped ?? {});
+
+  const stateLabel = data?.running
+    ? INDEX_STATE_LABEL[service?.state ?? "idle"] ?? "未知"
+    : "未启动";
+
+  return (
+    <div className="pane">
+      <div className="pane-bar">
+        <button
+          type="button"
+          className="pane-btn"
+          onClick={() => void run("start")}
+          disabled={busy !== null}
+          title="读取 MFT 需要管理员权限；已在运行但读不了 MFT 时会自动提权重启"
+        >
+          {busy === "start" ? <Loader2 size={14} className="spin" /> : <ShieldAlert size={14} />}
+          提权启动索引服务
+        </button>
+        <button
+          type="button"
+          className="pane-btn"
+          onClick={() => void run("rebuild")}
+          disabled={busy !== null}
+          title="忽略旧快照，重新扫描本机各卷的 MFT（必要时先请求管理员授权）"
+        >
+          {busy === "rebuild" ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+          {building ? "正在重建索引…" : "重建索引"}
+        </button>
+        <span className="pane-stats">
+          <span>状态：{stateLabel}</span>
+          <span>条目数：{(service?.totalEntries ?? 0).toLocaleString()}</span>
+          <span>已索引体积：{formatBytes(service?.totalBytes ?? 0)}</span>
+        </span>
+      </div>
+
+      {error && <p className="pane-error">{error}</p>}
+      {notice && <p className="pane-notice">{notice}</p>}
+      {autoNote && <p className="pane-notice">{autoNote}</p>}
+      {!data?.running && data?.reason && (
+        <p className="pane-notice">
+          {data.reason}——读 MFT 需要管理员权限，点「提权启动索引服务」授权后会自动建立索引。
+        </p>
+      )}
+      {data?.running && service && !service.mftReadable && (
+        <p className="pane-error">
+          索引服务已运行，但当前进程无法读取 MFT（未提权）。点「提权启动索引服务」重启一次。
+        </p>
+      )}
+      {service && <p className="pane-hint">{service.message}</p>}
+
+      <div className="idx-cards">
+        <div className="idx-card">
+          <span className="idx-card-label">条目数</span>
+          <strong className="idx-card-value">{(service?.totalEntries ?? 0).toLocaleString()}</strong>
+        </div>
+        <div className="idx-card">
+          <span className="idx-card-label">已索引体积</span>
+          <strong className="idx-card-value">{formatBytes(service?.totalBytes ?? 0)}</strong>
+        </div>
+        <div className="idx-card">
+          <span className="idx-card-label">上次同步</span>
+          <strong className="idx-card-value">
+            {formatAgo(
+              volumes.reduce<number | null>(
+                (latest, volume) =>
+                  volume.lastSyncAt && (!latest || volume.lastSyncAt > latest)
+                    ? volume.lastSyncAt
+                    : latest,
+                null,
+              ),
+            )}
+          </strong>
+        </div>
+        <div className="idx-card">
+          <span className="idx-card-label">状态</span>
+          <strong className="idx-card-value">{stateLabel}</strong>
+        </div>
+      </div>
+
+      {failed.length > 0 && (
+        <div className="pane-banner">
+          <AlertTriangle size={14} aria-hidden="true" />
+          <span>
+            {failed
+              .map((volume) => `${volume.volume ?? "?"}：${volume.buildError ?? "未知原因"}`)
+              .join("；")}
+          </span>
+        </div>
+      )}
+
+      <div className="idx-list">
+        {volumes.length === 0 && !data?.running && (
+          <p className="pane-empty">索引服务尚未启动。</p>
+        )}
+        {volumes.length === 0 && data?.running && (
+          <p className="pane-empty">正在发现本机卷…（卷设备无响应时最多等 5 秒）</p>
+        )}
+        {volumes.map((volume) => {
+          // 阶段：空闲时按「有没有条目」判断是从快照装载的（已就绪）还是
+          // 真的没建（未建立）——快照装载的卷不会产生建索引进度。
+          const phaseKey =
+            volume.buildPhase !== "idle"
+              ? volume.buildPhase
+              : volume.totalEntries > 0
+                ? "ready"
+                : "idle";
+          const phase = INDEX_PHASE_LABEL[phaseKey] ?? phaseKey;
+          const percent =
+            volume.buildTotal > 0
+              ? Math.min(100, Math.round((volume.buildScanned / volume.buildTotal) * 100))
+              : null;
+          return (
+            <div className="idx-row" key={volume.volume ?? "unknown"}>
+              <span className="idx-vol">{volume.volume ?? "—"}</span>
+              <span className="idx-meta">{volume.totalEntries.toLocaleString()} 项</span>
+              <span className="idx-meta">{formatBytes(volume.indexedBytes)}</span>
+              <span className="idx-meta" title={volume.indexedAt ? new Date(volume.indexedAt).toLocaleString() : ""}>
+                索引于 {volume.indexedAt ? new Date(volume.indexedAt).toLocaleString() : "—"}
+              </span>
+              <span className="idx-meta" title={volume.lastSyncAt ? new Date(volume.lastSyncAt).toLocaleString() : ""}>
+                上次同步 {formatAgo(volume.lastSyncAt)}
+              </span>
+              <span className={`idx-phase is-${phaseKey}`}>{phase}</span>
+              {phaseKey !== "idle" && phaseKey !== "ready" && (
+                <span className="idx-progress">
+                  <span className="meter">
+                    <span
+                      className="meter-fill"
+                      style={{ width: `${percent ?? (volume.buildScanned > 0 ? 100 : 0)}%` }}
+                    />
+                  </span>
+                  <span className="idx-progress-text">
+                    {volume.buildTotal > 0
+                      ? `${volume.buildScanned.toLocaleString()}/${volume.buildTotal.toLocaleString()}`
+                      : `${volume.buildScanned.toLocaleString()} 条`}
+                  </span>
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {skipped.length > 0 && (
+        <p className="pane-hint">
+          跳过：{skipped.map(([volume, reason]) => `${volume}（${reason}）`).join("；")}
+        </p>
+      )}
     </div>
   );
 }

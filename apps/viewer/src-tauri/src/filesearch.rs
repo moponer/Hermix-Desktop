@@ -433,21 +433,97 @@ pub async fn viewer_filesearch_stop() -> Result<String, String> {
         .map_err(|error| format!("停止索引服务失败：{error}"))?
 }
 
-/// 索引服务状态（给「搜索」面板显示是否已就绪）。
+/// 索引服务状态（给「文件索引」面板显示是否已就绪）。
+///
+/// `action` 让这一个命令同时承担「查状态 / 提权启动 / 重建索引」三件事：
+/// - `None` / `"status"`：只读状态。
+/// - `"start"`：确保索引服务在跑（必要时弹 UAC 提权）。已在跑但**读不了 MFT**
+///   （没提权）时，会先请它自己退出再以提权方式重拉。
+/// - `"rebuild"`：重建索引（忽略旧快照重新扫 MFT）。
+///
+/// **为什么合成一个命令**：查看器的 Tauri 命令要在 `lib.rs` 注册，
+/// 每加一个就要动一次中央注册表；合成一个动作参数把改动面收在
+/// 这一个文件里。
 #[tauri::command(async)]
-pub async fn viewer_filesearch_status() -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        let Ok(endpoint) = read_endpoint() else {
-            return Ok(json!({"running": false, "reason": "索引服务未启动"}));
-        };
-        if !process_alive(endpoint.pid) {
-            return Ok(json!({"running": false, "reason": "索引服务进程已退出"}));
-        }
-        let result = request(&endpoint, "status", json!({})).unwrap_or(Value::Null);
-        Ok(json!({"running": true, "status": result}))
+pub async fn viewer_filesearch_status(action: Option<String>) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || match action.as_deref() {
+        Some("start") => start_service().map(|message| json!({"running": true, "message": message})),
+        Some("rebuild") => rebuild_index(),
+        _ => status_snapshot(),
     })
     .await
-    .map_err(|error| format!("状态查询失败：{error}"))?
+    .map_err(|error| format!("索引服务操作失败：{error}"))?
+}
+
+/// 只读状态快照。
+fn status_snapshot() -> Result<Value, String> {
+    let Ok(endpoint) = read_endpoint() else {
+        return Ok(json!({"running": false, "reason": "索引服务未启动"}));
+    };
+    if !process_alive(endpoint.pid) {
+        return Ok(json!({"running": false, "reason": "索引服务进程已退出"}));
+    }
+    let result = request(&endpoint, "status", json!({})).unwrap_or(Value::Null);
+    Ok(json!({"running": true, "status": result}))
+}
+
+/// 确保索引服务在跑，并且**真的能读 MFT**。
+///
+/// 「已在运行」不等于「有权限读 $MFT」：helper 是提权进程，普通权限
+/// 启动的实例照样在跑，但建索引会直接 ACCESS_DENIED——界面却显示
+/// 「已就绪」。所以这里用 helper 自报的 `mftReadable` 判定，
+/// 不满足就请它自己退出（提权进程 taskkill 会被拒绝，只能让它自己走），
+/// 再以提权方式重拉。
+fn start_service() -> Result<String, String> {
+    if let Ok(endpoint) = read_endpoint() {
+        if process_alive(endpoint.pid) {
+            let status = request(&endpoint, "status", json!({})).unwrap_or(Value::Null);
+            if mft_readable(&status) {
+                return Ok("索引服务已在运行（已提权，可读取 MFT）。".to_string());
+            }
+            let _ = request(&endpoint, "shutdown", json!({}));
+            wait_exit(endpoint.pid, 10);
+        }
+    }
+    let endpoint = ensure_helper()?;
+    let status = request(&endpoint, "status", json!({})).unwrap_or(Value::Null);
+    if mft_readable(&status) {
+        Ok("索引服务已提权启动，正在建立索引。".to_string())
+    } else {
+        Err("索引服务已启动，但仍无法读取 MFT——管理员授权可能未真正生效。".to_string())
+    }
+}
+
+/// helper 自报能不能读 MFT（等价于「有没有提权」）。
+fn mft_readable(status: &Value) -> bool {
+    status
+        .get("mftReadable")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+/// 提权进程只能「请它自己走」：轮询等它退出。
+fn wait_exit(pid: u32, timeout_secs: u64) {
+    for _ in 0..timeout_secs {
+        if !process_alive(pid) {
+            return;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+/// 重建索引：先确保 helper 在跑，再让它后台重建（协议立即返回）。
+fn rebuild_index() -> Result<Value, String> {
+    let endpoint = ensure_helper()?;
+    let result = request(&endpoint, "rebuild", json!({}))?;
+    let message = result
+        .get("message")
+        .and_then(|value| value.as_str())
+        .unwrap_or("已开始重建索引。")
+        .to_string();
+    // 不回传 status：重建响应不是服务状态，回传会让前端把状态面板
+    // 短暂替换成非状态数据（等下一次轮询才恢复）。
+    Ok(json!({"running": true, "message": message}))
 }
 
 #[cfg(test)]

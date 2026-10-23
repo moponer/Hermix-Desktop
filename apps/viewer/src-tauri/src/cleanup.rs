@@ -1,10 +1,10 @@
-//! 垃圾清理引擎 —— 规则驱动（照抄 BleachBit/CleanerML 的模型，不自己发明）。
+//! 垃圾清理引擎 —— 规则驱动（清理项是**数据**，不是代码）。
 //!
-//! CleanerML 的核心是：**清理项是数据，不是代码**。每条规则声明一组路径
-//! （支持环境变量与通配）、一个动作（delete/truncate）、以及白名单；引擎
-//! 只删"匹配到的东西"，不递归删目录、不碰白名单。这里同样：
+//! 模型来自 BleachBit / CleanerML 一脉：每条规则声明一组路径（支持环境变量与
+//! 通配）、一个动作（删除）、最小年龄、是否需要管理员、是否危险、以及**本地评分**
+//! 与**恢复方式**；引擎只删"规则展开出来的东西"，不递归删目录、不碰禁区。
 //!
-//! - 规则表 [`RULES`]：路径模板 + 最小年龄 + 是否需要管理员 + 是否危险；
+//! - 规则表 [`RULES`]：路径模板 + 最小年龄 + 管理员 + 危险标记 + 评分 + 恢复方式；
 //! - 扫描：展开 `%VAR%` → 通配匹配 → 递归枚举（不跟随 symlink/junction）；
 //! - 清理：**重新扫描**（绝不信任前端传来的路径），逐文件删除，失败的跳过
 //!   并计数，最后尽力清掉空目录；
@@ -16,6 +16,9 @@
 //! 2. [`FORBIDDEN_ROOTS`] 里的系统目录即使规则写错也拒绝；
 //! 3. 符号链接/联接点一律跳过（`symlink_metadata`，不解引用）；
 //! 4. 目录本身永不删除，只删文件 + 移除已空子目录。
+//!
+//! AI 辅助（`cleanup_ai.rs`）只在这套规则之上**加建议**，不扩大删除范围：
+//! 本地判定为高风险的项，模型即使说"可以清"也不采纳。
 
 use std::{
     fs,
@@ -28,6 +31,11 @@ use serde::Serialize;
 use crate::sysmon::{drive_of, expand_env};
 
 /// 规则作用域里的"绝对禁区"：即使某条规则的通配把这里纳入了，也拒绝删除。
+///
+/// 注意 `c:\program files` / `c:\program files (x86)` 是**整棵树**禁区：
+/// Steam 等游戏平台的缓存也装在 Program Files 下，但本引擎的红线是
+/// "不碰 Program Files"（那里的东西装错版本号就装不回来了），
+/// 所以那些清理项只能等禁区策略细化后再加。
 const FORBIDDEN_ROOTS: &[&str] = &[
     r"c:\windows\system32",
     r"c:\windows\syswow64",
@@ -58,12 +66,24 @@ pub struct CleanRule {
     pub needs_admin: bool,
     /// 危险项：默认不勾选，UI 需二次确认。
     pub risky: bool,
+    /// **本地评分**（0-100）：这一项「有多适合直接清掉」。
+    /// 纯缓存 = 高分；涉及用户数据或需要重新下载的 = 低分。
+    /// 评分只决定**默认勾选与排序**，不代表执行权限（权限看 risky/禁区）。
+    pub score: i32,
+    /// 删掉之后怎么恢复（给用户看，别用"可恢复"这种含糊说法）。
+    pub recoverable: &'static str,
 }
+
+/// 评分分档门槛：≥ 此值 → 默认勾选（安全档）。
+const SCORE_SAFE: i32 = 80;
 
 /// 规则表。新增一类垃圾 = 加一条结构体，不改引擎。
 ///
 /// 只收"删了不会丢用户数据"的目录：缓存、临时文件、转储、回收站。
 /// 刻意**不**收下载目录、浏览器历史/书签、聊天记录——那些是数据不是垃圾。
+///
+/// 分类沿用 BleachBit 的两层结构（应用 → 选项），这里压成一维 `group`：
+/// 系统 / 浏览器 / 显卡 / 开发工具 / 应用 / 游戏。
 pub const RULES: &[CleanRule] = &[
     CleanRule {
         id: "user-temp",
@@ -74,6 +94,8 @@ pub const RULES: &[CleanRule] = &[
         min_age_minutes: 10,
         needs_admin: false,
         risky: false,
+        score: 90,
+        recoverable: "不可恢复（临时文件本就该丢）",
     },
     CleanRule {
         id: "windows-temp",
@@ -84,6 +106,8 @@ pub const RULES: &[CleanRule] = &[
         min_age_minutes: 10,
         needs_admin: true,
         risky: false,
+        score: 85,
+        recoverable: "不可恢复",
     },
     CleanRule {
         id: "recycle-bin",
@@ -94,6 +118,8 @@ pub const RULES: &[CleanRule] = &[
         min_age_minutes: 0,
         needs_admin: false,
         risky: false,
+        score: 70,
+        recoverable: "不可恢复（等同于清空回收站）",
     },
     CleanRule {
         id: "thumbnails",
@@ -104,6 +130,8 @@ pub const RULES: &[CleanRule] = &[
         min_age_minutes: 0,
         needs_admin: false,
         risky: false,
+        score: 85,
+        recoverable: "自动重建（首次浏览稍慢）",
     },
     CleanRule {
         id: "icon-cache",
@@ -117,6 +145,8 @@ pub const RULES: &[CleanRule] = &[
         min_age_minutes: 0,
         needs_admin: false,
         risky: false,
+        score: 85,
+        recoverable: "自动重建",
     },
     CleanRule {
         id: "crash-dumps",
@@ -127,6 +157,20 @@ pub const RULES: &[CleanRule] = &[
         min_age_minutes: 0,
         needs_admin: false,
         risky: false,
+        score: 80,
+        recoverable: "不可恢复（失去崩溃现场）",
+    },
+    CleanRule {
+        id: "minidump",
+        title: "系统小型转储",
+        hint: "蓝屏时 Windows 写的 Minidump，排查蓝屏才需要。",
+        group: "系统",
+        paths: &[r"%SystemRoot%\Minidump\*"],
+        min_age_minutes: 0,
+        needs_admin: true,
+        risky: false,
+        score: 75,
+        recoverable: "不可恢复（失去蓝屏现场）",
     },
     CleanRule {
         id: "d3d-cache",
@@ -137,6 +181,80 @@ pub const RULES: &[CleanRule] = &[
         min_age_minutes: 0,
         needs_admin: false,
         risky: false,
+        score: 85,
+        recoverable: "自动重建（首次启动会重新编译着色器）",
+    },
+    CleanRule {
+        id: "delivery-optimization",
+        title: "传递优化缓存",
+        hint: "Windows 更新/商店下载的共享缓存；删除后需要时会重新下载。",
+        group: "系统",
+        paths: &[r"%ProgramData%\Microsoft\Windows\DeliveryOptimization\Cache\*"],
+        min_age_minutes: 0,
+        needs_admin: true,
+        risky: false,
+        score: 85,
+        recoverable: "自动重下",
+    },
+    CleanRule {
+        id: "inet-cache",
+        title: "IE / INet 缓存",
+        hint: "Windows 传统联网组件的缓存与历史文件。",
+        group: "系统",
+        paths: &[r"%LOCALAPPDATA%\Microsoft\Windows\INetCache\*"],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 85,
+        recoverable: "自动重建",
+    },
+    CleanRule {
+        id: "font-cache",
+        title: "字体缓存",
+        hint: "系统字体缓存；清掉后新字体要重新扫描（首次启动变慢）。",
+        group: "系统",
+        paths: &[r"%LOCALAPPDATA%\FontCache\*"],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 70,
+        recoverable: "自动重建（首次启动变慢）",
+    },
+    CleanRule {
+        id: "cbs-logs",
+        title: "组件服务日志",
+        hint: "Windows 组件服务（CBS）的排障日志，体积通常很大。",
+        group: "系统",
+        paths: &[r"%SystemRoot%\Logs\CBS\*"],
+        min_age_minutes: 0,
+        needs_admin: true,
+        risky: false,
+        score: 75,
+        recoverable: "不可恢复（排障日志）",
+    },
+    CleanRule {
+        id: "panther-logs",
+        title: "系统安装日志",
+        hint: "Windows 安装/升级过程的 Panther 日志。",
+        group: "系统",
+        paths: &[r"%SystemRoot%\Panther\*"],
+        min_age_minutes: 0,
+        needs_admin: true,
+        risky: false,
+        score: 75,
+        recoverable: "不可恢复（安装日志）",
+    },
+    CleanRule {
+        id: "prefetch",
+        title: "预读文件",
+        hint: "Windows 用来加速启动的预读数据；清掉后前几次启动会变慢。",
+        group: "系统",
+        paths: &[r"%SystemRoot%\Prefetch\*"],
+        min_age_minutes: 0,
+        needs_admin: true,
+        risky: false,
+        score: 55,
+        recoverable: "自动重建（前几次启动变慢）",
     },
     CleanRule {
         id: "error-reports",
@@ -150,6 +268,8 @@ pub const RULES: &[CleanRule] = &[
         min_age_minutes: 0,
         needs_admin: true,
         risky: false,
+        score: 80,
+        recoverable: "不可恢复（排障日志）",
     },
     CleanRule {
         id: "browser-cache",
@@ -167,6 +287,209 @@ pub const RULES: &[CleanRule] = &[
         min_age_minutes: 0,
         needs_admin: false,
         risky: false,
+        score: 85,
+        recoverable: "自动重建（登录态保留）",
+    },
+    CleanRule {
+        id: "browser-sw-cache",
+        title: "浏览器离线站点缓存",
+        hint: "Service Worker 的 CacheStorage：网页的离线副本，删后这些站点要重新联网加载。",
+        group: "浏览器",
+        paths: &[
+            r"%LOCALAPPDATA%\Google\Chrome\User Data\*\Service Worker\CacheStorage\*",
+            r"%LOCALAPPDATA%\Microsoft\Edge\User Data\*\Service Worker\CacheStorage\*",
+        ],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 60,
+        recoverable: "自动重建（离线站点要重新联网）",
+    },
+    CleanRule {
+        id: "nvidia-cache",
+        title: "NVIDIA 着色器缓存",
+        hint: "NVIDIA 的 DXCache / GLCache，删后游戏首次运行会重新编译着色器。",
+        group: "显卡",
+        paths: &[
+            r"%LOCALAPPDATA%\NVIDIA\DXCache\*",
+            r"%LOCALAPPDATA%\NVIDIA\GLCache\*",
+            r"%ProgramData%\NVIDIA Corporation\NV_Cache\*",
+        ],
+        min_age_minutes: 0,
+        needs_admin: true,
+        risky: false,
+        score: 85,
+        recoverable: "自动重建（首次运行重新编译着色器）",
+    },
+    CleanRule {
+        id: "amd-cache",
+        title: "AMD 着色器缓存",
+        hint: "AMD 的 DxCache / VkCache。",
+        group: "显卡",
+        paths: &[
+            r"%LOCALAPPDATA%\AMD\DxCache\*",
+            r"%LOCALAPPDATA%\AMD\VkCache\*",
+        ],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 85,
+        recoverable: "自动重建",
+    },
+    CleanRule {
+        id: "intel-cache",
+        title: "Intel 着色器缓存",
+        hint: "Intel 的 ShaderCache。",
+        group: "显卡",
+        paths: &[r"%LOCALAPPDATA%\Intel\ShaderCache\*"],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 85,
+        recoverable: "自动重建",
+    },
+    CleanRule {
+        id: "vscode-cache",
+        title: "VS Code 缓存",
+        hint: "编辑器的工作区缓存与扩展安装包缓存（不含你的代码与设置）。",
+        group: "开发工具",
+        paths: &[
+            r"%APPDATA%\Code\Cache\*",
+            r"%APPDATA%\Code\CachedData\*",
+            r"%APPDATA%\Code\CachedExtensionVSIXs\*",
+            r"%APPDATA%\Code\Code Cache\*",
+        ],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 85,
+        recoverable: "自动重建",
+    },
+    CleanRule {
+        id: "npm-cache",
+        title: "npm 缓存",
+        hint: "Node 包管理器下载的包缓存。",
+        group: "开发工具",
+        paths: &[r"%LOCALAPPDATA%\npm-cache\*"],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 85,
+        recoverable: "自动重下",
+    },
+    CleanRule {
+        id: "pip-cache",
+        title: "pip 缓存",
+        hint: "Python 包下载缓存。",
+        group: "开发工具",
+        paths: &[r"%LOCALAPPDATA%\pip\Cache\*"],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 85,
+        recoverable: "自动重下",
+    },
+    CleanRule {
+        id: "nuget-cache",
+        title: "NuGet 缓存",
+        hint: ".NET 包缓存；清掉后离线还原会失败（需联网重下）。",
+        group: "开发工具",
+        paths: &[r"%LOCALAPPDATA%\NuGet\v3-cache\*"],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 80,
+        recoverable: "自动重下",
+    },
+    CleanRule {
+        id: "cargo-cache",
+        title: "Cargo 下载缓存",
+        hint: "Rust 依赖的下载缓存（只清 cache，不动已解压的源码）。",
+        group: "开发工具",
+        paths: &[r"%USERPROFILE%\.cargo\registry\cache\*"],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 85,
+        recoverable: "自动重下",
+    },
+    CleanRule {
+        id: "gradle-cache",
+        title: "Gradle 缓存",
+        hint: "Gradle 构建缓存与依赖缓存。",
+        group: "开发工具",
+        paths: &[r"%USERPROFILE%\.gradle\caches\*"],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 65,
+        recoverable: "自动重下（首次构建变慢）",
+    },
+    CleanRule {
+        id: "onedrive-logs",
+        title: "OneDrive 日志",
+        hint: "同步客户端的本地日志，不含云端文件。",
+        group: "应用",
+        paths: &[r"%LOCALAPPDATA%\Microsoft\OneDrive\logs\*"],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 85,
+        recoverable: "自动重建",
+    },
+    CleanRule {
+        id: "teams-cache",
+        title: "Teams 缓存",
+        hint: "Teams 客户端的界面与媒体缓存。",
+        group: "应用",
+        paths: &[
+            r"%APPDATA%\Microsoft\Teams\Cache\*",
+            r"%APPDATA%\Microsoft\Teams\Code Cache\*",
+        ],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 75,
+        recoverable: "自动重建",
+    },
+    CleanRule {
+        id: "discord-cache",
+        title: "Discord 缓存",
+        hint: "Discord 客户端的图片与代码缓存。",
+        group: "应用",
+        paths: &[
+            r"%APPDATA%\discord\Cache\*",
+            r"%APPDATA%\discord\Code Cache\*",
+        ],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 75,
+        recoverable: "自动重建",
+    },
+    CleanRule {
+        id: "spotify-cache",
+        title: "Spotify 缓存",
+        hint: "音乐缓存与离线副本（离线歌会失效）。",
+        group: "应用",
+        paths: &[r"%LOCALAPPDATA%\Spotify\Storage\*"],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 60,
+        recoverable: "自动重建（离线歌曲需重新下载）",
+    },
+    CleanRule {
+        id: "zoom-logs",
+        title: "Zoom 日志",
+        hint: "会议客户端日志与录制临时文件。",
+        group: "应用",
+        paths: &[r"%APPDATA%\Zoom\logs\*"],
+        min_age_minutes: 0,
+        needs_admin: false,
+        risky: false,
+        score: 75,
+        recoverable: "不可恢复（日志）",
     },
     CleanRule {
         id: "windows-update-cache",
@@ -177,6 +500,8 @@ pub const RULES: &[CleanRule] = &[
         min_age_minutes: 0,
         needs_admin: true,
         risky: true,
+        score: 40,
+        recoverable: "需重新下载",
     },
 ];
 
@@ -191,10 +516,27 @@ pub struct CleanItem {
     pub files: u64,
     pub risky: bool,
     pub needs_admin: bool,
+    /// 本地评分（0-100）：这一项有多适合直接清掉（纯缓存高、涉及用户数据低）。
+    pub score: i32,
+    /// 分档：`safe`（默认勾选）/ `review`（看一眼再决定）/ `risky`（高风险，默认不勾）。
+    pub bucket: String,
+    /// 删掉之后怎么恢复（给用户看，别写"可恢复"这种含糊说法）。
+    pub recoverable: String,
     /// 规则展开出的根（展示用；清理时服务端重新展开，不用这些字符串）。
     pub roots: Vec<String>,
     /// 根目录不存在（或不适用于所选盘符）时为 false。
     pub available: bool,
+}
+
+/// 规则 → 分档。高风险一票否决（不管评分多高）。
+fn bucket_of(rule: &CleanRule) -> &'static str {
+    if rule.risky {
+        "risky"
+    } else if rule.score >= SCORE_SAFE {
+        "safe"
+    } else {
+        "review"
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -306,6 +648,9 @@ pub fn scan_with_progress(drive: Option<String>, progress: Option<Progress>) -> 
                 files,
                 risky: rule.risky,
                 needs_admin: rule.needs_admin,
+                score: rule.score,
+                bucket: bucket_of(rule).to_string(),
+                recoverable: rule.recoverable.to_string(),
                 roots: drive
                     .as_deref()
                     .map(|d| vec![format!("{d}\\$RECYCLE.BIN")])
@@ -357,6 +702,9 @@ pub fn scan_with_progress(drive: Option<String>, progress: Option<Progress>) -> 
             files,
             risky: rule.risky,
             needs_admin: rule.needs_admin,
+            score: rule.score,
+            bucket: bucket_of(rule).to_string(),
+            recoverable: rule.recoverable.to_string(),
             roots: roots.iter().map(|p| p.display().to_string()).collect(),
             available: !roots.is_empty(),
         });
@@ -812,6 +1160,8 @@ mod tests {
             min_age_minutes: 0,
             needs_admin: false,
             risky: false,
+            score: 90,
+            recoverable: "不可恢复",
         }
     }
 

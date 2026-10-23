@@ -127,7 +127,6 @@
 .syspanel-body {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
   padding: 10px 12px 12px; background: var(--bg-secondary);
-  border-top: 1px solid var(--border-subtle);
 }
 .pane { display: flex; flex-direction: column; min-height: 0; flex: 1; gap: 8px; }
 .pane-bar { display: flex; align-items: center; gap: 10px; flex: none; }
@@ -426,7 +425,6 @@
 .about-foot {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; font-size: 11px; padding-top: 4px;
-  border-top: 1px solid var(--border-subtle);
 }
 /* ─── 盘内深度扫描（kondo 式产物识别 + 残留/大文件） ─────────────── */
 .deep-scan {
@@ -463,7 +461,6 @@
 .deep-foot {
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; font-size: 12px; padding-top: 6px;
-  border-top: 1px solid var(--border-subtle);
 }
 
 /* ─── Treemap（squarified） ─────────────────────────────────────── */

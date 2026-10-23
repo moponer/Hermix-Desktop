@@ -1,0 +1,158 @@
+/* 系统调优（后台进程清理 / 磁盘清理 AI 辅助）—— 与 system-panel.css 同源的
+   视觉语言：层次靠底色差 + 间距，不画描边（chip 用底色差承载语义）。 */
+
+.tuner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.tuner-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tuner-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tuner-head .pane-stats {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 候选清单 */
+.tuner-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.tuner-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+
+.tuner-row.is-recommended {
+  background: var(--bg-card-hover);
+}
+
+.tuner-row.is-blocked {
+  background: var(--bg-tertiary);
+  opacity: 0.72;
+}
+
+.tuner-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.tuner-check input {
+  margin: 0;
+  flex: none;
+}
+
+.tuner-name {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tuner-pid {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  flex: none;
+}
+
+.tuner-memory {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* 风险 chip：底色差承载语义，不描边 */
+.tuner-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.tuner-chip.is-low {
+  background: color-mix(in srgb, var(--success) 22%, var(--bg-card));
+  color: var(--success);
+}
+
+.tuner-chip.is-medium {
+  background: color-mix(in srgb, var(--warning, #b45309) 18%, var(--bg-card));
+  color: var(--text-secondary);
+}
+
+.tuner-chip.is-high {
+  background: color-mix(in srgb, var(--danger) 18%, var(--bg-card));
+  color: var(--danger);
+}
+
+.tuner-reasons {
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* AI 建议标注（磁盘清理项） */
+.ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-card));
+  color: var(--accent);
+}
+
+.ai-badge.is-keep {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.ai-badge.is-unsure {
+  background: color-mix(in srgb, var(--info) 16%, var(--bg-card));
+  color: var(--info);
+}
+
+.ai-reason {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}

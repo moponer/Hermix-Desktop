@@ -246,6 +246,63 @@ pub fn snapshot() -> ProcessSnapshot {
     }
 }
 
+/// 轻量进程表：复用同一个 sampler（CPU 差分才有意义），但**不读 exe 版本信息**
+/// ——那是几百次文件 IO，后台清理扫描用不上，只取打分需要的字段。
+///
+/// 复用 sampler 而不是新建 System 是必须的：新建会触发第二次 300ms
+/// 差分 sleep，而且两个 System 的 CPU 基准不同，差分出来的百分比是错的。
+#[derive(Debug, Clone)]
+pub struct LightProcess {
+    pub pid: u32,
+    pub parent_pid: Option<u32>,
+    pub name: String,
+    pub cpu: f32,
+    pub memory_mb: f64,
+    /// 累计读写字节（sysinfo 内部走 GetProcessIoCounters，零额外 Win32 开销）。
+    pub disk_bytes: u64,
+    pub started_at: u64,
+    pub user: Option<String>,
+}
+
+pub fn refresh_light() -> Vec<LightProcess> {
+    let mut guard = match sampler().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let since = guard.sampled_at.elapsed();
+    if since < CPU_SAMPLE_GAP {
+        std::thread::sleep(CPU_SAMPLE_GAP - since);
+    }
+    guard
+        .system
+        .refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    guard.sampled_at = Instant::now();
+
+    let system = &guard.system;
+    let mut users: Option<sysinfo::Users> = None;
+    let mut rows: Vec<LightProcess> = Vec::with_capacity(system.processes().len());
+    for (pid, process) in system.processes() {
+        let user = process.user_id().and_then(|uid| {
+            users
+                .get_or_insert_with(sysinfo::Users::new_with_refreshed_list)
+                .get_user_by_id(uid)
+                .map(|user| user.name().to_string())
+        });
+        let io = process.disk_usage();
+        rows.push(LightProcess {
+            pid: pid.as_u32(),
+            parent_pid: process.parent().map(|p| p.as_u32()),
+            name: process.name().to_string_lossy().to_string(),
+            cpu: process.cpu_usage(),
+            memory_mb: process.memory() as f64 / 1024.0 / 1024.0,
+            disk_bytes: io.total_read_bytes + io.total_written_bytes,
+            started_at: process.start_time(),
+            user,
+        });
+    }
+    rows
+}
+
 /// 结束进程。返回给用户的文案要能解释失败原因（权限/UAC/已退出）。
 pub fn kill_process(pid: u32, force: bool) -> Result<String, String> {
     if pid <= 4 {
