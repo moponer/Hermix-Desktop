@@ -2945,6 +2945,22 @@ pub(crate) async fn handle_ws_stream(
     // 通往节点的 HTTP 通道 → 必然 404 → 选择器永远是空的）。
     push_model_list(&state, &mut *sender, &trace_id_base).await;
 
+    // 桌面会话列表快照：手机端「桌面会话浏览」的数据源。复用 `list_sessions`
+    // 的同一份查询（同一张表、同一个 scope 规则），避免两处口径漂移。
+    // 扁平帧直发——`to_mobile_frame` 对扁平帧原样映射，无需新协议类型。
+    {
+        let resp = crate::routes::list_sessions(
+            axum::extract::State(state.clone()),
+            axum::extract::Query(crate::routes::ListSessionsQuery { workbench_id: None }),
+        )
+        .await;
+        let frame = serde_json::json!({
+            "type": "session_list",
+            "sessions": resp.0.sessions.iter().take(30).collect::<Vec<_>>(),
+        });
+        let _ = sender.send(frame.to_string()).await;
+    }
+
     while let Some(first) = receiver.recv().await {
         // A turn's `handle_ws_stream_send` can hand back a user message it
         // consumed mid-stream. Re-drive it here rather than waiting for the
@@ -3252,6 +3268,15 @@ async fn handle_inbound_frame(
                 image_mime_type,
                 skills,
             } => {
+            // 阿黎（twin:ali）：这条会话固定用**她的人格**——桌面 TwinView 与
+            // 手机端两个入口看到的是同一个她。请求显式带人格时尊重请求，
+            // 兜底只发生在「没指定」的情况（手机端目前从不带）。
+            let personality = if session_id == crate::mobile::TWIN_SESSION_ID && personality.is_none()
+            {
+                Some(crate::mobile::TWIN_PERSONALITY.to_string())
+            } else {
+                personality
+            };
             let request = SendMessageRequest {
                 text,
                 model,

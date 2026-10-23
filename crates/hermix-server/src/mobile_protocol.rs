@@ -69,6 +69,8 @@ pub fn to_mobile_event(msg_type: &str) -> Option<&'static str> {
         "request_approval" => "approval.request",
         "done" => "turn.done",
         "error" => "turn.error",
+        // 桌面会话列表快照（手机连上即下发）——"桌面会话浏览"的数据源
+        "session_list" => "session.list",
         // 桌面推来的模型清单（手机连上即下发）——手机端唯一的模型来源
         "model_list" => "model.list",
         // 上下文窗口占用（持久条）/ 单轮 token 用量（cache 命中率）
@@ -170,6 +172,8 @@ pub fn to_mobile_frame(frame: &Value) -> Option<Value> {
         // 桌面推来的模型清单（model.list）
         "models",
         "default_model",
+        // 桌面会话列表快照（session.list）
+        "sessions",
         // 待办列表（todo.*）
         "items",
         "item",

@@ -182,7 +182,7 @@ pub(crate) const WORKBENCH_SESSION_SCOPE_SQL: &str = "workbench_id = ?1";
 /// context and the two histories read as a single thread.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ListSessionsQuery {
-    workbench_id: Option<String>,
+    pub(crate) workbench_id: Option<String>,
 }
 
 pub(crate) async fn list_sessions(
