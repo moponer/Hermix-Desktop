@@ -221,6 +221,28 @@ pub struct TurnEvidence<'a> {
 // Gate state (tracks rejections across turns)
 // ---------------------------------------------------------------------------
 
+/// The prefix of the advisory message the gate injects into the
+/// context.
+///
+/// Exposed so the wiring site and the tests recognise an advisory by a
+/// single marker instead of matching on prose.
+pub const ADVISORY_MESSAGE_PREFIX: &str = "[验收提醒] ";
+
+/// Hard cap on how many advisories one session may carry.
+///
+/// The advisory is a *state* correction, not a stream of feedback: once
+/// the model has been told that its claim is unbacked, repeating the
+/// same words adds nothing. The cap is the backstop for the case where
+/// the text differs slightly each time (the advisory quotes the user's
+/// message, so a session with several user messages could otherwise
+/// accumulate one advisory per message).
+pub const MAX_ADVISORIES_PER_SESSION: usize = 3;
+
+/// Is this message one of the gate's advisories?
+pub fn is_advisory_message(text: &str) -> bool {
+    text.starts_with(ADVISORY_MESSAGE_PREFIX)
+}
+
 /// Mutable state for the acceptance gate, held across turns.
 #[derive(Debug, Default)]
 pub struct AcceptanceGate {

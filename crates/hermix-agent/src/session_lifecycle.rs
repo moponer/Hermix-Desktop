@@ -591,16 +591,60 @@ fn run_acceptance_gate(
         &evidence,
     );
     if let Some(advisory) = report.advisory_text() {
+        let message = format!(
+            "{}{advisory}\n\
+             若上一条回复把尚未执行的动作说成已完成，请先真正执行该动作再汇报；\n\
+             若确实无法执行，请明确说明无法执行的原因。",
+            crate::acceptance_gate::ADVISORY_MESSAGE_PREFIX
+        );
+        // ★ Do not repeat an advisory the model already has.
+        //
+        // The check can fire on more than one turn of the same run: a
+        // model that answers with a completion claim and no tool call
+        // is nudged ("you have not yet started working") and the loop
+        // runs again — and the claim is still unbacked, so the check
+        // fires again. Injecting the same words twice buys nothing
+        // (the model already has them in context) and costs context on
+        // every such turn.
+        //
+        // The advisory quotes the user's message, so its text is stable
+        // for a given (session, user message) pair — an exact match is
+        // the right de-duplication key. The per-session cap is the
+        // backstop for the case where the text differs.
+        let existing = ctx.get_messages();
+        let already_present = existing
+            .iter()
+            .any(|m| m.content.as_deref() == Some(message.as_str()));
+        let advisory_count = existing
+            .iter()
+            .filter(|m| {
+                m.content
+                    .as_deref()
+                    .map(crate::acceptance_gate::is_advisory_message)
+                    .unwrap_or(false)
+            })
+            .count();
+        if already_present {
+            tracing::debug!(
+                turn = total_turns,
+                "acceptance_gate: advisory already in context, not repeating it"
+            );
+            return;
+        }
+        if advisory_count >= crate::acceptance_gate::MAX_ADVISORIES_PER_SESSION {
+            tracing::debug!(
+                turn = total_turns,
+                advisories = advisory_count,
+                "acceptance_gate: per-session advisory cap reached, not adding another"
+            );
+            return;
+        }
         tracing::warn!(
             turn = total_turns,
             advisory = %advisory,
             "acceptance_gate: advisory queued for the next turn"
         );
-        ctx.add_message(Message::system(format!(
-            "[验收提醒] {advisory}\n\
-             若上一条回复把尚未执行的动作说成已完成，请先真正执行该动作再汇报；\
-             若确实无法执行，请明确说明无法执行的原因。"
-        )));
+        ctx.add_message(Message::system(message));
     }
 }
 
