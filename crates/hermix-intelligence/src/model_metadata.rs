@@ -75,6 +75,12 @@ static DEFAULT_CONTEXT_LENGTHS: &[(&str, u64)] = &[
     ("qwen3-coder", 262_144),
     ("qwen", 131_072),
     // MiniMax
+    //
+    // M3.1 系列把上下文扩到 1M（用户 2026-10-23 实测确认）；M2 及更早仍是
+    // 204.8K。条目按 key 长度降序匹配，所以具体型号必须排在家族前——否则
+    // `("minimax", 204_800)` 会先命中，M3.1 永远读成 200K（这正是之前的
+    // 症状：模型自称 1M，项目按 205K 触发压缩）。
+    ("minimax-m3.1", 1_000_000),
     ("minimax", 204_800),
     // GLM
     ("glm", 202_752),
@@ -476,10 +482,41 @@ pub fn get_model_context_length_with_source(
                     return (ctx, ContextSource::Provider);
                 }
             }
+        } else {
+            // 1b. 内置型号（`MiniMax-M3.1-Flash` 这类没有 provider 前缀）。
+            //
+            // 旧实现只在 `split_once(':')` 成功时才看 provider 覆盖，于是
+            // **内置 provider 的上下文根本无法配置**：用户在 config.yaml 的
+            // `llm_providers.minimax.model_contexts` 里写什么都被跳过，只能
+            // 改代码里的静态表（2026-10-23 报告：M3.1 支持 1M，项目按
+            // 205K 算）。
+            //
+            // 模型名跨 provider 唯一性足够，遍历匹配即可；大小写不敏感，
+            // 因为前端 fetch-models 写入的是上游原样 id，用户手写时大小写
+            // 常常对不上。
+            for provider in providers.values() {
+                if let Some((_, &ctx)) = provider
+                    .model_contexts
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(model))
+                {
+                    return (ctx, ContextSource::Probed);
+                }
+            }
         }
     }
 
-    // 2. Static catalog (inlined; do NOT recurse back into
+    // 2. **线上目录优先于静态表**（2026-10-23）。
+    //
+    // OpenRouter 的公开模型目录（免 key）带每个型号真实的 `context_length`，
+    // 而下面的静态表是按家族前缀猜的——`("minimax", 204_800)` 在 M3.1
+    // （1M）上照样生效，模型按 1M 干活、项目按 205K 触发压缩。
+    // 目录快照是同步内存查（磁盘缓存 + 后台刷新），不阻塞这一轮。
+    if let Some(limits) = crate::model_directory::lookup(model) {
+        return (limits.context, ContextSource::Catalog);
+    }
+
+    // 3. Static catalog (inlined; do NOT recurse back into
     // `get_model_context_length` — that path doesn't accept overrides but
     // would still be functionally identical; inlining keeps the call chain
     // flat and avoids accidental infinite recursion.)
@@ -741,6 +778,43 @@ mod tests {
         assert_eq!(
             get_model_context_length_with("custom-agnes:unknown-model", Some(&providers)),
             256_000
+        );
+    }
+
+    /// M3.1 的 1M 上下文必须命中具体型号条目，而不是被家族兜底吃掉。
+    #[test]
+    fn minimax_m31_resolves_to_one_million_not_the_family_default() {
+        assert_eq!(
+            get_model_context_length_with("MiniMax-M3.1-Flash", None),
+            1_000_000,
+            "M3.1 系列是 1M —— 家族兜底 204.8K 只适用于 M2 及更早"
+        );
+        // 更早的型号仍走家族兜底（不要误伤）。
+        assert_eq!(
+            get_model_context_length_with("MiniMax-M2", None),
+            204_800,
+            "M2 仍是 204.8K"
+        );
+    }
+
+    /// 内置型号（无 provider 前缀）也要能读 `model_contexts` 覆盖。
+    ///
+    /// 2026-10-23 报告：用户按 1M 规格用 M3.1，项目按 205K 触发压缩，
+    /// 而 config.yaml 里写 `model_contexts` 对内置 provider 不生效——
+    /// 旧实现只在 `split_once(':')` 成功时才看覆盖。
+    #[test]
+    fn builtin_model_honours_a_model_context_override() {
+        let mut providers = HashMap::new();
+        let mut p = LlmProviderConfig::default();
+        p.model_contexts
+            .insert("MiniMax-M3.1-Flash".to_string(), 1_000_000);
+        providers.insert("minimax".to_string(), p);
+
+        // 大小写与配置里的 key 不同也要命中（前端写上游原样 id，用户手写
+        // 常常大小写不一）。
+        assert_eq!(
+            get_model_context_length_with("minimax-m3.1-flash", Some(&providers)),
+            1_000_000
         );
     }
 

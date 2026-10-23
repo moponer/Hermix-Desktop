@@ -23,6 +23,7 @@ pub mod embedding;
 pub mod display;
 pub mod error_classifier;
 pub mod insights;
+pub mod model_directory;
 pub mod model_metadata;
 pub mod models_dev;
 pub mod prefetch;

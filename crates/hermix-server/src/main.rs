@@ -22,6 +22,29 @@ async fn main() -> Result<(), AgentError> {
     // 之前。
     hermix_server::crash_dump::install_panic_hook(hermix_config::paths::hermix_home());
 
+    // ── 模型目录（上下文长度的权威来源）──
+    //
+    // 先同步装本地缓存（立即生效，不碰网络），缓存过期再后台刷一次。
+    // 没有它，上下文长度只能靠静态家族表猜：`minimax → 204.8K` 在 M3.1
+    // （实际 1M）上照样生效（2026-10-23 实测）。
+    let cached_models = hermix_intelligence::model_directory::load_from_disk();
+    if hermix_intelligence::model_directory::cache_is_stale() {
+        tokio::spawn(async {
+            match reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(25))
+                .build()
+            {
+                Ok(http) => {
+                    let n = hermix_intelligence::model_directory::refresh(&http).await;
+                    tracing::info!(models = n, "模型目录已刷新（OpenRouter 公开目录）");
+                }
+                Err(e) => tracing::debug!("模型目录：HTTP client 构建失败: {e}"),
+            }
+        });
+    } else {
+        tracing::debug!(models = cached_models, "模型目录：使用本地缓存");
+    }
+
     let config = load_config(None).map_err(|e| AgentError::Config(e.to_string()))?;
 
     // 安全中心：启动即按 config.yaml 的 security 刷新自动备份策略。
