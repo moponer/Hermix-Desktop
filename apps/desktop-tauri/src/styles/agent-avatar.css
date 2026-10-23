@@ -1,0 +1,29 @@
+/* ════════════════════════════════════════════════════════════════════
+   agent-avatar.css — 专家头像（首汉字 / 首字母色块）
+   ──────────────────────────────────────────────────────────────────
+   2026-10-23 建立，取代 18 个 emoji 的头像选择器。
+
+   尺寸 / 底色 / 前景色全部来自共享的 .cat-icon 类族（--color-tone-*），
+   这里只补三件 cat-icon 不负责的事：
+     1. 圆形（cat-icon 是圆角方块，用于类目图标）；
+     2. 字号 —— 一个字形要占满 36px 的块，视觉上才不显空；
+     3. 字重 600 + 1 的行高，让单字在块里居中而不是偏上。
+   ════════════════════════════════════════════════════════════════════ */
+
+.agent-avatar {
+  border-radius: var(--radius-full);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  /* 单字在 flex 居中下仍会因字体上沿留白显得偏上，用 1px 视觉修正 */
+  padding-top: 1px;
+  user-select: none;
+}
+
+/* 字号按块尺寸分档，比例都在 42~46%（单字最稳的占比）：
+     28px 块 → 13px · 36px 块 → 16px · 48px 块 → 20px
+   全部走 --text-* 七档令牌，不开新档位（否则 check-theme-tokens 的
+   css-type-debt 会持续报警，且"一屏内字号 ≤3 档"的纪律会失效）。 */
+.agent-avatar.cat-icon--sm { font-size: var(--text-ui); }
+.agent-avatar.cat-icon--md { font-size: var(--text-title); }
+.agent-avatar.cat-icon--lg { font-size: var(--text-display); }

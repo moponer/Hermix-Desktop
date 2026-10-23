@@ -68,7 +68,8 @@ export function fromWireAgent(raw: Record<string, unknown>): AgentPersona {
   return {
     id: String(a.id ?? ""),
     name: String(a.name ?? ""),
-    avatar: String(a.avatar ?? "🤖"),
+    /* 头像已改由姓名首字派生，不再需要 emoji 兜底（旧数据里的 emoji 原样保留读取）。 */
+    avatar: String(a.avatar ?? ""),
     role: String(a.role ?? ""),
     identity: String(a.identity ?? ""),
     soul: String(a.soul ?? ""),

@@ -29,9 +29,9 @@ export type CardTone = "accent" | "success" | "warning" | "error" | "info";
  *   3. 同样的「柔和底 + 饱和图标」在 icon-tone.css 里已经有一份实现
  *      （14% color-mix 现算），两份并存就是漂移的开始。
  *
- * 现在改为 `cat-icon--${tone}` 一个类：底色由 color-mix 现算，亮色混纸面、
- * 暗色混纸面，主题自动跟随；hover 反馈由 .cat-icon 的 transition 统一给。
- * 语义四色与强调色在 icon-tone.css 里各有对应档位。
+ * 现在改为 `cat-icon--${tone}` 一个类：底色是主题中性实底（--color-bg-tertiary），
+ * 图标本身是饱和实色；hover 反馈由 .cat-icon 的 transition 与
+ * `.m-lift:hover .cat-icon` 统一给。语义四色与强调色在 icon-tone.css 各有档位。
  */
 export interface ChoiceCardProps {
   label: string;
@@ -69,8 +69,8 @@ export function ChoiceCard({
       )}
     >
       <div className="flex w-full items-center gap-2.5">
-        {/* 图标块走共享的 cat-icon（底色 14% 淡染现算），不再用行内样式
-            写死配色 —— 行内样式没有 :hover，且改色要逐处改。 */}
+        {/* 图标块走共享的 cat-icon（主题中性实底 + 饱和图标色），不再用行内
+            样式写死配色 —— 行内样式没有 :hover，且改色要逐处改。 */}
         <span
           aria-hidden
           className={cx("cat-icon cat-icon--md", `cat-icon--${tone}`)}

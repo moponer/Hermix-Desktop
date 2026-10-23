@@ -6,6 +6,7 @@ import { useState, useEffect, useRef } from "react";
 import { MessageSquare, ArrowRight } from "lucide-react";
 import { clsx } from "clsx";
 import { PALETTES, type AgentPersona } from "./types";
+import { AgentAvatar } from "./AgentAvatar";
 import { resolveProviderConfig } from "./providerConfig";
 import { IconButton, Modal } from "../ui";
 
@@ -96,13 +97,7 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
       height="600px"
       title={
         <span className="flex items-center gap-2.5">
-          <span
-            className="w-9 h-9 rounded-lg flex items-center justify-center text-lg shrink-0"
-            style={{ background: g.avatar }}
-            aria-hidden="true"
-          >
-            {agent.avatar}
-          </span>
+          <AgentAvatar name={agent.name} colorTheme={agent.colorTheme} className="shrink-0" />
           <span className="flex min-w-0 flex-col gap-0.5">
             <span className="truncate">{agent.name}</span>
             <span className="truncate text-[length:var(--text-meta)] font-normal text-[var(--color-text-muted)]">

@@ -6,7 +6,9 @@
 export interface AgentPersona {
   id: string;
   name: string;
-  avatar: string;           // emoji
+  /** 历史字段：曾存 emoji 头像。2026-10-23 起头像改由「姓名首字 + colorTheme」
+   *  派生（见 AgentAvatar），本字段不再渲染，仅为读写旧数据保留。 */
+  avatar: string;
   role: string;
   identity: string;         // one-line tagline shown on card
   soul: string;             // longer self-description
@@ -74,7 +76,6 @@ export function pickColor(seed: string): AgentColorTheme {
 export interface AgentTemplate {
   id: string;
   name: string;
-  emoji: string;
   tagline: string;     // 1-line hook shown in card
   role: string;
   category: string;    // human-readable
@@ -90,7 +91,6 @@ export const TEMPLATES: AgentTemplate[] = [
   {
     id: "tpl-engineer",
     name: "编程专家",
-    emoji: "⚡",
     tagline: "帮你写出更少 bug 的代码",
     role: "高级软件工程师",
     category: "编程开发",
@@ -105,7 +105,6 @@ export const TEMPLATES: AgentTemplate[] = [
   {
     id: "tpl-writer",
     name: "爆款写手",
-    emoji: "✍️",
     tagline: "10w+ 标题套路它都懂",
     role: "公众号 / 营销内容写手",
     category: "内容创作",
@@ -120,7 +119,6 @@ export const TEMPLATES: AgentTemplate[] = [
   {
     id: "tpl-translator",
     name: "同声传译",
-    emoji: "🌐",
     tagline: "保留俚语和口吻的多语翻译",
     role: "多语种同声传译",
     category: "翻译",
@@ -135,7 +133,6 @@ export const TEMPLATES: AgentTemplate[] = [
   {
     id: "tpl-analyst",
     name: "数据分析师",
-    emoji: "📊",
     tagline: "SQL 写手 + 业务洞察",
     role: "数据分析师",
     category: "数据分析",
@@ -150,7 +147,6 @@ export const TEMPLATES: AgentTemplate[] = [
   {
     id: "tpl-product",
     name: "产品经理",
-    emoji: "💡",
     tagline: "需求→方案→排期一把抓",
     role: "资深产品经理",
     category: "产品",
@@ -165,7 +161,6 @@ export const TEMPLATES: AgentTemplate[] = [
   {
     id: "tpl-tutor",
     name: "私教老师",
-    emoji: "🎓",
     tagline: "耐心讲解，因材施教",
     role: "学科私教",
     category: "学习答疑",
@@ -180,7 +175,6 @@ export const TEMPLATES: AgentTemplate[] = [
   {
     id: "tpl-counselor",
     name: "心理咨询",
-    emoji: "💬",
     tagline: "倾听、共情、不评判",
     role: "心理咨询师",
     category: "咨询",
@@ -195,7 +189,6 @@ export const TEMPLATES: AgentTemplate[] = [
   {
     id: "tpl-bizdev",
     name: "商业顾问",
-    emoji: "📈",
     tagline: "商业模式、增长、融资",
     role: "战略 / 商业顾问",
     category: "商业",
@@ -208,5 +201,3 @@ export const TEMPLATES: AgentTemplate[] = [
     systemPrompt: "你是一名顶级商业顾问，服务过多家 SaaS / 消费品牌的创始人。回答用「框架 + 数据 + 反常识」三段式：先给分析框架，再举行业基准数据，最后点出对方可能忽略的反常识点。",
   },
 ];
-
-export const AVATARS = ["🤖", "🧠", "🎯", "🔮", "⚡", "🛡️", "🔬", "📚", "🎨", "🦊", "🐉", "🌟", "💡", "🚀", "🌊", "🔥", "🧙", "🦉"];

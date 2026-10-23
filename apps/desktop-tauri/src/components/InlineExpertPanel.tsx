@@ -15,6 +15,8 @@ import {
   type ExpertDef,
 } from "../data/builtinExperts";
 import { useExpertCatalog } from "../hooks/useExpert";
+import { AgentAvatar } from "./agents/AgentAvatar";
+import { toneForCategory } from "../lib/categoryTone";
 
 interface InlineExpertPanelProps {
   currentExpertId: string | null;
@@ -186,9 +188,7 @@ export function InlineExpertPanel({
                     : "bg-bg-card hover:bg-bg-hover hover:shadow-sm",
                 )}
               >
-                <div className="w-8 h-8 rounded-lg bg-bg-tertiary flex items-center justify-center text-[length:var(--text-title)] shrink-0 group-hover:bg-accent/15 transition-colors">
-                  {e.avatar}
-                </div>
+                <AgentAvatar name={e.name} tone={toneForCategory(e.category)} size="sm" className="shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div className="text-[length:var(--text-meta)] font-medium text-text-primary truncate leading-tight">
                     {e.name}

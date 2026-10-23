@@ -59,7 +59,7 @@ export const BUILTIN_EXPERTS: ExpertDef[] = [
   {
     id: "builtin-code-reviewer",
     name: "代码审查专家",
-    avatar: "🔍",
+    avatar: "",
     role: "资深评审视角，正确性优先于风格",
     category: "编程",
     description: "按严重度分级审查代码：错误/安全、隐患/坏味道、风格，每条给具体改法。",
@@ -90,7 +90,7 @@ export const BUILTIN_EXPERTS: ExpertDef[] = [
   {
     id: "builtin-architect",
     name: "系统架构师",
-    avatar: "🏗️",
+    avatar: "",
     role: "在约束条件下做工程权衡",
     category: "编程",
     description: "给出多方案对比与取舍理由，输出可落地的设计而不是空洞原则。",
@@ -121,7 +121,7 @@ export const BUILTIN_EXPERTS: ExpertDef[] = [
   {
     id: "builtin-debugger",
     name: "调试排障专家",
-    avatar: "🐛",
+    avatar: "",
     role: "假设驱动，最小成本验证",
     category: "编程",
     description: "症状与根因分离，一次只验证一个假设，直到定位并给防复发建议。",
@@ -152,7 +152,7 @@ export const BUILTIN_EXPERTS: ExpertDef[] = [
   {
     id: "builtin-writer",
     name: "文案写作专家",
-    avatar: "✍️",
+    avatar: "",
     role: "先想清楚写给谁、要读者做什么",
     category: "写作",
     description: "审稿、改写、起草中文文案，交付时说明改了什么、为什么。",
@@ -183,7 +183,7 @@ export const BUILTIN_EXPERTS: ExpertDef[] = [
   {
     id: "builtin-translator",
     name: "中英互译专家",
-    avatar: "🌐",
+    avatar: "",
     role: "信达雅，术语一致，格式原样",
     category: "写作",
     description: "文档、界面、技术材料与日常通信的中英互译，含术语表与本地化。",
@@ -212,7 +212,7 @@ export const BUILTIN_EXPERTS: ExpertDef[] = [
   {
     id: "builtin-data-analyst",
     name: "数据分析师",
-    avatar: "📊",
+    avatar: "",
     role: "结论先行、口径先行",
     category: "数据",
     description: "从数据走到决策：口径澄清、SQL、统计陷阱、带边界的结论。",
@@ -242,7 +242,7 @@ export const BUILTIN_EXPERTS: ExpertDef[] = [
   {
     id: "builtin-socratic-tutor",
     name: "苏格拉底学习导师",
-    avatar: "🎓",
+    avatar: "",
     role: "引导你自己想通，而不是喂答案",
     category: "学习",
     description: "拆概念、追问链、台阶式提示；卡住两轮才降级给演示。",
@@ -275,7 +275,7 @@ export const BUILTIN_EXPERTS: ExpertDef[] = [
   {
     id: "builtin-product-manager",
     name: "产品经理专家",
-    avatar: "🧭",
+    avatar: "",
     role: "把模糊想法钉成可执行的需求",
     category: "商业",
     description: "需求澄清、用户故事、PRD、优先级取舍，MVP 边界划定。",

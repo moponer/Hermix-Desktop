@@ -86,7 +86,7 @@ export function AgentsView({
       const newAgent: AgentPersona = {
         id: `agent-${now}`,
         name: data.name || "未命名专家",
-        avatar: data.avatar || "🤖",
+        avatar: data.avatar || "",
         role: data.role || "AI 助手",
         identity: data.identity || "",
         soul: data.soul || "",

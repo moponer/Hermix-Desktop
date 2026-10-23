@@ -5,8 +5,8 @@
 import { useState, useEffect, useRef } from "react";
 import {
   ArrowLeft, ArrowRight, Check, Sparkle, Wand2, RefreshCw, Copy, MessageSquare, Layers, Lightbulb,
-  // 2026-10-21：模板 / 领域标记从 emoji 换成 Lucide（emoji 是身份，
-  // 标记是 chrome —— 身份留在 avatar 字段，见 generateFromTemplate）。
+  // 2026-10-23：模板标记一律 Lucide。emoji 已从专家体系里彻底移除 ——
+  // 头像改由「姓名首字 + colorTheme」派生（AgentAvatar），不再有 emoji 身份字段。
   Code2, PenLine, BarChart3, Palette, GraduationCap, TrendingUp, Languages,
   type LucideIcon,
 } from "lucide-react";
@@ -15,6 +15,7 @@ import {
   PALETTES, TEMPLATES, pickColor,
   type AgentPersona, type AgentColorTheme, type AgentTemplate,
 } from "./types";
+import { AgentAvatar } from "./AgentAvatar";
 import { buildSystemPrompt } from "./storage";
 import { resolveProviderConfig } from "./providerConfig";
 
@@ -60,9 +61,12 @@ const TEMPLATE_ICONS: Record<string, LucideIcon> = {
   "tpl-bizdev": TrendingUp,
 };
 
-function TemplateIcon({ id, emoji, className }: { id: string; emoji: string; className?: string }) {
-  const Icon = TEMPLATE_ICONS[id];
-  return Icon ? <Icon className={className} /> : <span aria-hidden="true">{emoji}</span>;
+/** 模板图标。2026-10-23：去掉了 emoji 回退 —— 8 个模板已全部有 lucide 映射，
+ *  回退分支从未被走到，留着只会让新加模板时悄悄漏出一个 emoji。
+ *  新增模板时**必须**在 TEMPLATE_ICONS 里补一行，否则落到 Sparkles 兜底。 */
+function TemplateIcon({ id, className }: { id: string; className?: string }) {
+  const Icon = TEMPLATE_ICONS[id] ?? Sparkle;
+  return <Icon className={className} />;
 }
 
 const STYLE_OPTIONS = [
@@ -299,7 +303,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                       <div
                         className="w-8 h-8 rounded-full flex items-center justify-center text-base shrink-0 bg-bg-tertiary text-text-secondary"
                       >
-                        <TemplateIcon id={tpl.id} emoji={tpl.emoji} className="icon-lg" />
+                        <TemplateIcon id={tpl.id} className="icon-lg" />
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">{tpl.name}</p>
@@ -326,15 +330,12 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
           <div className="rounded-xl bg-bg-card p-5 space-y-4">
             {selectedTpl && (
               <div className="flex items-center gap-2.5 p-3 rounded-lg bg-bg-primary">
-                <div
-                  className="w-8 h-8 rounded-lg flex items-center justify-center text-base shrink-0"
-                  style={{
-                    background: PALETTES[selectedTpl.colorTheme].avatar,
-                    color: PALETTES[selectedTpl.colorTheme].chip.fg,
-                  }}
-                >
-                  <TemplateIcon id={selectedTpl.id} emoji={selectedTpl.emoji} className="icon-lg" />
-                </div>
+                <AgentAvatar
+                  name={selectedTpl.name}
+                  colorTheme={selectedTpl.colorTheme}
+                  size="sm"
+                  className="shrink-0"
+                />
                 <div className="min-w-0 flex-1">
                   <p className="text-[length:var(--text-meta)] text-text-muted">基于模板</p>
                   <p className="text-[length:var(--text-ui)] font-medium text-text-primary">{selectedTpl.name}</p>
@@ -502,12 +503,12 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                 <div className="rounded-xl bg-bg-card overflow-hidden">
                   <div className="p-4">
                     <div className="flex items-start gap-3 mb-3">
-                      <div
-                        className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl shrink-0 shadow-sm"
-                        style={{ background: g.avatar }}
-                      >
-                        {generated.avatar || "🤖"}
-                      </div>
+                      <AgentAvatar
+                        name={generated.name}
+                        colorTheme={generated.colorTheme}
+                        size="lg"
+                        className="shrink-0"
+                      />
                       <div className="min-w-0 flex-1">
                         <h4 className="text-[length:var(--text-body)] font-semibold text-text-primary">{generated.name || "未命名"}</h4>
                         <p className="text-[length:var(--text-meta)] text-text-muted">{generated.role || "AI 助手"}</p>
@@ -615,7 +616,8 @@ export function generateFromTemplate(
   const styleText = STYLE_OPTIONS.find((o) => o.id === clarify.style)?.label || "简洁专业";
   return {
     name: tpl?.name || description.slice(0, 6) || "新专家",
-    avatar: tpl?.emoji || "🤖",
+    /* 头像不再由 emoji 决定，改为「姓名首字 + colorTheme」派生（AgentAvatar）。 */
+    avatar: "",
     role: tpl?.role || `${domainText}专家`,
     identity: tpl?.tagline || description.slice(0, 30),
     soul: `专注于 ${domainText} 场景，提供 ${styleText} 的回答`,

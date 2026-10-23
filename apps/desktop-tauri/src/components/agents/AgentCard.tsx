@@ -1,5 +1,6 @@
 import { Play, Edit3, Trash2 } from "lucide-react";
 import type { AgentPersona } from "./types";
+import { AgentAvatar } from "./AgentAvatar";
 import { DELETE } from "../strings";
 
 interface AgentCardProps {
@@ -20,10 +21,9 @@ export function AgentCard({ agent, onEdit, onDelete, onTest }: AgentCardProps) {
   return (
     <div className="group relative rounded-xl bg-bg-card p-3.5 transition-[color,background-color,border-color,transform,box-shadow] hover:-translate-y-0.5 hover:shadow-md">
       <div className="flex items-start gap-2.5">
-        {/* Round avatar */}
-        <div className="w-9 h-9 rounded-full flex items-center justify-center text-[length:var(--text-display)] shrink-0 bg-bg-tertiary">
-          {agent.avatar}
-        </div>
+        {/* 头像：首汉字 / 首字母色块（见 AgentAvatar）。此前渲染的是 agent.avatar
+            里的 emoji —— 字形由系统字体决定、大小随字号变化、不跟主题。 */}
+        <AgentAvatar name={agent.name} colorTheme={agent.colorTheme} className="shrink-0" />
 
         {/* Content */}
         <div className="min-w-0 flex-1">

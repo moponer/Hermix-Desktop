@@ -6,10 +6,11 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { clsx } from "clsx";
 import {
-  AVATARS, COLOR_KEYS, PALETTES, pickColor,
+  COLOR_KEYS, PALETTES, pickColor,
   type AgentColorTheme,
   type AgentPersona,
 } from "./types";
+import { AgentAvatar } from "./AgentAvatar";
 import { Button, Input, TextArea } from "../ui";
 import { CANCEL, SAVE } from "../strings";
 
@@ -34,7 +35,9 @@ const COLOR_LABELS: Record<AgentColorTheme, string> = {
 
 export function AgentForm({ initial, onSave, onCancel }: AgentFormProps) {
   const [form, setForm] = useState<Partial<AgentPersona>>({
-    name: "", avatar: "🤖", role: "", identity: "", soul: "",
+    /* avatar 字段保留（后端 / 历史数据契约），但已不参与渲染 ——
+       头像由「姓名首字 + colorTheme」派生，见 AgentAvatar。 */
+    name: "", avatar: "", role: "", identity: "", soul: "",
     skills: [], specialty: "", dialogStyle: "", background: "",
     personality: [], systemPrompt: "",
     colorTheme: pickColor(initial?.name || `agent-${Date.now()}`),
@@ -57,19 +60,14 @@ export function AgentForm({ initial, onSave, onCancel }: AgentFormProps) {
     onSave(form);
   };
 
-  const g = PALETTES[form.colorTheme || "violet"];
+
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       {/* Live preview strip */}
       <div className="rounded-lg overflow-hidden bg-bg-primary">
         <div className="p-3 flex items-center gap-2.5 bg-bg-primary">
-          <div
-            className="w-9 h-9 rounded-lg flex items-center justify-center text-lg shrink-0"
-            style={{ background: g.avatar }}
-          >
-            {form.avatar}
-          </div>
+          <AgentAvatar name={form.name} colorTheme={form.colorTheme} className="shrink-0" />
           <div className="min-w-0 flex-1">
             <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">
               {form.name || "未命名专家"}
@@ -83,27 +81,10 @@ export function AgentForm({ initial, onSave, onCancel }: AgentFormProps) {
 
       {/* Name + Avatar + Color */}
       <div className="grid grid-cols-[auto_1fr_auto] gap-3">
-        <div className="flex flex-col gap-1">
-          <div
-            className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl"
-            style={{ background: g.avatar }}
-          >
-            {form.avatar}
-          </div>
-          <div className="grid grid-cols-4 gap-0.5">
-            {AVATARS.slice(0, 8).map((a) => (
-              <button
-                key={a}
-                type="button"
-                aria-label={`选择头像 ${a}`}
-                onClick={() => setForm((p) => ({ ...p, avatar: a }))}
-                className={clsx("w-6 h-6 rounded text-sm flex items-center justify-center", form.avatar === a ? "bg-bg-active" : "hover:bg-bg-hover")}
-              >
-                {a}
-              </button>
-            ))}
-          </div>
-        </div>
+        {/* 头像不再可选：由姓名首字 + colorTheme 自动生成（见 AgentAvatar）。
+            原来的 8 个 emoji 选择器已删除 —— emoji 字形随系统字体变化、
+            大小不齐、不跟主题，且与全站 lucide 图标不是一套视觉语言。 */}
+        <AgentAvatar name={form.name} colorTheme={form.colorTheme} size="lg" className="mt-0.5" />
         <div className="space-y-2.5">
           <Input
             required

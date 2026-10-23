@@ -10,6 +10,8 @@ import { useState, useMemo } from "react";
 import { Bot } from "lucide-react";
 import { clsx } from "clsx";
 import { BUILTIN_EXPERTS, EXPERT_CATEGORIES, type ExpertDef } from "../../data/builtinExperts";
+import { AgentAvatar } from "./AgentAvatar";
+import { toneForCategory } from "../../lib/categoryTone";
 import { ALL } from "../strings";
 
 export function BuiltInExpertsTab() {
@@ -110,9 +112,11 @@ function ExpertCard({ expert }: { expert: ExpertDef }) {
   return (
     <div className="rounded-xl bg-bg-card p-3.5 transition-[color,background-color,border-color,transform,box-shadow] hover:-translate-y-0.5 hover:shadow-md">
       <div className="flex items-start gap-2.5">
-        <div className="w-9 h-9 rounded-full flex items-center justify-center text-[length:var(--text-display)] shrink-0 bg-bg-tertiary">
-          {expert.avatar}
-        </div>
+        <AgentAvatar
+          name={expert.name}
+          tone={toneForCategory(expert.category)}
+          className="shrink-0"
+        />
         <div className="min-w-0 flex-1">
           <div className="mb-0.5">
             <h3 className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate leading-tight">

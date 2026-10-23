@@ -23,6 +23,7 @@
    两个 app 共用一份才不会分叉。 */
 @import "@hermix/preview/styles/icon-tone.css";
 @import "./flat-ui.css";
+@import "./agent-avatar.css";
 @import "./motion.css";
 @import "./utilities.css";
 
