@@ -5,7 +5,7 @@ import * as api from "../../api";
 import { parseMcpJson, pickIconByName } from "./toolTabsData";
 import { McpCatalogGrid } from "./McpCatalogGrid";
 import { ToolCardIcon } from "./ToolCardIcon";
-import { MgmtTag } from "./MgmtTag";
+import { ToolListRow } from "./ToolListRow";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { ConfirmDialog, Input, SelectField, TextArea } from "../ui";
 import { DELETE } from "../strings";
@@ -337,39 +337,37 @@ function ConnectorRow({
 }) {
   const Icon = pickIconByName(server.name);
   return (
-    <div className="h-enter m-lift group flex items-start gap-3 px-3 py-2.5 rounded-xl bg-bg-card hover:bg-bg-card-hover">
-      <ToolCardIcon category="mcp">
-        <Icon className="icon-lg" />
-      </ToolCardIcon>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[length:var(--text-ui)] font-medium text-text-primary truncate">{server.name}</span>
-          <MgmtTag tone="neutral">{server.transport}</MgmtTag>
-          {server.enabled && (
-            <MgmtTag tone="accent">启用中</MgmtTag>
-          )}
-        </div>
-        {server.description && (
-          <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
-            {server.description}
-          </p>
-        )}
-        <p className="text-[length:var(--text-meta)] font-mono text-text-faint mt-1 truncate">
-          {server.transport === "stdio"
-            ? `${server.command ?? "?"} ${(server.args ?? []).join(" ")}`
-            : server.url ?? "(no url)"}
-        </p>
-      </div>
-      <div className="flex items-center gap-1.5 shrink-0">
-        <ToggleSwitch enabled={server.enabled} onToggle={() => onToggle(!server.enabled)} offLabel="停用" onLabel="启用" />
-        <button
-          onClick={onRemove}
-          className="h-7 w-7 rounded-md text-text-muted hover:text-text-error hover:bg-error/10 flex items-center justify-center"
-          title={DELETE}
-          aria-label={DELETE}>
-          <Trash2 className="icon-md" />
-        </button>
-      </div>
-    </div>
+    <ToolListRow
+      dimmed={!server.enabled}
+      icon={
+        <ToolCardIcon category="mcp">
+          <Icon className="icon-sm" />
+        </ToolCardIcon>
+      }
+      title={server.name}
+      meta={server.transport}
+      /* 只留一句能分辨 server 的信息：描述优先，没有就退回命令行。
+         旧版描述与命令行上下叠两行，行高被撑到 80px，列表一长就散。 */
+      description={server.description || (server.transport === "stdio"
+        ? `${server.command ?? "?"} ${(server.args ?? []).join(" ")}`
+        : server.url ?? "(no url)")}
+      action={
+        <>
+          <ToggleSwitch
+            enabled={server.enabled}
+            onToggle={() => onToggle(!server.enabled)}
+            offLabel="停用"
+            onLabel="启用"
+          />
+          <button
+            onClick={onRemove}
+            className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-error-soft)] hover:text-[var(--color-text-error)]"
+            title={DELETE}
+            aria-label={DELETE}>
+            <Trash2 className="icon-md" />
+          </button>
+        </>
+      }
+    />
   );
 }

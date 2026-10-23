@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 
 import { cx } from "../../lib/cx";
-import { toneClass, type IconTone } from "../../lib/categoryTone";
+import { type IconTone } from "../../lib/categoryTone";
 import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import { Switch, SettingsGroup, SettingsRow, SegmentedControl, Input } from "../ui";
@@ -219,7 +219,7 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
               <div className="px-3 pb-1 pt-4 text-[length:var(--text-meta)] font-medium text-[var(--color-text-faint)]">
                 {g.label}
               </div>
-              {g.items.map(({ id, label, icon: Icon, tone }) => (
+              {g.items.map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
                   onClick={() => go(id)}
@@ -234,13 +234,15 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
                       : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]",
                   )}
                 >
-                  {/* 图标按类目上色：色相是「这是什么」的第一线索。
-                      旧版用 opacity-55 把图标压成灰 —— 那等于关掉扫视通道，
-                      17 项只能逐行读文字。底块是 14% 淡染，不是实色块
-                      （实色块在列表里堆叠会发脏）。 */}
-                  <span className={cx("cat-icon cat-icon--sm", toneClass(tone))}>
-                    <Icon className="icon-md" />
-                  </span>
+                  {/* 导航图标**不上色**（2026-10-23 修正）：侧栏是"位置"，
+                      不是"内容"。17 项各带一块彩色底时，整条侧栏变成一条
+                      彩虹，抢夺右内容区的注意力，而且彩色块本身比文字重，
+                      扫视时先看到色块再读字，反而更慢。
+                      改为随文字色的单色描边图标：选中态跟 primary、未选中
+                      跟 secondary，与文字一起进退，侧栏退成背景。
+                      彩色身份色只留在**内容区**（类目卡片），那里才需要
+                      "这是什么"的线索。 */}
+                  <Icon className="icon-md shrink-0" aria-hidden />
                   <span className="min-w-0 flex-1 truncate text-[length:var(--text-body)]">{label}</span>
                 </button>
               ))}
@@ -326,11 +328,9 @@ function PageHeading({ def }: { def: PageDef }) {
   const { icon: Icon } = def;
   return (
     <header className="mb-6 flex items-start gap-3">
-      {/* 页头图标与侧栏项同色同形 —— 侧栏选中项与内容页头是同一件事的
-          两个位置，色相不一致就会让人怀疑点错了页。 */}
-      <span className={cx("cat-icon cat-icon--md mt-0.5", toneClass(def.tone))}>
-        <Icon className="icon-lg" />
-      </span>
+      {/* 页头与侧栏同形同色（单色描边）：它们是同一件事的两个位置，
+          位置标记不承担"类目"语义 —— 类目色只出现在内容区的卡片图标上。 */}
+      <Icon className="icon-lg mt-1 shrink-0 text-[var(--color-text-muted)]" aria-hidden />
       <div className="min-w-0">
         <h2 className="text-[length:var(--text-title)] font-semibold text-[var(--color-text-primary)]">{def.label}</h2>
         <p className="mt-1 text-[length:var(--text-ui)] text-[var(--color-text-muted)]">{def.hint}</p>

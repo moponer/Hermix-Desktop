@@ -5,7 +5,6 @@ import * as api from "../../api";
 import type { ToolsetInfo } from "../../api";
 import { pickIconByName } from "./toolTabsData";
 import { ToolCardIcon } from "./ToolCardIcon";
-import { MgmtTag } from "./MgmtTag";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { SearchBar, Grid, EmptyHint, SkeletonGrid, SummaryBar } from "./toolTabsShared";
 import { ENABLED, SAVE_FAILED, failure } from "../strings";
@@ -223,44 +222,24 @@ function ToolsetCard({
   const shown = expanded ? tools : tools.slice(0, 4);
   const hidden = tools.length - shown.length;
   return (
-    <div className="m-lift group flex flex-col gap-2.5 px-3 py-3 rounded-xl bg-bg-card hover:bg-bg-card-hover">
-      <div className="flex items-start gap-3">
+    <div className="flex flex-col gap-2 rounded-[var(--radius-lg)] bg-[var(--color-bg-card)] px-2.5 py-2.5">
+      <div className="flex items-center gap-2.5">
         <ToolCardIcon category={toolset.label}>
-          <Icon className="icon-lg" />
+          <Icon className="icon-sm" />
         </ToolCardIcon>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[length:var(--text-ui)] font-medium text-text-primary truncate">{toolset.label}</span>
-            <MgmtTag tone="neutral">{tools.length} 个工具</MgmtTag>
+          <div className="flex items-center gap-2">
+            <span className="truncate text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+              {toolset.label}
+            </span>
+            <span className="shrink-0 text-[length:var(--text-tiny)] text-[var(--color-text-faint)]">
+              {tools.length} 个工具
+            </span>
           </div>
-          <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
+          {/* 单行截断：旧版 hover 展开会让整个网格重排（鼠标下方目标乱跑）。 */}
+          <p className="mt-0.5 truncate text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
             {toolset.description || "（无描述）"}
           </p>
-          {tools.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1.5">
-              {shown.map((tool) => (
-                <span
-                  key={tool}
-                  className="font-mono text-[length:var(--text-tiny)] text-text-secondary bg-[color-mix(in_srgb,var(--color-text-primary)_5%,transparent)] rounded px-1.5 py-0.5"
-                >
-                  {tool}
-                </span>
-              ))}
-              {hidden > 0 && !expanded && (
-                <span className="text-[length:var(--text-tiny)] text-text-muted self-center">+{hidden}</span>
-              )}
-            </div>
-          )}
-          {tools.length > 4 && (
-            <button
-              type="button"
-              onClick={() => setExpanded((v) => !v)}
-              className="mt-1.5 text-[length:var(--text-tiny)] font-medium text-text-muted hover:text-text-primary"
-              aria-expanded={expanded}
-            >
-              {expanded ? "收起" : "全部工具"}
-            </button>
-          )}
         </div>
         <ToggleSwitch
           enabled={enabled}
@@ -268,9 +247,32 @@ function ToolsetCard({
           disabled={saving}
           offLabel={`关闭 ${toolset.label} 工具集`}
           onLabel={`启用 ${toolset.label} 工具集`}
-          className="shrink-0 mt-0.5"
         />
       </div>
+      {tools.length > 0 && (
+        /* 工具名与标题左对齐（28px 图标 + 10px 间距 = 38px），不缩进会显得
+           这行是"卡片的第四个部分"而不是"标题的补充"。 */
+        <div className="flex flex-wrap items-center gap-1 pl-[38px]">
+          {shown.map((tool) => (
+            <span
+              key={tool}
+              className="rounded-[var(--radius-sm)] bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 font-mono text-[length:var(--text-tiny)] text-[var(--color-text-secondary)]"
+            >
+              {tool}
+            </span>
+          ))}
+          {tools.length > 4 && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              className="rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[length:var(--text-tiny)] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]"
+            >
+              {expanded ? "收起" : `+${hidden}`}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

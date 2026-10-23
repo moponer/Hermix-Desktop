@@ -33,6 +33,7 @@ export function ToolCardIcon({
   children,
   tone,
   category,
+  size = "sm",
   interactive = false,
   onClick,
   title,
@@ -43,6 +44,9 @@ export function ToolCardIcon({
   tone?: IconTone;
   /** 类目名（自由文本），用于推导色调。 */
   category?: string | null;
+  /** 尺寸。列表行默认 sm(28px)：36px 的块在 44px 高的行里会压过标题，
+   *  这是列表"显得拥挤"的主因之一。md(36) 留给网格卡片。 */
+  size?: "sm" | "md";
   /** hover 放大（卡片图标可点时的轻反馈）。 */
   interactive?: boolean;
   /** 传入则在按钮语义下渲染（图标点开即打开技能 / 详情）。 */
@@ -52,7 +56,7 @@ export function ToolCardIcon({
 }) {
   const resolved = tone ?? toneForCategory(category);
   const cls = [
-    "cat-icon cat-icon--md",
+    `cat-icon cat-icon--${size}`,
     toneClass(resolved),
     onClick || interactive ? "m-icon-hover cursor-pointer" : "",
   ].join(" ");

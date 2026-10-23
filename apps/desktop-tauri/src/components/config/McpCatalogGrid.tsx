@@ -198,38 +198,40 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
           return (
             <div
               key={item.id}
-              className={`rounded-xl p-3 ${
-                blocked ? "bg-bg-tertiary/40" : "bg-bg-card"
+              className={`rounded-[var(--radius-lg)] p-2.5 ${
+                blocked ? "bg-[color-mix(in_srgb,var(--color-bg-tertiary)_60%,transparent)]" : "bg-[var(--color-bg-card)]"
               }`}
             >
-              <div className="flex items-start gap-2.5">
+              <div className="flex items-center gap-2.5">
                 {/* 与插件 / 技能 / 工具集三页共用 ToolCardIcon（此前这里自写一套
                     实色块 + 阴影，是四页里唯一漂出去的一处）。 */}
                 <ToolCardIcon category={item.category}>
                   {CATEGORY_ICON[item.category] ?? CATEGORY_ICON["其它"]}
                 </ToolCardIcon>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[length:var(--text-ui)] font-medium text-text-primary truncate">
-                      {name}
-                    </span>
-                    {!item.descriptionZh && (
-                      <span className="text-[length:var(--text-tiny)] text-text-faint">（暂无中文）</span>
-                    )}
-                    {item.install.kind === "npm" && (
-                      <span className="text-[length:var(--text-tiny)] text-text-faint">需在本机执行</span>
-                    )}
-                    {item.requiredEnv.length > 0 && (
-                      <span className="text-[length:var(--text-tiny)] text-text-faint">
-                        需 {item.requiredEnv.length} 项配置
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-0.5 text-[length:var(--text-meta)] text-text-muted leading-snug line-clamp-2">
+                  <span className="truncate text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+                    {name}
+                  </span>
+                  {/* 描述恒定单行：旧版 line-clamp-2 让每张卡高度不一，
+                      网格出现参差的锯齿边。完整信息在详情里。 */}
+                  <p className="mt-0.5 truncate text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
                     {desc}
                   </p>
                 </div>
               </div>
+
+              {/* 元信息收成一行、11px、faint：三条提示（暂无中文 / 本机执行 /
+                  需 N 项配置）此前并排塞在标题行里，把标题挤成一个词。
+                  现在它们退到描述下方，用 · 连接，只看不抢。 */}
+              {(!item.descriptionZh || item.install.kind === "npm" || item.requiredEnv.length > 0) && (
+                <p className="mt-1 pl-[38px] text-[length:var(--text-tiny)] text-[var(--color-text-faint)]">
+                  {[
+                    !item.descriptionZh ? "暂无中文" : null,
+                    item.install.kind === "npm" ? "需在本机执行" : null,
+                    item.requiredEnv.length > 0 ? `需 ${item.requiredEnv.length} 项配置` : null,
+                  ].filter(Boolean).join(" · ")}
+                </p>
+              )}
 
               {blocked && (
                 <ul className="mt-2 space-y-0.5">

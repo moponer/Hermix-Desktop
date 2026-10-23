@@ -1,10 +1,10 @@
 // SkillCard.tsx —— 技能卡 + 内容阅读弹窗（R2-4 拆分第三步，从 ToolTabs 抽出）。
 import { useState, useCallback } from "react";
-import { Wand2, ArrowUpRight, Sparkles } from "lucide-react";
+import { Wand2, Sparkles } from "lucide-react";
 import * as api from "../../api";
 import type { SkillInfo } from "../../api";
 import { ToolCardIcon } from "./ToolCardIcon";
-import { MgmtTag } from "./MgmtTag";
+import { ToolListRow } from "./ToolListRow";
 import { ConfirmDialog, Modal, SkeletonCard } from "../ui";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { MarkdownBody } from "../MarkdownBody";
@@ -64,33 +64,26 @@ export function SkillCard({ skill, catLabel, onToggle }: {
 
   return (
     <>
-      <div className="m-lift group rounded-xl bg-bg-card hover:bg-bg-card-hover">
-        <div className="flex items-center gap-3 px-3 py-2.5">
-          <ToolCardIcon
-            onClick={openContent}
-            title="查看技能内容"
-            aria-label="查看技能内容"
-            category={skill.category}
-          >
-            <Wand2 className="icon-md" />
+      <ToolListRow
+        onClick={openContent}
+        icon={
+          <ToolCardIcon category={skill.category}>
+            <Wand2 className="icon-sm" />
           </ToolCardIcon>
-          <div className="min-w-0 flex-1 cursor-pointer" onClick={openContent}>
-            <div className="flex items-center gap-2">
-              <span className="text-[length:var(--text-ui)] font-medium text-text-primary truncate">
-                {skill.display_name || skill.name}
-              </span>
-              <MgmtTag tone="neutral" className="shrink-0">
-                {catLabel(skill.category) || "skill"}
-              </MgmtTag>
-            </div>
-            <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
-              {skill.description || "（无描述）"}
-            </p>
-          </div>
-          <ArrowUpRight className="icon-sm text-text-faint shrink-0" />
-          <ToggleSwitch enabled={skill.enabled} onToggle={requestToggle} disabled={toggling} offLabel={`停用 ${skill.name}`} onLabel={`启用 ${skill.name}`} className="shrink-0" />
-        </div>
-      </div>
+        }
+        title={skill.display_name || skill.name}
+        meta={catLabel(skill.category) || "skill"}
+        description={skill.description || "（无描述）"}
+        action={
+          <ToggleSwitch
+            enabled={skill.enabled}
+            onToggle={requestToggle}
+            disabled={toggling}
+            offLabel={`停用 ${skill.name}`}
+            onLabel={`启用 ${skill.name}`}
+          />
+        }
+      />
 
       {showModal && (
         <SkillContentModal

@@ -1,11 +1,10 @@
 // PluginsTab.tsx —— 内置能力开关 Tab + PluginCard（R2-4 拆分第六步）。
 import { useCallback, useEffect, useState } from "react";
-import { ArrowUpRight } from "lucide-react";
 import * as api from "../../api";
 import type { PluginSettings } from "../../api";
 import { BUILTIN_PLUGINS, DEFAULT_PLUGIN_SETTINGS } from "./toolTabsData";
 import { ToolCardIcon } from "./ToolCardIcon";
-import { MgmtTag } from "./MgmtTag";
+import { ToolListRow } from "./ToolListRow";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { SearchBar, Section, Grid, SummaryBar } from "./toolTabsShared";
 
@@ -69,7 +68,7 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
             return (
               <PluginCard
                 key={plugin.id}
-                icon={<plugin.icon className="icon-lg" />}
+                icon={<plugin.icon className="icon-md" />}
                 name={plugin.name}
                 description={plugin.description}
                 badge={plugin.category}
@@ -77,7 +76,7 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
                 enabled={enabled}
                 saving={savingId === plugin.id}
                 disabled={loading}
-                rightIcon={<ArrowUpRight className="icon-sm" />}
+
                 onToggle={() => togglePlugin(plugin, !enabled)}
               />
             );
@@ -102,8 +101,6 @@ export function PluginCard({
   saving,
   disabled,
   highlight = false,
-  /** 右侧装饰图标（开关按钮之前）。默认无。 */
-  rightIcon,
   onToggle,
 }: {
   icon: React.ReactNode;
@@ -116,7 +113,6 @@ export function PluginCard({
   saving: boolean;
   disabled: boolean;
   highlight?: boolean;
-  rightIcon?: React.ReactNode;
   onToggle: () => void;
 }) {
   // 无描边：卡片靠 bg-bg-card 浮出（浅色主题下 bg-app 才是白的，卡片比底暗一档，
@@ -129,23 +125,22 @@ export function PluginCard({
   // 卡片等于不存在——令牌怎么调都救不回来，也就是为什么唯独插件页调色阶毫无
   // 反应。已删除该 prop，插件卡片与其余所有卡片走同一条实色分支。
   return (
-    <div
-      className={`h-enter group flex items-center gap-3 px-3 py-2.5 rounded-xl m-lift ${
-        highlight ? "bg-bg-card-hover" : "bg-bg-card hover:bg-bg-card-hover"
-      }`}
-    >
-      <ToolCardIcon category={category}>
-        {icon}
-      </ToolCardIcon>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[length:var(--text-ui)] font-medium text-text-primary truncate">{name}</span>
-          <MgmtTag tone="neutral" className="shrink-0">{badge}</MgmtTag>
-        </div>
-        <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">{description}</p>
-      </div>
-      {rightIcon && <span className="shrink-0 text-text-faint">{rightIcon}</span>}
-      <ToggleSwitch enabled={enabled} onToggle={onToggle} disabled={saving || disabled} offLabel={`停用 ${name}`} onLabel={`启用 ${name}`} className="shrink-0" />
-    </div>
+    <ToolListRow
+      dimmed={!enabled}
+      className={highlight ? "bg-[var(--color-bg-card-hover)]" : undefined}
+      icon={<ToolCardIcon category={category}>{icon}</ToolCardIcon>}
+      title={name}
+      meta={badge}
+      description={description}
+      action={
+        <ToggleSwitch
+          enabled={enabled}
+          onToggle={onToggle}
+          disabled={saving || disabled}
+          offLabel={`停用 ${name}`}
+          onLabel={`启用 ${name}`}
+        />
+      }
+    />
   );
 }
