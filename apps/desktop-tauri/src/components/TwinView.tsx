@@ -1,34 +1,30 @@
 /**
- * 助手阿黎 —— 常驻助理的主界面。
+ * 助手阿黎 —— 值守大屏。
  *
- * 这一页不是对话页：三栏信息板（新鲜情报 / 正在执行 / 待你定夺）+ 底部
- * 单行输入口。设计依据见
- * docs/notes/proposed/feature/2026-10-21-digital-twin-assistant.md。
+ * 版面是「中轴 + 两翼 + 底条」：
+ *   左翼  她替你看着什么（任务 / 指标 / 最近会话 / 工作日志）
+ *   中轴  双态面板：对话 ↔ 数据。默认对话；出现待审批时自动切到数据，
+ *        点「回到对话」或点输入框切回（手动切回后 30s 内不再抢屏）
+ *   右翼  现在要你做什么（待审批 / 刚发生的事 / 权限）
+ *   底条  会话与快捷键
  *
- * 数据纪律：**只渲染真实数据**。阿黎自己的情报源、决策队列、成长档案
- * 都还没有后端，这三块一律显示「待接通」并说明将来会显示什么，不用
- * 示例数据填空——用户看到的数据必须能当真。
+ * 数据纪律：**只渲染真实数据**。情报源、决策队列、成长档案都还没有后端，
+ * 对应位置显示「待接通」并写明将来会显示什么，不用示例数据填空 —— 用户
+ * 看到的数据必须能当真。
  *
- * 当前真实数据源：
- *   - 自动化任务（`GET /api/automation/tasks`）→ 正在执行
- *   - 在途运行数（`GET /api/automation/active-count`）→ 顶栏读数
- *   - 最近会话（宿主 sessions prop）→ 新鲜情报栏的补充，标明是替代源
- *
- * 内联对话（2026-10-23）：输入口投到 `twin:ali` 这一条会话，回复就地显示，
- * 审批与澄清也在本页就地处理。她走**自己的发送器实例**（见 `TwinInlineApi`），
- * 与任何对话并行、互不禁用。显示两条来源合并——本轮内存态（`twin.turn`）
- * + 一次轻轮询拉到的落库历史（覆盖手机投递进来的轮次、以及 App 重启后的旧历史）。
+ * 真实数据源：
+ *   - 自动化任务（`GET /api/automation/tasks`）→ 左翼任务条 + 中轴环
+ *   - 在途运行数（`GET /api/automation/active-count`）
+ *   - 最近会话（宿主 sessions prop）
+ *   - 工作日志（`GET /api/memory/daily`）
+ *   - 内联对话与审批（`twin` 这个独立发送器实例，会话 `twin:ali`）
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle, BookOpen, Brain, Clock3, ListChecks, Radio, Sparkles,
-} from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 
 import * as api from "../api";
 import type { AutomationTask, Session } from "../types";
-import { PageHeader, SkeletonCard } from "./ui";
 import { AliCharacter, type AliState } from "./twin/AliCharacter";
-import { toneClass, type IconTone } from "../lib/categoryTone";
 import { TWIN_SESSION_ID, type TwinInlineApi } from "../app/routes";
 import {
   mergeTranscript,
@@ -40,8 +36,11 @@ import {
 /** 落库历史的轮询间隔。她这一轮跑着时暂停，避免轮询结果落后于屏幕造成回跳。 */
 const HISTORY_POLL_MS = 8000;
 
+/** 手动切回对话后，这段时间内不再被自动切走（防抢屏）。 */
+const AUTO_SWITCH_COOLDOWN_MS = 30_000;
+
 interface TwinViewProps {
-  /** 宿主会话表 —— 「最近活跃」用它，避免额外一次全量拉取。 */
+  /** 宿主会话表 —— 「最近会话」用它，避免额外一次全量拉取。 */
   sessions: Session[];
   /** 去看 `twin:ali` 的完整对话（工具时间线等完整形态在那个页面）。 */
   onOpenChat: () => void;
@@ -55,6 +54,9 @@ interface TwinViewProps {
 }
 
 type Mode = "watch" | "dispatch" | "summary";
+
+/** 中轴两态。数据态不是装饰：它承载「现在这一刻最该看的那个数」。 */
+type CenterMode = "chat" | "data";
 
 const MODES: { id: Mode; label: string }[] = [
   { id: "watch", label: "盯住" },
@@ -81,30 +83,16 @@ const MODE_PROMPT: Record<Mode, string> = {
 };
 
 /**
- * 栏头：图标 + 标题 + 计数。
- *
- * 为什么必须带图标（2026-10-23）：三栏并排时，栏与栏之间只有一条发丝线，
- * 扫视全靠读文字。给每栏一个**按职能上色**的图标后，色相成为第一线索 ——
- * 「蓝色是情报（外部输入）、琥珀是执行（在跑的事）、玫瑰是定夺（要你决策）」
- * 这套对应关系在整页里保持一致。
+ * 小面板标题。大屏版不用图标：数据本身已经够密，再加图标只会和数字抢眼。
+ * 一条 3px 的主色竖条 + 一行标签，是这套版面里唯一的「标题语法」。
  */
-function ColHead({
-  icon: Icon, tone, title, meta,
-}: {
-  icon: React.ElementType;
-  tone: IconTone;
-  title: string;
-  meta?: React.ReactNode;
-}) {
+function BoxHead({ title, meta }: { title: string; meta?: React.ReactNode }) {
   return (
-    <div className="twin-col__head">
-      <span className="twin-col__label">
-        <span className={["cat-tile cat-tile--sm", toneClass(tone, "cat-tile")].join(" ")}>
-          <Icon className="icon-sm" />
-        </span>
-        <span className="twin-col__title">{title}</span>
-      </span>
-      {meta != null ? <span className="twin-col__meta">{meta}</span> : null}
+    <div className="twin-box__head">
+      <span className="twin-box__bar" aria-hidden />
+      <span className="twin-box__title">{title}</span>
+      <span className="twin-box__spacer" />
+      {meta != null ? <span className="twin-box__meta">{meta}</span> : null}
     </div>
   );
 }
@@ -112,7 +100,7 @@ function ColHead({
 export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
   const [activeRuns, setActiveRuns] = useState(0);
-  /** 最近的工作日志（daily_memory）—— 三栏右侧的真实数据源之一。 */
+  /** 最近的工作日志（daily_memory）—— 左翼与右翼的真实数据源之一。 */
   const [workDays, setWorkDays] = useState<api.DailyMemoryDay[]>([]);
   /** 落库历史（轮询拿到）。手机投递进来的轮次、App 重启前的旧轮次都在这。 */
   const [history, setHistory] = useState<TranscriptRow[]>([]);
@@ -184,6 +172,10 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
   const [draft, setDraft] = useState("");
   /** 上次成功核对的时刻（ms）。给在场位显示「多久没看过了」。 */
   const [checkedAt, setCheckedAt] = useState<number | null>(null);
+  /** 中轴两态。 */
+  const [center, setCenter] = useState<CenterMode>("chat");
+  /** 用户手动切回对话的时刻 —— 冷却期内不被自动切换抢屏。 */
+  const manualAtRef = useRef(0);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -223,7 +215,7 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
   const recentSessions = useMemo(
     () =>
       // 排除她自己的会话：`twin:ali` 一旦发过消息就进了宿主会话表，混进
-      // 「最近活跃」会变成"她自己的对话出现在她的近期情报里"。
+      // 「最近会话」会变成"她自己的对话出现在她的近期记录里"。
       sessions
         .filter((s) => !s.id.startsWith("twin:"))
         .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))
@@ -247,11 +239,11 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
         : "idle";
 
   const presenceLine = error
-    ? "核对任务状态时出错，右侧「正在执行」里是原始报错"
+    ? "核对任务状态时出错，右翼「刚才发生」上方是原始报错"
     : twin.streaming
       ? twin.turn?.activity
-        ? `正在用 ${twin.turn.activity} 做事，回复会直接出现在下面`
-        : "正在电脑上跑你刚交代的这一轮，回复会直接出现在下面"
+        ? `正在用 ${twin.turn.activity} 做事，回复会直接出现在中间`
+        : "正在电脑上跑你刚交代的这一轮，回复会直接出现在中间"
       : loading
         ? "正在核对任务状态"
         : activeRuns > 0
@@ -266,6 +258,33 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
       : Date.now() - checkedAt < 60_000
         ? "刚刚核对"
         : `${Math.round((Date.now() - checkedAt) / 60_000)} 分钟前核对`;
+
+  /**
+   * 自动切到数据态：只在「出现新的待办」时切一次。
+   * 手动切回后 30s 内不抢屏，否则你在打字时会被反复拽走。
+   */
+  useEffect(() => {
+    if (pending.length === 0) return;
+    if (Date.now() - manualAtRef.current < AUTO_SWITCH_COOLDOWN_MS) return;
+    setCenter("data");
+  }, [pending.length]);
+
+  const goChat = useCallback(() => {
+    manualAtRef.current = Date.now();
+    setCenter("chat");
+  }, []);
+
+  /** 中轴环读的都是真实量：有 max_runs 才有百分比，否则只报次数。 */
+  const runningTask = useMemo(
+    () => enabledTasks.find((t) => t.last_status === "running") ?? null,
+    [enabledTasks],
+  );
+  const runningRatio =
+    runningTask?.max_runs && runningTask.max_runs > 0
+      ? Math.min(1, runningTask.run_count / runningTask.max_runs)
+      : null;
+  const ringR = 130;
+  const ringC = 2 * Math.PI * ringR;
 
   /** 发自这一轮。失败不吞：把原因留在输入口上方，草稿已清空可重打。 */
   const sendDraft = useCallback(async () => {
@@ -292,422 +311,559 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
   const sendDisabled = twin.streaming || draft.trim().length === 0;
 
   return (
-    <div className="twin-view">
-      <PageHeader
-        icon={<Sparkles className="icon-lg" />}
-        title="助手阿黎"
-        children={
-          <span className="twin-state">
-            <span
-              className={
-                activeRuns > 0 ? "twin-dot" : "twin-dot twin-dot--idle"
-              }
-              aria-hidden
-            />
-            {stateText}
+    <div className="twin-screen">
+      {/* ── 顶栏 ───────────────────────────────────────────── */}
+      <header className="twin-head">
+        <div className="twin-head__side">
+          <span className="twin-head__deco" aria-hidden />
+          <span
+            className={`twin-head__live${activeRuns > 0 ? " is-live" : ""}`}
+            title={stateText}
+          >
+            <i aria-hidden />
+            {activeRuns > 0 ? "值守中" : "静默"}
           </span>
-        }
-        actions={
-          <>
-            <div className="twin-readouts">
-              <div className="twin-readout">
-                <span className="twin-readout__label">在跑</span>
-                <span className="twin-readout__value">{activeRuns}</span>
-              </div>
-              <div className="twin-readout">
-                <span className="twin-readout__label">已启用</span>
-                <span className="twin-readout__value">
-                  {enabledTasks.length}
-                  <small>个</small>
-                </span>
-              </div>
-              <div className="twin-readout">
-                <span className="twin-readout__label">待你定夺</span>
-                <span className="twin-readout__value">—</span>
-              </div>
-            </div>
-            <button
-              type="button"
-              className="twin-perm"
-              data-level={level}
-              aria-label="切换权限级别"
-              onClick={() =>
-                setLevel((prev) => (prev === "full" ? "default" : "full"))
-              }
-            >
-              <span className="twin-perm__label">权限</span>
-              <span className="twin-perm__value">
-                {level === "full" ? "放手模式" : "默认"}
-              </span>
-            </button>
-          </>
-        }
-      />
-
-      {/* 在场位：角色姿态与文案同源，异常/思考/在跑三种状态各自有表情 */}
-      {/* 在场位：形象 + 名字 + 当前姿态 + 上次核对时间。
-          姿态文案（presenceLine）与形象状态（aliState）同源派生，不会出现
-          「表情在笑、文案报错」。 */}
-      <div className="twin-presence">
-        <AliCharacter state={aliState} size={48} />
-        <div className="twin-presence__text">
-          <span className="twin-presence__name">阿黎</span>
-          <span className="twin-presence__line">{presenceLine}</span>
         </div>
-        <span className="twin-presence__checked">
-          <Brain className="cat-ink cat-ink--violet icon-sm" aria-hidden />
-          {checkedText}
-        </span>
-      </div>
 
-      <div className="twin-board">
-        {/* ── 一、新鲜情报 ── */}
-        <section className="twin-col">
-          <ColHead icon={Radio} tone="blue" title="新鲜情报" meta="待接通" />
-          <div className="twin-col__body">
-            <Pending
-              title="情报源尚未接通"
-              desc="接通后这里显示她替你盯到的新变化：只收「新」且与你在意的项目相关的，重复内容进笔记不再打扰。"
-              items={[
-                "订阅源水位线（RSS 取 last guid、页面取内容指纹）",
-                "每条带一句「为什么给你看」的依据",
-              ]}
-            />
+        <h1 className="twin-head__title">阿黎 · 值守总览</h1>
 
-            <ColHead
-              icon={Clock3}
-              tone="cyan"
-              title="最近活跃"
-              meta={`${recentSessions.length} 条`}
-            />
-            {recentSessions.length === 0 ? (
-              <p className="twin-pending__desc">还没有会话记录。</p>
-            ) : (
-              recentSessions.map((s) => (
-                <article key={s.id} className="twin-card">
-                  <div className="twin-card__top">
-                    <span className="twin-card__source">会话</span>
-                    <span className="twin-card__age">
-                      {formatRelative(s.updated_at)}
-                    </span>
-                  </div>
-                  <div className="twin-card__title">{s.title || "未命名会话"}</div>
-                  <div className="twin-card__foot">
-                    {s.project ? (
-                      <span className="twin-tag">{s.project}</span>
-                    ) : null}
-                    {typeof s.message_count === "number" ? (
-                      <span className="twin-tag">{s.message_count} 条消息</span>
-                    ) : null}
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
+        <div className="twin-head__side twin-head__side--r">
+          <span className="twin-head__kv">
+            在跑 <b>{activeRuns}</b>
+          </span>
+          <span className="twin-head__kv">
+            已启用 <b>{enabledTasks.length}</b>
+          </span>
+          <span className="twin-head__kv">
+            待批 <b className={pending.length > 0 ? "is-hot" : ""}>{pending.length}</b>
+          </span>
+          <button
+            type="button"
+            className="twin-head__perm"
+            data-level={level}
+            aria-label="切换权限级别"
+            onClick={() => setLevel((prev) => (prev === "full" ? "default" : "full"))}
+          >
+            {level === "full" ? "放手模式" : "默认权限"}
+          </button>
+          <span className="twin-head__deco twin-head__deco--r" aria-hidden />
+        </div>
+      </header>
 
-        {/* ── 二、正在执行 ── */}
-        <section className="twin-col">
-          <ColHead
-            icon={ListChecks}
-            tone="amber"
-            title="正在执行"
-            meta={`${activeRuns} 跑 · ${enabledTasks.length} 启用`}
-          />
-          <div className="twin-col__body">
+      <div className="twin-main">
+        {/* ── 左翼：她替你看着什么 ─────────────────────────── */}
+        <aside className="twin-wing">
+          <section className="twin-box">
+            <BoxHead title="值守任务" meta={`${enabledTasks.length} 个`} />
             {error ? (
               <p className="twin-error">
                 <AlertTriangle className="icon-md" />
                 <span>{error}</span>
               </p>
             ) : null}
-
             {loading && tasks.length === 0 ? (
-              <>
-                <SkeletonCard lines={2} />
-                <SkeletonCard lines={2} />
-              </>
+              <p className="twin-muted">正在核对任务状态…</p>
             ) : null}
-
             {!loading && enabledTasks.length === 0 ? (
-              <Pending
-                title="没有启用的自动化任务"
-                desc="在「自动化」页或直接跟她说话建立任务；启用后会在这里看到运行状态、已跑次数与下次触发时间。"
-              />
+              <p className="twin-muted">
+                还没有启用的任务。在「自动化」页或直接跟她说一句就能建。
+              </p>
             ) : null}
-
-            {enabledTasks.map((t) => {
-              const ratio =
-                t.max_runs && t.max_runs > 0
-                  ? Math.min(1, t.run_count / t.max_runs)
-                  : null;
-              return (
-                <article key={t.id} className="twin-task">
-                  <div className="twin-task__row">
-                    <span className="twin-task__name">{t.name}</span>
-                    <span className="twin-task__pct">
-                      {ratio != null
-                        ? `${t.run_count}/${t.max_runs}`
-                        : `第 ${t.run_count} 次`}
-                    </span>
-                  </div>
-                  {ratio != null ? (
-                    <div className="twin-bar">
+            <div className="twin-tasks">
+              {enabledTasks.map((t) => {
+                const ratio =
+                  t.max_runs && t.max_runs > 0
+                    ? Math.min(1, t.run_count / t.max_runs)
+                    : null;
+                return (
+                  <div key={t.id} className="twin-task">
+                    <div className="twin-task__line">
+                      <span className="twin-task__name">{t.name}</span>
                       <span
-                        className="twin-bar__fill"
-                        style={{ "--p": ratio } as React.CSSProperties}
+                        className={`twin-task__st${statusClass(t.last_status)}`}
+                      >
+                        {t.last_status ? (STATUS_TEXT[t.last_status] ?? t.last_status) : "未运行"}
+                      </span>
+                    </div>
+                    <div className="twin-track">
+                      <span
+                        className="twin-track__fill"
+                        style={{ "--p": ratio ?? 0 } as React.CSSProperties}
                       />
                     </div>
-                  ) : null}
-                  <div className="twin-task__sub">
-                    <span
-                      className={`twin-dot${statusDotClass(t.last_status)}`}
-                      aria-hidden
-                    />
-                    <span>
-                      {t.last_status
-                        ? (STATUS_TEXT[t.last_status] ?? t.last_status)
-                        : "尚未运行"}
-                    </span>
-                    <code>{t.schedule_label ?? t.schedule}</code>
-                    {t.next_run_at ? (
-                      <span>下次 {formatRelative(t.next_run_at)}</span>
+                    <div className="twin-task__meta">
+                      <span className="twin-task__pct">
+                        {ratio != null ? `${Math.round(ratio * 100)}%` : "—"}
+                      </span>
+                      <span>
+                        {ratio != null ? `${t.run_count}/${t.max_runs}` : `第 ${t.run_count} 次`}
+                      </span>
+                      <span className="twin-spacer" />
+                      <code>{t.schedule_label ?? t.schedule}</code>
+                    </div>
+                    {t.last_error ? (
+                      <p className="twin-task__err">{t.last_error}</p>
                     ) : null}
                   </div>
-                  {t.last_error ? (
-                    <p className="twin-card__note">{t.last_error}</p>
-                  ) : null}
-                </article>
-              );
-            })}
-          </div>
-        </section>
+                );
+              })}
+            </div>
+          </section>
 
-        {/* ── 三、待你定夺 ── */}
-        <section className="twin-col twin-col--third">
-          <ColHead icon={Sparkles} tone="rose" title="待你定夺" meta="待接通" />
-          <div className="twin-col__body">
-            <Pending
-              title="决策队列尚未接通"
-              desc="接通后，她需要你拍板的事会出现在这里，每条都附一句依据——你要能一眼看出她凭什么问这个。"
-              items={[
-                "「把这件事转成每天 9 点的常驻任务？」",
-                "「外部 CLI 请求删除 3 个已合并分支」",
-              ]}
-            />
+          <section className="twin-box">
+            <BoxHead title="此刻" meta={checkedText} />
+            <div className="twin-grid">
+              <div>
+                <div className="twin-grid__v">{activeRuns}</div>
+                <div className="twin-grid__k">在跑</div>
+              </div>
+              <div>
+                <div className="twin-grid__v">{enabledTasks.length}</div>
+                <div className="twin-grid__k">已启用</div>
+              </div>
+              <div>
+                <div className={`twin-grid__v${pending.length > 0 ? " is-hot" : ""}`}>
+                  {pending.length}
+                </div>
+                <div className="twin-grid__k">待批</div>
+              </div>
+              <div>
+                <div className="twin-grid__v">{tasks.length}</div>
+                <div className="twin-grid__k">任务总数</div>
+              </div>
+            </div>
+          </section>
 
-            <ColHead
-              icon={BookOpen}
-              tone="green"
-              title="最近工作日志"
-              meta={`${workDays.length} 天`}
-            />
-            {workDays.length === 0 ? (
-              <Pending
-                title="还没有工作日志"
-                desc="daily_memory 里没有记录。任务跑起来后，她会在每天的目标 / 进展 / 结论里留下痕迹，这里读的就是同一份数据。"
-              />
-            ) : (
-              <div className="twin-learn">
-                {workDays.slice(0, 4).map((d) => (
-                  <div key={d.date} className="twin-learn__item">
-                    <span className="twin-learn__ev">{d.date.slice(5)}</span>
-                    <span>
+          <section className="twin-box twin-box--grow">
+            <BoxHead title="最近会话" meta={`${recentSessions.length} 条`} />
+            <div className="twin-rows">
+              {recentSessions.length === 0 ? (
+                <p className="twin-muted">还没有会话记录。</p>
+              ) : (
+                recentSessions.map((s) => (
+                  <div key={s.id} className="twin-row">
+                    <span className="twin-row__t">{formatRelative(s.updated_at)}</span>
+                    <span className="twin-row__m">{s.title || "未命名会话"}</span>
+                    <span className="twin-row__k">
+                      {typeof s.message_count === "number" ? `${s.message_count} 条` : "—"}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="twin-box">
+            <BoxHead title="最近工作日志" meta={`${workDays.length} 天`} />
+            <div className="twin-rows">
+              {workDays.length === 0 ? (
+                <p className="twin-muted">daily_memory 里还没有记录。</p>
+              ) : (
+                workDays.slice(0, 3).map((d) => (
+                  <div key={d.date} className="twin-row">
+                    <span className="twin-row__t">{d.date.slice(5)}</span>
+                    <span className="twin-row__m">
                       {firstLine(d.conclusions) ||
                         firstLine(d.progress) ||
                         firstLine(d.goals) ||
                         "这天没有留下结论"}
                     </span>
+                    <span className="twin-row__k">日志</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        </aside>
+
+        {/* ── 中轴：对话 ↔ 数据 ───────────────────────────── */}
+        <section className="twin-center" data-mode={center}>
+          <div className="twin-ctabs">
+            <button
+              type="button"
+              className="twin-ctab"
+              aria-pressed={center === "chat"}
+              onClick={goChat}
+            >
+              对话
+            </button>
+            <button
+              type="button"
+              className="twin-ctab"
+              aria-pressed={center === "data"}
+              onClick={() => setCenter("data")}
+            >
+              数据
+            </button>
+            <span className="twin-ctabs__spacer" />
+            {pending.length > 0 ? (
+              center === "data" ? (
+                <span className="twin-ctabs__note">
+                  <i aria-hidden />
+                  有 {pending.length} 件待办，已切到数据
+                </span>
+              ) : (
+                <span className="twin-ctabs__note">
+                  <i aria-hidden />
+                  有 {pending.length} 件待办，点「数据」看详情
+                </span>
+              )
+            ) : (
+              <span className="twin-ctabs__note twin-ctabs__note--quiet">
+                {presenceLine}
+              </span>
+            )}
+            {center === "data" ? (
+              <button type="button" className="twin-ctab twin-ctab--back" onClick={goChat}>
+                回到对话
+              </button>
+            ) : null}
+          </div>
+
+          {center === "chat" ? (
+            <div className="twin-chat">
+              <div className="twin-msgs" aria-live="polite">
+                {transcript.length === 0 && !twin.streaming ? (
+                  <p className="twin-muted twin-msgs__empty">
+                    她还没有说过话 · 在下面跟她说一句
+                  </p>
+                ) : null}
+                {transcript.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`twin-msg${m.role === "user" ? " is-user" : ""}`}
+                  >
+                    <span className="twin-msg__who">
+                      {m.role === "user" ? "你" : "阿黎"}
+                    </span>
+                    <p className="twin-msg__tx">{m.text}</p>
+                  </div>
+                ))}
+                {twin.streaming ? (
+                  <div className="twin-msg is-live">
+                    <span className="twin-msg__who">阿黎</span>
+                    <p className="twin-msg__tx">
+                      {twin.turn?.activity ? `正在用 ${twin.turn.activity}` : "正在执行"}
+                    </p>
+                  </div>
+                ) : null}
+
+                {/* 就地拍板：她这一轮在服务端停住等这个决定，
+                    不答就等于 600s 后自动拒绝 —— 按钮必须在视线里。 */}
+                {pending.map((p) =>
+                  p.kind === "approval" ? (
+                    <div key={p.id} className="twin-need" role="group" aria-label="待审批操作">
+                      <span className="twin-need__tag">需要授权</span>
+                      <span className="twin-need__text">
+                        {p.tool}
+                        {p.reason ? ` · ${p.reason}` : ""}
+                      </span>
+                      <span className="twin-need__actions">
+                        <button
+                          type="button"
+                          className="chip-flat"
+                          onClick={() => twin.resolve(p.id, "denied")}
+                        >
+                          拒绝
+                        </button>
+                        <button
+                          type="button"
+                          className="chip-flat chip-flat--on"
+                          onClick={() => twin.resolve(p.id, "approved")}
+                        >
+                          允许
+                        </button>
+                      </span>
+                    </div>
+                  ) : (
+                    <div key={p.id} className="twin-need" role="group" aria-label="待回答的问题">
+                      <span className="twin-need__tag">需要你回答</span>
+                      <span className="twin-need__text">{p.question}</span>
+                      <span className="twin-need__actions">
+                        {p.choices && p.choices.length > 0 ? (
+                          p.choices.map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              className="chip-flat"
+                              onClick={() => twin.resolve(p.id, "approved", c)}
+                            >
+                              {c}
+                            </button>
+                          ))
+                        ) : (
+                          <>
+                            <input
+                              className="twin-need__input"
+                              value={clarifyDraft[p.id] ?? ""}
+                              onChange={(e) =>
+                                setClarifyDraft((prev) => ({ ...prev, [p.id]: e.target.value }))
+                              }
+                              aria-label="回答她的问题"
+                              placeholder="回答她"
+                            />
+                            <button
+                              type="button"
+                              className="chip-flat chip-flat--on"
+                              onClick={() => twin.resolve(p.id, "approved", clarifyDraft[p.id] ?? "")}
+                            >
+                              答复
+                            </button>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  ),
+                )}
+              </div>
+
+              {twin.turn?.error || notice ? (
+                <p className="twin-error twin-error--inline" role="alert">
+                  <AlertTriangle className="icon-md" />
+                  <span>{twin.turn?.error ?? notice}</span>
+                </p>
+              ) : null}
+
+              <form className="twin-cinput" onSubmit={submit}>
+                <div className="twin-cfield">
+                  <input
+                    className="twin-cfield__input"
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onFocus={() => {
+                      manualAtRef.current = Date.now();
+                    }}
+                    placeholder="跟她说点什么，或者直接派活"
+                    aria-label="给助手阿黎发消息"
+                    disabled={twin.streaming}
+                  />
+                  <div className="twin-modes" role="group" aria-label="动作模式">
+                    {MODES.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className="twin-mode"
+                        aria-pressed={mode === m.id}
+                        onClick={() => setMode(m.id)}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="submit"
+                    className="twin-cfield__send"
+                    aria-label="发送"
+                    disabled={sendDisabled}
+                  >
+                    发送
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : (
+            <div className="twin-data">
+              <div className="twin-ring">
+                <svg viewBox="0 0 320 320" aria-hidden>
+                  <circle
+                    cx="160"
+                    cy="160"
+                    r="152"
+                    fill="none"
+                    stroke="var(--color-border-primary)"
+                    strokeWidth="1"
+                  />
+                  <circle
+                    cx="160"
+                    cy="160"
+                    r={ringR}
+                    fill="none"
+                    stroke="var(--color-bg-tertiary)"
+                    strokeWidth="14"
+                  />
+                  <circle
+                    cx="160"
+                    cy="160"
+                    r={ringR}
+                    fill="none"
+                    stroke="var(--color-accent)"
+                    strokeWidth="14"
+                    strokeLinecap="round"
+                    strokeDasharray={`${ringC * (runningRatio ?? 0)} ${ringC}`}
+                    transform="rotate(-90 160 160)"
+                  />
+                  <circle
+                    cx="160"
+                    cy="160"
+                    r="97"
+                    fill="none"
+                    stroke="var(--color-border-primary)"
+                    strokeWidth="1"
+                    strokeDasharray="2 10"
+                  />
+                </svg>
+                <div className="twin-ring__ctr">
+                  <div className="twin-ring__big">
+                    {runningRatio != null ? Math.round(runningRatio * 100) : activeRuns}
+                    {runningRatio != null ? <span>%</span> : null}
+                  </div>
+                  <div className="twin-ring__sub">
+                    {runningRatio != null ? "本轮进度" : "个任务在跑"}
+                  </div>
+                  <div className="twin-ring__fig">
+                    {runningTask
+                      ? `${runningTask.name} · 第 ${runningTask.run_count} 次`
+                      : "没有正在跑的任务"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="twin-data__cap">
+                <b>{twin.streaming ? "你刚交代的这一轮在跑" : stateText}</b>
+                <span>{presenceLine}</span>
+              </div>
+
+              <div className="twin-strip">
+                <div>
+                  <div className="twin-strip__v">{activeRuns}</div>
+                  <div className="twin-strip__k">在跑</div>
+                </div>
+                <div>
+                  <div className="twin-strip__v">{enabledTasks.length}</div>
+                  <div className="twin-strip__k">已启用</div>
+                </div>
+                <div>
+                  <div className={`twin-strip__v${pending.length > 0 ? " is-hot" : ""}`}>
+                    {pending.length}
+                  </div>
+                  <div className="twin-strip__k">待批</div>
+                </div>
+                <div>
+                  <div className="twin-strip__v">{workDays.length}</div>
+                  <div className="twin-strip__k">日志天</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* ── 右翼：现在要你做什么 ─────────────────────────── */}
+        <aside className="twin-wing twin-wing--r">
+          <section className="twin-box">
+            <BoxHead title="等你决定" meta={`${pending.length} 件`} />
+            {pending.length === 0 ? (
+              <p className="twin-muted">队列是空的。有事她会直接在这儿问她。</p>
+            ) : (
+              <div className="twin-att">
+                {pending.map((p) => (
+                  <div key={p.id} className="twin-att__item">
+                    <span className="twin-att__tag">
+                      {p.kind === "approval" ? "需要授权" : "需要回答"}
+                    </span>
+                    <span className="twin-att__text">
+                      {p.kind === "approval"
+                        ? `${p.tool}${p.reason ? ` · ${p.reason}` : ""}`
+                        : p.question}
+                    </span>
+                    <span className="twin-att__actions">
+                      {p.kind === "approval" ? (
+                        <>
+                          <button
+                            type="button"
+                            className="chip-flat"
+                            onClick={() => twin.resolve(p.id, "denied")}
+                          >
+                            拒绝
+                          </button>
+                          <button
+                            type="button"
+                            className="chip-flat chip-flat--on"
+                            onClick={() => twin.resolve(p.id, "approved")}
+                          >
+                            允许
+                          </button>
+                        </>
+                      ) : (
+                        <button type="button" className="chip-flat" onClick={goChat}>
+                          去回答
+                        </button>
+                      )}
+                    </span>
                   </div>
                 ))}
               </div>
             )}
+          </section>
 
-            <Pending
-              title="成长档案待接通"
-              desc="上面是她的工作日志。真正「学到你」的部分（偏好、判断准不准）要等 profile 与证据账本落地，现在不假装有。"
-            />
-          </div>
-        </section>
-      </div>
-
-      {/* 内联对话：她的最近几条就地显示——输入后不用跳去对话页看她说了什么。 */}
-      <div className="twin-transcript" aria-live="polite">
-        {transcript.length === 0 && !twin.streaming ? (
-          <div className="twin-transcript__empty">她还没有说过话 · 在下面跟她说一句</div>
-        ) : (
-          transcript.map((m, i) => (
-            <div key={i} className={`twin-transcript__row${m.role === "user" ? " is-user" : ""}`}>
-              <span className="twin-transcript__who">{m.role === "user" ? "你" : "阿黎"}</span>
-              <span className="twin-transcript__text">{m.text}</span>
-            </div>
-          ))
-        )}
-        {twin.streaming ? (
-          <div className="twin-transcript__row is-live">
-            <span className="twin-transcript__who">阿黎</span>
-            <span className="twin-transcript__text twin-transcript__text--live">
-              {twin.turn?.activity ? `正在用 ${twin.turn.activity}` : "正在执行"}
-            </span>
-          </div>
-        ) : null}
-      </div>
-
-      {/* 就地拍板：审批与澄清都在这页处理。她这一轮在服务端停住等这个决定，
-          不答就等于 600s 后自动拒绝 —— 所以按钮必须就在视线里。 */}
-      {pending.map((p) =>
-        p.kind === "approval" ? (
-          <div key={p.id} className="twin-need" role="group" aria-label="待审批操作">
-            <span className="twin-need__text">
-              需要你允许：{p.tool}
-              {p.reason ? ` · ${p.reason}` : ""}
-            </span>
-            <span className="twin-need__actions">
-              <button
-                type="button"
-                className="chip-flat"
-                onClick={() => twin.resolve(p.id, "denied")}
-              >
-                拒绝
-              </button>
-              <button
-                type="button"
-                className="chip-flat chip-flat--on"
-                onClick={() => twin.resolve(p.id, "approved")}
-              >
-                允许
-              </button>
-            </span>
-          </div>
-        ) : (
-          <div key={p.id} className="twin-need" role="group" aria-label="待回答的问题">
-            <span className="twin-need__text">{p.question}</span>
-            <span className="twin-need__actions">
-              {p.choices && p.choices.length > 0 ? (
-                p.choices.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    className="chip-flat"
-                    onClick={() => twin.resolve(p.id, "approved", c)}
-                  >
-                    {c}
-                  </button>
-                ))
+          <section className="twin-box twin-box--grow">
+            <BoxHead title="刚才发生" meta={`${workDays.length} 条`} />
+            <div className="twin-rows">
+              {workDays.length === 0 ? (
+                <p className="twin-muted">
+                  daily_memory 里还没有记录。任务跑起来后她会在这里留下痕迹。
+                </p>
               ) : (
-                <>
-                  <input
-                    className="twin-need__input"
-                    value={clarifyDraft[p.id] ?? ""}
-                    onChange={(e) =>
-                      setClarifyDraft((prev) => ({ ...prev, [p.id]: e.target.value }))
-                    }
-                    aria-label="回答她的问题"
-                    placeholder="回答她"
-                  />
-                  <button
-                    type="button"
-                    className="chip-flat chip-flat--on"
-                    onClick={() => twin.resolve(p.id, "approved", clarifyDraft[p.id] ?? "")}
-                  >
-                    答复
-                  </button>
-                </>
+                workDays.slice(0, 8).map((d) => (
+                  <div key={d.date} className="twin-row">
+                    <span className="twin-row__t">{d.date.slice(5)}</span>
+                    <span className="twin-row__m">
+                      {firstLine(d.progress) ||
+                        firstLine(d.conclusions) ||
+                        firstLine(d.goals) ||
+                        "这天没有留下记录"}
+                    </span>
+                    <span className="twin-row__k">日志</span>
+                  </div>
+                ))
               )}
-            </span>
-          </div>
-        ),
-      )}
+            </div>
+          </section>
 
-      {twin.turn?.error || notice ? (
-        <p className="twin-error twin-error--inline" role="alert">
-          <AlertTriangle className="icon-md" />
-          <span>{twin.turn?.error ?? notice}</span>
-        </p>
-      ) : null}
-
-      <form className="twin-dock" onSubmit={submit}>
-        <div className="twin-dock__hint">
-          <span>
-            {twin.streaming
-              ? "这一轮在电脑上执行中 · 工具 / 工作区 / 派 agent 都在跑"
-              : "在电脑上执行 · 工具 / 工作区 / 派 agent 都可用"}
-          </span>
-          <span>·</span>
-          <kbd>Enter</kbd>
-          <span>发送</span>
-          {twin.streaming ? (
-            <button type="button" className="chip-flat" onClick={twin.stop}>
-              停止
-            </button>
-          ) : null}
-          <button type="button" className="chip-flat" onClick={onOpenChat}>
-            完整对话
-          </button>
-        </div>
-        <div className="twin-dock__row">
-          <span className="twin-dock__caret" aria-hidden>
-            ›
-          </span>
-          <input
-            className="twin-dock__input"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="跟她说点什么，或者直接派活"
-            aria-label="给助手阿黎发消息"
-            disabled={twin.streaming}
-          />
-          <div className="twin-dock__chips" role="group" aria-label="动作模式">
-            {MODES.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                className="twin-chip"
-                aria-pressed={mode === m.id}
-                onClick={() => setMode(m.id)}
-              >
-                {m.label}
+          <section className="twin-box">
+            <BoxHead title="她" />
+            <div className="twin-who">
+              <AliCharacter state={aliState} size={36} />
+              <div className="twin-who__text">
+                <span className="twin-who__name">阿黎</span>
+                <span className="twin-who__line">{checkedText}</span>
+              </div>
+            </div>
+            <div className="twin-who__acts">
+              <button type="button" className="chip-flat" onClick={onOpenChat}>
+                完整对话
               </button>
-            ))}
-          </div>
-          <button type="submit" className="twin-send" aria-label="发送" disabled={sendDisabled}>
-            ↑
-          </button>
-        </div>
-      </form>
+              {twin.streaming ? (
+                <button type="button" className="chip-flat" onClick={twin.stop}>
+                  停止这一轮
+                </button>
+              ) : null}
+            </div>
+          </section>
+        </aside>
+      </div>
+
+      {/* ── 底条 ─────────────────────────────────────────── */}
+      <footer className="twin-bottom">
+        <span className="twin-bottom__live">
+          <i aria-hidden />
+          {twin.streaming ? "这一轮在电脑上执行中" : "在电脑上执行"}
+        </span>
+        <span>会话 {TWIN_SESSION_ID}</span>
+        <span className="twin-spacer" />
+        <span>
+          <kbd>Enter</kbd> 发送
+        </span>
+        <span>{pending.length > 0 ? `有 ${pending.length} 件待办` : "没有待办"}</span>
+      </footer>
     </div>
   );
 }
 
-/** 未接通模块：说清「将来显示什么」，不给假数据。 */
-function Pending({
-  title,
-  desc,
-  items,
-}: {
-  title: string;
-  desc: string;
-  items?: string[];
-}) {
-  return (
-    <div className="twin-pending">
-      <div className="twin-pending__title">{title}</div>
-      <div className="twin-pending__desc">{desc}</div>
-      {items && items.length > 0 ? (
-        <ul className="twin-pending__list">
-          {items.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
-  );
-}
-
-function statusDotClass(status: AutomationTask["last_status"]): string {
-  if (status === "failed") return " twin-dot--error";
-  if (status === "ok" || status === "running") return "";
-  return " twin-dot--idle";
+function statusClass(status: AutomationTask["last_status"]): string {
+  if (status === "failed") return " is-error";
+  if (status === "running") return " is-run";
+  if (status === "ok") return " is-ok";
+  return " is-idle";
 }
 
 /** 取首行非空文本并裁到 80 字，把一天的三段日志压成一行。 */
