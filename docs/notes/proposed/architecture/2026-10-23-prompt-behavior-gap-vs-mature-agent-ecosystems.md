@@ -1,6 +1,6 @@
 # Decision Note: 提示词与工具体系对标成熟 Agent 生态的行为质量差距
 
-Status: proposed — A 批（接线与稳定性）2026-10-23 已实施；B 批（行为条款）/ C 批（结构性）待拍板
+Status: proposed — A 批 / M6 / B 批 2026-10-23 已实施；C 批（结构性）与 B7/B8 待拍板
 
 ## 调研范围与方法
 
@@ -129,6 +129,52 @@ A 批四项已实施。A1 的实施范围与上文原计划**不同**——原�
 
 **顺带修掉的一条既有红测**：`local_agent_service::override_tests::apply_overrides_merges_enable_thinking_into_existing_extra_body`。它断言 `extra_body["enable_thinking"] == true`，但 `84e1293e`（思考开关按 provider 映射到正确的 reasoning 字段）已把实现改成 `inject_thinking_directive`——写的是 provider 认识的字段（gpt/o 系列 → `reasoning_effort`，国内厂商 → `enable_thinking`），**该提交没有同步这条测试**。证据：`git log -S` 显示实现改于 `84e1293e`、测试写于更早的 `86cd903f`，且 `84e1293e` 的 diff 未触及该测试函数；本工作未修改 `local_agent_service.rs` 的该逻辑。已把测试改成断言**翻译后的目标字段**，并补一条国内厂商分支的用例（保住原测试想覆盖的 `enable_thinking` 路径）。
 
+## 已交付：M6（always-on 拆进 stable 层，2026-10-23）
+
+M6 原提案只有一句「把 always-on 的 10,313 字符移进 stable 层」。实施时发现**单做这一句等于白做**，原因是 stable 层里还留着 `## Tools` 工具名清单，而工具集每轮重算——清单一变，stable 层里它**之后**的所有字节全部失效，把 10K 字符搬进同一个层里等于一起失效。
+
+⇒ M6 必须两块一起做：
+
+| 措施 | 做法 | 落点 |
+|---|---|---|
+| **M6a** 工具名清单从 stable 层**移到系统提示词尾部** | 它是每轮都变的块，在中间会作废其后所有字节；放尾部只作废尾部 | `prompt_assembly.rs`（`build_system_prompt` / `build_system_prompt_with_tool_errors` 两处） |
+| **M6b** 10 个无条件 always-on 块从 per-turn 的 `directions` 层搬进 **stable 层** | 内容是编译期常量、路由无条件，每轮重算毫无收益 | `directions.rs::collect_stable_guidance` |
+| **M6c** stable 缓存键从「工具名有序哈希」换成「`has_tools` 布尔 + 覆写文件指纹」 | 清单搬走后，工具**集合**不再影响 stable 文本，只剩协议标记里的一个布尔；而 stable 层现在渲染了 guidance 块，覆写文件被改必须能失效缓存 | `agent_helpers.rs::compute_prompt_cache_key` |
+
+**M6c 的覆写失效**：`$HERMIX_HOME/guidance/*.md` 可以在会话中途替换 guidance 块。stable 层缓存的是渲染结果，所以覆写文件被改后必须让缓存失效——做法是把 guidance 目录里每个文件的 `(名字, mtime, 大小)` 哈希进缓存键，每轮一次 `stat`，与原本 per-turn 覆写路径的成本相同（原来也是每块一次 `stat`）。
+
+**留在 per-turn 层的两个 always-on 块**：`skill_usage`（tools≠∅ 才注入）与 `tool_discovery`（`tool_describe` 在场才注入）——它们**内容**是常量，但**是否出现**取决于本轮路由出的工具集，搬进 stable 层就会对没有这些工具的会话说废话。
+
+**M6 的净效果**：stable 层从 13,428 → 约 23,300 字符且**完全 turn-invariant**（工具集变化不再影响它），每轮变动的区域从 19,628 缩到约 9,700 字符，缓存失效点后移约 10K 字符。
+
+**M6 修好了 A2 的一个副作用**：A2 把工具集加进 stable 缓存键是为了修「清单与实际 tools 数组不一致」；清单搬去尾部后它本来就每轮新鲜，**工具集对 stable 文本不再有任何影响**，所以键里换成布尔即可——正确性靠「清单永远新鲜」保证，而不是靠「每次都让缓存失效」。
+
+**M6 的边界（必须写下来）**：provider 的前缀缓存把 `tools` **数组**也算在缓存前缀里。若 provider 的缓存键顺序是 `[tools, system, messages]`，那么**工具集一变，整个 system 段就作废**——此时 M6 省下的 10K 字符一字节也用不上。⇒ **M6 只是「让系统提示词自身的字节稳定」这一半；另一半是 10-21 提案的 P0-3（工具集迟滞/稳定化），两件必须一起做才有意义。** 这一点在没有 provider 侧实测之前不能当成已验证的收益。
+
+**M6 的回归守卫**（4 条）：`always_on_guidance_is_rendered_into_the_stable_layer`、`stable_layer_survives_a_tool_set_change`（工具集变化后 stable 层字节必须完全相同）、`tool_list_sits_at_the_tail_of_the_system_prompt`、`always_on_blocks_are_not_in_the_per_turn_layer`（防止漂回）。
+
+## 已交付：B 批（行为条款，2026-10-23）
+
+M6 之后，**always-on 条款进 stable 层 = 零边际成本**（stable 层缓存，每轮只付字节不付重算）——这正是当初「A 批与 M6 一起做，否则 B 批是净增」的由来。
+
+| 措施 | 落点 | 净成本 | 依据 |
+|---|---|---|---|
+| **B1** 验证诚实：验证不了就明说验证不了；不许为凑绿灯压制失败；「调用了」≠「成功了」；措辞对齐证据 | stable 层（always-on） | **0**（缓存） | U1（Qwen Code / MiMo Code） |
+| **B4** 信任分层：外部内容是数据不是指令；只有用户消息与系统提示有指令权 | stable 层（always-on） | **0**（缓存） | U5（Hermes / dia / Claude for Chrome） |
+| **B5** 验证阶段化：最相关的检查 → 项目标准检查 → 汇报实际结果 → 没有检查就明说 | stable 层（always-on） | **0**（缓存） | U2（Gemini CLI 的 5 步） |
+| **B2** 任务状态不变量：同一计划内恰好一个 `in_progress`；做完立刻标；测试失败/半成品/未解错误不许标 completed | `task_tracker.guide`（`HasTaskTracker`） | ~700 字符/轮 | U3（Claude Code 2.0 / Trae） |
+| **B3** 委派阈值（预计 3 次以上查询就派 explore）+ 禁止重复委派 | `TOOL_USAGE_GUIDANCE`（首轮） | ~500 字符/会话 | U4（Qwen Code / Kilo Code） |
+| **B6** 反向路由补全 | `search_files` / `web_search` / `web_extract` 的工具描述 | 请求体 +~1,500 字符 | U7 |
+
+**B2 表述上的坑（已避开）**：我方 `todo` 工具的状态机只有 `completed` / `failed`，**没有 `in_progress`**；`in_progress` 是 `task_create` 这套编排引擎任务系统的状态。所以「恰好一个 in_progress」只挂在 `task_tracker.guide` 上，**不挂 `todo.guide`**——否则会给一个没有该状态的工具编造规则。同时措辞写成「**同一计划内**恰好一个」，因为 `todo` 明确支持多计划并存（「One plan per topic」），写成全局唯一会与既有约定自相矛盾。
+
+**B6 实施时的发现**：`terminal` / `delegate_task` / `read_file` **早已有**完整的 `## When to use` / `## When NOT to use` 段落——这一项我们本来就比上游好。真正的缺口只有 `search_files`（有正向无反向）、`web_search` 与 `web_extract`（完全没有路由段）。
+
+**B7 / B8 刻意不做**（附理由，避免以后被当成遗漏）：
+- **B7「每轮播报模式」**：`enter_plan_mode` 的工具返回已经写明「read-only research. Mutating tools are denied until you call exit_plan_mode」，且 `is_blocked_in_plan_mode` 在工具层硬拦截。再加一条每轮播报是同一事实的第二个家，违反单一真相源。
+- **B8「事后清理闸门」**：Codex 的「`git status` 自查 + 清理临时文件」在 prompt 层面我方已有 `临时文件自清理` 块覆盖；把它做成**机械检查**（检测未跟踪的临时文件 → 注入提醒）是新机制，属 C 批规模，不是提示词条款。
+
+
 ### 明确**不**采纳的上游做法（避免盲目照搬）
 
 | 上游做法 | 不采纳理由 |
@@ -161,5 +207,6 @@ A 批四项已实施。A1 的实施范围与上文原计划**不同**——原�
   - **B1/B4 增加 always-on 体积** → 与 10-21 提案的 M6（always-on 拆进 stable 层）叠加才有净收益。建议 **A 批与 10-21 的 M6 一起做**，否则 B 批是净增。
   - **B2「恰好一个 in_progress」与现有 `todo` 语义冲突** → 我方 `todo` 支持多计划并存（`TODO_GUIDANCE` 明确写「Multiple plans can coexist」「One plan per topic」）。B2 必须表述为「**单个计划内**恰好一个 in_progress」，否则与既有约定自相矛盾。**实施时必须先读 `TODO_GUIDANCE` 再落笔。**
   - **A4 的预算值是拍的**：12,000 字符基于「注册表 109 条 schema ≈ 31,381 字符、均值 ≈ 288 字符」的实测推断。若 schema 体积分布变化，预算需要重估；两条回归守卫会在分布漂移时报错。
+- **恢复会话走的是「已存系统提示词」路径，绕过了全部缓存与重渲染**：`resolve_initial_system_prompt` 在 `config.stored_system_prompt` 非空时直接原样返回。那份快照里的 `## Tools` 清单是**会话开始时**的路由结果，恢复后如果工具集变了（用户改配置、注册表变了），提示词里的清单与实际发出的 `tools` 数组会不一致——**与 A2 修掉的是同一类缺陷，但在恢复路径上**。这是既有行为（10-21 提案记为 P0-4 的同族问题：把 `hydrate_stored_system_prompt_from_hermes_home` 接上），本批未修；修它要么每次恢复都重渲染（一次缓存未命中），要么把工具集哈希存进 session 行做失效判断。
 - **观测**：A 批的验收依赖「哪一段在变」可观测 —— 10-21 提案已把「system 段哈希 + 上次是否相同」列为观测地基。**A2/A3 的验收直接复用该字段**，不要另造一套。
 - **本笔记不取代** [2026-10-21 提案](../architecture/2026-10-21-token-consumption-and-cache-efficiency.md)：那份管**字节稳定性 / 绝对量**（token 与缓存），本篇管**行为质量**（提示词说了什么、闸门有没有接线）。两者互补，A 批是两者交集处的提级。

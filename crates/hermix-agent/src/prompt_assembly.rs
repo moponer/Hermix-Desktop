@@ -647,7 +647,26 @@ pub fn build_system_prompt_with_tool_errors(
 
     let suffix_text = build_dynamic_suffix(config, model_for_prompt);
 
-    let prompt = format!("{stable_text}{directions_text}{context_text}{suffix_text}");
+    // ★ The active tool list, at the **tail**.
+    //
+    // It is injected as a `<tools>` text block so the model is always
+    // aware of what it can call — even if the native
+    // OpenAI/Anthropic `tools` API field is ignored, filtered out by
+    // the router, or the model is a text-only fine-tune that has no
+    // notion of tool-calling wire protocols.
+    //
+    // It sits at the end because the routed tool set changes from turn
+    // to turn. In the middle of the prompt it invalidated every byte
+    // after it; at the tail it costs only the tail.
+    let tools_text = {
+        let mut b = SystemPromptBuilder::new();
+        b = b.with_tools_section(tool_schemas);
+        b.build().to_string()
+    };
+
+    let prompt = format!(
+        "{stable_text}{directions_text}{context_text}{suffix_text}{tools_text}"
+    );
     tracing::Span::current().record("out_chars", prompt.len());
 
     //★ Cache-effectiveness summary : one info event per
@@ -791,7 +810,17 @@ pub fn build_system_prompt(
 
     let suffix_text = build_dynamic_suffix(config, model_for_prompt);
 
-    let prompt = format!("{stable_text}{directions_text}{context_text}{suffix_text}");
+    // ★ The active tool list, at the **tail**. See the note on the
+    // same block in `build_system_prompt_with_tool_errors`.
+    let tools_text = {
+        let mut b = SystemPromptBuilder::new();
+        b = b.with_tools_section(tool_schemas);
+        b.build().to_string()
+    };
+
+    let prompt = format!(
+        "{stable_text}{directions_text}{context_text}{suffix_text}{tools_text}"
+    );
     tracing::Span::current().record("out_chars", prompt.len());
 
     //★ Cache-effectiveness summary : one info event per
@@ -856,12 +885,15 @@ fn build_stable_layer(
         config.personality.as_deref(),
         config.system_prompt.as_deref(),
         config.workspace.as_deref(),
-        // The stable layer renders a `## Tools` name list from this
-        // slice, so the tool set is part of what the cached text
-        // depends on. Leaving it out let the cache serve a stale tool
-        // list — the prompt would advertise one tool set while the
-        // request's `tools` array carried another.
-        &tool_schemas.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+        // The stable layer no longer carries the tool list (it moved to
+        // the tail of the system prompt), so the *set* of tools no
+        // longer affects the cached text — only whether there are any
+        // at all, via the `### Active tools` protocol marker.
+        !tool_schemas.is_empty(),
+        // An on-disk guidance override edited mid-session must
+        // invalidate the cache, or the model keeps seeing the compiled
+        // default until the process restarts.
+        crate::directions::guidance_override_fingerprint(),
     );
 
     // Hot-path read: peek the cache without re-rendering. The lookup
@@ -897,13 +929,18 @@ fn build_stable_layer(
     // `build_system_prompt`. The stable layer must NOT depend on
     // per-turn state (user message, active tool set) so the cache key
     // stays stable across turns.
-
-    // ★ Inject the active tool list as a `<tools>` text block so the model
-    // is *always* aware of what it can call — even if the native
-    // OpenAI/Anthropic `tools` API field is ignored, filtered out by
-    // the router, or the model is a text-only fine-tune that has no
-    // notion of tool-calling wire protocols.
-    builder = builder.with_tools_section(tool_schemas);
+    //
+    // ★ The active tool list used to be injected here as a `<tools>`
+    // text block so the model is *always* aware of what it can call —
+    // even if the native OpenAI/Anthropic `tools` API field is ignored,
+    // filtered out by the router, or the model is a text-only fine-tune
+    // that has no notion of tool-calling wire protocols.
+    //
+    // It no longer lives here: the routed tool set changes every turn,
+    // and a per-turn-varying block in the middle of the cached layer
+    // invalidated everything after it. It now sits at the **tail** of
+    // the system prompt (see `build_system_prompt`), where a change
+    // costs only the tail.
 
     if let Some(ref personality) = config.personality {
         let requested = personality.trim();
@@ -1014,6 +1051,23 @@ fn build_stable_layer(
 4. 不用 backdrop-filter 与全局 `* { transition }`；过渡只加在交互元素的具体属性（transform/opacity）。"#,
     );
 
+    // ★ Always-on guidance (safety, tool failure, env/shell, file
+    // lifecycle, git safety, URL safety, web automation, reply
+    // termination, bare-label replies, parallel execution).
+    //
+    // These blocks are compile-time constants with an unconditional
+    // route, so they used to be re-evaluated on every turn inside the
+    // per-turn `directions` layer — which put ~10K characters inside
+    // the part of the prompt that changes every turn, the part a
+    // provider's prefix cache cannot reuse. They are rendered once
+    // here instead, into the cached stable layer.
+    //
+    // Placed last so the block that follows them (the per-turn
+    // directions) starts as late as possible — every character before
+    // the churn boundary is a character the provider can serve from
+    // cache.
+    builder = builder.with_guidance_bodies(crate::directions::stable_guidance_bodies());
+
     let mut rendered = builder.build().to_string();
 
     // ★ Protocol-completeness: inline the five required section markers
@@ -1037,7 +1091,7 @@ fn build_stable_layer(
         let protocol = [
             Section::Identity.default_body().to_string(),
             if has_tools {
-                "### Active tools\nSee the active tools list above.".to_string()
+                "### Active tools\nSee the active tools list at the end of this prompt.".to_string()
             } else {
                 Section::ToolList.default_body().to_string()
             },
@@ -1336,6 +1390,108 @@ pub fn resolve_initial_system_prompt(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    // ---------------------------------------------------------------
+    // M6 — the always-on guidance lives in the cached stable layer
+    // ---------------------------------------------------------------
+
+    /// The unconditional always-on blocks (safety, tool failure,
+    /// env/shell, file lifecycle, git safety, URL safety, web
+    /// automation, reply termination, bare-label replies, parallel
+    /// execution) must be rendered into the **stable** layer, not the
+    /// per-turn directions layer.
+    ///
+    /// Why it matters: the per-turn region is the part a provider's
+    /// prefix cache cannot reuse. ~10K characters of compile-time
+    /// constants living there meant paying for them on every turn.
+    #[test]
+    fn always_on_guidance_is_rendered_into_the_stable_layer() {
+        let cfg = AgentConfig::default();
+        let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+        let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model, 0);
+
+        let stable = slot.lock().unwrap().stable.clone().expect("stable layer");
+        for marker in [
+            "Tool failure rule",     // TOOL_FAILURE_GUIDANCE
+            "Environment & Shell",   // ENVIRONMENT_SHELL_GUIDANCE
+            "Git safety protocol",   // GIT_SAFETY_GUIDANCE
+            "URL safety",            // URL_SAFETY_GUIDANCE
+        ] {
+            assert!(
+                stable.contains(marker),
+                "stable layer must contain the always-on block ({marker:?})"
+            );
+        }
+    }
+
+    /// The stable layer must be **turn-invariant with respect to the
+    /// routed tool set**.
+    ///
+    /// Before M6 the stable layer rendered the tool name list, so a
+    /// tool-set change invalidated the whole cached layer and every byte
+    /// after it. The list now sits at the tail of the system prompt, so
+    /// a changed tool set must leave the stable layer byte-identical.
+    #[test]
+    fn stable_layer_survives_a_tool_set_change() {
+        use hermix_core::{JsonSchema, ToolSchema};
+        let cfg = AgentConfig::default();
+        let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+
+        let one = vec![ToolSchema::new("read_file", "Read", JsonSchema::new("object"))];
+        let two = vec![
+            ToolSchema::new("read_file", "Read", JsonSchema::new("object")),
+            ToolSchema::new("write_file", "Write", JsonSchema::new("object")),
+        ];
+
+        let _ = build_system_prompt(&cfg, &slot, None, "", &one, &cfg.model, 0);
+        let (key_a, stable_a) = {
+            let g = slot.lock().unwrap();
+            (g.cached_stable_prompt_key, g.stable.clone())
+        };
+
+        let _ = build_system_prompt(&cfg, &slot, None, "", &two, &cfg.model, 0);
+        let (key_b, stable_b) = {
+            let g = slot.lock().unwrap();
+            (g.cached_stable_prompt_key, g.stable.clone())
+        };
+
+        assert_eq!(
+            key_a, key_b,
+            "a tool-set change must not invalidate the stable layer"
+        );
+        assert_eq!(
+            stable_a, stable_b,
+            "the stable layer text must not change when the routed tool set changes"
+        );
+    }
+
+    /// The tool list moved to the **tail** of the system prompt: it is
+    /// the one block that changes every turn, so it must not sit in the
+    /// middle where it would invalidate everything after it.
+    #[test]
+    fn tool_list_sits_at_the_tail_of_the_system_prompt() {
+        use hermix_core::{JsonSchema, ToolSchema};
+        let cfg = AgentConfig::default();
+        let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+        let tools = vec![ToolSchema::new("read_file", "Read", JsonSchema::new("object"))];
+        let prompt = build_system_prompt(&cfg, &slot, None, "", &tools, &cfg.model, 0);
+
+        let tools_at = prompt.find("## Tools").expect("tool list must be present");
+        let marker_at = prompt
+            .find("### Active tools")
+            .expect("protocol marker must be present");
+        assert!(
+            marker_at < tools_at,
+            "the tool list must come after the protocol markers (tail), not before them"
+        );
+        assert!(
+            prompt.contains("Available: read_file"),
+            "the tool list must still name the active tools"
+        );
+    }
 
     /// 缓存稳定性回归（2026-09-28，对标 dsh 的 97%→11% 缓存 issue）：
     /// 系统提示尾部的 "Conversation started" 块此前每 turn 用

@@ -226,11 +226,18 @@ impl Default for ToolRegistry {
 /// on** — a key that omits an input makes the cache return text that
 /// no longer matches the request.
 ///
-/// The stable layer renders a `## Tools` name list (`with_tools_section`),
-/// and the routed tool set is recomputed every turn from the last six
-/// messages. The key therefore **includes the tool names, in order**: a
-/// tool-set change must miss the cache, otherwise the prompt advertises
-/// one tool set while the request's `tools` array carries another.
+/// The stable layer used to render a `## Tools` name list, which made
+/// the routed tool set an input. That list now sits at the tail of the
+/// system prompt (it changes every turn, and in the middle of the
+/// prompt it invalidated everything after it), so the stable layer
+/// depends on the tool set only through one boolean — the `### Active
+/// tools` protocol marker.
+///
+/// Two more inputs:
+/// - `has_tools` — that boolean.
+/// - `guidance_fingerprint` — the on-disk guidance overrides. The
+///   stable layer renders those blocks, so a file edited mid-session
+///   has to invalidate the cache.
 ///
 /// Per-turn data that is *not* part of the stable layer (user message,
 /// timestamp, session id) is still excluded — those live in other
@@ -240,7 +247,8 @@ pub fn compute_prompt_cache_key(
     personality: Option<&str>,
     system_prompt: Option<&str>,
     workspace: Option<&str>,
-    tool_names: &[&str],
+    has_tools: bool,
+    guidance_fingerprint: u64,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::default();
@@ -248,9 +256,8 @@ pub fn compute_prompt_cache_key(
     personality.unwrap_or("").hash(&mut h);
     system_prompt.unwrap_or("").hash(&mut h);
     workspace.unwrap_or("").hash(&mut h);
-    // Ordered: the rendered `## Tools` list preserves this order, so a
-    // reorder is a content change and must miss the cache.
-    tool_names.hash(&mut h);
+    has_tools.hash(&mut h);
+    guidance_fingerprint.hash(&mut h);
     h.finish()
 }
 

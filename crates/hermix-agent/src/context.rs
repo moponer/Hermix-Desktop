@@ -1175,6 +1175,20 @@ impl SystemPromptBuilder {
         self
     }
 
+    /// Add pre-rendered guidance bodies.
+    ///
+    /// Used by the stable layer for the always-on blocks: they have
+    /// already been filtered (they are unconditional) and their
+    /// on-disk overrides already applied, so there is nothing left to
+    /// route.
+    pub fn with_guidance_bodies(mut self, bodies: impl IntoIterator<Item = String>) -> Self {
+        for b in bodies {
+            self.parts.push(b);
+        }
+        self.cached = None;
+        self
+    }
+
     /// Borrow the latest audit log. Cleared by mutation; populated by
     /// [`Self::assemble_directions`].
     pub fn direction_audit(&self) -> &[DirAuditEntry] {

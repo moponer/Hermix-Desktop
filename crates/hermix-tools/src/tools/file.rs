@@ -917,7 +917,13 @@ impl ToolHandler for SearchFilesHandler {
              ## When to reach for this tool\n\
              - **Find files by name** (e.g. \"where is the config?\" / \"show me the .toml files\") → use `target: \"files\"` or the `list_files` alias.\n\
              - **Search inside files** (e.g. \"where is the `effective_model` resolved?\" / \"grep TODO\") → use `target: \"content\"` (the default).\n\
-             Much cheaper and more precise than `computer_use.screenshot` of an editor with Find-open.",
+             Much cheaper and more precise than `computer_use.screenshot` of an editor with Find-open.\n\
+             \n\
+             ## When NOT to use it\n\
+             - **You already know the file** → `read_file` it directly; searching for a known path is a wasted round trip.\n\
+             - **You need the file's contents, not its location** → `search_files` gives you matching lines, not the file; read the match with `read_file`.\n\
+             - **The pattern is not a regex** (it contains unescaped `(`, `[`, `.`) → this is a regex engine; a literal dot matches any character. Escape it, or use `read_file` when you know the file.\n\
+             - **Exploring a codebase broadly** (20+ files, unknown structure) → a handful of targeted searches in the main context gets expensive; delegate the sweep to `delegate_task` and let it return the conclusion.",
             JsonSchema::object(props, vec!["pattern".into()]),
         )
     }
