@@ -157,7 +157,7 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
       <ConfirmDialog
         open={confirmReset}
         title="恢复官方 MCP 清单"
-        body={`将删除全部 ${servers.length} 个已配置的 MCP 服务（含自定义条目），恢复为内置官方清单。此操作不可撤销。`}
+        body={`将删除全部 ${servers.length} 个已配置的 MCP 服务（含自定义条目），恢复为内置官方清单。`}
         confirmLabel="恢复官方清单"
         onCancel={() => setConfirmReset(false)}
         onConfirm={() => {

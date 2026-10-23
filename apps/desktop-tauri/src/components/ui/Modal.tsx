@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 
 import { cx } from "../../lib/cx";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
@@ -259,7 +259,10 @@ export function Modal({
           {children}
         </div>
         {footer && (
-          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] px-5 py-3">
+          /* 底栏靠**面亮度差**分层（bg-secondary 比 elevated 低一档），不画
+             border-t —— 2026-10-23 去描边后，全站只剩这一处还在给 footer
+             画线，同一屏里弹窗有边、其它面板没边，看起来像两套设计。 */
+          <div className="flex shrink-0 items-center justify-end gap-2 bg-[var(--color-bg-secondary)] px-5 py-3">
             {footer}
           </div>
         )}
@@ -272,9 +275,25 @@ export function Modal({
 
 export interface ConfirmDialogProps {
   open: boolean;
-  /** 标题（可含图标等节点；图标请加 `aria-hidden`）。 */
+  /** 标题（纯文本优先；传节点时请自行保证语义）。 */
   title: ReactNode;
   body: ReactNode;
+  /**
+   * 标题左侧的语义图标（`Trash2` / `AlertTriangle` / `LogOut` …）。
+   * 不传则只有文字。**色调由 confirmVariant 决定**，调用方只给图标本身，
+   * 避免各页自己挑颜色（此前 Sidebar 的删除框用了 `bg-success-soft` 的
+   * 绿色垃圾桶 —— 删除是 error 语义，绿色会让用户以为"这是好事"）。
+   */
+  icon?: ReactNode;
+  /**
+   * 是否在正文下补一行「此操作不可恢复」。
+   * 默认：danger 变体为 true。
+   *
+   * **调用方不要自己在 body 里再拼这句话** —— 此前 Sidebar 两头都写了，
+   * 弹窗里同一句话出现两遍（正文尾句 + 尾注），是最典型的"组件没管住、
+   * 调用方各写一遍"的结果。
+   */
+  irreversible?: boolean;
   confirmLabel?: string;
   cancelLabel?: string;
   /** 危险操作（删除、撤销、解绑）用 danger —— 默认就是 danger，
@@ -289,10 +308,25 @@ export interface ConfirmDialogProps {
   onCancel: () => void;
 }
 
+/**
+ * 确认弹窗。层次靠**三层信息密度**而不是线：
+ *
+ *   图标(40) + 标题(title/600)      ← 第一层：这是什么
+ *            描述(ui/secondary)     ← 第二层：会发生什么
+ *            ⚠ 不可恢复(tiny/error) ← 第三层：最坏后果，胶囊底色
+ *   ── bg-secondary 底栏 ──        ← 面亮度差分区，取消 | 确认
+ *
+ * 2026-10-23 重做：此前 ConfirmDialog 直接把 title 交给 Modal 的头部，
+ * body 丢进内容区，两者字号只差一档、间距也只有 4px，读起来是一坨 ——
+ * 用户反馈「这个卡片一点层次没有」。现在标题/描述/后果三段各有明确
+ * 字号、颜色与间距，且 danger 变体自动补「不可恢复」尾注。
+ */
 export function ConfirmDialog({
   open,
   title,
   body,
+  icon,
+  irreversible,
   confirmLabel = CONFIRM,
   cancelLabel = CANCEL,
   confirmVariant = "danger",
@@ -301,13 +335,17 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const danger = confirmVariant === "danger";
+  const showIrreversible = irreversible ?? danger;
+
   return (
     <Modal
       open={open}
       onClose={onCancel}
-      title={title}
       width="base"
       scrim={scrim}
+      ariaLabel={typeof title === "string" ? title : "确认操作"}
+      bodyClassName="p-0 overflow-hidden"
       footer={
         <>
           <Button variant="secondary" onClick={onCancel} disabled={busy}>
@@ -319,7 +357,35 @@ export function ConfirmDialog({
         </>
       }
     >
-      {typeof body === "string" ? <p className="text-[length:var(--text-ui)] leading-6">{body}</p> : body}
+      <div className="flex items-start gap-3.5 px-5 pt-5 pb-4">
+        {icon && (
+          <span
+            aria-hidden
+            className={cx(
+              "grid size-9 shrink-0 place-items-center rounded-[var(--radius-md)]",
+              danger
+                ? "bg-[var(--color-bg-error-soft)] text-[var(--color-text-error)]"
+                : "bg-[var(--color-bg-accent-soft)] text-[var(--color-text-accent)]",
+            )}
+          >
+            {icon}
+          </span>
+        )}
+        <div className="min-w-0 flex-1">
+          <h2 className="text-[length:var(--text-title)] font-semibold leading-snug text-[var(--color-text-primary)]">
+            {title}
+          </h2>
+          <div className="mt-1.5 text-[length:var(--text-ui)] leading-6 text-[var(--color-text-secondary)]">
+            {typeof body === "string" ? <p className="whitespace-pre-wrap">{body}</p> : body}
+          </div>
+          {showIrreversible && (
+            <p className="mt-3 inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--color-bg-error-soft)] px-2 py-1 text-[length:var(--text-tiny)] font-medium text-[var(--color-text-error)]">
+              <AlertTriangle className="icon-xs" aria-hidden />
+              此操作不可恢复
+            </p>
+          )}
+        </div>
+      </div>
     </Modal>
   );
 }

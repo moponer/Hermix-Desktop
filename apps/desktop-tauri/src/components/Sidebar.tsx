@@ -13,6 +13,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import { ConnectionIndicator } from "./ConnectionIndicator";
+import { ConfirmDialog } from "./ui";
 import { type ConfigCategory } from "./SettingsDialog";
 import { SessionPickerDialog } from "./SessionPickerDialog";
 import {
@@ -294,7 +295,9 @@ export function Sidebar({
     if (removingIds.has(id) || deletingIds.has(id)) return;
     setConfirmState({
       title: `删除「${label}」`,
-      body: `${impact}\n此操作不可恢复。`,
+      /* 只描述"会发生什么"。「此操作不可恢复」由 ConfirmDialog 在 danger
+         变体下统一补 —— 两边都写就是屏幕上重复两遍（用户反馈的原图）。 */
+      body: impact,
       onConfirm: () => runDelete(id, label, onConfirm),
     });
   }, [removingIds, deletingIds, runDelete]);
@@ -1084,68 +1087,24 @@ function DeleteConfirmDialog({
   onCancel,
 }: {
   state: { title: string; body: string; onConfirm: () => void } | null;
-  onConfirm: () => void;
   onCancel: () => void;
+  onConfirm: () => void;
 }) {
-  if (!state) return null;
-  // Render into <body> via portal so the `fixed inset-0` is relative to
-  // the viewport, not to the sidebar's transform containing block
-  // (App.tsx wraps <Sidebar> in a `translate-x-*` container for the
-  // mobile slide-in animation, which would otherwise trap this dialog
-  // inside the sidebar width and push it to the left edge).
-  return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-      <button
-        type="button"
-        aria-label={CANCEL}
-        onClick={onCancel}
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-      />
-      <div
-        className={clsx(
-          "relative z-10 w-full max-w-base flex flex-col",
-          "rounded-xl border shadow-2xl",
-          "bg-bg-secondary border-border-subtle",
-        )}
-      >
-        <div className="flex items-start gap-3 px-5 py-4 border-b border-border-subtle">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-success-soft">
-            <Trash2 className="icon-md text-text-success" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-body font-bold text-text-primary">{state.title}</h2>
-            <p className="mt-1 text-meta text-text-muted whitespace-pre-wrap leading-relaxed">
-              {state.body}
-            </p>
-            <p className="mt-2 text-tiny text-text-faint">
-              此操作不可恢复
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-2.5 px-5 py-4">
-          <button
-            type="button"
-            onClick={onCancel}
-            className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-semibold",
-              "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors",
-            )}
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-bold",
-              "bg-error text-on-error transition-opacity hover:opacity-90",
-            )}
-          >
-            删除
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
+  /* 2026-10-23：此前这里是 Sidebar 私有的一份手写确认框，问题有三：
+       1. 删除操作用了 `bg-success-soft` + `text-text-success` 的**绿色**垃圾桶；
+       2. 把「此操作不可恢复」同时拼进 body 和尾注，屏幕上出现两遍；
+       3. 头部/正文/按钮全在同一底色上，只靠 border-b 分隔，层次几乎为零。
+     现在统一走 ui/ConfirmDialog：图标色调由 variant 推导，尾注由组件补，
+     分区靠面亮度差。 */
+  return (
+    <ConfirmDialog
+      open={!!state}
+      title={state?.title ?? ""}
+      body={state?.body ?? ""}
+      icon={<Trash2 className="icon-md" aria-hidden />}
+      confirmLabel="删除"
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+    />
   );
 }

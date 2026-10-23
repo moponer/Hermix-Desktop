@@ -102,7 +102,7 @@ export function SkillCard({ skill, catLabel, onToggle }: {
           body={
             <>
               即将从文件系统中删除技能 <span className="font-medium text-text-primary">{skill.name}</span>。
-              该操作不可撤销，需要重新下载才能再次启用。
+              需要重新下载才能再次启用。
             </>
           }
           confirmLabel="禁用并删除"

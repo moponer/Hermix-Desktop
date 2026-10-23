@@ -429,7 +429,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
       <ConfirmDialog
         open={confirmReset}
         title="恢复官方任务清单"
-        body={`将删除全部 ${tasks.length} 个自动化任务（含运行历史），恢复为内置官方清单。此操作不可撤销。`}
+        body={`将删除全部 ${tasks.length} 个自动化任务（含运行历史），恢复为内置官方清单。`}
         confirmLabel="恢复官方清单"
         onCancel={() => setConfirmReset(false)}
         onConfirm={() => {
