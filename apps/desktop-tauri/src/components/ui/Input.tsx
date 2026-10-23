@@ -25,7 +25,6 @@ export const FIELD_BASE_CLASSES = [
   /* 焦点态全 app 唯一形态：2px accent 环 + 2px 偏移（宪法 §七.2）。
      偏移用透明色 —— 缝隙透出下方表面色，控件坐在任何底色上都不出现接缝
      （写死 --color-bg-card 会在白底页面上留一道浅灰边）。 */
-  "focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-transparent",
   "disabled:cursor-not-allowed disabled:opacity-60 disabled:bg-[var(--color-bg-quaternary)]",
 ].join(" ");
 

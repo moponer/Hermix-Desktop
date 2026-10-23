@@ -93,10 +93,8 @@ const BASE_CLASSES = [
   // 一条动效曲线走到底：着色 .16s，形变 .14s。只写 transition-colors 会让
   // hover 的抬升动作「弹」一下。
   "transition-[background-color,color,border-color,box-shadow,transform,opacity] duration-150 ease-out",
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]",
   /* 偏移用透明色：缝隙透出按钮所处的表面色。此前写死 --color-bg-card，
      按钮坐在 --color-bg-primary（白）上时会出现一道浅灰接缝。 */
-  "focus-visible:ring-offset-2 focus-visible:ring-offset-transparent",
   "disabled:cursor-not-allowed disabled:pointer-events-none disabled:translate-y-0",
   "motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100",
 ].join(" ");

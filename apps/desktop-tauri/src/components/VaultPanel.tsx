@@ -88,7 +88,7 @@ function Favicon({ url, size = 16 }: { url: string; size?: number }) {
       height={size}
       alt=""
       loading="lazy"
-      className="shrink-0 rounded-[3px] ring-1 ring-border-primary"
+      className="shrink-0 rounded-[3px]"
       onError={() => setFailed(true)}
     />
   );

@@ -59,8 +59,6 @@ export function Switch({
       onClick={() => onChange(!checked)}
       className={cx(
         "relative shrink-0 rounded-full transition-colors duration-150",
-        /* 焦点态全 app 唯一形态：2px accent 环 + 2px 偏移（宪法 §七.2）。 */
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-transparent",
         "disabled:cursor-not-allowed disabled:opacity-50",
         TRACK[size],
         checked ? "bg-[var(--color-accent)]" : "bg-[var(--color-bg-tertiary)]",
