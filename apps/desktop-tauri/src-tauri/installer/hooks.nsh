@@ -11,6 +11,13 @@
   DetailPrint "Hermix Desktop：正在校验安装完整性…"
   ; 主程序校验：杀毒软件静默隔离 exe 时用户只会看到打开即白屏，
   ; 这里把失败变成看得见的弹窗，而不是让用户自己猜。
+  ; 主 exe 名 = cargo package name（hermix-desktop.exe），不是 productName。
+  ; Tauri v2 的 mainBinaryName 默认取 src-tauri/Cargo.toml 的 [package] name，
+  ; productName 只用于显示名/快捷方式/安装目录。此前这里按 productName 找
+  ; "Hermix Desktop.exe"，在每台机器上都必然落空 → 恒定误报"主程序缺失"。
+  ; 两种名字任一存在即算通过（与下方 sidecar 校验同策略），兼容 A 路便携包
+  ; （release.sh 会把主 exe 改名为 productName.exe）。
+  IfFileExists "$INSTDIR\hermix-desktop.exe" hermix_post_main_ok
   IfFileExists "$INSTDIR\Hermix Desktop.exe" hermix_post_main_ok hermix_post_main_fail
 hermix_post_main_fail:
   DetailPrint "Hermix Desktop：完整性校验失败（主程序缺失）"
