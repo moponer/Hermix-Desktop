@@ -85,6 +85,64 @@ const lastDuration = ref<number | null>(null)
  * （含 API Key）已被删除。界面上要说清是「电脑端没开」而不是「手机坏了」。
  */
 const modelPushOff = ref(false)
+
+/**
+ * 离线模式（手机直连云模型）：电脑关机时的兜底通路。
+ *
+ * 它**不是阿黎**——阿黎在桌面端执行；这条路上没有电脑，手机拿电脑此前
+ * 推来的凭据直接问云厂商，只有纯对话（无工具/审批/不落电脑会话库）。
+ * 凭据来自本地持久化的 modelStore（电脑上次推送的快照）。
+ */
+const offline = ref(false)
+/** 离线直连要用的配置：优先取本地持久化那份（电脑关机后唯一可用）。 */
+const localConfig = computed<ModelConfig | null>(() => {
+  const saved = loadModelConfig()
+  if (saved && saved.providers.length && saved.defaultModel) return saved
+  if (chat.value.providers.length && chat.value.defaultModel) {
+    return {
+      models: chat.value.models,
+      providers: chat.value.providers,
+      defaultModel: chat.value.defaultModel,
+      updatedAt: 0,
+    }
+  }
+  return null
+})
+const canOffline = computed(() => localConfig.value !== null)
+
+/**
+ * 跑一轮离线直连：增量**转成同名 App 事件喂给 onFrame**——打字机、淡入、
+ * markdown 渲染、气泡落定全部复用现有管线，不写第二套渲染。
+ */
+function runOfflineChat(history: LocalTurn[]) {
+  const cfg = localConfig.value
+  const model = cfg?.defaultModel
+  if (!cfg || !model) {
+    uni.showToast({ title: '没有可用的模型凭据', icon: 'none' })
+    return
+  }
+  streamLocalChat(cfg, model, history, {
+    onDelta: (d) => onFrame(JSON.stringify({ type: 'assistant.message', content: d })),
+    onDone: () => onFrame(JSON.stringify({ type: 'turn.done' })),
+    onError: (msg) => {
+      onFrame(JSON.stringify({ type: 'turn.error', message: msg }))
+      uni.showToast({ title: msg, icon: 'none' })
+    },
+  })
+}
+
+function toggleOffline() {
+  if (offline.value) {
+    offline.value = false
+    return
+  }
+  if (!canOffline.value) {
+    uni.showToast({ title: '电脑端未启用模型配置推送，离线对话不可用', icon: 'none' })
+    return
+  }
+  offline.value = true
+  uni.showToast({ title: '离线模式 · 手机直连云模型（不是阿黎）', icon: 'none' })
+}
 let typer: ReturnType<typeof setInterval> | null = null
 let ticker: ReturnType<typeof setInterval> | null = null
 
@@ -518,6 +576,20 @@ function sendText(t: string) {
     saveSession(currentSid.value, [], source.value)
   }
   void (async () => {
+    // 离线模式：手机直连云模型（**不是阿黎**——她只在桌面端执行）。
+    // 不等 ensureSession：这条路上没有电脑，也就没有"连不上"这回事。
+    if (offline.value) {
+      if (!messages.value.some((m) => m.role === 'user' && m.text === text && m.viaVoice)) {
+        messages.value.push({ id: String(Date.now()), role: 'user', text, sending: true })
+      }
+      const history: LocalTurn[] = messages.value
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.text }))
+      runOfflineChat(history)
+      persistSession()
+      scrollToTail()
+      return
+    }
     // 等连接真正就绪（hello + key.exchange 完成）再发，否则 send() 返回 false
     // 导致消息「发出去没回」而用户以为是网络慢。
     await ensureSession()
@@ -575,6 +647,11 @@ onUnmounted(() => {
         :default-model="chat.defaultModel"
         @select="onSelectModel"
       />
+      <!-- 离线模式（手机直连云模型）：电脑关机时的兜底通路，显式开关——
+           它不是阿黎，开的时候要让人知道自己在跟谁说话。 -->
+      <view class="hm-pill" :class="offline ? 'warn' : 'ghost'" @tap="toggleOffline">
+        <text>{{ offline ? '离线中' : '离线' }}</text>
+      </view>
       <view class="hist-btn" @tap="goHistory"><text>☰</text></view>
       <!-- 通话：当前对话的另一种交互模式，入口挂在这条对话上，不占底部频道位 -->
       <view class="call-btn" @tap="goCall"><text>☎</text></view>
