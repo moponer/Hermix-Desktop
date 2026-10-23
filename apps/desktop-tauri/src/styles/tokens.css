@@ -263,7 +263,7 @@
      **纯中性灰**（R=G=B），松墨绿只保留给「主行动按钮 / 链接 / 焦点环」。
      此前 2026-10-15 的"染色轴"实验（≤4% 绿相）被用户实测否决——大气感
      的来源是**克制**，不是色相贯穿；WorkBuddy 双主题逐像素采样证明
-     组件层 100% 中性灰反而更贵。色相个性收敛到 ink-green 主题。
+     组件层 100% 中性灰反而更贵。色相个性收敛到 accent（2026-10-24 起为墨蓝）。
      其余桌面端纪律沿用：级差 ≥4%、亮度比 ≥1.06、全实色。 */
   --color-bg-app: #ececec;         /* 案·最外层：窗口底、列间空隙 */
   --color-bg-primary: #ffffff;     /* 纸·对话与主区底 = 最亮最纯 */
@@ -355,7 +355,7 @@
 
      注：注释里也别把已删掉的间接引用写成 `var(--…)` 的完整形式——Check 2 的
      孤儿扫描不跳过注释，会把它当成活跃引用。 */
-  --color-accent: #1e4a3c;
+  --color-accent: #2f4a63;
 
   /* 压在 accent 实色块上的文字色。
      与下面 --color-accent-on-text 是**两件事，名字却只差词序**：
@@ -406,18 +406,18 @@
   --color-brand-qq: #12b7f5;
   --color-brand-wecom: #07c160;
 
-  --color-link: #1e4a3c;
-  --color-link-hover: #163a2f;
+  --color-link: #2f4a63;
+  --color-link-hover: #24384a;
   --color-link-soft: #5f5f5f;
-  --color-link-soft-hover: #2f6b58;
+  --color-link-soft-hover: #2f4a63;
   /* ── 按钮语义对 ──────────────────────────────────────────────────
      2026-09-30：这里此前有**两套并存的按钮 token**（`-fg` 与 `-text`），
      键名重复、CSS 后者覆盖前者 —— 结果 primary 按钮实际是苹果蓝 #0071e3，
      改 -fg 那套完全没生效。现只保留 `-text` 一套（代码里 21 处引用它），
-     并把主按钮并入新强调色（松墨绿）。 */
-  --color-btn-primary-bg: #1e4a3c;
+     并把主按钮并入强调色（2026-10-24 起为墨蓝）。 */
+  --color-btn-primary-bg: #2f4a63;
   --color-btn-primary-text: #ffffff;
-  --color-btn-primary-hover: #163a2f;
+  --color-btn-primary-hover: #24384a;
   --color-btn-secondary-bg: transparent;
   --color-btn-secondary-fg: #181818;
   --color-btn-secondary-hover: #ededed;
