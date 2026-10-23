@@ -3,7 +3,7 @@
 // 的映射集中为一张路由表，App 主区只需调用 renderRoutes 即可。
 import { lazy, Suspense, type ReactNode } from "react";
 import type { NavPage, Session } from "../types";
-import { SkeletonCard } from "../components/ui";
+import { Skeleton, SkeletonCard } from "../components/ui";
 
 // 重视图（ECharts / 大表单 / 全量列表）懒加载：首次进入才求值模块并挂载，
 // 且切走即卸载，不占常驻内存。chat 页面是首屏主路径，保持静态导入。
@@ -97,9 +97,30 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
 
 function RouteLoading() {
   // 骨架屏而非「加载中…」文字——ui/Skeleton 的规范（感知更快、零布局跳动）。
+  //
+  // 2026-10-23 修复「进页面时闪一个竖长灰胶囊」：
+  // 旧实现是 `flex flex-col items-center` 里塞一张 SkeletonCard。
+  // items-center 让子项按**内容宽度**收缩，而 SkeletonCard 内部最宽只有
+  // w-1/3 的文字条 —— 整张卡被压成约 30px 宽，p-4 又撑出 ~110px 高，
+  // 屏幕上于是出现一个带描边的竖胶囊（用户报的那个）。
+  //
+  // 现在改成**与真实页面同构**的骨架：页头（图标 + 标题 + 副标题）
+  // + 双列卡片网格。结构对上之后，模块加载完成时不会跳版 ——
+  // 这才是「零布局跳动」本来的意思，而不是"随便放一个灰块"。
   return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6">
-      <SkeletonCard lines={2} />
+    <div className="flex-1 overflow-hidden p-6" aria-busy="true">
+      <div className="mb-6 flex items-start gap-3">
+        <Skeleton className="h-9 w-9 rounded-[var(--radius-md)]" />
+        <div className="flex flex-col gap-2 pt-0.5">
+          <Skeleton className="h-4 w-28" />
+          <Skeleton className="h-3 w-56" />
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+        {[0, 1, 2, 3].map((i) => (
+          <SkeletonCard key={i} lines={2} />
+        ))}
+      </div>
     </div>
   );
 }

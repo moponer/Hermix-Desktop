@@ -41,8 +41,11 @@ export function SkeletonCard({ lines = 2, className }: { lines?: number; classNa
   return (
     <div
       aria-hidden
+      /* 2026-10-23：去掉 1px 描边（无描边纪律），并补 `w-full`。
+         没有 w-full 时，一旦父级是 `flex flex-col items-center`，卡片会按
+         内容宽度收缩 —— 路由兜底骨架就是这样塌成一个竖长胶囊的。 */
       className={cx(
-        "rounded-[var(--radius-lg)] border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] p-4",
+        "w-full rounded-[var(--radius-lg)] bg-[var(--color-bg-card)] p-4",
         className,
       )}
     >
