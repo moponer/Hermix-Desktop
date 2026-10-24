@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Check } from "lucide-react";
+import { MenuRow } from "./MenuRow";
 
 export interface MenuItem {
   id: string;
@@ -87,7 +87,7 @@ export function MenuBar({ menus, onCommand, onOpenChange }: MenuBarProps) {
       }
       if (!popRef.current) return;
       const buttons = Array.from(
-        popRef.current.querySelectorAll<HTMLButtonElement>("button.menubar-item:not(:disabled)"),
+        popRef.current.querySelectorAll<HTMLButtonElement>("button.menu-item:not(:disabled)"),
       );
       if (buttons.length === 0) return;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -152,31 +152,32 @@ export function MenuBar({ menus, onCommand, onOpenChange }: MenuBarProps) {
               >
                 {menu.items.map((entry, index) =>
                   entry === "-" ? (
-                    <div className="menubar-sep" key={`sep-${index}`} role="separator" />
+                    <div className="menu-sep" key={`sep-${index}`} role="separator" />
                   ) : (
                     <button
                       type="button"
                       key={entry.id}
                       role="menuitemcheckbox"
                       aria-checked={entry.checked ? "true" : "false"}
-                      className={`menubar-item${entry.danger ? " is-danger" : ""}`}
+                      className={`menu-item${entry.danger ? " is-danger" : ""}`}
                       disabled={entry.disabled}
                       onFocus={() => {
                         const buttons = Array.from(
                           popRef.current?.querySelectorAll<HTMLButtonElement>(
-                            "button.menubar-item:not(:disabled)",
+                            "button.menu-item:not(:disabled)",
                           ) ?? [],
                         );
                         setActiveIndex(buttons.indexOf(document.activeElement as HTMLButtonElement));
                       }}
                       onClick={() => run(entry)}
                     >
-                      <span className="menubar-check" aria-hidden="true">
-                        {entry.checked ? <Check size={12} /> : null}
-                      </span>
-                      {entry.icon && <span className="menubar-icon">{entry.icon}</span>}
-                      <span className="menubar-label">{entry.label}</span>
-                      {entry.shortcut && <span className="menubar-kbd">{entry.shortcut}</span>}
+                      <MenuRow
+                        label={entry.label}
+                        icon={entry.icon}
+                        shortcut={entry.shortcut}
+                        checked={entry.checked}
+                        reserveCheckSlot
+                      />
                     </button>
                   ),
                 )}

@@ -37,6 +37,22 @@ pub struct ResolvedEndpoint {
     api_key: Option<String>,
 }
 
+/// 常见供应商的内置默认端点（OpenAI 兼容），与主程序
+/// `hermix_agent::runtime_provider` 的默认表保持一致：主程序里这些 id
+/// 不写 base_url 也能跑，viewer 若不认识同一张表，就会在主程序一切正常时
+/// 报「供应商没有 base_url」—— inherit 模式下最高频的误报。
+/// 刻意不含 anthropic / copilot：它们的端点不是裸 OpenAI 兼容
+/// （/v1/messages、GitHub token 交换），补了也连不上，报错反而更诚实。
+const BUILTIN_PROVIDER_BASE_URLS: &[(&str, &str)] = &[
+    ("openai", "https://api.openai.com/v1"),
+    ("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    ("qwen-oauth", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    ("kimi", "https://api.moonshot.cn/v1"),
+    ("moonshot", "https://api.moonshot.cn/v1"),
+    ("minimax", "https://api.minimax.chat/v1"),
+    ("nous", "https://api.nousresearch.com/v1"),
+];
+
 /// 解析生效端点。inherit 模式读主程序配置；custom 模式读查看器设置。
 pub fn resolve(settings: &ViewerSettings) -> Result<ResolvedEndpoint, String> {
     if settings.ai.mode == "custom" {
@@ -102,6 +118,7 @@ pub fn resolve(settings: &ViewerSettings) -> Result<ResolvedEndpoint, String> {
     let base_url = p
         .and_then(|p| p.base_url.clone())
         .or_else(|| free.map(|c| c.base_url.to_string()))
+        .or_else(|| builtin_base_url(&provider).map(str::to_string))
         .map(|s| s.trim().trim_end_matches('/').to_string())
         .unwrap_or_default();
     let model = model_from_ref
@@ -141,6 +158,14 @@ pub fn resolve(settings: &ViewerSettings) -> Result<ResolvedEndpoint, String> {
         },
         api_key,
     })
+}
+
+/// 内置默认端点查询：provider id 命中表项返回默认 base_url。
+fn builtin_base_url(provider: &str) -> Option<&str> {
+    BUILTIN_PROVIDER_BASE_URLS
+        .iter()
+        .find(|(id, _)| *id == provider)
+        .map(|(_, url)| *url)
 }
 
 /// 供应商密钥：先看配置里的字面量 / `${ENV}` 引用，再退回按供应商 id 找环境变量。
@@ -394,5 +419,18 @@ mod tests {
             resolve_provider_key(Some("sk-literal"), "openai"),
             Some("sk-literal".into())
         );
+    }
+
+    #[test]
+    fn builtin_base_url_covers_main_program_defaults() {
+        // 与主程序 runtime_provider 的默认端点一致；截图中报错的 minimax 必须命中。
+        assert_eq!(
+            builtin_base_url("minimax"),
+            Some("https://api.minimax.chat/v1")
+        );
+        assert_eq!(builtin_base_url("kimi"), Some("https://api.moonshot.cn/v1"));
+        assert_eq!(builtin_base_url("qwen").is_some(), true);
+        // 未知供应商不瞎猜（宁可报「没有 base_url」也不打错端点）。
+        assert_eq!(builtin_base_url("my-gateway"), None);
     }
 }

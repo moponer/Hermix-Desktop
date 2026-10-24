@@ -15,7 +15,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check } from "lucide-react";
+import { MenuRow } from "./MenuRow";
 
 export interface MenuItem {
   id: string;
@@ -89,7 +89,7 @@ export function ContextMenu({ x, y, groups, autoFocusFirst, onClose }: ContextMe
     const el = ref.current;
     if (!el) return;
     if (autoFocusFirst) {
-      el.querySelector<HTMLButtonElement>(".ctxmenu-item")?.focus();
+      el.querySelector<HTMLButtonElement>(".menu-item")?.focus();
     } else {
       el.focus();
     }
@@ -114,7 +114,7 @@ export function ContextMenu({ x, y, groups, autoFocusFirst, onClose }: ContextMe
     }
     e.preventDefault();
     const items = Array.from(
-      ref.current?.querySelectorAll<HTMLButtonElement>(".ctxmenu-item") ?? [],
+      ref.current?.querySelectorAll<HTMLButtonElement>(".menu-item") ?? [],
     );
     if (items.length === 0) return;
     const cur = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -149,7 +149,7 @@ export function ContextMenu({ x, y, groups, autoFocusFirst, onClose }: ContextMe
                 key={item.id}
                 type="button"
                 role="menuitem"
-                className={`ctxmenu-item${item.danger ? " is-danger" : ""}${
+                className={`menu-item${item.danger ? " is-danger" : ""}${
                   item.checked ? " is-checked" : ""
                 }`}
                 aria-disabled={item.disabled || undefined}
@@ -161,11 +161,12 @@ export function ContextMenu({ x, y, groups, autoFocusFirst, onClose }: ContextMe
                   item.onSelect();
                 }}
               >
-                <span className="ctxmenu-icon" aria-hidden="true">
-                  {item.checked ? <Check className="ctxmenu-check" /> : item.icon}
-                </span>
-                <span className="ctxmenu-label">{item.label}</span>
-                {item.hint && <span className="ctxmenu-hint">{item.hint}</span>}
+                <MenuRow
+                  label={item.label}
+                  icon={item.icon}
+                  shortcut={item.hint}
+                  checked={item.checked}
+                />
               </button>
             ))}
           </div>

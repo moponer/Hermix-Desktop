@@ -7,7 +7,11 @@
  * 动效原则：只让"数值变化"和"进度推进"可被看见（transition 200–400ms），
  * 不加循环装饰动画——面板每 3 秒刷新一次，循环动画会一直抖。 */
 
-/* ─── 标题栏菜单栏 ────────────────────────────────────────────────── */
+/* ─── 标题栏菜单栏（本体） ───────────────────────────────────────────
+   只有常驻的菜单栏条与按钮在这里；展开的下拉（.menubar-pop）与菜单行
+   （.menu-item，MenuRow.tsx 渲染）2026-10-24 起与右键菜单共用一套
+   规格，样式统一收口在 styles.css 的菜单区——此前两处各写一套正是
+   圆角/图标/投影漂移的根源。 */
 
 .menubar { display: flex; align-items: center; gap: 1px; flex: none; }
 .menubar-slot { position: relative; }
@@ -20,61 +24,6 @@
 }
 .menubar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .menubar-btn.is-open { background: var(--bg-tertiary); color: var(--text-primary); }
-
-.menubar-pop {
-  position: absolute; top: 26px; left: 0; z-index: 130;
-  min-width: 236px; max-height: min(72vh, 460px);
-  overflow: auto; padding: 5px;
-  background: var(--bg-card); border-radius: 9px;
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18), 0 2px 6px rgba(15, 23, 42, 0.08);
-  user-select: none;
-  /* 贴右缘时翻到右对齐（MenuBar 量出来越界才加这个类）。 */
-}
-.menubar-pop.is-flipped { left: auto; right: 0; }
-
-.menubar-item {
-  display: flex; align-items: center; gap: 7px; width: 100%;
-  border: none; background: transparent; cursor: pointer;
-  padding: 6px 8px; border-radius: 6px;
-  font-size: 12.5px; color: var(--text-primary); text-align: left;
-  font-family: var(--font-sans);
-  transition: background 120ms ease-out;
-}
-.menubar-item:hover:not(:disabled),
-.menubar-item:focus-visible { background: var(--bg-secondary); outline: none; }
-.menubar-item:disabled { color: var(--text-faint); cursor: default; }
-.menubar-item.is-danger { color: var(--danger); }
-.menubar-check { width: 13px; display: inline-flex; justify-content: center; color: var(--accent); flex: none; }
-.menubar-icon { display: inline-flex; color: var(--text-muted); flex: none; }
-.menubar-label { flex: 1; white-space: nowrap; }
-.menubar-kbd { color: var(--text-muted); font-size: 11px; font-family: var(--font-mono); }
-.menubar-sep { height: 1px; margin: 5px 4px; background: var(--border-subtle); }
-
-/* ─── 菜单项图标按菜单上色（2026-10-23）───────────────────────────
-   此前所有菜单项图标都是 --text-muted 一档灰，展开一列后图标不参与辨识，
-   只能逐行读文字。按顶层菜单给一组色：文件=绿（文档）、视图=蓝（外观）、
-   工具=琥珀（动作）、帮助=无彩灰。
-
-   用 data-menu 属性选择器而不是在 tsx 里传 className：菜单数据是纯数据
-   （App.tsx 的 menus 数组），把视觉类混进数据会让「菜单项有什么」和
-   「菜单项长什么样」两件事绑死。 */
-.menubar-slot[data-menu="file"] .menubar-icon { color: var(--color-tone-green); }
-.menubar-slot[data-menu="view"] .menubar-icon { color: var(--color-tone-blue); }
-.menubar-slot[data-menu="tools"] .menubar-icon { color: var(--color-tone-amber); }
-.menubar-slot[data-menu="help"] .menubar-icon { color: var(--color-tone-slate); }
-/* 危险项（退出）单独走语义红：它是「会丢东西」的动作，不该被归类色稀释。 */
-.menubar-item.is-danger .menubar-icon { color: var(--danger); }
-
-/* 菜单弹出加一个入场：从上方轻微下移 + 淡入（只动 transform/opacity）。
-   此前是瞬间出现，在 460px 高的长菜单上会显得"闪一下"。 */
-.menubar-pop { animation: menubar-pop-in 120ms cubic-bezier(0.16, 1, 0.3, 1); }
-@keyframes menubar-pop-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .menubar-pop { animation: none; }
-}
 
 /* ─── 弹窗外壳 ────────────────────────────────────────────────────── */
 .syspanel-overlay {

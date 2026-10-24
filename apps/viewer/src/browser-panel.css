@@ -8,7 +8,10 @@
 .bpanel-overlay {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  /* 次级模态档（140）：模态必须压过右键菜单（100）与菜单栏下拉（130）。
+     此前是 60（小浮层档），开着浏览器面板时右键菜单会弹在遮罩之上。
+     阶梯全表见 styles.css 菜单区注释。 */
+  z-index: 140;
   display: flex;
   align-items: center;
   justify-content: center;

@@ -144,6 +144,15 @@
   --sheet-head-bg: #f0f0f0;
   --sheet-head-fg: #5a5a5a;
   --duration-fast: 120ms;
+
+  /* ─── 菜单（标题栏下拉 + 右键菜单共用规格，2026-10-24） ────────
+   * 对齐 Win11 原生菜单：紧凑、整行高亮、收紧变硬的投影、纯淡入。
+   * 此前 .menubar-pop / .ctxmenu 各写一套（圆角 9/10、图标 13/15、
+   * 大而柔的漂浮投影、滑入位移），读起来是网页下拉不是桌面菜单。 */
+  --radius-menu: 8px;
+  --radius-menu-item: 4px;
+  --icon-size-menu: 14px;
+  --shadow-menu: 0 6px 16px rgba(15, 23, 42, 0.16), 0 1px 4px rgba(15, 23, 42, 0.1);
 }
 
 /* 暗色由 JS 写入的 data-theme 驱动（theme.ts），不用媒体查询——
@@ -175,6 +184,9 @@
      因 var() 解析失败而整条声明被丢弃 → 键盘焦点在暗色下完全不可见。
      这里补上，并比亮色略强（暗底上同等浓度更不明显）。 */
   --shadow-focus-flat: 0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent);
+
+  /* 菜单投影：暗底上同等浓度更弱，提浓一档（与 focus-flat 同理由）。 */
+  --shadow-menu: 0 8px 20px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
 
   --color-tone-slate: #9aa4b2;
   --color-tone-blue: #6aa9f0;
@@ -333,7 +345,7 @@ html, body, #root {
 /* 关闭按钮用系统语义：红底白叉（不是"浅红字"，那是提示不是关闭）。 */
 .wb-btn.is-close:hover { background: var(--danger); color: var(--text-on-accent); }
 
-/* ─── App 容器：垂直栈 标题栏 / 工具条 / breadcrumb / 三栏主区 ───── */
+/* ─── App 容器：垂直栈 标题栏 / 工具条(含地址栏+搜索) / 三栏主区 ─── */
 .app { display: flex; flex-direction: column; height: 100%; }
 
 /* ─── 工具条 ─────────────────────────────────────── */
@@ -378,51 +390,73 @@ html, body, #root {
 .tb-group .tb-btn {
   padding: 0 9px; height: calc(var(--ctl-h) - 4px); font-size: 13px;
 }
-
-/* 路径输入框原来 flex:1 吃满整行（1216px 下 760px 宽），一个空输入框
-   占掉三分之二屏。现在它有界：基准 460px，可压缩不扩张，右侧留白
-   交给视图选项组——左一簇右一簇，中间是干净的底色。 */
-.path-form {
-  display: flex; flex: 0 1 460px; align-items: center; gap: 4px;
-  margin-left: 6px; min-width: 120px;
-}
-.path-input {
-  flex: 1; min-width: 0;
-  height: var(--ctl-h);
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  /* 输入框不描边：层次靠底色差（白底压在浅灰工具条上）。原来漏写
-     border，浏览器默认描边整个漏了出来。 */
-  border: none;
-  border-radius: 6px; padding: 0 10px; font-size: 13px;
-  font-family: var(--font-mono);
-}
+/* 编辑器工具条（图片 / 文档 / 表格 / 签名板）共用的弹性占位。 */
 .toolbar-spacer { flex: 1; }
 
-/* ─── 面包屑 + 搜索 ──────────────────────────────── */
-.breadcrumb-bar {
-  display: flex; align-items: center; gap: 4px;
-  padding: 6px 12px; background: var(--bg-secondary);
-  flex: none; min-width: 0; overflow: hidden;
+/* ─── 地址栏（面包屑即地址栏）─────────────────────────
+   一颗药丸承载两种形态：平时是可点击的面包屑（段=跳转），点空白处 /
+   Ctrl+L 切到完整路径编辑（Enter 提交，Esc/失焦取消）。路径只在这里
+   显示这一遍——旧布局第一行路径输入框 + 第二行面包屑，同一地址显示
+   两遍，工具区占掉两行。
+   .path-input 常驻挂载（编辑态之外 display:none）：AI 自控面
+   （viewerControl.submitPathBar）靠这个类名 + form submit 驱动 set_path，
+   不能只在编辑态渲染。 */
+.addr-pill {
+  flex: 1 1 auto; min-width: 140px; height: var(--ctl-h);
+  display: flex; align-items: center; gap: 2px;
+  margin-left: 6px; padding: 0 4px 0 8px;
+  background: var(--bg-primary); border-radius: 6px;
+  cursor: text;
+}
+.addr-pill:hover { box-shadow: 0 0 0 2px var(--bg-accent-soft); }
+.addr-pill.is-editing { cursor: default; }
+.addr-pill.is-editing .addr-crumbs,
+.addr-pill.is-editing .addr-tail,
+.addr-pill.is-editing .addr-copy,
+.addr-pill.is-editing .addr-empty { display: none; }
+.addr-crumbs {
+  display: inline-flex; align-items: center; gap: 2px;
+  min-width: 0; overflow: hidden; flex: 0 1 auto;
 }
 .bc-segment {
   display: inline-flex; align-items: center; gap: 2px;
-  font-size: 12px; color: var(--text-secondary);
+  font-size: 12.5px; color: var(--text-secondary);
   min-width: 0;
 }
 .bc-btn {
   border: none; background: transparent;
   color: inherit; cursor: pointer; padding: 2px 6px;
-  border-radius: 4px; font-size: 12px;
-  /* 单段过长就截断：路径深了面包屑一行撑开会把搜索框挤出窗口。 */
+  border-radius: 4px; font-size: 12.5px;
+  /* 单段过长就截断：路径深了面包屑一行撑开会把搜索框挤出窗口
+     （整行级的中段折叠由 App 里的 addrTail 测量收敛负责）。 */
   max-width: 180px; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; display: inline-block; vertical-align: middle;
 }
 .bc-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .bc-sep { width: 12px; height: 12px; opacity: 0.5; flex: none; }
+/* 当前目录（末段）是主信息：比祖先段深一档、加重。 */
+.addr-crumbs .bc-segment:last-child .bc-btn {
+  color: var(--text-primary); font-weight: 500;
+}
+.addr-tail { flex: 1; height: 100%; min-width: 8px; }
+.addr-empty { font-size: 12.5px; color: var(--text-faint); }
+.addr-ellipsis { letter-spacing: 1px; }
+.addr-copy {
+  border: none; background: transparent; color: var(--text-secondary);
+  width: 22px; height: 22px; border-radius: 4px; flex: none; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.addr-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
+.path-input {
+  display: none; flex: 1; min-width: 0; height: 100%;
+  border: none; background: transparent; color: var(--text-primary);
+  font-size: 13px; padding: 0 4px; outline: none;
+  font-family: var(--font-mono);
+}
+.addr-pill.is-editing .path-input { display: block; }
 
 .search-form {
-  margin-left: auto; flex: none;
+  flex: none;
   display: flex; align-items: center; gap: 4px;
   position: relative;
 }
@@ -437,7 +471,7 @@ html, body, #root {
   border: none;
   height: var(--ctl-h);
   border-radius: 6px; padding: 0 28px 0 26px;
-  font-size: 13px; width: 240px;
+  font-size: 13px; width: 200px;
 }
 .search-clear {
   position: absolute; right: 4px;
@@ -595,15 +629,12 @@ html, body, #root {
 
 /* ─── 中央：文件列表 ──────────────────────────────── */
 .explorer {
-  /* 比例列：随窗口宽度铺满——原先 `max-width: 460px` 把这一栏钉死，
-     宽屏下"文件列表没铺开"就是它造成的。上限 720px 是为了 4K 下
-     文件名不至于被拉得太长。 */
+  /* 宽度由布局状态机分配（见下方状态机规则）：浏览态吃主宽、预览态收成
+     --dir-slot 窄槽。容器查询的锚保留：「修改时间」列的让位看的是
+     「列表自己有多宽」，与窗口宽度无关。 */
   flex: 0 1 auto;
-  width: clamp(260px, calc(var(--ex-ratio, 0.3) * 100%), 1100px);
   min-width: 200px;
   overflow: auto; background: var(--bg-primary);
-  /* 容器查询的锚：列宽让位规则看的是「列表自己有多宽」，
-     不是窗口多宽（这一栏可以拖）。 */
   container-type: inline-size;
   container-name: explorer;
 }
@@ -665,6 +696,82 @@ html, body, #root {
 @container explorer (max-width: 340px) {
   .entries .col-mtime { display: none; }
 }
+
+/* ─── 预览优先布局状态机（2026-10-24）────────────────
+   .app[data-state] 三态（heavy 模式；pure 模式不受影响）：
+     browse      驱动器栏 + 目录(主宽) [+ AI 右缘]
+     preview     目录(--dir-slot 详情窄栏) + 预览(flex)
+     preview-ai  AI(同 --dir-slot) + 预览 —— 目录与 AI 是**同一个槽位的
+                 两种占用**，槽宽相同 → 「AI 展开预览宽度不变」是结构性
+                 保证，不依赖测量。栏宽规则只在此处声明。 */
+.app { --dir-slot: 336px; }
+
+/* 驱动器栏只在浏览态出现。 */
+.app[data-state="preview"] .sidebar,
+.app[data-state="preview-ai"] .sidebar { display: none; }
+
+/* 目录栏：浏览态铺满主宽；预览态收成固定槽；preview-ai 态整体让位。 */
+.app[data-state="browse"] .explorer { flex: 1 1 auto; width: auto; }
+.app[data-state="preview"] .explorer {
+  flex: none; width: var(--dir-slot); min-width: 0;
+  border-right: 1px solid var(--border-subtle);
+}
+.app[data-state="preview-ai"] .explorer { display: none; }
+
+/* AI 栏：组件常驻挂载、默认不占位（对话状态跨开关保留）；浏览态在右缘
+   吃 --ai-w（可拖），preview-ai 态顶替目录槽 → 与目录同宽。 */
+.app .ai-side { display: none; }
+.app[data-state="browse"][data-ai="open"] .ai-side { display: flex; }
+.app[data-state="preview-ai"] .ai-side {
+  display: flex; width: var(--dir-slot);
+  border-right: 1px solid var(--border-subtle);
+}
+/* 窄窗下目录槽与 AI 槽用同一把尺一起收缩，宽度不变在任何窗口宽度成立。 */
+@media (max-width: 1100px) {
+  .app[data-state="preview"] .explorer,
+  .app[data-state="preview-ai"] .ai-side { width: min(var(--dir-slot), 32vw); }
+}
+
+/* ─── 大图列表（浏览态默认视图；预览态由 data-view 强制详情）──── */
+.explorer[data-view="rows"] .entries-grid { display: none; }
+.explorer[data-view="grid"] .entries { display: none; }
+.entries-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 4px; align-content: start;
+  padding: 8px 12px 12px;
+  user-select: none;
+}
+.entries-grid .empty-cell { grid-column: 1 / -1; }
+.entry-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  padding: 12px 6px 9px; border-radius: 8px;
+  cursor: pointer; text-align: center;
+}
+.entry-tile:hover { background: var(--bg-hover); }
+.entry-tile.is-active { background: var(--bg-accent-soft); }
+.entry-tile.is-active:hover { background: var(--bg-accent-soft); }
+.entry-tile-icon { color: var(--text-secondary); }
+.entry-tile-name {
+  font-size: 12px; line-height: 1.35; color: var(--text-primary);
+  max-width: 100%; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.entry-tile-meta { font-size: 11px; color: var(--text-muted); }
+
+/* 工具栏的目录视图切换（仅浏览态渲染）：凹槽底 + 选中块，无描边。 */
+.view-seg {
+  display: flex; gap: 2px; padding: 2px; border-radius: 7px;
+  background: var(--bg-hover); flex: none;
+}
+.view-seg button {
+  height: 22px; width: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 5px;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+}
+.view-seg button:hover { color: var(--text-primary); }
+.view-seg button.is-active { background: var(--bg-primary); color: var(--text-primary); }
 
 /* ─── 右侧：预览 ─────────────────────────────────── */
 .preview {
@@ -735,10 +842,11 @@ html, body, #root {
   z-index: 60;
   width: min(420px, 60vw);
   max-height: 60vh; overflow: auto;
+  /* 菜单类浮面：与右键菜单 / 菜单栏下拉共用一套表面规格（Win11 原生风）。 */
   padding: 4px;
-  border-radius: 8px;
-  background: var(--bg-primary);
-  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.22);
+  border-radius: var(--radius-menu);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-menu);
 }
 .tab-list-row {
   display: flex; align-items: center; gap: 6px;
@@ -1053,84 +1161,146 @@ html, body, #root {
 }
 .ai-send:disabled { opacity: 0.5; cursor: default; }
 
-/* ─── 右键菜单 ──────────────────────────────────────────────
+/* ─── 菜单（标题栏下拉 + 右键菜单，一套规格） ──────────────────
    自绘菜单：WebView2 的原生菜单配色与本项目两套主题都不搭，
    而且给不了文件操作（打开方式 / 复制文件 / 粘贴…）。
-   层次靠"浮起的卡片 + 阴影"，不描边。 */
+   2026-10-24 起两套菜单共用 Win11 原生风规格（--radius-menu /
+   --shadow-menu / 整行高亮 / 80ms 纯淡入）：此前 .menubar-pop 与
+   .ctxmenu 各写一套（圆角 9/10、图标 13/15、内缩胶囊高亮、大而柔
+   的漂浮投影、滑入位移），读起来是网页下拉不是桌面菜单。行内容由
+   MenuRow.tsx 渲染，行类名两套菜单共用，规格只有这一处。
+
+   z-index 阶梯（全窗口唯一权威表，改档位先来这里对齐）：
+     60   小浮层（标签列表 .tab-list-pop / 签名板）
+     99/100 右键菜单（遮罩 / 菜单本体）
+     120  toast（轻提示，pointer-events:none）
+     130  菜单栏下拉（.menubar-pop）
+     140  次级模态（设置 .set-overlay / 浏览器面板 .bpanel-overlay）
+     200  顶级模态（系统面板 / 关于 .syspanel-overlay）
+   注意：这套阶梯只管 DOM 之间的叠放。网页子 webview 是独立 HWND，
+   永远画在所有 DOM 之上——浮层让位由 App.tsx 的
+   floatingChromeOpen 派生布尔驱动 web_set_visible，与 z-index 无关。 */
+
+/* 表面：两个容器共用。 */
+.ctxmenu, .menubar-pop {
+  background: var(--bg-card);
+  border-radius: var(--radius-menu);
+  box-shadow: var(--shadow-menu);
+  padding: 4px;
+  animation: menu-in 80ms ease-out;
+  user-select: none;
+}
+@keyframes menu-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .ctxmenu, .menubar-pop { animation: none; }
+}
+
+/* 右键菜单容器：视口点锚定（翻转在 ContextMenu.tsx 里量好了再摆）。 */
 .ctxmenu-backdrop {
   position: fixed; inset: 0;
   z-index: 99;
 }
 .ctxmenu {
   position: fixed;
-  background: var(--bg-card);
-  border-radius: 10px;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18), 0 2px 6px rgba(15, 23, 42, 0.08);
-  padding: 5px;
   min-width: 208px;
   max-width: 320px;
   /* 菜单比屏幕还高时内部滚动，而不是被切掉 */
   max-height: calc(100vh - 16px);
   overflow-y: auto;
   z-index: 100;
-  user-select: none;
   -webkit-touch-callout: none;
 }
 .ctxmenu-group + .ctxmenu-group {
-  /* 组之间只留间距，不画分隔线——本项目的硬规矩是"一律不用描边"，
-     层次靠底色差 + 阴影 + 间距。菜单分组靠这段留白读出来。 */
-  margin-top: 5px;
-  padding-top: 5px;
+  /* 组间 hairline 分隔线（与 .menu-sep 同款）：原生菜单靠线读组，纯
+     留白在长菜单里读不出边界。2026-10-24 起替代"只留白"方案。 */
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
 }
-.ctxmenu-item {
-  display: flex; align-items: center; gap: 9px;
+
+/* 标题栏菜单下拉容器：槽位锚定（贴右缘翻转由 MenuBar.tsx 加 .is-flipped；
+   菜单栏本体 .menubar / .menubar-btn 的样式在 system-panel.css）。 */
+.menubar-pop {
+  position: absolute; top: 26px; left: 0; z-index: 130;
+  min-width: 236px;
+  max-height: min(72vh, 460px);
+  overflow: auto;
+}
+.menubar-pop.is-flipped { left: auto; right: 0; }
+.menu-sep { height: 1px; margin: 4px 0; background: var(--border-subtle); }
+
+/* 菜单行（两个菜单的 <button> 共用）：整行高亮——高亮占满行宽而不是
+   内缩的胶囊，这是桌面菜单与网页下拉最直观的差别。 */
+.menu-item {
+  display: flex; align-items: center; gap: 8px;
   width: 100%; border: none; background: transparent;
   color: var(--text-primary);
-  padding: 6px 9px;
-  border-radius: 6px; cursor: pointer;
-  font-size: 13px; text-align: left;
+  padding: 5px 10px;
+  border-radius: var(--radius-menu-item); cursor: pointer;
+  font-size: 12.5px; text-align: left;
   line-height: 1.4;
+  font-family: var(--font-sans);
 }
-.ctxmenu-item:hover:not([aria-disabled="true"]) { background: var(--bg-hover); }
-/* 键盘焦点环：全项目唯一保留的描边（无障碍必需）。菜单容器本身是
-   布局元素，不画环——真正需要指示的是菜单项。 */
-.ctxmenu:focus { outline: none; }
-.ctxmenu-item:focus-visible {
-  outline: none; box-shadow: var(--shadow-focus-flat);
-  outline-offset: -2px;
-}
-.ctxmenu-item[aria-disabled="true"] {
+.menu-item:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--bg-hover); }
+.menu-item:disabled, .menu-item[aria-disabled="true"] {
   color: var(--text-faint); cursor: default;
 }
-.ctxmenu-item.is-danger { color: var(--danger); }
-.ctxmenu-item.is-danger:hover:not([aria-disabled="true"]) {
-  background: var(--bg-accent-soft);
+.menu-item.is-danger { color: var(--danger); }
+/* 键盘焦点环：全项目唯一保留的"描边"位（无障碍必需），用光晕不描边。
+   菜单容器本身是布局元素，不画环——真正需要指示的是菜单行。 */
+.menu-item:focus { outline: none; }
+.menu-item:focus-visible {
+  outline: none; box-shadow: var(--shadow-focus-flat);
 }
-.ctxmenu-icon {
-  width: 15px; height: 15px; flex: none;
+
+/* ─── 行内容（MenuRow.tsx 渲染） ────────────────────────────── */
+.menu-check {
+  width: 13px; flex: none;
+  display: inline-flex; justify-content: center;
+  color: var(--accent);
+}
+.menu-lead {
+  width: var(--icon-size-menu); height: var(--icon-size-menu); flex: none;
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--text-secondary);
 }
-.ctxmenu-item.is-danger .ctxmenu-icon { color: var(--danger); }
-.ctxmenu-item.is-checked .ctxmenu-icon { color: var(--accent); }
-.ctxmenu-label {
+/* 槽位管图标大小（token 单一来源）：lucide 的 size 属性被这里压住，
+   两套菜单传进来的 13/15 混用尺寸因此归一。 */
+.menu-check svg, .menu-lead svg { width: 100%; height: 100%; }
+.menu-item.is-danger .menu-lead { color: var(--danger); }
+.menu-item.is-checked .menu-lead { color: var(--accent); }
+.menu-label {
   flex: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* 快捷键提示：右对齐的等宽小字，颜色比正文淡一档 */
-.ctxmenu-hint {
+.menu-kbd {
   flex: none; margin-left: 12px;
   font-family: var(--font-mono);
   font-size: 11px; color: var(--text-muted);
 }
-/* 菜单内滚动条不喧宾夺主 */
-.ctxmenu::-webkit-scrollbar { width: 6px; }
-.ctxmenu::-webkit-scrollbar-thumb { background: var(--bg-tertiary); border-radius: 3px; }
+
+/* 标题栏菜单项图标按菜单上色（2026-10-23）──────────────────────
+   展开一列后图标要参与辨识，不能全灰。用 data-menu 属性选择器而
+   不是把视觉类混进菜单数据：菜单数据是纯数据（App.tsx 的 menus
+   数组），「有什么」和「长什么样」不该绑死。 */
+.menubar-slot[data-menu="file"] .menu-lead { color: var(--color-tone-green); }
+.menubar-slot[data-menu="view"] .menu-lead { color: var(--color-tone-blue); }
+.menubar-slot[data-menu="tools"] .menu-lead { color: var(--color-tone-amber); }
+.menubar-slot[data-menu="help"] .menu-lead { color: var(--color-tone-slate); }
+/* 危险项（退出）单独走语义红：它是「会丢东西」的动作，不该被归类色稀释。 */
+.menubar-slot .menu-item.is-danger .menu-lead { color: var(--danger); }
 
 /* 触摸设备：行高放大到手指点得中的尺寸 */
 @media (pointer: coarse) {
-  .ctxmenu-item { padding: 10px 10px; font-size: 14px; }
+  .menu-item { padding: 10px 10px; font-size: 14px; }
   .ctxmenu { min-width: 232px; }
+}
+
+/* 菜单内滚动条不喧宾夺主 */
+.ctxmenu::-webkit-scrollbar, .menubar-pop::-webkit-scrollbar { width: 6px; }
+.ctxmenu::-webkit-scrollbar-thumb, .menubar-pop::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary); border-radius: 3px;
 }
 
 /* 轻提示：动作结果的即时反馈（复制/粘贴/打开）。 */

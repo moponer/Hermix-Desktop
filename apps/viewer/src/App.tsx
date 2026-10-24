@@ -1,12 +1,16 @@
 // Hermix 文件查看器主界面：单 WebView 内 资源管理器 + 多 tab 预览。
 //
-// 决策笔记 2026-10-13：viewer 一期是「拖入文件 + 多 tab」，二期是
-// 「真实资源管理器」。这一版把两侧合并：左侧树 + 中部列表 + 右侧预览，
-// 单击文件进入预览 tab（PDF/图片/Office …），新 tab 不会持续再开窗口。
+// 布局是「预览优先」状态机（2026-10-24，决策笔记见
+// docs/notes/implemented/feature/2026-10-24-viewer-preview-centric-layout.md）：
+//   browse     驱动器栏 + 目录（默认大图列表，可切详情）+ 可选 AI（右缘）
+//   preview    点文件进入：驱动器收起、目录自动切详情窄栏、预览吃剩余宽度
+//   preview-ai 再展开 AI：目录折叠、AI 顶替目录槽位（同宽）→ 预览宽度不变
+// 关预览回 browse。状态挂在 .app[data-state]/[data-ai] 上由 CSS 排布，
+// 「AI 展开预览宽度不变」是槽位互换的结构性结果，不是量出来的。
 //
 // 共享包走 @hermix/preview —— 与桌面 app 用同一份解析器、同一份样式层。
 
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -15,7 +19,7 @@ import {
   Funnel, FunnelX, FileSearch,
   ChevronRight, HardDrive, ExternalLink, Sparkles, X,
   Monitor, Moon, Sun, Activity, Info, LogOut, Settings2, Pencil, List, Globe,
-  PanelLeftClose, PanelLeftOpen, PanelsTopLeft, Copy,
+  LayoutGrid, PanelRightClose, PanelsTopLeft, Copy, MoreHorizontal,
 } from "lucide-react";
 import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { resolveKind } from "@hermix/preview";
@@ -71,8 +75,9 @@ const LAST_PATH_KEY = "hermix.viewer.lastPath";
 const DRIVES_TIMEOUT_MS = 1500;
 /** 栏宽持久化键。 */
 const LAYOUT_KEY = "hermix.viewer.layout";
-/** 中部文件列表收起状态（预览放大用）。 */
-const LIST_COLLAPSED_KEY = "hermix.viewer.listCollapsed";
+/** 目录栏视图（仅浏览态生效；预览态强制详情列表）：大图 / 详情。 */
+type DirView = "grid" | "rows";
+const DIR_VIEW_KEY = "hermix.viewer.dirView";
 /** 列表排序方式持久化键（右键菜单可切）。 */
 const SORT_KEY = "hermix.viewer.sort";
 /** 视图模式：纯净（只预览）/ 重量（资源管理器 + 预览 + AI + 工具）。 */
@@ -84,6 +89,11 @@ const THEME_LABEL: Record<ThemeMode, string> = {
   light: "浅色",
   dark: "深色",
 };
+
+/** 工具栏换挡阈值：窗口窄于此值时，右侧开关组收进「⋯」弹出菜单。
+ *  常规宽度下面包屑 + 搜索 + 三按钮的固定占位约 660px，再窄就会挤压
+ *  面包屑到不可用——宁可少两个常驻按钮，不牺牲地址显示。 */
+const TOOLBAR_NARROW_QUERY = "(max-width: 820px)";
 
 let nextTabId = 1;
 
@@ -121,20 +131,15 @@ function readLastPath(): string | null {
 }
 
 /**
- * 栏宽布局：侧栏固定 px、文件列表按**比例**、AI 栏固定 px。
- *
- * 文件列表用比例而不是绝对像素——窗口拉大 / 全屏时它跟着铺满，
- * 这正是"全屏下组件没有平铺"的病根：原先 `.col-name` 被钉死在
- * `max-width: 240px`、`.explorer` 被钉死在 `max-width: 460px`，
- * 宽屏下表格右侧全是空白。比例列在 1080p 与 4K 上都按同一份"观感"分栏。
+ * 栏宽布局：侧栏固定 px、AI 栏固定 px。目录栏宽度不在这里——
+ * 由布局状态机分配（浏览态吃主宽、预览态收成 --dir-slot 窄槽）。
  */
 interface Layout {
   sbW: number;
-  exRatio: number;
   aiW: number;
 }
 
-const LAYOUT_DEFAULT: Layout = { sbW: 200, exRatio: 0.3, aiW: 320 };
+const LAYOUT_DEFAULT: Layout = { sbW: 200, aiW: 320 };
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
@@ -157,11 +162,6 @@ function readLayout(): Layout {
     const l = raw as Partial<Layout>;
     return {
       sbW: clamp(typeof l.sbW === "number" ? l.sbW : LAYOUT_DEFAULT.sbW, 140, 420),
-      exRatio: clamp(
-        typeof l.exRatio === "number" ? l.exRatio : LAYOUT_DEFAULT.exRatio,
-        0.16,
-        0.6,
-      ),
       aiW: clamp(typeof l.aiW === "number" ? l.aiW : LAYOUT_DEFAULT.aiW, 240, 560),
     };
   } catch {
@@ -370,6 +370,24 @@ export function App() {
   // —— 资源管理器状态 ——
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [pathInput, setPathInput] = useState("");
+
+  // —— 地址栏（面包屑即地址栏，2026-10-24 两行合为一行）——
+  // 一颗药丸两种形态：平时是面包屑（点段跳转），点空白处 / Ctrl+L 切到
+  // 完整路径编辑。路径只在地址栏显示这一遍。
+  /** 编辑态：input 显示（面包屑隐藏）。Enter 提交、Esc/失焦取消。 */
+  const [addrEdit, setAddrEdit] = useState(false);
+  /** 深路径折叠：尾部保留的段数（首段恒显）。null = 不折叠（全显）。 */
+  const [addrTail, setAddrTail] = useState<number | null>(null);
+  /** 「⋯」视图选项弹出菜单 / 「…」被折叠段弹出菜单的锚点坐标。 */
+  const [overflowMenu, setOverflowMenu] = useState<{ x: number; y: number } | null>(null);
+  const [segMenu, setSegMenu] = useState<{ x: number; y: number } | null>(null);
+  /** 窗口较窄时右侧开关组收进「⋯」（方案 B），常规宽度平铺（方案 A）。 */
+  const [tbNarrow, setTbNarrow] = useState(
+    () => window.matchMedia(TOOLBAR_NARROW_QUERY).matches,
+  );
+  const addrInputRef = useRef<HTMLInputElement>(null);
+  const addrPillRef = useRef<HTMLFormElement>(null);
+  const addrCrumbsRef = useRef<HTMLSpanElement>(null);
   const [entries, setEntries] = useState<DirEntryLike[]>([]);
   const [drivesState, setDrivesState] = useState<{
     status: "loading" | "slow" | "ready";
@@ -381,27 +399,24 @@ export function App() {
   const [layout, setLayout] = useState<Layout>(readLayout);
 
   /**
-   * 中部文件列表是否收起。
-   *
-   * 收起后预览区独占剩余宽度、内容居中 —— 文档、表格、PDF 这类需要"看得
-   * 清楚"的东西在两侧夹着列表时永远嫌小。这个开关放在预览区上沿（标签栏
-   * 那一行），就是"预览模块"的一部分。
+   * 目录栏视图（浏览态）：默认大图列表，工具栏可切详情。
+   * 预览态不看它——目录收成窄槽，强制详情列表。
    */
-  const [listCollapsed, setListCollapsed] = useState<boolean>(() => {
+  const [dirView, setDirView] = useState<DirView>(() => {
     try {
-      return localStorage.getItem(LIST_COLLAPSED_KEY) === "1";
+      return localStorage.getItem(DIR_VIEW_KEY) === "rows" ? "rows" : "grid";
     } catch {
-      return false;
+      return "grid";
     }
   });
 
   useEffect(() => {
     try {
-      localStorage.setItem(LIST_COLLAPSED_KEY, listCollapsed ? "1" : "0");
+      localStorage.setItem(DIR_VIEW_KEY, dirView);
     } catch {
       /* 记不住也就下次不记住，不阻塞 */
     }
-  }, [listCollapsed]);
+  }, [dirView]);
 
   // —— 视图模式：纯净（只预览）/ 重量（资源管理器 + 预览 + AI + 工具） ——
   const [mode, setMode] = useState<ViewerMode>("heavy");
@@ -478,27 +493,6 @@ export function App() {
   const [forwardStack, setForwardStack] = useState<string[]>([]);
 
   // —— 右键菜单（全局拦截原生右键，落点由 data-ctx 属性决定） ——
-  /**
-   * 菜单展开计数 → 网页子 webview 让位。
-   *
-   * 网页是**独立的子 webview（独立 HWND）**，永远画在父 webview 的 DOM
-   * 之上 —— 不是同一层的东西，CSS 的 z-index 根本管不到它。菜单一旦展开
-   * 到内容区（标题栏菜单、右键菜单都会），就被这块网页整个盖住。
-   *
-   * 所以：菜单展开时把网页 **hide**（不是 close —— 关掉会丢页面状态、
-   * 滚动位置、表单内容），全部收起后再 show 回来。用计数而不是布尔：
-   * 两个菜单可能同时开着。
-   */
-  const menuDepthRef = useRef(0);
-  const setMenuOpen = useCallback((open: boolean) => {
-    const next = Math.max(0, menuDepthRef.current + (open ? 1 : -1));
-    const changed = next !== menuDepthRef.current;
-    menuDepthRef.current = next;
-    if (changed) {
-      void invoke("web_set_visible", { visible: next === 0 }).catch(() => undefined);
-    }
-  }, []);
-
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -508,6 +502,33 @@ export function App() {
     /** 输入框里选中的文字（没有选区时为空——菜单据此把「复制选区」置灰）。 */
     fieldSelection: string;
   } | null>(null);
+
+  /** 标题栏菜单栏是否有展开项（开合状态 MenuBar 自管，这里只收通知）。 */
+  const [menubarOpen, setMenubarOpen] = useState(false);
+
+  /**
+   * 浮层让位：网页是**独立的子 webview（独立 HWND）**，永远画在父
+   * webview 的 DOM 之上 —— CSS 的 z-index 管不到，不是同一层。任何浮层
+   * （菜单 / 对话框 / 弹出列表）展开时把网页 **hide**（不是 close——
+   * 关掉会丢页面状态、滚动位置、表单内容），全部收起后再 show 回来。
+   *
+   * 由状态**派生**而不是旧式的命令计数器：计数器在右键菜单点选 / Esc /
+   * 遮罩点击这几条关闭路径上从不减一，网页会一直藏到下次滚动才恢复。
+   * toast / 拖放遮罩不参与让位（短暂且非交互，藏网页反而闪）。
+   */
+  const floatingChromeOpen =
+    menu !== null ||
+    menubarOpen ||
+    sysOpen ||
+    aboutOpen ||
+    settingsOpen ||
+    browserOpen ||
+    tabListOpen ||
+    overflowMenu !== null ||
+    segMenu !== null;
+  useEffect(() => {
+    void invoke("web_set_visible", { visible: !floatingChromeOpen }).catch(() => undefined);
+  }, [floatingChromeOpen]);
   /** 本机可用的「打开方式」（notepad / code…）——没装的在菜单里置灰。 */
   const [openApps, setOpenApps] = useState<string[]>([]);
   /** 一次性轻提示（复制/粘贴/打开的结果反馈）。 */
@@ -650,13 +671,6 @@ export function App() {
   const onSbDelta = useCallback((dx: number) => {
     setLayout((l) => ({ ...l, sbW: clamp(l.sbW + dx, 140, 420) }));
   }, []);
-  const onExDelta = useCallback((dx: number) => {
-    setLayout((l) => ({
-      ...l,
-      // 比例列按窗口宽度换算成比例增量：拖动 100px ≈ 窗口的 8%。
-      exRatio: clamp(l.exRatio + dx / Math.max(window.innerWidth, 800), 0.16, 0.6),
-    }));
-  }, []);
   const onAiDelta = useCallback((dx: number) => {
     setLayout((l) => ({ ...l, aiW: clamp(l.aiW - dx, 240, 560) }));
   }, []);
@@ -677,7 +691,6 @@ export function App() {
     () =>
       ({
         "--sb-w": `${layout.sbW}px`,
-        "--ex-ratio": layout.exRatio,
         "--ai-w": `${layout.aiW}px`,
       }) as unknown as CSSProperties,
     [layout],
@@ -1077,12 +1090,21 @@ export function App() {
   const openEntry = useCallback(
     (e: DirEntryLike) => {
       if (e.isDir) {
+        // 预览态下进目录 = 顺势回浏览态（驱动器展开、目录回大图）。
+        // 标签全关而不是仅隐藏：留着隐藏标签会出现「看不见却占着预览态」
+        // 的僵尸状态，用户说不清驱动器栏为什么不出来。
+        if (activeTabId !== null) {
+          setTabs([]);
+          setActiveTabId(null);
+          openedRef.current.clear();
+        }
         navigate(e.path, true);
         return;
       }
       openPath(e.path);
     },
-    [navigate],
+    // openPath 故意不进依赖：它声明在下方（TDZ），且自身是空依赖的稳定引用。
+    [activeTabId, navigate],
   );
 
   const openPath = useCallback((path: string) => {
@@ -1215,7 +1237,7 @@ export function App() {
   );
 
   /**
-   * 路径栏是**万能输入框**，按输入形态分派：
+   * 地址栏是**万能输入框**，按输入形态分派：
    *   1. 网址（http/https/www）→ 按设置里的「网页内核」走：内嵌视图（不出
    *      应用）或系统浏览器；
    *   2. 绝对路径 → 目录进资源管理器，文件开预览标签（并跟着定位）；
@@ -1224,10 +1246,8 @@ export function App() {
    * 以前只有「目录」一种理解：传文件路径会报「不是目录」，用户只能
    * 自己在中间栏找。现在一个框能吃下三类输入。
    */
-  const onPathSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      const v = pathInput.trim();
+  const submitAddress = useCallback(
+    async (v: string) => {
       if (!v) return;
       // 1. 网址
       if (isUrlInput(v)) {
@@ -1256,7 +1276,18 @@ export function App() {
       setSearchQ(v);
       void runSearch(v);
     },
-    [pathInput, navigate, openTarget, openWebTab, runSearch, settings.browser.kernel],
+    [navigate, openTarget, openWebTab, runSearch, settings.browser.kernel],
+  );
+
+  const onPathSubmit = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      // 空提交：留在编辑态（与旧输入框一致，不收起药丸）。
+      if (!pathInput.trim()) return;
+      setAddrEdit(false);
+      void submitAddress(pathInput.trim());
+    },
+    [pathInput, submitAddress],
   );
 
   // 驱动器列表到位后，补做一次首屏期间排队的「跟随定位」。
@@ -1332,9 +1363,8 @@ export function App() {
         ? f.value.slice(f.selectionStart ?? 0, f.selectionEnd ?? 0)
         : "";
       setMenu({ x, y, target, viaKeyboard, fieldSelection });
-      setMenuOpen(true);
     },
-    [setMenuOpen],
+    [],
   );
 
   useEffect(() => {
@@ -1429,10 +1459,7 @@ export function App() {
   // 菜单开着时滚动页面：菜单是固定定位的，不跟着走——直接关掉。
   useEffect(() => {
     if (!menu) return undefined;
-    const close = () => {
-    setMenu(null);
-    setMenuOpen(false);
-  };
+    const close = () => setMenu(null);
     document.addEventListener("scroll", close, true);
     return () => document.removeEventListener("scroll", close, true);
   }, [menu]);
@@ -1696,6 +1723,64 @@ export function App() {
     return acc;
   }, [currentPath]);
 
+  // —— 地址栏：编辑态 / 深路径折叠 / 窄窗换挡 ——————————————
+
+  /** 编辑态取消：丢掉未提交的输入，回到当前目录的面包屑。 */
+  const cancelAddrEdit = useCallback(() => {
+    setPathInput(currentPath ?? "");
+    setAddrEdit(false);
+  }, [currentPath]);
+
+  // 进编辑态后聚焦并全选：手动点/Ctrl+L 两条路都走这里。
+  useEffect(() => {
+    if (!addrEdit) return;
+    const el = addrInputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [addrEdit]);
+
+  // 深路径折叠：保留首段 + 尾 addrTail 段，中段收进「…」。装不下就一段
+  // 一段往后退（useLayoutEffect 在绘制前收敛，用户看不到中间态）；换目录
+  // 或药丸变宽时回到全显再重新收敛。
+  const addrMaxTail = Math.max(0, breadcrumbs.length - 1);
+  const addrTailN = addrTail === null ? addrMaxTail : Math.min(addrTail, addrMaxTail);
+  const addrHeadEnd = Math.max(1, breadcrumbs.length - addrTailN);
+  const addrTailSegs = breadcrumbs.slice(addrHeadEnd);
+  const addrHiddenSegs = breadcrumbs.slice(1, addrHeadEnd);
+  useLayoutEffect(() => {
+    setAddrTail(null);
+  }, [currentPath]);
+  useLayoutEffect(() => {
+    if (addrEdit) return;
+    const row = addrCrumbsRef.current;
+    if (row && row.scrollWidth > row.clientWidth + 1 && addrTailN > 0) {
+      setAddrTail(addrTailN - 1);
+    }
+  }, [addrEdit, addrTailN, breadcrumbs]);
+  useEffect(() => {
+    // 纯净模式不渲染工具栏（pillRef 为空），换回重量模式时重新挂监听。
+    const pill = addrPillRef.current;
+    if (!pill) return undefined;
+    const ro = new ResizeObserver(() => setAddrTail(null));
+    ro.observe(pill);
+    return () => ro.disconnect();
+  }, [mode, addrEdit]);
+
+  // 窄窗检测：matchMedia 跟随窗口尺寸（含 DPI/缩放后的 CSS 像素）。
+  useEffect(() => {
+    const mq = window.matchMedia(TOOLBAR_NARROW_QUERY);
+    const on = () => setTbNarrow(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+
+  /** 弹出菜单的通用锚点：按钮左下角贴着放。 */
+  const anchorMenu = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return { x: r.left, y: r.bottom + 4 };
+  }, []);
+
   /**
    * 列表显示什么：**搜索进行中或已出结果** → 搜索结果；否则 → 目录内容。
    *
@@ -1778,8 +1863,17 @@ export function App() {
       editLabel: editorLabel(activeEditorKind),
       edit: requestEdit,
       openEntry: (path: string, isDir: boolean) => {
-        if (isDir) navigate(path, true);
-        else openPath(path);
+        if (isDir) {
+          // 与列表单击同一条口径：预览态下进目录 = 顺势回浏览态。
+          if (activeTabId !== null) {
+            setTabs([]);
+            setActiveTabId(null);
+            openedRef.current.clear();
+          }
+          navigate(path, true);
+        } else {
+          openPath(path);
+        }
       },
       openWith,
       pin: (path: string) => {
@@ -1871,6 +1965,13 @@ export function App() {
         refresh();
         return;
       }
+      if (e.ctrlKey && e.key.toLowerCase() === "l") {
+        // Ctrl+L 聚焦地址栏（进编辑态）。放在 inField 让位之前：从搜索框
+        // / AI 输入框里也应该一步跳到地址栏——它是全局目的地。
+        e.preventDefault();
+        if (mode === "heavy") setAddrEdit(true);
+        return;
+      }
       const t = e.target as HTMLElement | null;
       const inField =
         !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
@@ -1911,6 +2012,7 @@ export function App() {
     exitSearch,
     forward,
     menu,
+    mode,
     pasteFiles,
     refresh,
     requestEdit,
@@ -1950,10 +2052,24 @@ export function App() {
     void invoke("web_exec", { script }).catch(() => undefined);
   }, []);
 
+  /** 布局状态机（预览优先）：三个区域怎么排，见文件头注释与 CSS 状态规则。 */
+  const layoutState: "browse" | "preview" | "preview-ai" | "pure" =
+    mode === "pure"
+      ? "pure"
+      : active !== null
+        ? aiOpen
+          ? "preview-ai"
+          : "preview"
+        : "browse";
+  /** 目录栏当前视图：预览态强制详情（窄槽装不下大图）；浏览态用用户手选。 */
+  const dirEffView: DirView = layoutState === "browse" ? dirView : "rows";
+
   return (
     <div
       className="app"
       style={layoutVars}
+      data-state={layoutState}
+      data-ai={aiOpen ? "open" : "closed"}
       data-ctx="app"
       onDragOver={(e) => {
         e.preventDefault();
@@ -1966,7 +2082,7 @@ export function App() {
         title="Hermix 文件查看器"
         menus={menus}
         onMenuCommand={onMenuCommand}
-        onMenuOpenChange={setMenuOpen}
+        onMenuOpenChange={setMenubarOpen}
       />
       {sysOpen && <SystemPanel onClose={() => setSysOpen(false)} />}
       {browserOpen && <BrowserPanel onClose={() => setBrowserOpen(false)} />}
@@ -1999,71 +2115,102 @@ export function App() {
         <button className="tb-btn" onClick={refresh} title="刷新" aria-label="刷新">
           <RefreshCw size={16} />
         </button>
-        <form className="path-form" onSubmit={onPathSubmit}>
+        {/* 地址栏 = 面包屑。点段跳转；点空白（addr-tail 撑满剩余宽度）或
+            Ctrl+L 切到完整路径编辑，Enter 提交、Esc/失焦取消。路径只在
+            这里显示这一遍（旧布局输入框 + 面包屑显示两遍）。
+            input 常驻挂载、编辑态之外由 CSS 隐藏：AI 自控面
+            （viewerControl.submitPathBar）靠 .path-input 类名 + form submit
+            驱动 set_path，不能只在编辑态渲染。 */}
+        <form
+          className={`addr-pill${addrEdit ? " is-editing" : ""}`}
+          onSubmit={onPathSubmit}
+          data-path={currentPath ?? ""}
+          ref={addrPillRef}
+          onClick={(e) => {
+            if (addrEdit) return;
+            // 点在段 / 复制按钮上走它们自己的行为，不进编辑态。
+            if (e.target instanceof Element && e.target.closest("button")) return;
+            setAddrEdit(true);
+          }}
+        >
+          {breadcrumbs.length === 0 && !addrEdit && (
+            <span className="addr-empty">选择目录…</span>
+          )}
+          {!addrEdit && (
+            <span className="addr-crumbs" ref={addrCrumbsRef}>
+              {breadcrumbs.length > 0 && (
+                <span className="bc-segment">
+                  <button
+                    type="button"
+                    className="bc-btn"
+                    title={breadcrumbs[0].path}
+                    onClick={() => navigate(breadcrumbs[0].path, true)}
+                  >
+                    {breadcrumbs[0].label}
+                  </button>
+                </span>
+              )}
+              {addrHiddenSegs.length > 0 && (
+                <span className="bc-segment">
+                  <button
+                    type="button"
+                    className="bc-btn addr-ellipsis"
+                    title="展开被折叠的路径段"
+                    aria-label="展开被折叠的路径段"
+                    onClick={(e) => setSegMenu(anchorMenu(e))}
+                  >
+                    …
+                  </button>
+                  <ChevronRight className="bc-sep" />
+                </span>
+              )}
+              {addrTailSegs.map((b, i) => (
+                <span className="bc-segment" key={b.path}>
+                  <button
+                    type="button"
+                    className="bc-btn"
+                    title={b.path}
+                    onClick={() => navigate(b.path, true)}
+                  >
+                    {b.label}
+                  </button>
+                  {i < addrTailSegs.length - 1 && <ChevronRight className="bc-sep" />}
+                </span>
+              ))}
+            </span>
+          )}
+          {!addrEdit && <span className="addr-tail" aria-hidden="true" />}
+          {!addrEdit && currentPath && (
+            <button
+              type="button"
+              className="addr-copy"
+              title="复制当前路径"
+              aria-label="复制当前路径"
+              onClick={() => copyPath(currentPath)}
+            >
+              <Copy size={13} />
+            </button>
+          )}
           <input
+            ref={addrInputRef}
             className="path-input"
             value={pathInput}
             onChange={(e) => setPathInput(e.target.value)}
+            onKeyDown={(e) => {
+              // Esc 取消要拦在这里：冒泡到全局快捷键会被当成「退出搜索」。
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                cancelAddrEdit();
+              }
+            }}
+            onBlur={cancelAddrEdit}
             placeholder="路径 / 网址 / 搜索…"
             data-ctx="pathbar"
+            spellCheck={false}
+            aria-label="地址"
           />
-          <button type="submit" className="tb-btn" title="跳转" aria-label="跳转">→</button>
         </form>
-        <div className="toolbar-spacer" />
-        {/* 视图选项组：三个都是「开关/切换」，光图标用户看不懂
-            （"那个眼睛是干啥的"）——一律配文字标签。 */}
-        <div className="tb-group">
-          <button
-            className={`tb-btn ${showHidden ? "is-active" : ""}`}
-            onClick={() => setShowHidden((v) => !v)}
-            title={
-              showHidden
-                ? "正在显示带「隐藏」属性的文件，点击改为隐藏"
-                : "正在隐藏带「隐藏」属性的文件，点击改为显示"
-            }
-          >
-            {/* 漏斗而不是眼睛：眼睛是通用「可见性」语义，用户会以为管的是
-                预览的显隐（"那个眼睛是干啥的"）；漏斗说的是「这份列表被
-                筛了没有」，正好是这个开关干的事。 */}
-            {showHidden ? <Funnel size={16} /> : <FunnelX size={16} />}
-            隐藏文件
-          </button>
-          <button
-            className={`tb-btn ${aiOpen ? "is-active" : ""}`}
-            onClick={() => setAiOpen((v) => !v)}
-            title={aiOpen ? "收起 AI 栏" : "展开 AI 栏"}
-          >
-            <Sparkles size={16} /> AI
-          </button>
-          <button className="tb-btn" onClick={cycleTheme} title={`主题：${THEME_LABEL[themeMode]}`}>
-            {themeMode === "system" ? (
-              <Monitor size={16} />
-            ) : themeMode === "light" ? (
-              <Sun size={16} />
-            ) : (
-              <Moon size={16} />
-            )}
-            {THEME_LABEL[themeMode]}
-          </button>
-        </div>
-      </header>
-      )}
 
-      {mode === "heavy" && (
-      <nav className="breadcrumb-bar">
-        {breadcrumbs.map((b, i) => (
-          <span key={i} className="bc-segment">
-            <button
-              type="button"
-              onClick={() => navigate(b.path, true)}
-              title={b.path}
-              className="bc-btn"
-            >
-              {b.label}
-            </button>
-            {i < breadcrumbs.length - 1 && <ChevronRight className="bc-sep" />}
-          </span>
-        ))}
         {currentPath && (
           <form className="search-form" onSubmit={onSearchSubmit}>
             <Search className="search-icon" />
@@ -2098,7 +2245,89 @@ export function App() {
             {searchNote}
           </span>
         )}
-      </nav>
+
+        {/* 目录视图切换：仅浏览态显示。预览态目录收成窄槽、强制详情
+            列表——大图在 336px 里一排放不下两个，切了反而没法用。 */}
+        {layoutState === "browse" && (
+          <div className="view-seg" role="group" aria-label="目录视图">
+            <button
+              type="button"
+              className={dirView === "grid" ? "is-active" : ""}
+              onClick={() => setDirView("grid")}
+              aria-pressed={dirView === "grid"}
+              title="大图列表"
+              aria-label="大图列表"
+            >
+              <LayoutGrid className="icon-sm" />
+            </button>
+            <button
+              type="button"
+              className={dirView === "rows" ? "is-active" : ""}
+              onClick={() => setDirView("rows")}
+              aria-pressed={dirView === "rows"}
+              title="详情列表"
+              aria-label="详情列表"
+            >
+              <List className="icon-sm" />
+            </button>
+          </div>
+        )}
+
+        {/* 视图选项组：开关配文字标签（"那个图标是干啥的"）；主题按钮例外
+            ——显示器/日/月图标本身表意，文字项在「视图」菜单里有，纯图标
+            省下 ~70px 给面包屑。窗口窄于 TOOLBAR_NARROW_QUERY 时整组收进
+            「⋯」弹出菜单（同一组开关，换个容器）。 */}
+        {!tbNarrow ? (
+          <div className="tb-group">
+            <button
+              className={`tb-btn ${showHidden ? "is-active" : ""}`}
+              onClick={() => setShowHidden((v) => !v)}
+              title={
+                showHidden
+                  ? "正在显示带「隐藏」属性的文件，点击改为隐藏"
+                  : "正在隐藏带「隐藏」属性的文件，点击改为显示"
+              }
+            >
+              {/* 漏斗而不是眼睛：眼睛是通用「可见性」语义，用户会以为管的是
+                  预览的显隐（"那个眼睛是干啥的"）；漏斗说的是「这份列表被
+                  筛了没有」，正好是这个开关干的事。 */}
+              {showHidden ? <Funnel size={16} /> : <FunnelX size={16} />}
+              隐藏文件
+            </button>
+            <button
+              className={`tb-btn ${aiOpen ? "is-active" : ""}`}
+              onClick={() => setAiOpen((v) => !v)}
+              title={aiOpen ? "收起 AI 栏" : "展开 AI 栏"}
+            >
+              <Sparkles size={16} /> AI
+            </button>
+            <button
+              className="tb-btn tb-icon"
+              onClick={cycleTheme}
+              title={`主题：${THEME_LABEL[themeMode]}（点击切换）`}
+              aria-label={`主题：${THEME_LABEL[themeMode]}`}
+            >
+              {themeMode === "system" ? (
+                <Monitor size={16} />
+              ) : themeMode === "light" ? (
+                <Sun size={16} />
+              ) : (
+                <Moon size={16} />
+              )}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="tb-btn tb-icon"
+            title="视图选项"
+            aria-label="视图选项"
+            onClick={(e) => setOverflowMenu(anchorMenu(e))}
+          >
+            <MoreHorizontal size={16} />
+          </button>
+        )}
+      </header>
       )}
 
       {mode === "pure" && (
@@ -2259,18 +2488,55 @@ export function App() {
           )}
         </aside>
 
-        <Resizer onDelta={onSbDelta} label="调整侧栏宽度" />
+        {/* 驱动器栏只在浏览态出现（CSS 控制），它的拖拽条也跟着只在浏览态。 */}
+        {layoutState === "browse" && (
+          <Resizer onDelta={onSbDelta} label="调整侧栏宽度" />
+        )}
 
-        {!listCollapsed && (
-        <>
-        <section className="explorer" data-ctx="explorer">
+        <section className="explorer" data-view={dirEffView} data-ctx="explorer">
           {error ? (
             <div className="explorer-error">
               <p>{error}</p>
               <small>{currentPath}</small>
             </div>
           ) : (
-            <table className="entries">
+            <>
+              {/* 大图列表：浏览态的默认视图（预览态由 data-view 强制详情）。 */}
+              <div className="entries-grid">
+                {visibleEntries.length === 0 && (
+                  <div className="empty-cell">
+                    {searching ? "正在搜索…" : searchScope ? "无搜索结果" : "空目录"}
+                  </div>
+                )}
+                {sortedEntries.map((e) => (
+                  <div
+                    key={e.path}
+                    className={`entry-tile ${e.isDir ? "is-dir" : ""} ${
+                      active?.path === e.path ? "is-active" : ""
+                    }`}
+                    onClick={(ev) => {
+                      // 与详情行同一条单击口径（detail === 1 防双击误开）。
+                      if (ev.detail !== 1) return;
+                      openEntry(e);
+                    }}
+                    title={e.path}
+                    data-ctx="entry"
+                    data-ctx-path={e.path}
+                    data-ctx-name={e.name}
+                    data-ctx-dir={e.isDir ? "1" : "0"}
+                    data-ctx-from="list"
+                  >
+                    {e.isDir ? (
+                      <FolderTypeIcon size={40} className="entry-tile-icon" />
+                    ) : (
+                      <FileTypeIcon name={e.name} size={40} className="entry-tile-icon" />
+                    )}
+                    <span className="entry-tile-name">{e.name}</span>
+                    <span className="entry-tile-meta">{e.isDir ? "" : fmtSize(e.size)}</span>
+                  </div>
+                ))}
+              </div>
+              <table className="entries">
               <thead>
                 <tr>
                   <th>名称</th>
@@ -2326,22 +2592,19 @@ export function App() {
                 ))}
               </tbody>
             </table>
+            </>
           )}
         </section>
-
-        <Resizer onDelta={onExDelta} label="调整文件列表宽度" />
-        </>
-        )}
         </>
         )}
 
+        {/* 预览栏：heavy 模式下只在有活动标签时存在（没有 = 浏览态，
+            目录大图就是内容主体，不放「空预览」占位）；纯净模式常驻。 */}
+        {(mode === "pure" || active !== null) && (
         <section className={`preview ${mode === "pure" ? "is-pure" : ""}`}>
-          {/* 标签条只在有标签时出现：空着的时候留一条灰条 + 一句
-              "单击文件即可预览"，和下面的空状态说的是同一件事（同一屏
-              说两遍）。空状态的文案已经覆盖了"单击"和"拖入"。
-              例外：文件列表已收起时这一行仍然要留着 —— 收起/展开的按钮
-              在这一行，没有它用户就被困在"看不到列表也点不回来"的状态。 */}
-          {(tabs.length > 0 || listCollapsed) && (
+          {/* heavy 模式走到这里必有标签（active !== null），标签条恒在；
+              纯净模式保留「有标签才有」的旧规则（空屏由下面的空状态接管）。 */}
+          {(mode === "heavy" || tabs.length > 0) && (
           <div className="tabbar-wrap">
             <div className="tabbar" ref={tabbarRef}>
               {tabs.map((t) => (
@@ -2413,23 +2676,21 @@ export function App() {
                 ))}
               </div>
             )}
-            {/* 收起 / 展开中部文件列表：预览区因此能占满宽度、内容居中。
-                放在标签栏这一行 —— 它服务的是预览区，就该长在预览区的边上，
-                而不是藏在某个菜单里。 */}
-            <button
-              type="button"
-              className={listCollapsed ? "tab-list-btn is-active" : "tab-list-btn"}
-              onClick={() => setListCollapsed((v) => !v)}
-              title={
-                listCollapsed
-                  ? "展开文件列表（预览区恢复三栏）"
-                  : "收起文件列表（预览区占满宽度、居中显示）"
-              }
-              aria-label={listCollapsed ? "展开文件列表" : "收起文件列表"}
-              aria-pressed={listCollapsed}
-            >
-              {listCollapsed ? <PanelLeftOpen className="icon-sm" /> : <PanelLeftClose className="icon-sm" />}
-            </button>
+            {/* 关闭预览 = 关掉全部标签回浏览态（驱动器展开、目录回大图）。
+                关单个标签走标签自带的 ✕；关到只剩一个时关 ✕ 同样回浏览态。
+                放在标签栏这一行——它服务的是预览区，就该长在预览区的边上。 */}
+            {mode === "heavy" && (
+              <button
+                type="button"
+                className="tab-list-btn"
+                onClick={closeAllTabs}
+                title="关闭预览，回到浏览态（展开驱动器栏与大图目录）"
+                aria-label="关闭预览"
+              >
+                <PanelRightClose className="icon-sm" />
+                <span>关闭预览</span>
+              </button>
+            )}
           </div>
           )}
           <div
@@ -2443,9 +2704,9 @@ export function App() {
                 <div className="empty-icon">
                   <FileSearch size={40} strokeWidth={1.5} />
                 </div>
-                <p>在左侧文件列表单击文件即可预览</p>
+                <p>拖入文件即可预览</p>
                 <p className="empty-sub">
-                  也可直接拖入文件 · 支持 Markdown / 文本 / 代码 / 图片 / PDF / Office / HTML
+                  支持 Markdown / 文本 / 代码 / 图片 / PDF / Office / HTML
                 </p>
               </div>
             ) : active.web ? (
@@ -2467,21 +2728,24 @@ export function App() {
             )}
           </div>
         </section>
+        )}
 
-        {mode === "heavy" && aiOpen && (
-          <>
-            <Resizer onDelta={onAiDelta} label="调整 AI 栏宽度" />
-            <AiSidebar
-              // key 绑当前文件：切换标签时重建面板 → 会话 id 随之重置。
-              // 否则不关 AI 栏换文件，新文件路径会被拼进上一个文件的会话里。
-              key={active?.path ?? "__none__"}
-              filePath={active?.path ?? null}
-              selection={selection}
-              pending={aiPending}
-              onPendingHandled={clearAiPending}
-              onClose={() => setAiOpen(false)}
-            />
-          </>
+        {/* AI 栏常驻挂载（hidden 由 CSS 按状态收放，对话状态跨开关保留）：
+            浏览态在右缘（可拖宽），preview-ai 态顶替目录槽位。 */}
+        {mode === "heavy" && layoutState === "browse" && aiOpen && (
+          <Resizer onDelta={onAiDelta} label="调整 AI 栏宽度" />
+        )}
+        {mode === "heavy" && (
+          <AiSidebar
+            // key 绑当前文件：切换标签时重建面板 → 会话 id 随之重置。
+            // 否则不关 AI 栏换文件，新文件路径会被拼进上一个文件的会话里。
+            key={active?.path ?? "__none__"}
+            filePath={active?.path ?? null}
+            selection={selection}
+            pending={aiPending}
+            onPendingHandled={clearAiPending}
+            onClose={() => setAiOpen(false)}
+          />
         )}
       </div>
 
@@ -2492,6 +2756,67 @@ export function App() {
           groups={buildMenu(menu.target, menuContext)}
           autoFocusFirst={menu.viaKeyboard}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {/* 窄窗「⋯」：与「视图」菜单同一组开关，容器换成工具栏弹出。 */}
+      {overflowMenu && (
+        <ContextMenu
+          x={overflowMenu.x}
+          y={overflowMenu.y}
+          onClose={() => setOverflowMenu(null)}
+          groups={[
+            [
+              {
+                id: "toggle-hidden",
+                label: "隐藏文件",
+                checked: showHidden,
+                onSelect: () => setShowHidden((v) => !v),
+              },
+              {
+                id: "toggle-ai",
+                label: "AI 栏",
+                checked: aiOpen,
+                onSelect: () => setAiOpen((v) => !v),
+              },
+            ],
+            [
+              {
+                id: "theme-system",
+                label: `主题：${THEME_LABEL.system}`,
+                checked: themeMode === "system",
+                onSelect: () => setTheme("system"),
+              },
+              {
+                id: "theme-light",
+                label: `主题：${THEME_LABEL.light}`,
+                checked: themeMode === "light",
+                onSelect: () => setTheme("light"),
+              },
+              {
+                id: "theme-dark",
+                label: `主题：${THEME_LABEL.dark}`,
+                checked: themeMode === "dark",
+                onSelect: () => setTheme("dark"),
+              },
+            ],
+          ]}
+        />
+      )}
+
+      {/* 面包屑「…」：展开被折叠的中段，点段即跳。 */}
+      {segMenu && addrHiddenSegs.length > 0 && (
+        <ContextMenu
+          x={segMenu.x}
+          y={segMenu.y}
+          onClose={() => setSegMenu(null)}
+          groups={[
+            addrHiddenSegs.map((s) => ({
+              id: s.path,
+              label: s.label,
+              onSelect: () => navigate(s.path, true),
+            })),
+          ]}
         />
       )}
 

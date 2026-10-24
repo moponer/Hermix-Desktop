@@ -68,7 +68,10 @@ export function scrapeState(): ViewerState {
   if (q(".about-overlay")) panels.push("about");
   return {
     ok: true,
-    currentPath: text(q(".breadcrumb-bar")),
+    // 地址栏药丸上的 data-path（完整路径，带分隔符）。2026-10-24 起地址栏
+    // 是「面包屑即地址栏」单行形态，旧 .breadcrumb-bar 容器没了；读属性
+    // 也比拼 textContent 干净（旧读法各段会被连成一串）。
+    currentPath: q<HTMLElement>(".addr-pill")?.dataset.path ?? "",
     pathInput: (q<HTMLInputElement>(".path-input")?.value ?? "").trim(),
     searchQuery: (q<HTMLInputElement>(".search-input")?.value ?? "").trim(),
     mode: q(".app")?.classList.contains("is-pure") ? "pure" : "heavy",
@@ -136,8 +139,9 @@ async function runMenuItem(label: string): Promise<void> {  const wanted = label
   // 菜单是 React 展开的，等一帧再找菜单项。
   return new Promise<void>((resolve, reject) => {    let tries = 0;
     const tick = () => {
-      const item = qa<HTMLElement>(".menubar-item").find((el) => {
-        const label = text(el.querySelector(".menubar-label")) || text(el);
+      // .menu-item 同时存在于右键菜单，限定在菜单栏下拉里找。
+      const item = qa<HTMLElement>(".menubar-pop .menu-item").find((el) => {
+        const label = text(el.querySelector(".menu-label")) || text(el);
         return label === wanted || label.includes(wanted);
       });
       if (item) {
@@ -176,7 +180,10 @@ async function openContextMenuItem(pattern: RegExp): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let tries = 0;
     const tick = () => {
-      const label = qa<HTMLElement>(".ctxmenu-label").find((el) => pattern.test(text(el)));
+      // .menu-label 同时存在于菜单栏下拉，限定在右键菜单里找。
+      const label = qa<HTMLElement>(".ctxmenu .menu-label").find((el) =>
+        pattern.test(text(el)),
+      );
       if (label) {
         label.click();
         resolve();
