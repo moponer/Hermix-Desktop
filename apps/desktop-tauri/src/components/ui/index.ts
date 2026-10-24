@@ -1,6 +1,14 @@
 export { Badge, StatusDot, type BadgeTone, type BadgeVariant, type BadgeSize } from "./Badge";
 export { Button, IconButton, type ButtonProps, type ButtonVariant, type ButtonSize, type ButtonShape } from "./Button";
 export { Card, type CardProps } from "./Card";
+export {
+  ContextMenu,
+  CONTEXT_MENU_CLASS,
+  isContextMenuHandled,
+  markContextMenuHandled,
+  type ContextMenuItem,
+  type ContextMenuProps,
+} from "./ContextMenu";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { IconTile } from "./IconTile";
 export {

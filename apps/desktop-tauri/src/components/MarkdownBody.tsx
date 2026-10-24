@@ -86,6 +86,14 @@ interface PathLinkProps {
   onClick: (path: string, e: React.MouseEvent) => void;
 }
 
+/**
+ * 行内路径链接。
+ *
+ * 图标走 `FileTypeIcon` 的 **soft 形态**（同色相淡染底 + 文字色字形）：
+ * 原来的品牌实色方块 + 白色粗体字母在段落里就是一块块彩色积木 —— 用户
+ * 实机反馈"一部分重点加粗带背景色的特殊词汇……界面有点乱"。淡染后色相
+ * 还在（扫一眼知道是什么类型），重量没了。
+ */
 function PathLink({ path, icons, onClick }: PathLinkProps) {
   const abs = isAbsolutePath(path);
   // %VAR% 开头（%TEMP%\x\y.csv）：后端会把环境变量展开后再探盘，语义上
@@ -93,8 +101,8 @@ function PathLink({ path, icons, onClick }: PathLinkProps) {
   const env = /^%[\p{L}\p{N}_]+%/u.test(path);
   // 只给**带扩展名**的路径配图标：目录路径（`crates/hermix-agent`）没有
   // 文件类型，FileTypeIcon 会退化成灰色 "?" 问号，反而是噪声。
-  // 且只在 `icons` 打开时配 —— 思考块里一段能蹦出十几个彩色方块，正文被
-  // 切成色块拼贴画，比没有图标更难读。
+  // 且只在 `icons` 打开时配 —— 思考块里一段能蹦出十几个方块，正文被
+  // 切成拼贴画，比没有图标更难读。
   const name = path.split(/[\\/]/).pop() ?? path;
   const showIcon = icons && /\.[\p{L}\p{N}]{1,5}$/u.test(name);
   // 裸文件名（`App.tsx`）没有目录上下文，不按"相对路径"处理 ——
@@ -112,13 +120,15 @@ function PathLink({ path, icons, onClick }: PathLinkProps) {
       title={env ? `环境变量路径：${path}` : abs ? `打开 ${path}` : bare ? name : `相对路径：将以工作区根为基准解析 ${path}`}
       className={`md-path-link md-path-link--${tone}`}
     >
-      {/* 16px：图标是「彩色方块 + 白色扩展名字母」（PDF / TS / W），字母在
-          24 viewBox 里只有 7.5–10.5px，按 13px 渲染出来字母约 5.7px ——
-          小到只能看见一个色块，认不出是哪种文件。16px 才让字母够辨读。
+      {/* 16px：图标是「色块 + 扩展名字母」（PDF / TS / W），字母在 24 viewBox
+          里只有 7.5–10.5px，按 13px 渲染出来字母约 5.7px —— 小到只能看见
+          一个色块，认不出是哪种文件。16px 才让字母够辨读。
           正文是中文时汉字字面占满整个 em box（--text-body 14px），不是拉丁文
           的 cap 高度；图标再配 CSS 的 translateY(2px)（见 components-prose.css
           的 .md-path-link__icon）光学居中于汉字行。 */}
-      {showIcon && <FileTypeIcon name={name} size={16} className="md-path-link__icon" />}
+      {showIcon && (
+        <FileTypeIcon name={name} size={16} variant="soft" className="md-path-link__icon" />
+      )}
       {/* 只显示文件名：正文里写的是一整串 `<repo-parent>\...\db1.py`，铺满整行
           把句子撕成两段，读者真正要找的是 `db1.py`。目录信息不丢 —— title
           属性仍是完整路径，悬停即见。 */}
@@ -696,9 +706,12 @@ export interface MarkdownBodyProps {
    * 正文里的文件路径是否带文件类型图标。**默认关** ——
    *
    * MarkdownBody 不只渲染最终答复：思考块、工具结果正文、更新日志、技能
-   * 文档都复用它。那些位置一段话里能有十几个路径，每个前面顶一个彩色
-   * 方块，正文被切成色块拼贴画，可读性反而不如纯文本。只有最终答复正文
+   * 文档都复用它。那些位置一段话里能有十几个路径，每个前面顶一个方块，
+   * 正文被切成拼贴画，可读性反而不如纯文本。只有最终答复正文
    * （`ToolCallBubble` 的 `kind === "text"` 步）显式打开。
+   *
+   * 图标本身是 **soft 形态**（淡染底 + 文字色字），不再品牌实色方块 ——
+   * 见 PathLink 的注记。
    */
   pathIcons?: boolean;
   /**
@@ -877,10 +890,17 @@ export const MarkdownBody = memo(function MarkdownBody({
           // 行内 code：药丸底色 + 复用 refractor 上色（与代码块同一套
           // 引擎与配色，两者不会漂移）。`prop` 是 CommonMark 里的行内代码
           // —— 带反引号的 `canonicalPath()` / `SideTab` 属于这一类。
+          //
+          // `inline = true`：行内 code **不加粗**。药丸底色已经占了"这是
+          // 代码"的重音，关键词再套一层 600 字重，两个重音互相抢 ——
+          // 正文里一段话五个行内 code 就是五块"加粗带底色"的词，
+          // 正是用户说的"界面有点乱"。代码块里没有底色，字重照旧。
           const isProp = (props as { prop?: string } | undefined)?.prop === "true";
           return (
             <code {...props} className="md-inline-code">
-              {isProp ? highlightToReact(codeString, guessInlineLang(codeString), isDark) : children}
+              {isProp
+                ? highlightToReact(codeString, guessInlineLang(codeString), isDark, true)
+                : children}
             </code>
           );
         },

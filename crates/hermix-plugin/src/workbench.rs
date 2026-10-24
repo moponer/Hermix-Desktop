@@ -78,13 +78,38 @@ const WB_SDK_JS: &str = r#"// 宿主 SDK —— 工作台代码只能通过它�
     }
   });
 
-  // 未开发工作台的默认底：骨架文档没有任何背景规则，iframe 画布是浏览器
-  // 默认白 —— 与宿主主题割裂。把 html 背景交还宿主：透明后父容器
-  // .wb-canvas 的 var(--color-bg-primary)（随主题）透出来。AI 之后想自定义
-  // 整页底色，给 html 加 !important 或直接设 body 即可覆盖（宿主不阻拦）。
+  // 未开发工作台的默认底：骨架文档没有任何背景规则，iframe 画布会露出父
+  // 容器的底色。把 html 背景设为透明 → 父容器 .wb-canvas 的
+  // var(--color-bg-base)（浅色 #f5f5f5 / 暗色 #1f1f1f）透出来 —— 画布与
+  // 右侧对话的纸白拉开一档，读作"应用里的一块画布"而不是"没加载出来的
+  // 网页"（2026-10-24 用户实机反馈：命名后还没开发完时画布一直是白色
+  // 网页背景）。
+  //
+  // AI 之后想自定义整页底色：写 body 的 background 即可（html 透明时
+  // body 的背景按 CSS 规范就是画布底），或给 html 加 !important ——
+  // 宿主不阻拦。
+  //
   // 宿主侧跨域读 contentDocument 的兜底（WorkbenchShell）在 asset 协议下
-  // 永远静默失效，这里是唯一真正生效的通道 —— SDK 跑在 iframe 自己的文档里。
+  // **永远静默失效**（iframe 是 asset:// 另一个源，contentDocument 为
+  // null），这里是唯一真正生效的通道 —— SDK 跑在 iframe 自己的文档里。
   document.documentElement.style.setProperty('background', 'transparent');
+
+  // 右键：不让浏览器弹"网页菜单"（重新加载/检查/后台打开），改由宿主弹
+  // 应用菜单。跨源，宿主读不到本 iframe 的 DOM —— 只能把坐标、选区、
+  // 链接转发过去，宿主用同一套菜单渲染（坐标按 iframe 位置换算）。
+  document.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+    var sel = window.getSelection ? String(window.getSelection() || '') : '';
+    var anchor = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    window.parent.postMessage({
+      source: 'hermix-workbench',
+      type: 'contextmenu',
+      x: e.clientX,
+      y: e.clientY,
+      text: sel,
+      href: anchor ? anchor.href : ''
+    }, '*');
+  });
 })();
 "#;
 

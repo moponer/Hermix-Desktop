@@ -7,6 +7,7 @@
 // Alt+F4 等真实销毁后下次 toggle 重建。先建后亮（hidden）+ 前端
 // mount 后 show，与 BrowserView 同款防白屏路径。
 
+use crate::hotkey::{HotkeySlot, HotkeyStatus};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 const WINDOW_LABEL: &str = "file-search";
@@ -21,9 +22,16 @@ const SHOW_FALLBACK_MS: u64 = 8000;
 /// 选项不一致时建窗直接报 0x8007139F（见 screenshot_controller 同款注记）。
 const FS_BROWSER_ARGS: &str = "--disable-features=msSmartScreenProtection,EdgeFeed,CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,RendererCodeIntegrity --disable-renderer-backgrounding --disable-background-timer-throttling --disk-cache-size=20971520 --js-flags=--max-old-space-size=1024";
 
-/// 功能开关 + 当前注册热键（apply 时先注册新的再解旧的，失败不破坏现状）。
+/// 功能开关。
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-static REGISTERED_HOTKEY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 文件搜索热键槽。与截图共用 hotkey.rs 的实现（幂等 / 冲突兜底 /
+/// 规范化比较三件事都在那里，只此一份）。
+static HOTKEY: HotkeySlot = HotkeySlot::new(
+    "文件搜索",
+    DEFAULT_HOTKEY,
+    &["ctrl+Alt+F", "ctrl+Alt+G", "ctrl+Alt+K"],
+);
 
 /// 热键入口：可见则隐藏、隐藏则唤回、不存在则创建。
 pub fn toggle(app: &tauri::AppHandle) {
@@ -76,53 +84,42 @@ fn create_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// 前端页面就绪后自行 show（BrowserView 同款）。
 
 /// 应用配置（搜索窗设置面板）：开关 + 全局热键。
-/// 顺序是"先注册新的、成功后再解旧的"——失败时旧热键仍在。
+///
+/// 返回真正生效的热键状态（与截图同款语义）：请求的键被占时会换备选键
+/// 并回报 `substituted`，前端提示"已改用 X"而不是笼统报错。
 #[tauri::command]
 pub fn file_search_apply_config(
     app: tauri::AppHandle,
     enabled: bool,
     hotkey: String,
-) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-
+) -> Result<HotkeyStatus, String> {
     ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
-    let mut registered = REGISTERED_HOTKEY.lock().unwrap();
-
     if !enabled {
-        let prev = registered.take().unwrap_or_else(|| DEFAULT_HOTKEY.into());
-        if let Ok(sc) = prev.parse::<Shortcut>() {
-            let _ = app.global_shortcut().unregister(sc);
-        }
-        return Ok(());
+        HOTKEY.disable(&app);
+        return Ok(HotkeyStatus::default());
     }
-
-    let gs = app.global_shortcut();
-    let sc: Shortcut = hotkey
-        .parse()
-        .map_err(|e| format!("热键 {hotkey} 格式无效: {e}"))?;
-    gs.register(sc)
-        .map_err(|e| format!("热键 {hotkey} 注册失败（可能被其他程序占用）: {e}"))?;
-
-    let prev = registered
-        .replace(hotkey.clone())
-        .unwrap_or_else(|| DEFAULT_HOTKEY.into());
-    if prev != hotkey {
-        if let Ok(old) = prev.parse::<Shortcut>() {
-            let _ = gs.unregister(old);
-        }
+    let status = HOTKEY.apply(&app, &hotkey)?;
+    if status.substituted {
+        eprintln!(
+            "[filesearch] 热键 {hotkey} 被占用，已改用 {}",
+            status.active.as_deref().unwrap_or("?")
+        );
     }
-    Ok(())
+    Ok(status)
+}
+
+/// 查询文件搜索热键当前状态。
+#[tauri::command]
+pub fn file_search_hotkey_status() -> HotkeyStatus {
+    HOTKEY.status()
+}
+
+/// 热键是否属于文件搜索（lib.rs 的全局派发用它）。
+pub fn hotkey_matches(shortcut: &tauri_plugin_global_shortcut::Shortcut) -> bool {
+    HOTKEY.matches(shortcut)
 }
 
 /// setup 时的默认热键注册（前端回放自定义配置前生效）。
-pub fn register_default_hotkey(app: &tauri::AppHandle) {
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-    match DEFAULT_HOTKEY.parse::<Shortcut>() {
-        Ok(sc) => {
-            if let Err(e) = app.global_shortcut().register(sc) {
-                eprintln!("[filesearch] 热键 Alt+F 注册失败（被占用?）: {e}");
-            }
-        }
-        Err(e) => eprintln!("[filesearch] 热键解析失败: {e}"),
-    }
+pub fn register_default_hotkey(app: &tauri::AppHandle) -> HotkeyStatus {
+    HOTKEY.apply_default(app)
 }

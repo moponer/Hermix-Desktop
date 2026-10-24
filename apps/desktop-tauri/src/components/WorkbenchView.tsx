@@ -21,6 +21,7 @@ import {
 } from "../workbench/api";
 import { WorkbenchShell } from "./WorkbenchShell";
 import { WorkbenchEmpty } from "./WorkbenchEmpty";
+import { markContextMenuHandled } from "./ui";
 
 interface WorkbenchViewProps {
   chatNode: ReactNode;
@@ -404,6 +405,8 @@ function TabItem({
         onClick={onOpen}
         onContextMenu={(e) => {
           e.preventDefault();
+          // tab 自带菜单（重命名 / 打开目录 / 删除），全局菜单让位。
+          markContextMenuHandled(e);
           openMenu();
         }}
         title={manifest.name}

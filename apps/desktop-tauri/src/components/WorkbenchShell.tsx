@@ -57,28 +57,11 @@ export function WorkbenchShell({ manifest, chatNode, onNewSession, onSelectSessi
     };
   }, [manifest.id]);
 
-  // 让宿主主题色透出 iframe：onLoad 时把 html/body 背景强制透明，
-  // 父容器 .wb-canvas 的 var(--color-bg-primary) 即可透出。
-  // 工作台代码若主动设 !important 背景色，宿主不阻拦 —— 这里只兜底
-  // "未开发工作台"的默认白底，让默认态跟随主程序主题。
-  // memory: 主题色系不同启动的也不同 —— 默认画布不能割裂。
-  useEffect(() => {
-    const frame = frameRef.current;
-    if (!frame) return;
-    const apply = () => {
-      try {
-        const doc = frame.contentDocument;
-        if (!doc) return;
-        doc.documentElement.style.background = "transparent";
-        doc.body.style.setProperty("background", "transparent", "important");
-      } catch {
-        // cross-origin — 跳过兜底。
-      }
-    };
-    apply();
-    frame.addEventListener("load", apply);
-    return () => frame.removeEventListener("load", apply);
-  }, [reloadToken, entryUrl]);
+  // 画布底色由父容器承担（workbench.css 的 .wb-canvas 铺 --color-bg-base）。
+  // iframe 文档的 html 背景由工作台 SDK（wb-sdk.js）设为透明 —— 它跑在
+  // iframe 自己的文档里，是唯一真正生效的通道：宿主读不到 iframe 的 DOM
+  // （asset:// 跨源，contentDocument 恒为 null），此前宿主侧那段
+  // contentDocument 兜底从来没生效过。
 
   useEffect(() => {
     const onMessage = async (e: MessageEvent) => {

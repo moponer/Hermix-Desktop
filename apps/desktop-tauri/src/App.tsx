@@ -6,6 +6,7 @@ import { Sidebar } from "./components/Sidebar";
 import { SidebarRevealRow } from "./components/SidebarRevealRow";
 import { ChatView } from "./components/ChatView";
 import { ImageLightbox } from "./components/ImageLightbox";
+import { GlobalContextMenu } from "./components/GlobalContextMenu";
 import { PreviewBar, BROWSER_TAB_ID, REVIEW_TAB_ID, SUBAGENT_TAB_ID, CANVAS_TAB_ID, type SideTab } from "./components/PreviewBar";
 import { docCanvasStore } from "@hermix/preview";
 import { TitleBar } from "./components/TitleBar";
@@ -4309,6 +4310,9 @@ return {
       {/* 预览统一走右侧预览栏（含 PreviewPanel 自带的全屏），不再有全屏模态。 */}
       <ToastContainer />
       <ImageLightbox />
+      {/* 全局右键菜单：桌面端不给用户浏览器的网页菜单（重新加载/检查/…），
+          换成本应用的菜单（剪切/复制/粘贴/复制图片/复制链接）。 */}
+      <GlobalContextMenu />
     </div>
     </AppProviders>
   );

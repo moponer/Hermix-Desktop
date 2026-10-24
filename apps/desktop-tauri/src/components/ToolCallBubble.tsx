@@ -393,9 +393,9 @@ export function ProcessTimeline({
                   <div className="tl-text-inner">
                     <MarkdownBody
                       content={parsed.body}
-                      /* 最终答复正文：唯一带文件类型图标的位置。思考块 /
-                         工具结果 / 更新日志复用同一个 MarkdownBody，默认
-                         不画图标（见 MarkdownBodyProps.pathIcons）。 */
+                      /* 最终答复正文：唯一带文件类型图标的位置（soft 形态）。
+                         思考块 / 工具结果 / 更新日志复用同一个 MarkdownBody，
+                         默认不画图标（见 MarkdownBodyProps.pathIcons）。 */
                       pathIcons
                       /* 小节交互（复制本节 / 折叠）只在正文定型后挂。
                          流式期间每个 chunk 都会重组小节树 → 展开态反复

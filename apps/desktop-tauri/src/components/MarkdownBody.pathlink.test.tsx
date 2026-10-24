@@ -13,9 +13,13 @@ import { linkifyChildren } from "./MarkdownBody";
  *
  * 图标只在最终答复正文出现（`linkifyChildren` 的第三个参数，由
  * MarkdownBody 的 `pathIcons` 传入）：思考块 / 工具结果复用同一个渲染器，
- * 一段十几个路径全顶彩色方块会毁掉可读性。
+ * 一段十几个路径全顶方块会毁掉可读性。
  *
- * 图标尺寸锁 16px：图标是「色块 + 白色扩展名字母」，字母在 24 viewBox 里
+ * 图标走 **soft 形态**（淡染底 + 文字色字形，不是品牌实色方块 + 白色
+ * 粗体字母）—— 用户实机反馈"一部分重点加粗带背景色的特殊词汇……界面
+ * 有点乱"，实色方块就是那个噪声源。
+ *
+ * 图标尺寸锁 16px：图标是「色块 + 扩展名字母」，字母在 24 viewBox 里
  * 只有 7.5–10.5px，13px 渲染出来约 5.7px，小到认不出类型。
  * 对齐说明见 components-prose.css 的 .md-path-link__icon。
  *
@@ -52,6 +56,16 @@ describe("行内路径链接（PathLink）", () => {
     expect(html).toContain('width="16"');
     expect(html).toContain("md-path-link__icon");
     expect(html).not.toContain('width="13"');
+  });
+
+  it("正文图标是 soft 形态（淡染底 + 文字色字形，不是实色方块）", () => {
+    const html = render("改完了 F:\\spiker\\hermix\\db1.py 这个文件", true);
+    // 淡染：底色不透明度 0.22 → 0.14（实色形态是 1 → 0.86）
+    expect(html).toContain('stop-opacity="0.22"');
+    expect(html).toContain('stop-opacity="0.14"');
+    expect(html).not.toContain('stop-opacity="1"');
+    // 字形走 currentColor（正文色），不是白色
+    expect(html).toContain('fill="currentColor"');
   });
 
   it("%VAR% 环境变量路径完整保留前缀，不再被 lookbehind 切断", () => {

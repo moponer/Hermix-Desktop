@@ -80,6 +80,7 @@ Key crates:
   - **CSS 层同样受管**（2026-10-23 补）：脚本此前只扫 `tsx/ts`，于是 129 处 `border: 1px solid` 在 CSS 里长期无人管 —— 这是「改了很多轮、界面上还是到处有线」的真正原因。现在 G11 扫 `src/**/*.css`，只放行功能性描边：`2px dashed`（拖放落点）、`transparent`（hover 占位）、语义色描边（error/warning 状态框）。
 - **对比度是硬约束（2026-10-21）** — `check-theme-tokens.mjs` 的 `contrast` 规则实测 29 组前景/背景配对的 WCAG 比值（半透明底**合成**到纸面上再算），<4.5:1 退出 1。语义四色因此各有一个「文字安全档」`--color-text-{success,warning,error,info}`（保持色相、只压暗解出，纸面与各自 `-soft` 底都 ≥4.5:1）—— 12px 以下的小字一律走它，别用原始语义色。
 - **共享预览层纪律（preview-layer gate，2026-10-19）** — `scripts/check-preview-layer.mjs`（进 ci-gate 的 `[4d/14]`）守 `@hermix/preview` 的一致性：共享组件的类名必须在 `packages/preview/src/styles/preview-doc.css` 里有规则（**禁 Tailwind 原子类**——viewer 刻意不装 Tailwind，原子类在那边是空操作），共享 CSS 用到的每个 `var(--token)` 两侧都要定义（`var()` 解析失败 = 整条声明被丢弃）。渲染器样式（image/pdf/pptx/纯文本/状态/头部按钮）必须住在共享包里，桌面端 `code-view.css` 只留 `.code-*` 与桌面外壳。依据：`docs/notes/implemented/architecture/2026-10-19-shared-preview-layer-ownership.md`。
+- **右键菜单是应用菜单（2026-10-24）** — 桌面端**不端出浏览器的网页菜单**（重新加载/检查/后台打开）。全局由 `components/GlobalContextMenu.tsx` 接管 `contextmenu`（捕获阶段 preventDefault），菜单本体是共享原语 `components/ui/ContextMenu.tsx`。**新增窗口（独立 React 根）必须挂 `<GlobalContextMenu />`**，否则那个窗口仍会弹网页菜单；组件自己处理右键时用 `markContextMenuHandled(e)` 让位。工作台 iframe 由 SDK 转发（跨源，宿主读不到它的 DOM）。依据：`docs/notes/implemented/feature/2026-10-24-app-native-context-menu.md`。
 
 ## Core principles (2026-07-23, applies to all work — code, design, bug fix, doc)
 
@@ -147,6 +148,8 @@ Key crates:
   教训：2026-10-06 / 10-08 两次"修了但新装的包里没有"（sidecar 停在旧二进制）；2026-10-19 同类事故复发在前端——钩子当时只刷 sidecar，前端靠人工 `vite build`，于是 10-14 的 exe 配 10-16 的 UI、源码已到 10-18。两条根因现都由 prepare-build 钩子收口；单 workspace 决策记录：`docs/notes/implemented/architecture/2026-10-09-single-workspace-target-dir.md`。
 - `.cargo/config.toml` hardcodes MSVC linker path — don't override
 - Linker is `rust-lld.exe` (`.cargo/config.toml`), which bypasses Git Bash's `link.exe` shadow entirely — no env script needed
+- **Rust 里有两处"环境性"测试失败，不是代码坏了**（2026-10-24 实测）：`cargo test --workspace --lib` 在本机会红在这两个 crate 上 —— ① `hermix-environments`：Windows 沙箱要给临时目录授 ACL，`SetNamedSecurityInfoW failed (Win32 error 5)`（本机权限不够）；② `hermix-viewer`：测试二进制没有 comctl32 v6 的 SxS 清单 → `0xC0000139`（**别当成代码坏了，也别试图拷 DLL —— comctl32 在 KnownDLLs 里，只认清单**，修法见 `docs/notes/implemented/process/2026-10-21-tauri-rust-test-binary-comctl32-v6.md`）。要验证自己的改动，用 `cargo test --workspace --lib --exclude hermix-environments --exclude hermix-viewer`。
+- **全局热键走 `hotkey.rs` 的槽（2026-10-24）**：新增全局热键功能**不要**自己 `app.global_shortcut().register()`，用 `apps/desktop-tauri/src-tauri/src/hotkey.rs` 的 `HotkeySlot`（幂等注册 / 冲突自动兜底 / 规范化比较）。两个坑：① `HotKey` 的 `Display` 是 `"alt+KeyQ"` 而不是 `"alt+Q"`，写死字符串比较**永远不成立** —— 热键注册成功、按了没反应（用户看到的是"热键被占"）；② 插件对同一实例重复注册同一个键报 `AlreadyRegistered`，setup 兜底 + 前端启动回放必然撞上 → 前端误报"热键未生效"并回滚 UI。依据：`docs/notes/implemented/bug-fix/2026-10-24-global-hotkey-slot.md`。
 - **sccache 缓存必须 H 盘 + server 在跑**：`[profile.*] incremental` 禁止改回 `true`（否则 sccache 命中率静默归零、无报错），server 掉则静默回退 C 盘。依据与运维见 `docs/notes/implemented/process/2026-10-15-sccache-h-shared-cache.md`；起 server 用 `scripts/start-sccache.ps1`（已建开机任务 `HermixSccacheServer`）
 - Tauri v2.9.2 doesn't support standalone zip bundle — NSIS produces portable archive
 - `hermix-server` has `test-helpers` feature for integration tests

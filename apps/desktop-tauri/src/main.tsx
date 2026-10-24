@@ -55,14 +55,17 @@ if (isOverlayWindow) {
   // 文件搜索小窗：启动遮罩移除（若存在），组件 mount 后自行 show。
   document.getElementById("splash")?.remove();
   void (async () => {
-    const [{ FileSearchWindow }] = await Promise.all([
+    const [{ FileSearchWindow }, { GlobalContextMenu }] = await Promise.all([
       import("./components/FileSearchWindow"),
+      import("./components/GlobalContextMenu"),
       import("./styles/file-search.css"),
     ]);
     ReactDOM.createRoot(document.getElementById("root")!).render(
       <React.StrictMode>
         <ErrorBoundary>
           <FileSearchWindow />
+          {/* 搜索窗也是桌面窗口：右键给应用菜单，不给网页菜单。 */}
+          <GlobalContextMenu />
         </ErrorBoundary>
       </React.StrictMode>,
     );
@@ -212,15 +215,30 @@ async function mainEntry() {
     toastSuccess("截图已复制到剪贴板");
   });
 
+  // 截图热键被占用：Rust 已自动改用备选键，这里告诉用户"现在按的是哪个"。
+  // 不提示的话，用户只会觉得"热键没反应"（这正是 2026-10-24 之前的状态：
+  // 派发比较写死了 "alt+q"，而 HotKey 的 Display 是 "alt+KeyQ"，永远不匹配）。
+  listen<{ active: string | null; requested: string | null; substituted: boolean }>(
+    "hermix:screenshot-hotkey",
+    (event) => {
+      const st = event.payload;
+      if (!st?.substituted) return;
+      toastWarning(
+        `截图热键 ${st.requested ?? ""} 被其他程序占用，已自动改用 ${st.active ?? ""}（设置 → 截图可更换）`,
+      );
+    },
+  );
+
   // 回放截图配置（设置 → 图像 持久化的开关/热键）。从未配置过则跳过——
   // Rust setup 已注册默认 Alt+Q 兜底。
   try {
     const raw = storage.getItem(STORAGE_KEYS.screenshotConfig);
     if (raw) {
       const cfg = JSON.parse(raw) as { enabled: boolean; hotkey: string };
-      void invoke("screenshot_apply_config", { enabled: cfg.enabled, hotkey: cfg.hotkey }).catch(
-        (err) => console.warn("[screenshot] 配置回放失败:", err),
-      );
+      void invoke<{ active: string | null; substituted: boolean }>(
+        "screenshot_apply_config",
+        { enabled: cfg.enabled, hotkey: cfg.hotkey },
+      ).catch((err) => console.warn("[screenshot] 配置回放失败:", err));
     }
   } catch { /* ignore */ }
 

@@ -240,7 +240,15 @@ export function FileSearchWindow() {
     );
     const hk = hotkey.trim() || "alt+F";
     try {
-      await invoke("file_search_apply_config", { enabled: true, hotkey: hk });
+      // Rust 侧被占用时会自动换备选键并回报 substituted —— 那不是失败，
+      // 要把"现在按的是哪个键"告诉用户，否则用户以为没生效。
+      const st = await invoke<{ active: string | null; substituted: boolean }>(
+        "file_search_apply_config",
+        { enabled: true, hotkey: hk },
+      );
+      if (st.substituted) {
+        setSearchError(`热键 ${hk} 被其他程序占用，已自动改用 ${st.active}`);
+      }
       await fetchJSON("/v1/filesearch/filter", { method: "POST", body: JSON.stringify(filter) });
       setSettingsOpen(false);
     } catch (err) {

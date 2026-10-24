@@ -13,6 +13,7 @@ import { toastWarning } from "../hooks/useToast";
 import { SkeletonCard } from "./ui";
 import { homeDir } from "@tauri-apps/api/path";
 import { FileExplorerContextMenu } from "./FileContextMenu";
+import { markContextMenuHandled } from "./ui";
 import { formatBytes, formatModifiedDate, pathToBreadcrumbs } from "./rightSidebarUtils";
 
 type ViewMode = "list" | "detail" | "icons";
@@ -136,6 +137,9 @@ export function ComputerTab({
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: DirEntry) => {
     e.preventDefault();
     e.stopPropagation();
+    // 这里有自己的文件菜单，全局菜单不要接管（全局监听在捕获阶段，
+    // 只能靠这个标记知道"这次右键已被处理"）。
+    markContextMenuHandled(e);
     setSelectedEntry(entry.path);
     setContextMenu({ x: e.clientX, y: e.clientY, entry });
   }, []);

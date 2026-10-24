@@ -18,6 +18,7 @@
 //    参数、覆盖窗走另一份、进程环境变量还有第三份，三份不一致就是
 //    "截图打不开"。现在统一由 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 提供。
 
+use crate::hotkey::{HotkeySlot, HotkeyStatus};
 use crate::screenshot;
 use base64::Engine as _;
 use serde::Serialize;
@@ -26,15 +27,29 @@ use tauri::{Emitter, Manager};
 const OVERLAY_LABEL: &str = "screenshot-overlay";
 /// 幕布帧事件名（页面订阅它拿新帧）。
 const FRAME_EVENT: &str = "hermix:screenshot-frame";
-/// setup 默认注册的热键，与 lib.rs 保持一致；前端回放配置前的兜底。
-const DEFAULT_HOTKEY: &str = "alt+Q";
 /// 会话总兜底：编码 + 页面加载正常以秒计，30s 没就绪即判异常收尾。
 const SESSION_FALLBACK_SECS: u64 = 30;
 
 /// 截图功能开关（设置 → 图像）。默认开；false 时热键与标题栏入口都拒绝。
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-/// 当前已注册的全局热键字符串（apply 时先注册新的再解旧的，失败不破坏现状）。
-static REGISTERED_HOTKEY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 截图热键槽。默认 Alt+Q；被别的程序占着就依次试备选键，
+/// 并把"实际生效的键"回报给前端（详见 hotkey.rs 的三条坑注记）。
+///
+/// 备选键刻意避开系统保留组合（Ctrl+Alt+Del）、中文 IME 切换
+/// （Ctrl+Shift+Space）与单键 F 键 —— 那些"看起来没人占"实则常被占用
+/// 或被系统抢走。
+static HOTKEY: HotkeySlot = HotkeySlot::new(
+    "截图",
+    "alt+Q",
+    &["ctrl+Alt+A", "ctrl+Alt+S", "ctrl+Alt+J"],
+);
+
+/// 热键状态变化事件 —— 启动时占用兜底、前端改键后生效键变化都发它。
+pub const HOTKEY_EVENT: &str = "hermix:screenshot-hotkey";
+
+/// 覆盖窗建窗互斥锁（预热线程 vs 截图热键可能同时建窗）。
+static OVERLAY_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Serialize, Clone)]
 pub struct FramePayload {
@@ -135,7 +150,15 @@ pub fn run_session(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 /// 取/建覆盖窗。已存在就复用——这是"第二次起快一个数量级"的关键。
+///
+/// 建窗是**原子的**：预热线程（启动 6s 后）与截图热键可能同时触发，
+/// 两个同名窗口建出来第二个会失败（label 冲突）→ 截图直接报错。
+/// 抢锁 + 二次检查：等锁期间别人可能已经建好。
 fn ensure_overlay(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
+    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
+        return Ok(win);
+    }
+    let _guard = OVERLAY_INIT.lock().unwrap();
     if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
         return Ok(win);
     }
@@ -419,42 +442,70 @@ pub fn screenshot_cancel(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 /// 应用截图配置（设置 → 图像）：开关 + 全局热键。
+///
 /// 顺序是"先注册新的、成功后再解旧的"——注册失败（被占用）时旧热键
-/// 仍在，现状不被破坏。无存储配置时前端不调用，setup 默认热键继续生效。
+/// 仍在，现状不被破坏。被占且备选键也全被占才报错。
+///
+/// 返回**真正生效**的热键状态：请求的键被占时 `substituted = true`，
+/// `active` 是替上去的备选键（前端据此提示"已改用 X"，而不是假装失败）。
 #[tauri::command]
 pub fn screenshot_apply_config(
     app: tauri::AppHandle,
     enabled: bool,
     hotkey: String,
-) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-
+) -> Result<HotkeyStatus, String> {
     ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
     if !enabled {
         // 关闭：解掉当前热键（含 setup 默认注册的兜底）。
-        let mut registered = REGISTERED_HOTKEY.lock().unwrap();
-        let prev = registered.take().unwrap_or_else(|| DEFAULT_HOTKEY.into());
-        if let Ok(sc) = prev.parse::<Shortcut>() {
-            let _ = app.global_shortcut().unregister(sc);
-        }
-        return Ok(());
+        HOTKEY.disable(&app);
+        let _ = app.emit(HOTKEY_EVENT, HotkeyStatus::default());
+        return Ok(HotkeyStatus::default());
     }
 
-    let gs = app.global_shortcut();
-    let sc: Shortcut = hotkey
-        .parse()
-        .map_err(|e| format!("热键 {hotkey} 格式无效: {e}"))?;
-    gs.register(sc)
-        .map_err(|e| format!("热键 {hotkey} 注册失败（可能被其他程序占用）: {e}"))?;
-
-    let mut registered = REGISTERED_HOTKEY.lock().unwrap();
-    let prev = registered
-        .replace(hotkey.clone())
-        .unwrap_or_else(|| DEFAULT_HOTKEY.into());
-    if prev != hotkey {
-        if let Ok(old) = prev.parse::<Shortcut>() {
-            let _ = gs.unregister(old);
-        }
+    let status = HOTKEY.apply(&app, &hotkey)?;
+    if status.substituted {
+        eprintln!(
+            "[screenshot] 热键 {hotkey} 被占用，已改用 {}",
+            status.active.as_deref().unwrap_or("?")
+        );
     }
-    Ok(())
+    let _ = app.emit(HOTKEY_EVENT, status.clone());
+    Ok(status)
+}
+
+/// 查询截图热键当前状态（设置页打开时读一次，显示真正生效的键）。
+#[tauri::command]
+pub fn screenshot_hotkey_status() -> HotkeyStatus {
+    HOTKEY.status()
+}
+
+/// 热键是否属于截图（lib.rs 的全局派发用它）。
+pub fn hotkey_matches(shortcut: &tauri_plugin_global_shortcut::Shortcut) -> bool {
+    HOTKEY.matches(shortcut)
+}
+
+/// setup 兜底：注册默认热键。被占则换备选键，并把结果告诉前端。
+pub fn register_default_hotkey(app: &tauri::AppHandle) -> HotkeyStatus {
+    let status = HOTKEY.apply_default(app);
+    if status.substituted {
+        let _ = app.emit(HOTKEY_EVENT, status.clone());
+    }
+    status
+}
+
+/// 预热覆盖窗 —— 提前把 WebView2 窗口建好、页面加载好。
+///
+/// 首次截图原本要付「建 WebView2 窗口 + 加载页面」的开销，用户感知就是
+/// "按了热键，等一会儿才出画布"。窗口建好后每次截图只剩
+/// 「定位 + 显示 + 推帧」，感知延迟降一个数量级。
+///
+/// 刻意**不在启动关键路径上建窗**：两个 WebView2 抢 CPU 会拖慢首屏。
+/// 调用方在主窗口就绪后再触发（见 lib.rs）。
+pub fn prewarm(app: &tauri::AppHandle) {
+    let inner = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(e) = ensure_overlay(&inner) {
+            eprintln!("[screenshot] 覆盖窗预热失败: {e}");
+        }
+    });
 }

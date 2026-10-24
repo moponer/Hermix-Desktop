@@ -32,14 +32,24 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
-  background: var(--color-bg-primary);
+  /* 画布底 = **--color-bg-base**，不是 --color-bg-primary（纸白 #ffffff）。
+     2026-10-24 用户实机反馈："工作台命名后还没开发完，背景色一直是白色的
+     网页背景" —— 根因就是这里铺的是纯白纸面：未开发的工作台没有自己的
+     背景规则，iframe 透明 → 露出父容器的纯白 → 整块画布看起来就是一张
+     没加载出来的网页。
+
+     改用 base 面（浅色 #f5f5f5 / 暗色 #1f1f1f）：画布与右侧对话的纸白
+     拉开一档，工作台读作"应用里的一块画布"而不是"浏览器里的一个网页"。
+     工作台自己的代码若要整页底色，写 body/html 的 background 即可覆盖
+     （iframe 文档 html 是透明的，body 的背景按 CSS 规范优先于父层）。 */
+  background: var(--color-bg-base);
 }
 
 .wb-frame {
   flex: 1;
   min-width: 0;
   border: 0;
-  background: transparent; /* 让父容器 .wb-canvas 的 var(--color-bg-primary) 透出 */
+  background: transparent; /* 让父容器 .wb-canvas 的 --color-bg-base 透出 */
 }
 
 .wb-canvas-empty {

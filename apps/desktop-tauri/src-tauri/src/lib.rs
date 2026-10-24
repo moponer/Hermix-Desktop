@@ -4,6 +4,7 @@ pub mod commands;
 pub mod commands_custom_app;
 pub mod commands_workbench;
 pub mod file_search_controller;
+pub mod hotkey;
 pub mod keep_awake;
 pub mod markitdown;
 pub mod portable_env;
@@ -678,11 +679,17 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        // 按快捷键分发：Alt+Q 截图、Alt+F 文件搜索（新注册的热键
-                        // 都从这条 handler 过，漏分发 = 按了没反应）。
-                        let name = shortcut.to_string().to_lowercase();
+                        // 按快捷键分发：截图 / 文件搜索。
+                        //
+                        // **必须按"当前生效的热键"比对，不能写死 "alt+q"**：
+                        // ① `HotKey` 的 Display 是 "alt+KeyQ" 而不是 "alt+Q"，
+                        //    写死字符串的判断永远不成立 —— 热键注册成功、
+                        //    按下去却什么都不发生（用户看到的就是"热键被占"）。
+                        // ② 用户在设置里换了热键后，写死的判断同样不成立 ——
+                        //    改完热键功能直接哑掉。
+                        // 规范化比较统一在 hotkey.rs（详见那里的三条坑注记）。
                         let app = app.clone();
-                        if name == "alt+q" {
+                        if screenshot_controller::hotkey_matches(shortcut) {
                             // spawn_blocking：抓屏 + 建窗走 GDI/IPC，不占主 UI 线程。
                             // 幕布 JPEG 编码已在 run_session 内起后台线程，主线程零阻塞。
                             tauri::async_runtime::spawn_blocking(move || {
@@ -691,7 +698,7 @@ pub fn run() {
                                     let _ = app.emit("hermix:screenshot-error", e);
                                 }
                             });
-                        } else if name == "alt+f" {
+                        } else if file_search_controller::hotkey_matches(shortcut) {
                             // toggle 本身轻量（建窗/显隐），直接当前线程跑。
                             file_search_controller::toggle(&app);
                         }
@@ -763,22 +770,27 @@ pub fn run() {
 
             // 截图全局热键（默认 Alt+Q）：setup 里注册兜底；设置 → 图像里
             // 的自定义配置由前端启动时经 screenshot_apply_config 回放覆盖。
-            // 失败仅打日志——热键被占用不该阻塞整个应用启动。
-            {
-                use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-                match "alt+Q".parse::<Shortcut>() {
-                    Ok(sc) => {
-                        if let Err(e) = app.global_shortcut().register(sc) {
-                            eprintln!("[screenshot] 热键 Alt+Q 注册失败（被占用?）: {e}");
-                        }
-                    }
-                    Err(e) => eprintln!("[screenshot] 热键解析失败: {e}"),
-                }
-            }
+            // 被别的程序占着就换备选键并通知前端（不再无声失效）。
+            screenshot_controller::register_default_hotkey(app.handle());
 
             // 文件搜索全局热键（默认 Alt+F）：setup 兜底；搜索窗设置面板的
             // 自定义配置由前端经 file_search_apply_config 回放覆盖。
             file_search_controller::register_default_hotkey(app.handle());
+
+            // ── 截图覆盖窗预热（2026-10-24）────────────────────────
+            // 首次截图原本要付「建 WebView2 窗口 + 加载页面」的开销，
+            // 用户感知是"按了热键，等一会儿才出画布"。这里在应用起来
+            // 之后提前把窗建好，之后每次截图只剩「定位 + 显示 + 推帧」。
+            //
+            // 刻意延后 6s：两个 WebView2 抢 CPU 会拖慢首屏与 sidecar
+            // 启动，而截图热键在启动头几秒几乎不会被按。
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(6));
+                    screenshot_controller::prewarm(&handle);
+                });
+            }
 
             // 0. WebView2 runtime probe (Windows only). Tauri 2's
             //    own WebView creation step fails with a cryptic
@@ -1005,7 +1017,9 @@ pub fn run() {
             screenshot_controller::screenshot_window_at,
             screenshot_controller::screenshot_cancel,
             screenshot_controller::screenshot_apply_config,
+            screenshot_controller::screenshot_hotkey_status,
             file_search_controller::file_search_apply_config,
+            file_search_controller::file_search_hotkey_status,
             cdp_probe::cdp_n0_probe,
             commands::document_to_markdown,
             browser_view_controller::browser_view_open,

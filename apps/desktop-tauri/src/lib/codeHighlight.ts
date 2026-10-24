@@ -295,14 +295,33 @@ const ONE_LIGHT: Record<string, React.CSSProperties> = {
 // emits multi-class strings like "token comment"; we accept any one
 // of the listed classes as a match (last one wins, so the more
 // specific token kind outranks the generic "token").
-function styleForToken(className: string, isDark: boolean): React.CSSProperties | undefined {
+//
+// `inline` = 行内 code 芯片：底色已经承担了"这是代码"的重音，关键词再
+// 加粗就是两个重音互相抢（用户实机反馈：正文里一堆加粗带底色的词，
+// 看着像被涂满高亮，读不下去）。行内一律去字重，代码块不受影响 ——
+// 那里没有底色，靠字重区分关键字才有效。
+function styleForToken(
+  className: string,
+  isDark: boolean,
+  inline: boolean,
+): React.CSSProperties | undefined {
   const palette = isDark ? ONE_DARK : ONE_LIGHT;
   const classes = className.split(/\s+/);
   for (const c of classes) {
     const style = palette[c];
-    if (style) return style;
+    if (style) return inline ? withoutWeight(style) : style;
   }
-  return palette[className];
+  const fallback = palette[className];
+  return inline ? withoutWeight(fallback) : fallback;
+}
+
+/** 去掉字重（保留颜色）。返回新对象 —— 调色板是共享常量，不能就地改。 */
+function withoutWeight(
+  style: React.CSSProperties | undefined,
+): React.CSSProperties | undefined {
+  if (!style) return undefined;
+  const { fontWeight: _drop, ...rest } = style;
+  return rest;
 }
 
 // Tokenizes `source` once and returns a React node tree. Measured
@@ -313,6 +332,7 @@ export function highlightToReact(
   source: string,
   language: string | null,
   isDark: boolean = true,
+  inline: boolean = false,
 ): React.ReactNode {
   if (!source) return null;
   if (!language) return source;
@@ -338,7 +358,7 @@ export function highlightToReact(
         // Use `jsx()` rather than JSX so this file can stay `.ts`.
         span: (props: React.HTMLAttributes<HTMLSpanElement>) => {
           const { className, style, ...rest } = props;
-          const tokenStyle = className ? styleForToken(className, isDark) : undefined;
+          const tokenStyle = className ? styleForToken(className, isDark, inline) : undefined;
           return jsx("span", {
             className,
             style: { ...tokenStyle, ...style },

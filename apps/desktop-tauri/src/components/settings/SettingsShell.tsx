@@ -394,10 +394,24 @@ function ToolSection({ children }: { children: ReactNode }) {
 // ── 图像：系统截图偏好（前端持久化 + Rust 即时应用） ──────────────
 // 持久化走 localStorage（screenshotConfig），与 imageConfig 同模式；生效
 // 走 screenshot_apply_config 命令即时重注册全局热键，启动时 main.tsx 回放。
+//
+// **本地存的是"用户请求的键"，真正生效的键可能不是它** —— 热键被别的
+// 程序占着时 Rust 会自动换备选键（hotkey.rs）。所以页面要显示 Rust 侧
+// 的真实状态，而不是本地配置的回显。
 
 interface ScreenshotConfig {
   enabled: boolean;
   hotkey: string;
+}
+
+/** Rust 侧 hotkey.rs::HotkeyStatus 的前端对应物。 */
+interface HotkeyStatus {
+  /** 真正生效的热键展示名（"Alt+Q"）；null = 没注册。 */
+  active: string | null;
+  /** 用户请求的热键展示名。 */
+  requested: string | null;
+  /** true = 请求的键被占用，实际用的是备选键。 */
+  substituted: boolean;
 }
 
 // 显式宽化成 string：否则 const 字面量把 SegmentedControl 的泛型推成
@@ -421,15 +435,36 @@ function loadScreenshotConfig(): ScreenshotConfig {
 function ScreenshotSettingsCard() {
   const [cfg, setCfg] = useState<ScreenshotConfig>(loadScreenshotConfig);
   const prevRef = useRef<ScreenshotConfig>(cfg);
+  /** Rust 侧真正生效的热键（可能被占用后换了备选键）。 */
+  const [active, setActive] = useState<string | null>(null);
 
-  // 变更 → 持久化 + 即时应用。注册失败（热键被占用）时回滚 UI 并提示，
-  // Rust 侧顺序是"先注册新、再解旧"，失败时旧热键仍在。
+  // 进页时读一次真实状态：本地配置只是"用户请求的键"。
+  useEffect(() => {
+    let alive = true;
+    void invoke<HotkeyStatus>("screenshot_hotkey_status")
+      .then((st) => { if (alive) setActive(st.active); })
+      .catch(() => { /* 旧版 exe 没这条命令：忽略，页面照常用 */ });
+    return () => { alive = false; };
+  }, []);
+
+  // 变更 → 持久化 + 即时应用。Rust 侧顺序是"先注册新、再解旧"，
+  // 注册彻底失败时旧热键仍在 —— 那才回滚 UI。
+  // 注册成功但**换了备选键**（原键被占）不算失败：保留用户选的配置，
+  // 另行提示"已改用 X"，并把生效键显示出来。
   const apply = (next: ScreenshotConfig) => {
     const prev = prevRef.current;
     setCfg(next);
     prevRef.current = next;
     storage.setItem(STORAGE_KEYS.screenshotConfig, JSON.stringify(next));
-    void invoke("screenshot_apply_config", { enabled: next.enabled, hotkey: next.hotkey })
+    void invoke<HotkeyStatus>("screenshot_apply_config", { enabled: next.enabled, hotkey: next.hotkey })
+      .then((st) => {
+        setActive(st.active);
+        if (st.substituted) {
+          toastWarning(
+            `截图热键 ${st.requested ?? next.hotkey} 被其他程序占用，已自动改用 ${st.active}`,
+          );
+        }
+      })
       .catch((err) => {
         setCfg(prev);
         prevRef.current = prev;
@@ -437,6 +472,12 @@ function ScreenshotSettingsCard() {
         toastWarning(`截图热键未生效：${String(err)}`);
       });
   };
+
+  // 选中的键与实际生效的键不一致 → 说明被占用后换了备选键，必须写出来，
+  // 否则用户看着"我选了 Alt+Q"，实际按的是别的键。
+  const substituted = active !== null && !cfg.enabled
+    ? false
+    : active !== null && !SCREENSHOT_HOTKEYS.some((h) => h.label === active);
 
   return (
     <div className="mt-6 space-y-6">
@@ -455,7 +496,7 @@ function ScreenshotSettingsCard() {
         />
         <SettingsRow
           title="截图热键"
-          description="系统级全局热键，任何应用内可用；被占用时会提示并回滚。"
+          description="系统级全局热键，任何应用内可用。被其他程序占用时自动改用备选键并在此提示。"
         >
           <SegmentedControl
             label="截图热键"
@@ -465,6 +506,11 @@ function ScreenshotSettingsCard() {
             onChange={(v) => apply({ ...cfg, hotkey: v })}
             className="mt-2"
           />
+          {substituted && (
+            <p className="mt-2 text-[length:var(--text-meta)] text-text-secondary">
+              当前实际生效：{active}
+            </p>
+          )}
         </SettingsRow>
       </SettingsGroup>
     </div>

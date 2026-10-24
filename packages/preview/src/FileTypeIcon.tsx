@@ -311,22 +311,29 @@ export function FileTypeIcon({
   size = 18,
   className,
   style,
+  variant = "solid",
 }: {
   name?: string;
   size?: number;
   className?: string;
   style?: CSSProperties;
+  /** "solid" = 品牌实底 + 白字（列表行 / 文件管理器）；"soft" = 淡染底 + 文字色字（正文）。 */
+  variant?: "solid" | "soft";
 }) {
   const look = useMemo(() => (name ? lookFor(name) : null), [name]);
   const label = look?.label ?? "?";
   // 未知类型的兜底灰——文件类型图标是官方品牌色系（见 FILE_LOOKS），
   // 不随主题。design-guard: allow
   const bg = look?.bg ?? "#6b7280";
+  // soft = 正文形态：底色只留同色相的淡染，字形走 currentColor（跟正文）。
+  // 实色方块 + 白色粗体字母在段落里就是一块块彩色积木（用户实机反馈：
+  // "一部分重点加粗带背景色的特殊词汇……界面有点乱"）。
+  const soft = variant === "soft";
 
   // Per-icon gradient id.  Embedding the bg in the id avoids the
   // "two PDF icons share a gradient" bug when the page has
   // multiple artifacts of the same type.
-  const gid = `fti-${label}-${bg}`.replace(/[^a-zA-Z0-9-]/g, "");
+  const gid = `fti-${variant}-${label}-${bg}`.replace(/[^a-zA-Z0-9-]/g, "");
 
   return (
     <svg
@@ -346,8 +353,8 @@ export function FileTypeIcon({
             is used on the body and the dog-ear (the dog-ear is
             just a clip-path, painted with a lighter stop). */}
         <linearGradient id={`${gid}-body`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor={bg} stopOpacity="1" />
-          <stop offset="1" stopColor={bg} stopOpacity="0.86" />
+          <stop offset="0" stopColor={bg} stopOpacity={soft ? "0.22" : "1"} />
+          <stop offset="1" stopColor={bg} stopOpacity={soft ? "0.14" : "0.86"} />
         </linearGradient>
         <linearGradient id={`${gid}-ear`} x1="0" y1="0" x2="0" y2="1">
           {/* 折角高光：叠在任意 body 色上的恒定白色渐变，不随主题。 */}
@@ -366,14 +373,19 @@ export function FileTypeIcon({
 
       {/* Dog-ear fold (top-right corner).  Painted as a
           translucent white triangle — gives the icon the
-          familiar "folded paper" hint without a hard outline. */}
-      <path d="M15 0 V8 H23 Z" fill={`url(#${gid}-ear)`} />
+          familiar "folded paper" hint without a hard outline.
+          soft 形态下白色折角压在淡底上会糊掉，改用同色相（body 渐变）。 */}
+      <path
+        d="M15 0 V8 H23 Z"
+        fill={soft ? `url(#${gid}-body)` : `url(#${gid}-ear)`}
+        opacity={soft ? 0.9 : undefined}
+      />
       {/* Ear shadow line — the fold's bottom edge, so the corner
           reads as a real fold, not just a triangle sticker. */}
       <path
         d="M15 0 V8 H23"
-        stroke="#000000"
-        strokeOpacity="0.12"
+        stroke={soft ? "currentColor" : "#000000"}
+        strokeOpacity={soft ? "0.24" : "0.12"}
         strokeWidth="0.6"
         strokeLinejoin="round"
         fill="none"
@@ -388,15 +400,20 @@ export function FileTypeIcon({
         fontSize={label.length > 2 ? 7.5 : 10.5}
         fontWeight="700"
         letterSpacing="0"
-        fill="#ffffff"
+        fill={soft ? "currentColor" : "#ffffff"}
         // Hairline dark stroke around the glyph so it stays
         // readable on light-tinted brand colors (yellow JS,
         // orange MD) without affecting dark colors.
-        style={{
-          paintOrder: "stroke",
-          stroke: "rgba(0,0,0,0.22)",
-          strokeWidth: 0.6,
-        }}
+        // soft 形态的字形就是文字色（与纸面的对比度由正文保证），不需要描边。
+        style={
+          soft
+            ? undefined
+            : {
+                paintOrder: "stroke",
+                stroke: "rgba(0,0,0,0.22)",
+                strokeWidth: 0.6,
+              }
+        }
       >
         {label}
       </text>
