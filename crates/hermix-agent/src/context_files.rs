@@ -225,12 +225,27 @@ fn find_git_root(start: &Path) -> Option<PathBuf> {
 }
 
 /// Truncate content preserving head and tail portions.
+///
+/// 字节偏移必须回退到字符边界：中文内容（AGENTS.md / 计划文档）里
+/// `&s[..n]` 切在多字节字符中间会直接 panic（不是错误信息，是崩溃）。
+/// 截断点向上取最近的字符边界，最长回退 3 字节（UTF-8 单字符上限 4）。
 fn truncate_context(content: &str, max_chars: usize, filename: &str) -> String {
-    let head_len = (max_chars as f64 * TRUNCATE_HEAD_RATIO) as usize;
-    let tail_len = (max_chars as f64 * TRUNCATE_TAIL_RATIO) as usize;
+    let floor_boundary = |n: usize| -> usize {
+        let mut i = n.min(content.len());
+        while i > 0 && !content.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
+    };
 
-    let head = &content[..head_len.min(content.len())];
-    let tail_start = content.len().saturating_sub(tail_len);
+    let head_end = floor_boundary(
+        (max_chars as f64 * TRUNCATE_HEAD_RATIO) as usize,
+    );
+    let tail_start = floor_boundary(content.len().saturating_sub(
+        (max_chars as f64 * TRUNCATE_TAIL_RATIO) as usize,
+    ));
+
+    let head = &content[..head_end];
     let tail = &content[tail_start..];
 
     format!(
