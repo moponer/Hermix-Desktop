@@ -43,6 +43,18 @@
   color: color-mix(in srgb, var(--cat-tone) 70%, var(--color-text-primary));
 }
 
+/* tone 注入：AgentAvatar 的 className 是 `cat-icon cat-icon--<size> cat-icon--<tone>`
+   两段同前缀 —— size 档管字号，这 8 条只负责把 tone 令牌交给 --cat-tone。
+   此前 --cat-tone 从未被定义，color-mix 整条失效、字形前景回退继承色。 */
+.agent-avatar.cat-icon--slate  { --cat-tone: var(--color-tone-slate); }
+.agent-avatar.cat-icon--blue   { --cat-tone: var(--color-tone-blue); }
+.agent-avatar.cat-icon--cyan   { --cat-tone: var(--color-tone-cyan); }
+.agent-avatar.cat-icon--green  { --cat-tone: var(--color-tone-green); }
+.agent-avatar.cat-icon--amber  { --cat-tone: var(--color-tone-amber); }
+.agent-avatar.cat-icon--orange { --cat-tone: var(--color-tone-orange); }
+.agent-avatar.cat-icon--rose   { --cat-tone: var(--color-tone-rose); }
+.agent-avatar.cat-icon--violet { --cat-tone: var(--color-tone-violet); }
+
 /* 字号按块尺寸分档，比例都在 42~46%（单字最稳的占比）：
      28px 块 → 13px · 36px 块 → 16px · 48px 块 → 20px
    全部走 --text-* 七档令牌，不开新档位（否则 check-theme-tokens 的

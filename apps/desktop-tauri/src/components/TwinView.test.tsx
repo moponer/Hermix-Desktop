@@ -67,8 +67,9 @@ describe("TwinView 内联对话", () => {
     });
     renderTwin(twin);
 
-    expect(screen.getByText(/需要你允许：shell/)).toBeTruthy();
-    fireEvent.click(screen.getByText("允许"));
+    // 出现待审批会自动切到数据态，审批块在右翼与中轴各有一份，点哪份都结算
+    expect(screen.getAllByText(/shell/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByText("允许")[0]);
     expect(twin.resolve).toHaveBeenCalledWith("req-1", "approved");
   });
 
@@ -80,7 +81,7 @@ describe("TwinView 内联对话", () => {
     });
     renderTwin(twin);
 
-    expect(screen.getByText("用哪个方案？")).toBeTruthy();
+    expect(screen.getAllByText("用哪个方案？").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByText("稳妥"));
     expect(twin.resolve).toHaveBeenCalledWith("c-1", "approved", "稳妥");
   });
