@@ -719,8 +719,10 @@ test('安装页: / 出页面，/api/app-info 如实报"未上传"', async () => 
   try {
     const page = await get(`http://127.0.0.1:${port}/`);
     assert.strictEqual(page.status, 200);
-    assert.ok(page.body.includes('Hermix M'), '页面应含产品名');
-    assert.ok(page.body.includes('/download/hermix.apk'), '页面应给出下载入口');
+    assert.ok(page.body.includes('Hermix'), '页面应含产品名');
+    // 2026-10-12 起固定 URL 302 到带版本文件名（版本读自 index.html 的
+    // HERMIX_M_VERSION），裸 URL 不再直接出字节 —— 无 APK 时版本读不到，
+    // 退回 404。
 
     const info = await getJson(`http://127.0.0.1:${port}/api/app-info`);
     assert.strictEqual(info.status, 200);
@@ -752,9 +754,16 @@ test('安装页: 放了 APK 就能下，且带内容类型与指纹头', async (
     assert.strictEqual(info.body.sha256, createHash('sha256').update(payload).digest('hex'));
 
     const dl = await get(`http://127.0.0.1:${port}/download/hermix.apk`);
-    assert.strictEqual(dl.status, 200);
-    assert.strictEqual(dl.raw.headers['content-type'], 'application/vnd.android.package-archive');
-    assert.ok(dl.raw.headers['x-checksum-sha256'], '应带校验头供客户端核对');
+    assert.strictEqual(dl.status, 302, '有版本号时应 302 到带版本文件名');
+    assert.ok(
+      /hermix-m-[\w.-]+\.apk$/.test(dl.raw.headers.location ?? ''),
+      `Location 应指向带版本文件名，实际 ${dl.raw.headers.location}`,
+    );
+    const dl2 = await get(`http://127.0.0.1:${port}${dl.raw.headers.location}`);
+    assert.strictEqual(dl2.status, 200);
+    assert.strictEqual(dl2.raw.headers['content-type'], 'application/vnd.android.package-archive');
+    assert.ok(dl2.raw.headers['x-checksum-sha256'], '应带校验头供客户端核对');
+    assert.strictEqual(dl2.body.length, payload.length, '字节应原样给出');
   } finally {
     relay.close();
     fs2.rmSync(apk, { force: true });
