@@ -713,6 +713,48 @@ pub fn run() {
         .setup(|app| {
             // 在线更新检查：启动 30s 后首查 + 每 2h，失败静默（updater.rs）。
             updater::spawn_check_scheduler(app.handle().clone());
+            // ── viewer 自动拉起（2026-10-25）───────────────────────────
+            // 阿黎的浏览器/文件自动化依赖 viewer MCP（3911）。viewer 不是
+            // sidecar，不随主程序拉起——用户不开查看器，阿黎第一个任务就
+            // 卡在"查看器工具不在工具列表里"（实测）。这里启动 10s 后静默
+            // spawn 它：exe 在主程序旁（安装版）或 workspace target（dev），
+            // 失败完全静默（viewer 缺席时 server 的 MCP 重试会兜底，
+            // 用户手动开查看器也能用）。
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    let exe = match std::env::current_exe() {
+                        Ok(p) => p.parent().map(|d| d.join("hermix-viewer.exe")),
+                        _ => None,
+                    }
+                    .filter(|p| p.exists())
+                    .or_else(|| {
+                        // dev：workspace target 下找最新的（debug 优先）。
+                        ["target/debug/hermix-viewer.exe", "target/release/hermix-viewer.exe"]
+                            .iter()
+                            .map(|rel| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                                .join("../../../").join(rel))
+                            .find(|p| p.exists())
+                    });
+                    let Some(exe) = exe else { return };
+                    use std::os::windows::process::CommandExt;
+                    // DETACHED_PROCESS：viewer 有自己的窗口与生命周期，
+                    // 不随主程序退出；也不需要控制台。
+                    match std::process::Command::new(&exe)
+                        .creation_flags(0x0000_0008)
+                        .spawn()
+                    {
+                        Ok(child) => {
+                            eprintln!("[viewer] 已自动拉起查看器（pid {}）。", child.id());
+                        }
+                        // 单实例互斥（viewer 自身）或其它启动期错误：静默。
+                        Err(e) => {
+                            eprintln!("[viewer] 自动拉起失败（静默忽略）：{e}");
+                        }
+                    }
+                });
+            }
             // ── N0 CDP 探针门控（批次 N 技术验证）──────────────────
             // HERMIX_CDP_PROBE=1 启动时，等主 webview 就绪后自动跑
             // Runtime.evaluate / DOMSnapshot / Accessibility 三个 CDP

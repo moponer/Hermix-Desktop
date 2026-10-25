@@ -20,6 +20,7 @@
  *   - 内联对话与审批（`twin` 这个独立发送器实例，会话 `twin:ali`）
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MarkdownBody } from "./MarkdownBody";
 import { AlertTriangle } from "lucide-react";
 
 import * as api from "../api";
@@ -538,7 +539,11 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
                     <span className="twin-msg__who">
                       {m.role === "user" ? "你" : "阿黎"}
                     </span>
-                    <p className="twin-msg__tx">{m.text}</p>
+                    {m.role === "user" ? (
+                      <p className="twin-msg__tx">{m.text}</p>
+                    ) : (
+                      <MarkdownBody content={m.text} />
+                    )}
                   </div>
                 ))}
                 {twin.streaming ? (

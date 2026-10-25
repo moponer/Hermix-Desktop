@@ -734,28 +734,7 @@ impl HttpServerState {
             // is dead and restart it in a loop. The MCP tools appear in
             // the registry as soon as each server finishes connecting.
             tokio::spawn(async move {
-                for entry in mcp_list.servers.iter().filter(|e| e.enabled) {
-                    match crate::dashboard::mcp::entry_to_server_config(entry) {
-                        Ok((cfg_name, cfg)) => {
-                            if let Err(e) = mcp_mgr.connect(&cfg_name, cfg).await {
-                                tracing::warn!(
-                                    server = %cfg_name,
-                                    error = %e,
-                                    "MCP server connect failed at startup; skipping"
-                                );
-                            } else {
-                                tracing::info!(server = %cfg_name, "MCP server connected");
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                server = %entry.name,
-                                error = %e,
-                                "MCP server entry invalid; skipping"
-                            );
-                        }
-                    }
-                }
+                Self::connect_mcp_servers_with_retry(mcp_mgr, mcp_list).await;
             });
         }
 
@@ -1111,26 +1090,12 @@ impl HttpServerState {
         let hermix_home = hermix_config::hermix_home();
         {
             let mcp_list = crate::dashboard::mcp::load_mcp_servers(&hermix_home);
-            for entry in mcp_list.servers.iter().filter(|e| e.enabled) {
-                match crate::dashboard::mcp::entry_to_server_config(entry) {
-                    Ok((cfg_name, cfg)) => {
-                        if let Err(e) = mcp_manager.connect(&cfg_name, cfg).await {
-                            tracing::warn!(
-                                server = %cfg_name,
-                                error = %e,
-                                "MCP server connect failed at startup; skipping"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            server = %entry.name,
-                            error = %e,
-                            "MCP server entry invalid; skipping"
-                        );
-                    }
-                }
-            }
+            // 同上：失败重试（viewer 后起场景）。克隆 Arc——manager 本体
+            // 还要装进 state（mcp_manager 字段）。
+            let mgr_for_retry = mcp_manager.clone();
+            tokio::spawn(async move {
+                Self::connect_mcp_servers_with_retry(mgr_for_retry, mcp_list).await;
+            });
         }
         let session_persistence = Arc::new(
             hermix_agent::session_persistence::SessionPersistence::new(&hermix_home),
@@ -1318,6 +1283,48 @@ impl HttpServerState {
         );
         self
     }
+    /// MCP 启动连接 + **失败重试**。viewer 这类"后起"的本地 HTTP 服务：
+    /// 桌面端启动时 viewer 往往还没跑（它不是 sidecar，不随主程序拉起），
+    /// 首连失败后不重试 = 工具永远缺失，阿黎第一个任务就卡死
+    /// （2026-10-25 实测）。60s 间隔重试，最多 30 次（30 分钟），全部成功即止。
+    async fn connect_mcp_servers_with_retry(
+        mcp_manager: Arc<hermix_mcp::McpManager>,
+        mcp_list: crate::dashboard::mcp::McpServersState,
+    ) {
+        let mut pending: Vec<(String, hermix_mcp::McpServerConfig)> = Vec::new();
+        for entry in mcp_list.servers.iter().filter(|e| e.enabled) {
+            match crate::dashboard::mcp::entry_to_server_config(entry) {
+                Ok((name, cfg)) => pending.push((name, cfg)),
+                Err(e) => {
+                    tracing::warn!(server = %entry.name, error = %e, "MCP server entry invalid; skipping")
+                }
+            }
+        }
+        let mut failed = Vec::new();
+        for (name, cfg) in pending {
+            if mcp_manager.connect(&name, cfg.clone()).await.is_ok() {
+                tracing::info!(server = %name, "MCP server connected");
+            } else {
+                tracing::warn!(server = %name, "MCP server connect failed; will retry every 60s");
+                failed.push((name, cfg));
+            }
+        }
+        let mut attempt = 0u32;
+        while !failed.is_empty() && attempt < 30 {
+            attempt += 1;
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            let mut still = Vec::new();
+            for (name, cfg) in failed {
+                if mcp_manager.connect(&name, cfg.clone()).await.is_ok() {
+                    tracing::info!(server = %name, attempt, "MCP server connected on retry");
+                } else {
+                    still.push((name, cfg));
+                }
+            }
+            failed = still;
+        }
+    }
+
     /// 启动资源水位巡检（总管方案 P0.5）：C 盘水位 + scratch 配额，
     /// 越限/恢复的边沿上 `OrchestrationEventBus`（→ WS → 桌面端）。
     /// 停派门由成员派单侧在发工单前查询（`dispatch_blocked`）。
