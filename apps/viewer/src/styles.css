@@ -734,9 +734,10 @@ html, body, #root {
    （组件不卸载，Esc 退出即恢复对话）。 */
 .app .ai-side { display: none; }
 .app[data-state="browse"][data-ai="open"] .ai-side { display: flex; }
+/* preview-ai 态的左缘分隔由 .ai-side 自带的左投影承担（原 border-right
+   加在了贴窗口边缘的一侧，本来就分不到层）。 */
 .app[data-state="preview-ai"] .ai-side {
   display: flex; width: var(--dir-slot);
-  border-right: 1px solid var(--border-subtle);
 }
 .app[data-state="preview-full"] .ai-side { display: none; }
 /* 窄窗下目录槽与 AI 槽用同一把尺一起收缩，宽度不变在任何窗口宽度成立。 */
@@ -1124,6 +1125,9 @@ html, body, #root {
   display: flex; flex-direction: column;
   background: var(--bg-primary);
   min-height: 0;
+  /* 与左侧内容分层：两侧同为纸面白，界限靠左投影（与编辑器说明面板
+     .ed-side 同款语言，不用描边）。两侧都白时比 ed-side 再深一档才可辨。 */
+  box-shadow: -8px 0 18px -10px rgba(15, 23, 42, 0.5);
 }
 .ai-head {
   display: flex; align-items: center; gap: 8px;
