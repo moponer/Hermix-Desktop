@@ -19,15 +19,22 @@ Status: implemented — 详情表空状态移出表格（修表头空白）；�
 表头列结构恒定。大图网格的空态原本就是独立 div（`grid-column: 1/-1`
 铺满），不受影响、保持原样。
 
-### 2. 搜索状态：spinner 替代提权文案（App.tsx）
+### 2. 搜索状态：spinner + 底部任务条（App.tsx + styles.css）
 
-搜索进行中原来平铺「正在搜索全盘索引（首次会请求管理员授权以建立
-索引）…」——半句话在讲故障似的。改为：
+搜索状态（进行中 / 范围 / 命中数）最初从平铺提权长文案改为 spinner，
+仍挂在搜索框旁边——但标签一变长搜索框就被挤窄，文案一变宽度就跳。
+最终归位：**底部新建任务条（`.statusbar`）**，动态信息统一住那里，
+搜索框旁边不再有任何随文案伸缩的东西。
 
-- **进行中**：`⟳ 搜索中…`（Loader2 + `search-rotate` 动画），
-  授权/装载细节挂 `title` 悬停可见；
-- **完成后**：照旧显示「全盘索引命中 N 条」/「仅在当前目录内搜索」；
-- runSearch 里搜索前的长文案不再 set（真失败时错误信息随结果说明）。
+- 任务条固定 24px（`.app` 底部 flex 尾项，`role="status"` +
+  `aria-live="polite"`）：搜索中显示 `⟳ 搜索中…`（Loader2 +
+  `search-rotate` 动画，授权/装载细节挂 `title` 悬停可见）；完成显示
+  「全盘索引 命中 N 条，显示前 N 条」/「仅在当前目录内搜索」；空闲
+  显示「就绪」。
+- 工具栏上的 `.search-scope` 标签及其样式整体删除；
+- 空态文案跟随表格显隐：`.entries-empty` 从表格里挪出来后是独立
+  元素，补 `.explorer[data-view="grid"] .entries-empty { display:none }`，
+  大图视图下不再与网格空态重复显示。
 
 ### 3. Word 编辑说明侧栏：默认收起（DocxEditor.tsx）
 
@@ -55,10 +62,12 @@ Status: implemented — 详情表空状态移出表格（修表头空白）；�
 ## Consequences
 
 - 搜索空态表头列结构恒定，任何宽度下不再出现匿名列空白；
-- 搜索中的界面反馈是动效而非长文案，提权说明降级为悬停细节；
+- 搜索状态全部住底部任务条：高度固定，内容更新零布局位移；搜索框
+  宽度稳定；工具栏少一个随文案伸缩的元素；
 - Word 编辑默认全宽文档，说明按需展开；ImageEditor 参数面板行为
   不变；
-- `.empty-cell` 样式仍被大图网格使用，未删。
+- `.empty-cell` 样式仍被大图网格使用，未删；`.search-scope` 死样式
+  已随迁移删除。
 
 验证：viewer `tsc --noEmit` 0 错；`vite build` 通过；`impeccable
 detect`（App.tsx / DocxEditor.tsx）exit 0；`check-preview-layer` OK；

@@ -480,23 +480,26 @@ html, body, #root {
   padding: 2px;
 }
 .search-clear:hover { color: var(--text-primary); }
-/* 搜索范围标签：告诉用户结果是「全盘索引」还是「当前目录」——两者差几个
-   数量级，混为一谈会让人以为「搜不到就是没有」。层次靠底色差，不描边。 */
-.search-scope {
-  flex: none; display: inline-flex; align-items: center;
-  height: var(--ctl-h); max-width: 260px;
-  padding: 0 8px; border-radius: 6px;
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-  font-size: 12px; line-height: 1;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.search-scope.is-global { color: var(--accent); background: var(--bg-accent-soft); }
-/* 搜索进行中：spinner + 「搜索中…」。授权 / 装载这类细节挂 title，
-   不平铺在界面上。 */
-.search-scope.is-searching { color: var(--text-secondary); }
+/* 搜索范围/进度标签已迁往底部任务条（.statusbar），原 .search-scope 样式随迁删除。 */
 .search-spin { animation: search-rotate 0.9s linear infinite; }
 @keyframes search-rotate { to { transform: rotate(360deg); } }
+
+/* ─── 底部任务条：动态信息（搜索进度 / 范围 / 结果数）的家 ───────
+   高度固定 24px，内容随便更新不引起任何布局位移——此前这些提示
+   挂在搜索框旁边，文案一变搜索框就跟着挤宽挤窄。 */
+.statusbar {
+  flex: none;
+  display: flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 12px;
+  background: var(--bg-tabbar);
+  font-size: 12px; color: var(--text-secondary);
+  user-select: none;
+}
+.statusbar-slot {
+  display: inline-flex; align-items: center; gap: 5px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.statusbar .search-spin { width: 12px; height: 12px; flex: none; }
 
 /* 键盘焦点指示——无障碍必需，但**不用描边**（2026-10-23）。
    旧版是 2px 实线 outline，与主程序统一扁平化后改为强调色淡晕
@@ -745,6 +748,9 @@ html, body, #root {
 /* ─── 大图列表（浏览态默认视图；预览态由 data-view 强制详情）──── */
 .explorer[data-view="rows"] .entries-grid { display: none; }
 .explorer[data-view="grid"] .entries { display: none; }
+/* 空态文案跟表格一起显隐：它是从表格里挪出来的独立元素，
+   不加这条的话大图视图下网格与表格的两个空态会同时显示。 */
+.explorer[data-view="grid"] .entries-empty { display: none; }
 .entries-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));

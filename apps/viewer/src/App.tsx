@@ -2250,29 +2250,8 @@ export function App() {
             )}
           </form>
         )}
-        {/* 搜索范围：全盘索引 vs 当前目录——两者结果差几个数量级，
-            用户必须一眼看出「搜到的是不是全盘」。
-            搜索**进行中**显示 spinner（首次可能要等索引装载几秒到几十秒；
-            「首次会请求管理员授权」这类细节挂 title 悬停可见——授权提示
-            平铺在界面上只会让用户以为出了故障）。 */}
-        {searching ? (
-          <span
-            className="search-scope is-searching"
-            title="正在搜索全盘索引；首次使用会请求管理员授权以建立索引"
-          >
-            <Loader2 className="icon-sm search-spin" aria-hidden="true" />
-            搜索中…
-          </span>
-        ) : (
-          searchNote && (
-            <span
-              className={`search-scope ${searchScope === "global" ? "is-global" : ""}`}
-              title={searchNote}
-            >
-              {searchNote}
-            </span>
-          )
-        )}
+        {/* 搜索范围/进度反馈已移到底部任务条（.statusbar）：它挂在搜索框
+            旁边时会随文案长短把搜索框挤宽挤窄，动态信息归任务条。 */}
 
         {/* 目录视图切换：仅浏览态显示。预览态目录收成窄槽、强制详情
             列表——大图在 336px 里一排放不下两个，切了反而没法用。 */}
@@ -2794,6 +2773,24 @@ export function App() {
           />
         )}
       </div>
+
+      {/* 底部任务条：动态信息（搜索进度/范围/结果数）归这里——贴着搜索框
+          的提示会随文案把搜索框挤宽挤窄，任务条高度固定、内容随便更新。
+          左侧是动态槽（搜索状态；空闲显示就绪），右侧留常驻位。 */}
+      <footer className="statusbar" role="status" aria-live="polite">
+        <span className="statusbar-slot">
+          {searching ? (
+            <>
+              <Loader2 className="icon-sm search-spin" aria-hidden="true" />
+              搜索中…
+            </>
+          ) : searchNote ? (
+            searchNote
+          ) : (
+            "就绪"
+          )}
+        </span>
+      </footer>
 
       {menu && (
         <ContextMenu
