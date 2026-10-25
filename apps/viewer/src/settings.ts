@@ -36,6 +36,9 @@ export interface AiSettings {
   maxTokens: number | null;
   /** 独立模式的密钥是否已配置（在 .env 里）——不存明文。 */
   hasKey: boolean;
+  /** inherit 模式下手选的模型（"provider:model"，来自主程序模型列表）；
+   *  null = 跟随主程序默认（默认模型 401 时在这里挑一个可用的）。 */
+  selectedModel: string | null;
 }
 
 export interface McpSettings {
@@ -100,6 +103,7 @@ export const DEFAULT_SETTINGS: ViewerSettings = {
     temperature: 0.3,
     maxTokens: 4096,
     hasKey: false,
+    selectedModel: null,
   },
   mcp: { enabled: false, port: 3911, allowRemote: false },
   browser: { kernel: "embedded", headed: false },
@@ -134,6 +138,26 @@ export async function saveSettings(s: ViewerSettings): Promise<ViewerSettings> {
 /** 写 / 清独立模型的 API Key（落 .env）。传 null 或空串 = 清除。 */
 export async function setAiKey(key: string | null): Promise<boolean> {
   return invoke<boolean>("viewer_set_ai_key", { key: key?.trim() || null });
+}
+
+/** 主程序里启用过的模型项（设置界面下拉用，不含明文 key）。 */
+export interface AiModelOption {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  hasKey: boolean;
+  ready: boolean;
+  problem: string | null;
+  isDefault: boolean;
+}
+
+export async function loadAiModels(): Promise<AiModelOption[]> {
+  try {
+    return await invoke<AiModelOption[]>("viewer_ai_models");
+  } catch {
+    return [];
+  }
 }
 
 export async function loadAiStatus(): Promise<AiStatus | null> {

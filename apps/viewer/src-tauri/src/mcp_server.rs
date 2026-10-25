@@ -156,6 +156,7 @@ fn tool_defs() -> Vec<ToolDef> {
                 "url": {"type": "string", "description": "要打开的网址（http / https）"},
                 "session": {"type": "string", "description": "会话 id（隔离键，缺省 default）"},
                 "headed": {"type": "boolean", "description": "是否有头（默认 false = 无头）"},
+                "profile": {"type": "string", "description": "持久 profile 名（字母/数字/-/_，如 github-x）：登录态跨会话保活，不随会话销毁。缺省 = 一次性 profile（隐私语义不变）。需要网站登录态时才用。"},
             }),
             required: &["url"],
             read_only: false,
@@ -666,7 +667,13 @@ fn call_tool_text(name: &str, args: &Value) -> Result<String, String> {
                 .unwrap_or_else(|| {
                     crate::settings::ViewerSettings::load().browser.headed
                 });
-            let info = crate::browser::open(&session, &url, headed)?;
+            // P5：可选持久 profile（登录态跨会话保活）。缺省保持一次性语义。
+            let profile = args
+                .get("profile")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let info =
+                crate::browser::open_with_profile(&session, &url, headed, profile.as_deref())?;
             Ok(format!(
                 "会话 {} 已打开（{}）：{}\n会话 id = {}",
                 info.id,

@@ -237,6 +237,7 @@ pub fn main() {
             commands::viewer_take_pending,
             commands::ai_send,
             commands::viewer_ai_status,
+            commands::viewer_ai_models,
             commands::viewer_get_settings,
             commands::viewer_set_settings,
             commands::viewer_set_ai_key,

@@ -1205,6 +1205,12 @@ pub fn viewer_ai_status() -> crate::ai::AiEndpointInfo {
     }
 }
 
+/// 主程序里启用过的模型清单（设置界面下拉用，不含明文 key）。
+#[tauri::command]
+pub fn viewer_ai_models() -> Result<Vec<crate::ai::AiModelOption>, String> {
+    crate::ai::list_models()
+}
+
 // ---------------------------------------------------------------------------
 // 设置
 // ---------------------------------------------------------------------------

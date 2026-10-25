@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import {
   DEFAULT_SETTINGS,
+  loadAiModels,
   loadAiStatus,
   loadMcpStatus,
   loadSettings,
@@ -29,6 +30,7 @@ import {
   setAiKey,
   startMcp,
   stopMcp,
+  type AiModelOption,
   type AiStatus,
   type McpStatus,
   type ViewerSettings,
@@ -56,6 +58,7 @@ export function SettingsDialog({
   const [tab, setTab] = useState<TabId>("general");
   const [draft, setDraft] = useState<ViewerSettings>(DEFAULT_SETTINGS);
   const [status, setStatus] = useState<AiStatus | null>(null);
+  const [models, setModels] = useState<AiModelOption[]>([]);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
   const [keyDraft, setKeyDraft] = useState("");
   const [keyVisible, setKeyVisible] = useState(false);
@@ -65,11 +68,12 @@ export function SettingsDialog({
   useEffect(() => {
     if (!open) return;
     setBusy(true);
-    void Promise.all([loadSettings(), loadAiStatus(), loadMcpStatus()])
-      .then(([s, st, mc]) => {
+    void Promise.all([loadSettings(), loadAiStatus(), loadMcpStatus(), loadAiModels()])
+      .then(([s, st, mc, mdl]) => {
         setDraft(s);
         setStatus(st);
         setMcp(mc);
+        setModels(mdl);
       })
       .catch((e) => setError(String(e)))
       .finally(() => setBusy(false));
@@ -92,6 +96,7 @@ export function SettingsDialog({
       const saved = await saveSettings(draft);
       setDraft(saved);
       setStatus(await loadAiStatus());
+      setModels(await loadAiModels());
       onSaved?.("设置已保存");
       onClose();
     } catch (e) {
@@ -372,6 +377,34 @@ export function SettingsDialog({
                     </button>
                   </div>
                 </div>
+
+                {draft.ai.mode === "inherit" && models.length > 0 && (
+                  <label className="set-field">
+                    <span className="set-label">选用主程序模型（默认模型 401 时在这里挑一个）</span>
+                    <select
+                      className="set-input"
+                      value={draft.ai.selectedModel ?? ""}
+                      onChange={(e) =>
+                        patch((s) => ({
+                          ...s,
+                          ai: {
+                            ...s.ai,
+                            selectedModel: e.target.value === "" ? null : e.target.value,
+                          },
+                        }))
+                      }
+                    >
+                      <option value="">跟随主程序默认</option>
+                      {models.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                          {m.isDefault ? "（默认）" : ""}
+                          {m.ready ? "" : ` — 不可用：${m.problem ?? ""}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
 
                 <div className="set-note">
                   {status ? (

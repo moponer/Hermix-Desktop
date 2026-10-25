@@ -42,6 +42,9 @@ struct Session {
     id: String,
     headed: bool,
     profile_dir: PathBuf,
+    /// P5：持久 profile（`persist-*` 目录）——close/shutdown 只杀进程
+    /// **不删目录**（登录态要跨会话活）；一次性会话维持「删干净」语义。
+    persistent: bool,
     port: u16,
     ws_path: String,
     target_id: String,
@@ -236,6 +239,18 @@ fn wait_for_port(profile: &PathBuf) -> Result<(u16, String), String> {
 
 /// 打开（或复用）一个会话并导航到指定网址。
 pub fn open(session: &str, url: &str, headed: bool) -> Result<SessionInfo, String> {
+    open_with_profile(session, url, headed, None)
+}
+
+/// 同 [`open`]，但 `profile` 给名时用**持久** profile 目录（P5 账号运营：
+/// 登录态跨会话保活），**不删除旧数据**。名字只允许字母/数字/`-`/`_`。
+/// 缺省（None）保持现行「每次全新 profile」的隐私语义不变。
+pub fn open_with_profile(
+    session: &str,
+    url: &str,
+    headed: bool,
+    profile: Option<&str>,
+) -> Result<SessionInfo, String> {
     let target = crate::webview_host::normalize_url(url)?;
     let id = session.trim().to_string();
     let id = if id.is_empty() {
@@ -265,12 +280,33 @@ pub fn open(session: &str, url: &str, headed: bool) -> Result<SessionInfo, Strin
             .to_string()
     })?;
 
-    let profile = profile_root().join(sanitize(&id));
-    // 每次开新会话 = **全新 profile**：上次的 cookie / 缓存不留（隐私第一），
-    // 也避免读到旧 profile 里那个已经失效的 DevToolsActivePort（端口是死
-    // 的 → 连接被拒）。
-    let _ = std::fs::remove_dir_all(&profile);
+    // P5：命名持久 profile 与一次性会话 profile 分目录；持久的不删
+    // （登录态要活），一次性的维持「全新 profile」隐私语义 + 规避失效的
+    // DevToolsActivePort。
+    let (profile, persistent) = match profile {
+        Some(name) if !name.trim().is_empty() => {
+            // 持久名**拒绝**非法字符而不是替换（sanitize 会把 `a b`/`a.b`
+            // 都折成 `a_b`——不同平台串同一登录态目录，复查 P2-2）。
+            let trimmed = name.trim();
+            if trimmed.is_empty()
+                || !trimmed
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err("profile 名只允许字母/数字/`-`/`_`".to_string());
+            }
+            (profile_root().join(format!("persist-{trimmed}")), true)
+        }
+        _ => (profile_root().join(sanitize(&id)), false),
+    };
+    if !persistent {
+        let _ = std::fs::remove_dir_all(&profile);
+    }
     std::fs::create_dir_all(&profile).map_err(|e| format!("创建浏览器 profile 失败：{e}"))?;
+    // P1-7：持久 profile 里上一次的 DevToolsActivePort 是死端口——
+    // wait_for_port 见文件即返会连旧端口。启动前只删这一个文件
+    // （登录态数据不动）。
+    let _ = std::fs::remove_file(profile.join("DevToolsActivePort"));
 
     let args = format!(
         "--remote-debugging-port=0 --user-data-dir=\"{}\" --no-first-run \
@@ -302,6 +338,7 @@ pub fn open(session: &str, url: &str, headed: bool) -> Result<SessionInfo, Strin
             id: id.clone(),
             headed,
             profile_dir: profile,
+            persistent,
             port,
             ws_path,
             target_id,
@@ -517,7 +554,8 @@ pub fn screenshot(session: &str) -> Result<(String, String, String), String> {
     crate::cdp::save_and_thumbnail(&png, &sanitize(session))
 }
 
-/// 关闭会话（并删掉它的 profile：cookie / 缓存不留痕）。
+/// 关闭会话。一次性 profile 删干净（cookie / 缓存不留痕）；持久 profile
+/// （P5，`persist-*`）只杀进程——登录态要跨会话活。
 pub fn close(session: &str) -> Result<(), String> {
     let removed = {
         let mut map = store().lock().unwrap();
@@ -527,7 +565,9 @@ pub fn close(session: &str) -> Result<(), String> {
         return Err(format!("没有这个浏览器会话：{session}"));
     };
     shutdown(&s);
-    let _ = std::fs::remove_dir_all(&s.profile_dir);
+    if !s.persistent {
+        let _ = std::fs::remove_dir_all(&s.profile_dir);
+    }
     Ok(())
 }
 

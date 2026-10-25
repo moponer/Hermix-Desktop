@@ -66,6 +66,11 @@ pub struct AiSettings {
     pub max_tokens: Option<u32>,
     /// 独立模式的密钥是否已配置（在 .env 里）——**不存明文**。
     pub has_key: bool,
+    /// inherit 模式下手选的模型（`"provider:model"`，来自主程序模型列表）。
+    /// `None` = 跟随主程序默认。默认模型走凭据池/OAuth 时 viewer 直连 401，
+    /// 用户在设置里挑一个静态 key 就绪的即可用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_model: Option<String>,
 }
 
 impl Default for AiSettings {
@@ -77,6 +82,7 @@ impl Default for AiSettings {
             system_prompt: "你是 Hermix 文件查看器的助手，基于用户当前打开的文件回答问题。回答用中文，简洁准确；涉及文件内容时以实际读取到的内容为准。".into(),
             temperature: Some(0.3),
             max_tokens: Some(4096),
+            selected_model: None,
             has_key: false,
         }
     }
