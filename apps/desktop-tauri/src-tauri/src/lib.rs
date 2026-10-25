@@ -11,6 +11,7 @@ pub mod portable_env;
 pub mod screenshot;
 pub mod screenshot_controller;
 pub mod sidecar;
+pub mod single_instance;
 pub mod stdio_bridge;
 pub mod system_settings;
 pub mod updater;
@@ -617,6 +618,14 @@ fn boot_stage() -> String {
 }
 
 pub fn run() {
+    // ── 单实例守护（2026-10-25）────────────────────────────────
+    // 必须放在一切副作用（Builder / sidecar / 全局热键 / viewer 拉起）
+    // 之前：第二个进程在此直接退出，双开引发的服务端口抢占、热键冲突、
+    // viewer 重复拉起从根上消失。机制见 single_instance.rs 模块注释。
+    if !single_instance::acquire_or_notify() {
+        return;
+    }
+
     // ── WebView2 / Chromium 启动参数 ──
     //
     // 必须在 `tauri::Builder::default()` 跑之前设置。
@@ -711,6 +720,9 @@ pub fn run() {
             None,
         ))
         .setup(|app| {
+            // 单实例监听：第二个进程 SetEvent 过来时弹主窗（关到托盘的
+            // 情况也能唤回）。见 single_instance.rs。
+            single_instance::spawn_show_listener(app.handle().clone());
             // 在线更新检查：启动 30s 后首查 + 每 2h，失败静默（updater.rs）。
             updater::spawn_check_scheduler(app.handle().clone());
             // ── viewer 自动拉起（2026-10-25）───────────────────────────
@@ -720,8 +732,11 @@ pub fn run() {
             // spawn 它：exe 在主程序旁（安装版）或 workspace target（dev），
             // 失败完全静默（viewer 缺席时 server 的 MCP 重试会兜底，
             // 用户手动开查看器也能用）。
+            //
+            // **必须带 --hidden**（2026-10-25 用户定死的硬约束）：启动主程序
+            // 绝不能弹出查看器窗口。--hidden 下 viewer 窗口保持隐藏、MCP
+            // 照常就绪；用户打开文件时单实例投递会把窗口弹到前面。
             {
-                let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(10));
                     let exe = match std::env::current_exe() {
@@ -742,6 +757,7 @@ pub fn run() {
                     // DETACHED_PROCESS：viewer 有自己的窗口与生命周期，
                     // 不随主程序退出；也不需要控制台。
                     match std::process::Command::new(&exe)
+                        .arg("--hidden")
                         .creation_flags(0x0000_0008)
                         .spawn()
                     {

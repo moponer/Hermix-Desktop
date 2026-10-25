@@ -139,6 +139,9 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn restart_app(app: tauri::AppHandle) {
+    // app.restart() 是「先 spawn 新进程再退出」：不先放单实例锁，
+    // 新进程会把自己误判成第二实例直接退出（见 single_instance.rs）。
+    crate::single_instance::release();
     app.restart();
 }
 
