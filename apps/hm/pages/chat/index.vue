@@ -81,8 +81,9 @@ const turnStart = ref(0)
 const elapsed = ref(0)
 const lastDuration = ref<number | null>(null)
 /**
- * 电脑端**没有**开启「模型配置推送」→ 手机端不能本地对话，且本地存的那份
- * （含 API Key）已被删除。界面上要说清是「电脑端没开」而不是「手机坏了」。
+ * 电脑端**没有**开启「模型配置推送」→ 手机端不能离线直连云模型，且本地存的
+ * 那份（含 API Key）已被删除。**只影响离线直连**——连着电脑时对话照常，
+ * 文案必须把这两件事分开，否则刚配完对的人会以为整个 App 坏了。
  */
 const modelPushOff = ref(false)
 
@@ -137,7 +138,7 @@ function toggleOffline() {
     return
   }
   if (!canOffline.value) {
-    uni.showToast({ title: '电脑端未启用模型配置推送，离线对话不可用', icon: 'none' })
+    uni.showToast({ title: '电脑端未开启「模型配置推送」，离线直连不可用', icon: 'none' })
     return
   }
   offline.value = true
@@ -740,7 +741,7 @@ onUnmounted(() => {
       :title="source === 'ali' ? '和阿黎聊聊' : '还没有对话'"
       :hint="
         source === 'ali'
-          ? '她直接在手机上回你，不经过电脑——电脑关机也能用。'
+          ? '她在你的电脑上回你——任务、工具、审批都在电脑上执行。电脑关机时可点右上角「离线」直连云模型。'
           : '在下面输入一句话下任务。任务实际在你的电脑上跑，这里只做入口与呈现。'
       "
     >
@@ -779,7 +780,10 @@ onUnmounted(() => {
     <view v-if="chat.busy" class="hm-notice warn notice-line"><text>上一轮还在跑 · 你发的话会排队</text></view>
     <view v-else-if="chat.turnActive" class="hm-notice notice-line"><text>还在想 · 已运行 {{ fmtDur(elapsed) }}</text></view>
     <view v-if="chat.lastError" class="hm-notice err notice-line"><text>{{ chat.lastError }}</text></view>
-    <view v-if="modelPushOff" class="hm-notice notice-line"><text>电脑端未启用模型配置推送 · 本地对话不可用</text></view>
+    <view v-if="modelPushOff" class="hm-notice notice-line">
+      <text>电脑端未开启「模型配置推送」· 离线直连不可用</text>
+      <text class="pushoff-sub">连着电脑时对话照常；要在电脑关机时继续聊，去电脑端「设置 → 设备管理 → 手机」打开模型配置推送。</text>
+    </view>
     <!-- 离线存档的出口：一键交给阿黎（她在电脑上接手安排）。 -->
     <view
       v-if="offline && messages.length && paired"
@@ -1135,6 +1139,12 @@ onUnmounted(() => {
 /* 提示条只留边距，形态见 styles/shared.scss 的 .hm-notice。 */
 .notice-line {
   margin: 0 $gutter 20rpx;
+}
+/* 推送关闭横幅的补充行：说明影响范围 + 电脑端开启路径，弱于主文案一档。 */
+.pushoff-sub {
+  display: block;
+  margin-top: 6rpx;
+  color: $fg4;
 }
 
 .risky {

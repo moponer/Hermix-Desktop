@@ -105,6 +105,11 @@ async function submit() {
         }
       }
     } catch { /* pairing 模块加载失败不影响主流程 */ }
+    // 起名输入的键盘还开着就 reLaunch，窗口的 adjustPan 上移状态会带进新页
+    // （键盘收起但不还原 → 对话页顶栏/底栏被裁出屏幕）。先收键盘再跳。
+    try {
+      uni.hideKeyboard()
+    } catch { /* 无键盘时可忽略 */ }
     uni.reLaunch({ url: '/pages/chat/index' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
