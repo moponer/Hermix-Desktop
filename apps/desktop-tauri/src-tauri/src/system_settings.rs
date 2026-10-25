@@ -313,7 +313,33 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             s.close_to_tray = checked;
             let _ = write_desktop_settings(&s);
         }
-        "quit" => app.exit(0),
+        "quit" => {
+            // 托盘退出必须**显式清理子进程**（2026-10-25 用户实测：右键退出
+            // 后 hermix.exe / hermix-filesearch.exe 全部残留，拖住主进程
+            // 本体也退不干净，还占用 binaries 里的 exe 导致编译 EBUSY）。
+            // app.exit() 不触发窗口 Destroyed 事件，sidecar 的 stop() 不会跑。
+            {
+                let state = app.state::<crate::AppState>();
+                state.sidecar.lock().unwrap().stop();
+            }
+            // filesearch：写停止请求（新版 daemon 有看门狗，10s 内刷盘退出；
+            // 提权进程 taskkill 杀不动，请它自己走是唯一正道）。
+            if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+                let req = std::path::PathBuf::from(local)
+                    .join("hermix")
+                    .join("filesearch")
+                    .join("stop-request.json");
+                let body = format!(
+                    "{{\"requestedAt\":{}}}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                );
+                let _ = std::fs::write(&req, body);
+            }
+            app.exit(0);
+        }
         _ => {}
     }
 }
