@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Star, Power, PowerOff, Trash2, Pencil, Zap, Loader2 } from "lucide-react";
 import * as api from "../../api";
 import { syncModelConfigLocal, writeModelConfigAndNotify } from "../../hooks/useCurrentModel";
-import { ProviderIcon } from "../ProviderIcon";
+import { ProviderIcon } from "@hermix/preview/ProviderIcon";
 import { ModelAddDialog, type EditingTarget } from "./ModelAddDialog";
 import { PROVIDERS, catalogMismatchNote } from "./settingsUtils";
 import type { CustomProviderSummary } from "../../api";

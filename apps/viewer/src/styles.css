@@ -1894,25 +1894,27 @@ html, body, #root {
   font-size: 11.5px; color: var(--text-muted);
 }
 .ai-backend.is-bad { color: var(--danger); }
-/* 头部右侧的模型选择：wrap 吃标题栏剩余宽度（带模型图标），inherit
-   模式可切主程序启用的模型，custom 模式置灰（端点/模型在设置里手填，
-   没有清单可选）。文件名不占头部——标签上已有。 */
-.ai-model-wrap {
+/* 头部右侧的模型选择按钮：吃标题栏剩余宽度（带模型图标），点开自有
+   ContextMenu 弹层（不用原生 select——弹层样式系统说了算，选项还
+   带十项重复的供应商前缀）。custom 模式置灰（端点/模型在设置里手填）。 */
+.ai-model-btn {
   flex: 1; min-width: 0; height: 24px;
-  display: flex; align-items: center; gap: 6px;
-  padding: 0 4px 0 8px;
-  background: var(--bg-tertiary); border-radius: 6px;
-  color: var(--text-secondary);
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 6px 0 8px;
+  border: none; background: var(--bg-tertiary); border-radius: 6px;
+  color: var(--text-secondary); cursor: pointer;
+  font-size: 12px;
 }
-.ai-model-wrap .icon-sm { width: 13px; height: 13px; flex: none; }
-.ai-model-wrap.is-bad { color: var(--danger); }
-.ai-model-select {
-  flex: 1; min-width: 0; height: 100%;
-  border: none; background: transparent; color: var(--text-primary);
-  font-size: 12px; padding: 0; cursor: pointer;
+.ai-model-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.ai-model-btn:disabled { opacity: 0.6; cursor: default; }
+.ai-model-btn.is-bad { color: var(--danger); }
+.ai-model-btn .icon-sm { width: 13px; height: 13px; flex: none; }
+.ai-model-cur {
+  flex: 1; min-width: 0; text-align: left;
+  color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ai-model-select:disabled { opacity: 0.6; cursor: default; }
-.ai-model-select.is-bad { color: var(--danger); }
+.ai-btn-bad .ai-model-cur { color: var(--danger); }
 /* MCP 服务状态：运行中用强调色，未启动用淡色。 */
 .set-state { flex: 1 1 auto; min-width: 0; font-size: var(--text-meta); color: var(--text-muted); }
 .set-state.is-on { color: var(--accent); }

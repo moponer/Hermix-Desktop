@@ -8,7 +8,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isImageExt } from "@hermix/preview";
-import { Bot, ChevronsRight } from "lucide-react";
+import { Bot, ChevronDown, ChevronsRight } from "lucide-react";
+import { ContextMenu } from "./ContextMenu";
+import { ProviderIcon } from "@hermix/preview/ProviderIcon";
 import {
   GENERAL_PROMPTS,
   IMAGE_PROMPTS,
@@ -147,11 +149,17 @@ export function AiSidebar({
     [send, fileName, outName],
   );
 
-  // 头部下拉的当前值：custom 模式无清单（模型是手填的），置灰显示生效模型。
+  // 头部模型按钮的当前值：custom 模式无清单（模型是手填的），显示生效模型。
   const customMode = aiSettings?.ai.mode === "custom";
-  const modelValue = customMode
-    ? (backend?.model ?? "")
-    : (aiSettings?.ai.selectedModel ?? "");
+  const selectedModel = customMode ? null : (aiSettings?.ai.selectedModel ?? null);
+  // 按钮上只显示模型 id（「免费模型 · Kilo · 」这类供应商前缀在弹层里
+  // 十项重复九次，纯噪音）；完整 id 悬停可见。
+  const modelLabel = customMode
+    ? (backend?.model || "独立模型")
+    : selectedModel
+      ? (models.find((m) => m.id === selectedModel)?.model ?? selectedModel)
+      : "跟随主程序默认";
+  const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);
 
   return (
     <aside className="ai-side">
@@ -159,10 +167,19 @@ export function AiSidebar({
         <span className="ai-title">AI 助手</span>
         {/* 模型选择占标题栏剩余宽度：inherit 模式列出主程序启用过的模型
             （跟随默认 + 手选）；custom 模式没有清单（端点/模型在设置里
-            手填），置灰显示生效值。文件名不占这里——标签上已有，空态里
-            也提示上下文。 */}
-        <span
-          className={`ai-model-wrap${backend && !backend.ready ? " is-bad" : ""}`}
+            手填），按钮显示生效值。文件名不占这里——标签上已有，空态里
+            也提示上下文。
+            弹层用自有 ContextMenu 而不是原生 select：原生弹层的样式系统
+            说了算，且选项里「免费模型 · Kilo · 」前缀十项重复九次——
+            自有弹层只显示模型 id、当前项打勾、随主题。 */}
+        <button
+          type="button"
+          className={`ai-model-btn${backend && !backend.ready ? " is-bad" : ""}`}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setModelMenu({ x: r.left, y: r.bottom + 4 });
+          }}
+          disabled={customMode || !aiSettings}
           title={
             customMode
               ? "独立模型模式：端点与模型在 设置 → AI 助手 中配置"
@@ -170,31 +187,13 @@ export function AiSidebar({
                 ? `对话模型（生效：${backend.model}）`
                 : "对话模型"
           }
+          aria-label="选择对话模型"
+          aria-expanded={modelMenu !== null}
         >
           <Bot className="icon-sm" aria-hidden="true" />
-          <select
-            className="ai-model-select"
-            value={modelValue}
-            disabled={customMode || !aiSettings}
-            aria-label="对话模型"
-            onChange={(e) => void pickModel(e.target.value)}
-          >
-            {customMode ? (
-              <option value="">{backend?.model || "独立模型"}</option>
-            ) : (
-              <>
-                <option value="">跟随主程序默认</option>
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                    {m.isDefault ? "（默认）" : ""}
-                    {m.ready ? "" : "（不可用）"}
-                  </option>
-                ))}
-              </>
-            )}
-          </select>
-        </span>
+          <span className="ai-model-cur">{modelLabel}</span>
+          <ChevronDown className="icon-sm" aria-hidden="true" />
+        </button>
         <button
           type="button"
           className="ai-close"
@@ -205,6 +204,39 @@ export function AiSidebar({
           <ChevronsRight className="icon-sm" />
         </button>
       </div>
+
+      {/* 模型清单：只显示模型 id（供应商名重复无信息量），当前项打勾，
+          主程序默认项右侧标注。不可用的置灰——选了只会 401。
+          行首图标：内置供应商走品牌 logo，免费渠道（custom-*）统一齿轮
+          （ProviderIcon，主程序同款解析）。 */}
+      {modelMenu && (
+        <ContextMenu
+          x={modelMenu.x}
+          y={modelMenu.y}
+          onClose={() => setModelMenu(null)}
+          groups={[
+            [
+              {
+                id: "__follow",
+                label: "跟随主程序默认",
+                icon: <Bot size={14} />,
+                checked: !customMode && !selectedModel,
+                onSelect: () => void pickModel(""),
+              },
+            ],
+            models.map((m) => ({
+              id: m.id,
+              label: `${m.model}${m.isDefault ? "（默认）" : ""}${
+                m.ready ? "" : "（不可用）"
+              }`,
+              icon: <ProviderIcon providerId={m.provider} size={14} />,
+              checked: !customMode && selectedModel === m.id,
+              disabled: customMode || !m.ready,
+              onSelect: () => void pickModel(m.id),
+            })),
+          ]}
+        />
+      )}
 
       {/* 未就绪的原因要摆出来，别让用户对着一个永远失败的输入框猜；
           就绪时模型信息已由头部下拉承担，不再占一行。 */}

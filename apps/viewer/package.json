@@ -21,7 +21,8 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "satteri": "^0.10.5",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "@lobehub/icons": "^5.10.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.0",

@@ -16,7 +16,7 @@ import { ChevronLeft, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import * as api from "../../api";
 import { writeModelConfigAndNotify } from "../../hooks/useCurrentModel";
 import { PROVIDERS, catalogMismatchNote, type ProviderDef } from "./settingsUtils";
-import { ProviderIcon } from "../ProviderIcon";
+import { ProviderIcon } from "@hermix/preview/ProviderIcon";
 import { Button, Modal } from "../ui";
 import { SAVE, SAVING } from "../strings";
 

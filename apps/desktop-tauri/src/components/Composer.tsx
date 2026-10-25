@@ -9,7 +9,7 @@ import { VoiceButton } from "./VoiceButton";
 import { VisionButton } from "./VisionButton";
 import { PolishButton } from "./PolishButton";
 import { EnhanceButton } from "./EnhanceButton";
-import { ProviderIcon } from "./ProviderIcon";
+import { ProviderIcon } from "@hermix/preview/ProviderIcon";
 import { Badge, Switch } from "./ui";
 import {
   formatContextTokens,
