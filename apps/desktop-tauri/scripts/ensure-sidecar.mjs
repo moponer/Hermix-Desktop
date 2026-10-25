@@ -47,7 +47,23 @@ function refresh(binName, destName) {
     console.error(`[ensure-sidecar] ✗ 产物缺失: ${src}（编译声称成功却没有产物，环境异常）`);
     process.exit(1);
   }
-  copyFileSync(src, dst);
+  try {
+    copyFileSync(src, dst);
+  } catch (e) {
+    if (e && (e.code === "EBUSY" || e.code === "EPERM")) {
+      // 目标 exe 正被一个**从 binaries 目录跑起来的 sidecar 进程**占用
+      // （桌面端按需拉起 viewer/filesearch，进程名就是目标文件本身）。
+      // 给出可操作指令而不是裸 errno（2026-10-25 实测踩中：viewer 在跑，
+      // 打包拷贝 EBUSY 中止）。
+      console.error(
+        `[ensure-sidecar] ✗ ${destName} 被占用（${e.code}）——正有一个运行中的 sidecar 进程从 binaries 目录加载它。
+` +
+        `[ensure-sidecar]   处理：关闭桌面端（或任务管理器结束 hermix-viewer / hermix-filesearch 进程）后重新打包。`
+      );
+      process.exit(1);
+    }
+    throw e;
+  }
   // copyFileSync 会**保留源文件的时间戳**（Windows CopyFileEx 的行为），
   // 于是"刚拷贝过来"的 sidecar 可能带着几个月前的时间戳，
   // check-sidecar-freshness.sh 的 mtime 比较就会误判 STALE。
