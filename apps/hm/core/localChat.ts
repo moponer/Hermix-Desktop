@@ -43,17 +43,19 @@ export interface LocalChatHandlers {
   onError: (message: string) => void
 }
 
-/** 发起一次流式对话。App 端分块收 SSE；H5 不支持 enableChunked，退化成一次性返回。 */
+/** 发起一次流式对话。App 端分块收 SSE；H5 不支持 enableChunked，退化成一次性返回。
+ * 返回值是中断句柄：调它即断开这次请求（对话页的停止键用）。 */
 export function streamLocalChat(
   config: ModelConfig,
   model: string,
   messages: LocalTurn[],
   h: LocalChatHandlers,
-): void {
+): () => void {
   const req = buildLocalRequest(config, model, messages)
   if ('error' in req) {
     h.onError(req.error)
-    return
+    return () => {}
+    // ↑ 请求根本没发出去，没有可中断的句柄——空函数保持返回形状一致。
   }
   const decoder = new TextDecoder('utf-8')
   let buf = ''
@@ -136,5 +138,12 @@ export function streamLocalChat(
         // 坏块：跳过这一块，不打断整轮。
       }
     })
+  }
+  return () => {
+    try {
+      task?.abort?.()
+    } catch {
+      // 已完成的请求没有可中断的句柄，忽略。
+    }
   }
 }

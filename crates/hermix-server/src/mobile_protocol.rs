@@ -169,9 +169,13 @@ pub fn to_mobile_frame(frame: &Value) -> Option<Value> {
         "cache_read_tokens",
         "cache_creation_tokens",
         "reasoning_tokens",
-        // 桌面推来的模型清单（model.list）
+        // 桌面推来的模型清单（model.list）。**providers 必须在名单里**：
+        // 它装着手机本机直聊要用的 provider 凭据（base_url + API Key），
+        // 白名单漏掉 = 凭据在 relay 边界被剥掉，手机永远收不到 key，
+        // 本机直聊必然报「没有凭据」（2026-10-25 实测发生的正是这条）。
         "models",
         "default_model",
+        "providers",
         // 桌面会话列表快照（session.list）
         "sessions",
         // 待办列表（todo.*）
@@ -312,6 +316,30 @@ mod tests {
         assert_eq!(m["models"][0]["provider_id"], "deepseek");
         assert_eq!(m["models"][0]["model_id"], "chat");
         assert_eq!(m["default_model"], "deepseek:chat");
+    }
+
+    #[test]
+    fn 模型清单的provider凭据必须到达手机() {
+        // providers 装着本机直聊的凭据（base_url + API Key）。白名单漏掉
+        // 该字段时，手机收到的 model.list 恒为 providers:[] ——本机直聊
+        // 永远报「没有凭据」，而桌面日志一切正常，极难排障。
+        let env = json!({
+            "event": {
+                "type": "model_list",
+                "models": [{"provider_id": "deepseek", "model_id": "chat"}],
+                "default_model": "deepseek:chat",
+                "providers": [{
+                    "provider_id": "deepseek",
+                    "base_url": "https://api.deepseek.com",
+                    "api_key": "sk-test",
+                    "api_style": "openai",
+                }],
+            },
+        });
+        let m = to_mobile_frame(&env).expect("应可映射");
+        assert_eq!(m["providers"][0]["provider_id"], "deepseek");
+        assert_eq!(m["providers"][0]["base_url"], "https://api.deepseek.com");
+        assert_eq!(m["providers"][0]["api_key"], "sk-test");
     }
 
     #[test]

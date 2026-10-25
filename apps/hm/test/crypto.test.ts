@@ -142,7 +142,6 @@ test('每帧 ephemeral 都不同（否则 key 可复用，前向保密失效）'
 test('无 crypto 全局时 generateIdentity 仍可用（DRBG polyfill 覆盖 noble keygen）', async () => {
   const g = globalThis as { crypto?: Crypto }
   const saved = g.crypto
-  // @ts-expect-error 模拟 App 端 V8：整个 crypto 全局不存在
   delete g.crypto
   try {
     ensureCryptoRandomPolyfill()

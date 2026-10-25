@@ -40,14 +40,14 @@ export function renderMarkdown(text: string): string {
   // 表格 | col1 | col2 |（在所有块替换之后处理，防止代码块里的 | 被误判）
   text = text.replace(
     /\|.+\|\n\|[-: |]+\|\n((?:\|[^\n]+\|\n?)*)/,
-    (_, body) => {
+    (_, body: string) => {
       const lines = body.trim().split('\n')
       // 每行："| a | b | c |" → [" a ", " b ", " c "]
-      const rows = lines.map((line) => {
+      const rows = lines.map((line: string) => {
         const cells: string[] = []
         // 去掉首尾 |，剩余 " a | b | c "，再按 | 分割
         const inner = line.replace(/^\|/, '').replace(/\|$/, '')
-        inner.split('|').forEach((raw) => {
+        inner.split('|').forEach((raw: string) => {
           const c = raw
             .replace(/\\\|/g, '|')
             .replace(/\\`/g, '`')

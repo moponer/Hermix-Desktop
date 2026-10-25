@@ -32,9 +32,8 @@ import {
   listSessions,
   type ChatSource,
 } from '../../core/history'
-// 阿黎是手机上唯一的对话对象，不再有"来源切换"。
-import { interruptSession } from '../../core/tasks'
-import { loadModelConfig, saveModelConfig, clearModelConfig } from '../../core/modelStore'
+import { getChatSource, setChatSource, SOURCE_META } from '../../core/chatSource'
+import { loadModelConfig, saveModelConfig, clearModelConfig, setLocalDefaultModel } from '../../core/modelStore'
 import { streamLocalChat, type LocalTurn } from '../../core/localChat'
 import type { ModelConfig } from '../../core/model'
 import { useKeyboardHeight } from '../../composables/useKeyboardHeight'
@@ -81,21 +80,18 @@ const turnStart = ref(0)
 const elapsed = ref(0)
 const lastDuration = ref<number | null>(null)
 /**
- * 电脑端**没有**开启「模型配置推送」→ 手机端不能离线直连云模型，且本地存的
- * 那份（含 API Key）已被删除。**只影响离线直连**——连着电脑时对话照常，
+ * 电脑端**没有**开启「模型配置推送」→ 手机端不能本机直聊，且本地存的
+ * 那份（含 API Key）已被删除。**只影响本机直聊**——连着电脑时对话照常，
  * 文案必须把这两件事分开，否则刚配完对的人会以为整个 App 坏了。
  */
 const modelPushOff = ref(false)
 
 /**
- * 离线模式（手机直连云模型）：电脑关机时的兜底通路。
- *
- * 它**不是阿黎**——阿黎在桌面端执行；这条路上没有电脑，手机拿电脑此前
- * 推来的凭据直接问云厂商，只有纯对话（无工具/审批/不落电脑会话库）。
- * 凭据来自本地持久化的 modelStore（电脑上次推送的快照）。
+ * 本机直聊（`source === 'local'`）要用的配置：手机直接用电脑推送的模型
+ * 配置问云厂商。它**不是阿黎**——阿黎在电脑上执行；这条路上没有电脑，
+ * 不能控制电脑，也没有工具/审批，就是一段普通对话。凭据来自本地持久化
+ * 的 modelStore（电脑上次推送的快照），所以**电脑没开过推送就不可用**。
  */
-const offline = ref(false)
-/** 离线直连要用的配置：优先取本地持久化那份（电脑关机后唯一可用）。 */
 const localConfig = computed<ModelConfig | null>(() => {
   const saved = loadModelConfig()
   if (saved && saved.providers.length && saved.defaultModel) return saved
@@ -112,17 +108,33 @@ const localConfig = computed<ModelConfig | null>(() => {
 const canOffline = computed(() => localConfig.value !== null)
 
 /**
- * 跑一轮离线直连：增量**转成同名 App 事件喂给 onFrame**——打字机、淡入、
- * markdown 渲染、气泡落定全部复用现有管线，不写第二套渲染。
+ * 模型选择器的数据源：本机直聊用**本地快照**（那条路上没有电脑可问），
+ * 阿黎/电脑来源用桌面推来的实时清单（连着电脑，清单永远新鲜）。
  */
-function runOfflineChat(history: LocalTurn[]) {
+const pickerModels = computed(() =>
+  source.value === 'local' ? (localConfig.value?.models ?? []) : chat.value.models,
+)
+const pickerDefault = computed(() =>
+  source.value === 'local'
+    ? (localConfig.value?.defaultModel ?? null)
+    : chat.value.defaultModel,
+)
+
+/**
+ * 跑一轮本机直聊：增量**转成同名 App 事件喂给 onFrame**——打字机、淡入、
+ * markdown 渲染、气泡落定全部复用现有管线，不写第二套渲染。
+ * 返回的中断句柄交给停止键。
+ */
+let localAbort: (() => void) | null = null
+
+function runLocalChat(history: LocalTurn[]) {
   const cfg = localConfig.value
   const model = cfg?.defaultModel
   if (!cfg || !model) {
     uni.showToast({ title: '没有可用的模型凭据', icon: 'none' })
     return
   }
-  streamLocalChat(cfg, model, history, {
+  localAbort = streamLocalChat(cfg, model, history, {
     onDelta: (d) => onFrame(JSON.stringify({ type: 'assistant.message', content: d })),
     onDone: () => onFrame(JSON.stringify({ type: 'turn.done' })),
     onError: (msg) => {
@@ -132,18 +144,6 @@ function runOfflineChat(history: LocalTurn[]) {
   })
 }
 
-function toggleOffline() {
-  if (offline.value) {
-    offline.value = false
-    return
-  }
-  if (!canOffline.value) {
-    uni.showToast({ title: '电脑端未开启「模型配置推送」，离线直连不可用', icon: 'none' })
-    return
-  }
-  offline.value = true
-  uni.showToast({ title: '离线模式 · 手机直连云模型（不是阿黎）', icon: 'none' })
-}
 let typer: ReturnType<typeof setInterval> | null = null
 let ticker: ReturnType<typeof setInterval> | null = null
 
@@ -200,15 +200,8 @@ function todoIcon(status: string): string {
   return '○'
 }
 /**
- * 手机端切换默认模型：走同一条密封上行（WS），不走 REST。
- *
- * 中继是只路由的字节管道，没有通往桌面的 HTTP 通道——手机此前那条
- * `GET {relay}/api/model/list` 必然 404，模型清单因此永远是空的。
- * 桌面收到后会回推一份新清单（`model.list`），这里不必自己改本地状态。
- */
-/**
- * 把离线存档整段交给阿黎：她在电脑上接手安排后续动作。
- * 这正是「离线模式」存在的意义——临时沟通存档，回来后一键移交。
+ * 把本机直聊的存档整段交给阿黎：她在电脑上接手安排后续动作。
+ * 这是「本机直聊」的出口之一——电脑不在时先聊着，回来了一键移交。
  */
 async function sendTranscriptToAli() {
   const lines = messages.value
@@ -223,15 +216,42 @@ async function sendTranscriptToAli() {
   })
 }
 
+/**
+ * 切换默认模型。阿黎/电脑来源走同一条密封上行改**桌面**的默认模型；
+ * 本机直聊只改本地快照——那条路上没有电脑，改桌面毫无意义。
+ */
 async function onSelectModel(model: string): Promise<void> {
+  if (source.value === 'local') {
+    setLocalDefaultModel(model)
+    uni.showToast({ title: '本机直聊已切换', icon: 'none' })
+    return
+  }
   const ok = await session?.selectModel(model)
   if (!ok) {
     uni.showToast({ title: '没连上电脑，切换失败', icon: 'none' })
   }
 }
 
-/** 空态：还没有任何一轮对话。 */
+/** 空态：还没有任何一轮对话。文案按来源说人话——新手第一眼看懂「在跟谁说话」。 */
 const isEmpty = computed(() => messages.value.length === 0 && !streaming.value)
+
+const emptyTitle = computed(() => {
+  if (source.value === 'ali') return '和阿黎聊聊'
+  if (source.value === 'desktop') return '给电脑下任务'
+  return canOffline.value ? '直接问模型' : '本机直聊还没准备好'
+})
+
+const emptyHint = computed(() => {
+  if (source.value === 'ali') {
+    return (
+      SOURCE_META.ali.hint + (paired.value ? '' : ' 先在下方扫码连接电脑。')
+    )
+  }
+  if (source.value === 'desktop') return SOURCE_META.desktop.hint
+  return canOffline.value
+    ? SOURCE_META.local.hint
+    : '需要先在电脑端「设置 → 手机端 → 模型配置推送」打开一次，把模型配置推给这台手机；之后电脑不在也能聊。'
+})
 
 /**
  * 未连接不是一道门，是主界面上的一个状态。
@@ -253,7 +273,7 @@ const currentSid = ref<string | null>(null)
 onMounted(() => {
   // 恢复上次下发的语音识别配置（WS 帧没到前先能用旧值）
   loadSavedVoiceConfig()
-  // 来源（阿黎/桌面）由阿黎页或历史页写进存储后再切过来——tab 页不收 query。
+  // 来源（阿黎/电脑/本机直聊）由历史页或上一次使用写进存储——tab 页不收 query。
   source.value = getChatSource()
   // 尝试恢复上一个被选中的会话
   const restore = uni.getStorageSync('hermix.restoreSession') as string | ''
@@ -266,8 +286,8 @@ onMounted(() => {
       scrollToTail()
     }
   } else {
-    // 没有指定会话：接着最近一条往下聊，而不是每次进来都是一片空白。
-    restoreLatest()
+    // 没有指定会话：接着该来源最近一条往下聊，而不是每次进来都是一片空白。
+    restoreLatest(source.value)
   }
 })
 
@@ -325,17 +345,25 @@ async function ensureSession(): Promise<void> {
 // 不会叠连接。
 onShow(() => {
   paired.value = isPaired()
-  // 来自阿黎页 / 历史页的跳转：来源与目标会话都靠存储传（tab 页不收 query）。
-  // 来源变了就把界面清干净——两个来源的历史分开存，把 A 的气泡留在 B 的
-  // 界面上，用户会以为"刚才和阿黎说的话被电脑看到了"。
+  // 来源可能已被历史页改写，而 tab 页常驻（onMounted 只跑一次）——每次
+  // 进页都从存储读回，否则会出现「desktop 的会话挂在阿黎来源下」的错位。
+  source.value = getChatSource()
+  // 来自历史页的跳转：来源与目标会话都靠存储传（tab 页不收 query）。
+  // 恢复会话按它自己的来源走——把 A 的气泡留在 B 的界面上，用户会以为
+  // "刚才和阿黎说的话被别的东西看到了"。
   const pending = uni.getStorageSync('hermix.restoreSession') as string | ''
   if (pending) {
     uni.removeStorageSync('hermix.restoreSession')
-    const msgs = loadSession(pending)
-    if (msgs.length) {
-      messages.value = msgs
-      currentSid.value = pending
-      scrollToTail()
+    if (chat.value.turnActive) {
+      // 一轮还在流式输出时不换现场：换了的落点无法归属，宁可让人再点一次。
+      uni.showToast({ title: '这一轮还在跑，等它说完再切换会话', icon: 'none' })
+    } else {
+      const msgs = loadSession(pending)
+      if (msgs.length) {
+        messages.value = msgs
+        currentSid.value = pending
+        scrollToTail()
+      }
     }
   }
   // 先装上次从电脑收到的配置：电脑没连上（或还没把配置推过来）时，模型
@@ -356,7 +384,8 @@ onShow(() => {
   if (session && !session.connected && !session.isConnecting) {
     session = null
   }
-  if (paired.value) void ensureSession()
+  // 本机直聊不需要链路；阿黎/电脑来源在已配对时保持常驻连接。
+  if (paired.value && source.value !== 'local') void ensureSession()
 })
 
 // boot 页在 onLoad 里 reLaunch，其 onReady 大概率被跳过；这里是正常路径的
@@ -378,13 +407,17 @@ function onFrame(raw: string) {
   // 桌面端下发的语音识别配置（WS 密封帧，relay 不可见）：不进 reducer，
   // 就地生效并持久化——重连后拿到新配置前沿用旧值，避免长按失灵。
   try {
-    const f = JSON.parse(raw) as { type?: string; voice_stt?: VoiceSttWire }
+    const f = JSON.parse(raw) as {
+      type?: string
+      voice_stt?: VoiceSttWire
+      sessions?: unknown[]
+    }
     if (f?.type === 'voice.stt_config') {
-      applyVoiceConfig(f.voice_stt)
+      applyVoiceConfig(f.voice_stt ?? null)
       return
     }
     if (f?.type === 'session.list') {
-      // 桌面会话列表：落盘给阿黎首页的「电脑上的会话」区块用（不进对话流）。
+      // 桌面会话列表：落盘给历史页的「电脑上的项目」区块用（不进对话流）。
       try {
         uni.setStorageSync('hermix.desktopSessions', JSON.stringify(f.sessions ?? []))
       } catch {
@@ -532,10 +565,8 @@ function goSettings() {
 }
 
 function goHistory() {
-  // 阿黎的对话在自己的专属页（她的历史只属于她）；桌面来源走通用历史列表。
-  uni.navigateTo({
-    url: source.value === 'ali' ? '/pages/ali/index' : '/pages/history/index',
-  })
+  // 历史页按来源分组展示（阿黎 / 电脑 / 本机直聊 / 电脑上的项目）。
+  uni.navigateTo({ url: '/pages/history/index' })
 }
 
 function goCall() {
@@ -562,17 +593,42 @@ function confirmNew() {
 }
 
 /**
- * 手机上只有一个对话对象：**阿黎**。
- *
- * 她在**电脑上**执行——工具、工作区、记忆，以及随时派 agent 角色干活，全都
- * 发生在桌面端；手机只是她的遥控入口，**不在手机上跑模型**。所以这里没有
- * 「来源切换」：换来源就等于换人，而用户要的就是她。
+ * 你在跟谁说话——三条通路，发出去的每一句话走的链路都不同：
+ * - `ali` 阿黎：投给桌面端 `twin:ali`（有人格、有记忆，桌面 TwinView 同一个她）；
+ * - `desktop` 电脑：投给本设备的通用助手会话（直接遥控电脑干活）；
+ * - `local` 本机直聊：不连电脑，用推送来的模型配置直接问云厂商。
  */
 const source = ref<ChatSource>('ali')
 
-/** 恢复最近一条会话（没有就留空）。 */
-function restoreLatest() {
-  const latest = listSessions('ali')[0]
+/** 顶部分段条的选项（顺序即展示顺序，阿黎是默认对象）。 */
+const SOURCES: ChatSource[] = ['ali', 'desktop', 'local']
+
+/**
+ * 换来源 = 换对话现场。
+ *
+ * 切走前先把当前会话落盘（气泡留在它所属来源的历史里）；切过去恢复该来源
+ * 最近一条。**运行中不让切**：回复帧到达时不知道该记到谁头上，A 的回答会
+ * 悄悄落进 B 的历史——那是比「不让切」严重得多的错位。
+ */
+function switchSource(next: ChatSource) {
+  if (next === source.value) return
+  if (chat.value.turnActive) {
+    uni.showToast({ title: '这一轮还在跑，等它说完再切', icon: 'none' })
+    return
+  }
+  persistSession()
+  source.value = next
+  setChatSource(next)
+  messages.value = []
+  chat.value = initialChatState()
+  currentSid.value = null
+  restoreLatest(next)
+  scrollToTail()
+}
+
+/** 恢复某来源最近一条会话（没有就留空）。 */
+function restoreLatest(src: ChatSource) {
+  const latest = listSessions(src)[0]
   if (!latest) return
   const msgs = loadSession(latest.id)
   if (!msgs.length) return
@@ -594,16 +650,16 @@ function sendText(t: string) {
     saveSession(currentSid.value, [], source.value)
   }
   void (async () => {
-    // 离线模式：手机直连云模型（**不是阿黎**——她只在桌面端执行）。
+    // 本机直聊：手机直接问云厂商（**不是阿黎**——她只在电脑上执行）。
     // 不等 ensureSession：这条路上没有电脑，也就没有"连不上"这回事。
-    if (offline.value) {
+    if (source.value === 'local') {
       if (!messages.value.some((m) => m.role === 'user' && m.text === text && m.viaVoice)) {
         messages.value.push({ id: String(Date.now()), role: 'user', text, sending: true })
       }
       const history: LocalTurn[] = messages.value
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.text }))
-      runOfflineChat(history)
+      runLocalChat(history)
       persistSession()
       scrollToTail()
       return
@@ -611,9 +667,8 @@ function sendText(t: string) {
     // 等连接真正就绪（hello + key.exchange 完成）再发，否则 send() 返回 false
     // 导致消息「发出去没回」而用户以为是网络慢。
     await ensureSession()
-    // 先发出去，成功了才落气泡：连不上时留一条永远等不到回复的假消息，
-    // 比直接不落更糟——用户会以为电脑收到了。
-    const ok = (await session?.send(text)) ?? false
+    // 阿黎的话投给 twin:ali（有人格）；电脑来源投给设备通用会话。
+    const ok = (await session?.send(text, source.value === 'ali' ? 'twin' : undefined)) ?? false
     if (!ok) {
       // 发不出去就明说。**不静默改投任何别的通路**：用户以为话发给了
       // 阿黎（她跑在电脑上），实际发去别处，比发不出去严重得多。
@@ -635,16 +690,20 @@ function sendText(t: string) {
 }
 
 /**
- * 中断。只有 `turnActive` 为真时这个按钮才出现——那表示**服务端确实在跑**，
- * 所以它不是常驻的摆设按钮。
+ * 中断。只有 `turnActive` 为真时这个按钮才出现——那表示**确实在跑**。
+ * 本机直聊 = 断开本地请求并就地落定；阿黎/电脑 = WS stop 帧（REST 对
+ * twin 会话有归属闸门，走不通）。
  */
 async function stop() {
-  const res = await interruptSession(currentSid.value)
-  if (res.interrupted) {
-    uni.showToast({ title: '已中断', icon: 'none' })
-  } else {
-    uni.showToast({ title: res.reason ?? '中断失败', icon: 'none' })
+  if (source.value === 'local') {
+    localAbort?.()
+    localAbort = null
+    onFrame(JSON.stringify({ type: 'turn.done' }))
+    uni.showToast({ title: '已停止', icon: 'none' })
+    return
   }
+  const ok = await session?.stopTurn()
+  if (!ok) uni.showToast({ title: '没连上电脑，停不了', icon: 'none' })
 }
 
 onUnmounted(() => {
@@ -658,25 +717,40 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <hm-shell title="阿黎" :scroll-into-view="anchor" :class="{ 'kb-open': kbHeight > 120 }">
+  <hm-shell
+    :title="SOURCE_META[source].name"
+    :scroll-into-view="anchor"
+    :class="{ 'kb-open': kbHeight > 120 }"
+  >
     <template #end>
       <hm-model-picker
-        :models="chat.models"
-        :default-model="chat.defaultModel"
+        :models="pickerModels"
+        :default-model="pickerDefault"
         @select="onSelectModel"
       />
-      <!-- 离线模式（手机直连云模型）：电脑关机时的兜底通路，显式开关——
-           它不是阿黎，开的时候要让人知道自己在跟谁说话。 -->
-      <view class="hm-pill" :class="offline ? 'warn' : 'ghost'" @tap="toggleOffline">
-        <text>{{ offline ? '离线中' : '离线' }}</text>
-      </view>
       <view class="hist-btn" @tap="goHistory"><text>☰</text></view>
       <!-- 通话：当前对话的另一种交互模式，入口挂在这条对话上，不占底部频道位 -->
       <view class="call-btn" @tap="goCall"><text>☎</text></view>
       <view class="new-btn" @tap="confirmNew"><text>✛</text></view>
     </template>
-    <!-- 未连接：主界面里的一张卡片，不是拦截层 -->
-    <view v-if="!paired" class="connect">
+
+    <!-- 你在跟谁说话：三条通路顶部分段切换，发出去的话走完全不同的链路。
+         这是本页第一眼要看见的东西——不分清来源，其余一切都会错位。 -->
+    <view class="src-bar">
+      <view
+        v-for="s in SOURCES"
+        :key="s"
+        class="src"
+        :class="{ on: source === s }"
+        @tap="switchSource(s)"
+      >
+        <text>{{ SOURCE_META[s].name }}</text>
+      </view>
+    </view>
+    <text class="src-desc">{{ SOURCE_META[source].desc }}</text>
+
+    <!-- 未连接：主界面里的一张卡片，不是拦截层（本机直聊不受影响） -->
+    <view v-if="!paired && source !== 'local'" class="connect">
       <view class="c-top">
         <view class="c-dot" />
         <text class="c-title">还没有连接电脑</text>
@@ -684,7 +758,7 @@ onUnmounted(() => {
       <text class="c-hint">
         {{
           hasRelay
-            ? '连接之后，你在这里下的任务会在电脑上执行，审批和结果也回到这里。'
+            ? '这个 App 是你电脑的遥控器：连接之后，阿黎在电脑上替你干活，任务、审批和结果都回到这里。'
             : '扫电脑上的配对码即可连接：relay 地址与凭据会自动带上，无需手填。'
         }}
       </text>
@@ -694,13 +768,18 @@ onUnmounted(() => {
       </view>
     </view>
 
-    <!-- 链路状态：连不上时对话区照常在，只是明确说清为什么发不出去 -->
-    <view v-if="paired && link !== 'online'" class="link-bar">
+    <!-- 链路状态：连不上时对话区照常在，只是明确说清为什么发不出去（本机直聊无此概念） -->
+    <view v-if="paired && source !== 'local' && link !== 'online'" class="link-bar">
       <view class="link-dot" />
       <text class="link-txt">{{ linkMsg || '正在连电脑…' }}</text>
       <!-- 凭据被中转拒绝是终态（不再自动重连），必须给一条出路：
            直达设备管理，移除后重新扫码。 -->
       <view v-if="linkRevoked" class="link-act" @tap="goSettings"><text>去处理</text></view>
+    </view>
+
+    <!-- 本机直聊的边界声明：一句话把「这条路不连电脑」钉在界面上。 -->
+    <view v-if="source === 'local'" class="local-note">
+      <text>本机直聊：不连接电脑、不能控制电脑、没有阿黎——只是普通对话。</text>
     </view>
 
     <!-- 运行胶囊：抄 dsh-mobile 的 ColorOS 流体云「胶囊态」——任务在跑时
@@ -736,15 +815,7 @@ onUnmounted(() => {
       </view>
     </view>
 
-    <hm-empty
-      v-else-if="isEmpty"
-      :title="source === 'ali' ? '和阿黎聊聊' : '还没有对话'"
-      :hint="
-        source === 'ali'
-          ? '她在你的电脑上回你——任务、工具、审批都在电脑上执行。电脑关机时可点右上角「离线」直连云模型。'
-          : '在下面输入一句话下任务。任务实际在你的电脑上跑，这里只做入口与呈现。'
-      "
-    >
+    <hm-empty v-else-if="isEmpty" :title="emptyTitle" :hint="emptyHint">
       <image class="mascot" src="/static/mascot.png" mode="aspectFit" />
     </hm-empty>
 
@@ -781,15 +852,15 @@ onUnmounted(() => {
     <view v-else-if="chat.turnActive" class="hm-notice notice-line"><text>还在想 · 已运行 {{ fmtDur(elapsed) }}</text></view>
     <view v-if="chat.lastError" class="hm-notice err notice-line"><text>{{ chat.lastError }}</text></view>
     <view v-if="modelPushOff" class="hm-notice notice-line">
-      <text>电脑端未开启「模型配置推送」· 离线直连不可用</text>
-      <text class="pushoff-sub">连着电脑时对话照常；要在电脑关机时继续聊，去电脑端「设置 → 设备管理 → 手机」打开模型配置推送。</text>
+      <text>电脑端未开启「模型配置推送」· 本机直聊不可用</text>
+      <text class="pushoff-sub">连着电脑时和阿黎/电脑的对话照常；要让手机在电脑不在时也能直聊，去电脑端「设置 → 手机端」打开模型配置推送——打开后这里会自动更新。</text>
     </view>
-    <!-- 离线存档的出口：一键交给阿黎（她在电脑上接手安排）。 -->
+    <!-- 本机直聊的存档出口：一键交给阿黎（她在电脑上接手安排）。 -->
     <view
-      v-if="offline && messages.length && paired"
+      v-if="source === 'local' && messages.length && paired"
       class="hm-notice notice-line"
       @tap="sendTranscriptToAli"
-    ><text>把这段离线记录发给阿黎 →</text></view>
+    ><text>把这段对话交给阿黎（在电脑上接手）→</text></view>
 
     <view id="tail" class="tail" />
 
@@ -818,14 +889,19 @@ onUnmounted(() => {
 
     <template #bottom>
       <view class="composer">
-        <view v-if="!paired" class="hint off">未连接电脑，暂时发不了任务</view>
+        <view v-if="source !== 'local' && !paired" class="hint off">
+          未连接电脑，暂时发不了——可先切到「本机直聊」
+        </view>
+        <view v-else-if="source === 'local'" class="hint">
+          本机直聊 · 不经过电脑，也不会出现在电脑上
+        </view>
         <view v-else-if="chat.turnActive" class="hint">运行中 · 你发的话会排队</view>
         <view class="field">
           <input
             v-model="draft"
             class="inp"
-            :placeholder="paired ? '说点什么…' : '先连接电脑'"
-            :disabled="!paired"
+            :placeholder="source === 'local' ? '直接问模型…' : paired ? '说点什么…' : '先连接电脑'"
+            :disabled="source !== 'local' && !paired"
             confirm-type="send"
             :adjust-position="true"
             @confirm="send"
@@ -840,7 +916,12 @@ onUnmounted(() => {
           </view>
           <!-- 运行中就地变停止键：和 WorkBuddy 一致，少一次找按钮的时间 -->
           <view v-if="chat.turnActive" class="send stop" @tap="stop"><text>■</text></view>
-          <view v-else class="send" :class="{ off: !paired }" @tap="paired ? send() : undefined">
+          <view
+            v-else
+            class="send"
+            :class="{ off: source !== 'local' && !paired }"
+            @tap="source === 'local' || paired ? send() : undefined"
+          >
             <text>↑</text>
           </view>
         </view>
@@ -855,6 +936,55 @@ onUnmounted(() => {
   height: 180rpx;
   margin-top: 40rpx;
   opacity: 0.9;
+}
+
+/* 来源分段条：三格等宽、选中态主色实底。它回答「我在跟谁说话」——
+   本页所有错位的根源都来自这个问题没有可见的答案。 */
+.src-bar {
+  display: flex;
+  gap: 10rpx;
+  margin: 16rpx $gutter 0;
+  padding: 8rpx;
+  background: $card;
+  border-radius: $r-pill;
+}
+.src {
+  flex: 1;
+  height: 64rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: $r-pill;
+  font-size: $fs-sub;
+  color: $fg2;
+}
+.src.on {
+  background: $accent;
+  color: $on-accent;
+  font-weight: 600;
+}
+.src:active {
+  opacity: 0.75;
+}
+/* 当前来源的一句话说明：紧跟分段条，弱一档的字。 */
+.src-desc {
+  display: block;
+  margin: 10rpx $gutter 0;
+  font-size: $fs-mini;
+  color: $fg4;
+}
+
+/* 本机直聊的边界声明：区别于其他来源的显著但克制的提示。 */
+.local-note {
+  margin: 16rpx $gutter 0;
+  padding: 16rpx 20rpx;
+  background: $card;
+  border-radius: $r-card;
+}
+.local-note text {
+  font-size: $fs-mini;
+  color: $fg2;
+  line-height: 1.6;
 }
 
 /* 未连接卡片：与空态同一个位置，只是多一个明确的下一步。 */
@@ -1014,7 +1144,7 @@ onUnmounted(() => {
   color: $fg2;
 }
 
-/* 阿黎的身份说明已移到首页（pages/ali）——对话页只负责对话本身。 */
+/* 阿黎的身份说明常驻在来源分段条下方（SOURCE_META.desc）——对话页只负责对话本身。 */
 
 /* 上下文仪表（抄对方「上下文占用持久条」）：细条 + 右侧文案，超过阈值转暖色。 */
 .ctx {

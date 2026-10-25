@@ -753,6 +753,7 @@ mod approval_registry_tests {
                 let (tx, _) = tokio::sync::broadcast::channel(1);
                 tx
             },
+            mobile_config_tx: tokio::sync::watch::channel::<u64>(0).0,
             expert_registry: hermix_skills::ExpertRegistry::new(),
             automation_scheduler: None,
             resource_patrol: None,

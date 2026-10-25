@@ -23,8 +23,6 @@ import {
   setRelayToken,
   storePairedDevice,
   listDevices,
-  removeDevice,
-  activeDevice,
 } from '../../core/pairing'
 import { interruptSession } from '../../core/tasks'
 import { setRelayBaseUrl } from '../../core/clock'
@@ -89,22 +87,16 @@ async function submit() {
       relayBase: t.relayBase,
       relayToken: t.phoneToken,
     })
-    // 切到聊天页之前把旧 session 清理掉：旧 token 已作废，
+    // 切到聊天页之前把旧 session 清理掉：本条连接要按**新设备**的凭据重建，
     // 不清会让 ensureSession 认为 session 存在（closed=true）而跳过重建。
     try {
       void interruptSession(null)
     } catch { /* tasks 与当前流程无关，失败不影响配对 */ }
-    // 配对成功后：只保留刚配上的这台，清掉同 relay 下其他旧设备记录。
-    // 原因：PC 侧撤销后旧设备 token 已无效，若 fallback 落到它会 401 白等。
-    // 新设备已经在 storePairedDevice 里作为 activeDevice 写入，清掉其余即可。
-    try {
-      const keep = activeDevice()?.id
-      if (keep) {
-        for (const d of listDevices()) {
-          if (d.id !== keep) removeDevice(d.id)
-        }
-      }
-    } catch { /* pairing 模块加载失败不影响主流程 */ }
+    // **已有设备全部保留**（2026-10-25 修正）：设计就是一台手机管多台电脑、
+    // 随时切换（core/pairing 的设备清单 + 顶栏切换面板）。此前这里会把其余
+    // 设备清掉——「连了新电脑，旧电脑就消失」正是这段删出来的。旧 token 若
+    // 已被电脑端撤销，切过去会收到 401 → 横幅「去处理」→ 设备管理里移除，
+    // 出路是明确的，不需要预防性清库。
     // 起名输入的键盘还开着就 reLaunch，窗口的 adjustPan 上移状态会带进新页
     // （键盘收起但不还原 → 对话页顶栏/底栏被裁出屏幕）。先收键盘再跳。
     try {

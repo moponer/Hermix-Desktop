@@ -21,5 +21,14 @@
   "vueCompilerOptions": {
     "target": 3
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "vite.config.ts"]
+  "include": [
+    "App.vue",
+    "main.js",
+    "pages/**/*.vue",
+    "components/**/*.vue",
+    "composables/**/*.ts",
+    "core/**/*.ts",
+    "test/**/*.ts",
+    "vite.config.ts"
+  ]
 }

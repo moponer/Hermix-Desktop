@@ -35,6 +35,7 @@ import {
   randomBytes,
   sealBody,
   type Identity,
+  type SealedEnvelope,
 } from './crypto'
 import { RelayClient } from './relayClient'
 import { PROTO_VERSION } from './envelope'
@@ -66,12 +67,8 @@ export function chatFrameHeader(sid: string): Uint8Array {
   return new TextEncoder().encode(`v=${PROTO_VERSION};tag=Route;sid=${sid};nid=`)
 }
 
-export interface SealedEnvelope {
-  ct: string
-  nonce: string
-  ep: string
-  eid: string
-}
+/** 密封帧 wire 形状的定义在 crypto.ts（本文件 re-export 保持旧引用不断）。 */
+export type { SealedEnvelope }
 
 export interface ChatSessionHandlers {
   /** 进来一帧**明文** JSON。UI 状态只能从这里变。 */
@@ -303,9 +300,15 @@ export class ChatSession {
    * 明文形态必须是 `WsClientMessage::Send`：`{"type":"send","text":…}`。
    * PC 侧用 `#[serde(tag="type", rename_all="snake_case")]` 解析，字段名不对
    * 不会回错误码，整轮就静默消失——所以这个字符串由 Rust 侧的枚举定义。
+   *
+   * `target:'twin'` = 投给**阿黎**（PC 侧路由到 `twin:ali` 会话并固定用她的
+   * 人格）；不带 target = 投给本设备的通用会话（电脑助手）。不带 target 的
+   * 后果是「界面写着阿黎、答话的却是无名助手」——2026-10-25 实报的错位。
    */
-  async send(text: string): Promise<boolean> {
-    return this.sendPlain({ type: 'send', text })
+  async send(text: string, target?: 'twin'): Promise<boolean> {
+    return this.sendPlain(
+      target === 'twin' ? { type: 'send', text, target } : { type: 'send', text },
+    )
   }
 
   /**
@@ -332,26 +335,29 @@ export class ChatSession {
    *
    * 走的还是自己的设备通道（信封 sid 不变，E2EE 不动），目标写在密封载荷里
    * （`target: 'twin'`）——PC 收到后把这一轮投到阿黎的会话，回复经设备通道
-   * 密封回来。典型用途：把离线模式的存档整段交给她接手安排。
+   * 密封回来。典型用途：把本机直聊的存档整段交给她接手安排。
    */
   async sendToTwin(text: string): Promise<boolean> {
     if (!text.trim()) return false
-    return this.sendPlain({ type: 'send', text, target: 'twin' })
+    return this.send(text, 'twin')
   }
 
-  /**
-   * 切换默认模型（`provider:model`）。
-   *
-   * 走**和聊天同一条密封上行**，不走 REST：中继是只路由的字节管道，没有
-   * 通往桌面的 HTTP 通道（手机此前那条 `GET /api/model/list` 必然 404，
-   * 选��器因此永远是空的）。
-   *
-   * 只带**一个**模型名，不带整份清单：桌面侧只改默认值，`enabled` 保持它
-   * 自己那份——手机整份回写会把付费厂商的模型挤出可见范围（已发生的事故）。
-   */
+  /** 切换默认模型（`provider:model`）。 */
   async selectModel(model: string): Promise<boolean> {
     if (!model.trim()) return false
     return this.sendPlain({ type: 'model_select', model })
+  }
+
+  /**
+   * 中断正在跑的一轮（`WsClientMessage::Stop`）。
+   *
+   * **必须走 WS 而不是 REST**：REST `/v1/sessions/{sid}/interrupt` 有归属闸门
+   * （只放行本设备的 sid），而阿黎的那一轮跑在 `twin:ali`——REST 一律 403。
+   * WS Stop 帧由桌面侧在**流中**处理（`handle_ws_stream_send` 的读循环），
+   * 与目标会话无关，两条来源都能停。
+   */
+  async stopTurn(): Promise<boolean> {
+    return this.sendPlain({ type: 'stop' })
   }
 
   /** 封一帧明文上行。`send` 与补发请求共用，密封细节只写一次。 */

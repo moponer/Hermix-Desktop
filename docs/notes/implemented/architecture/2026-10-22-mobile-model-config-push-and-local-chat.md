@@ -7,6 +7,8 @@ Status: implemented — 手机端模型清单与凭据经既有密封 WS 帧由�
 [2026-10-14-mobile-voice-input](../feature/2026-10-14-mobile-voice-input.md)（本文沿用它的「桌面配置 → WS 密封帧下发手机」范式）、
 [2026-10-15-phone-revoked-credential-terminal-state](../bug-fix/2026-10-15-phone-revoked-credential-terminal-state.md)（撤销判活，本文在其上补「连带清本地凭据」）。
 
+后续事实同步（2026-10-25）：[手机端三种对话来源 + 多电脑共存 + 模型推送即时生效](../bug-fix/2026-10-25-mobile-chat-sources-and-multi-desktop.md)——开关变更改为**保存即重推**给已连接手机（不再等重连）；`to_mobile_frame` 白名单补 `providers`（凭据此前在 relay 边界被剥掉，本机直连实际不可用）；本机直连从「离线开关」升级为独立对话来源（`local`）。
+
 ## Decision
 
 ### 1. 手机端模型清单与凭据一律走既有密封 WS 帧通道

@@ -10,17 +10,19 @@
  *
  * ## 为什么必须带 source
  *
- * 手机上有两条**完全不同**的对话通路：
- * - `ali`：阿黎，直接用电脑推来的凭据连云厂商（电脑关机也能聊）；
- * - `desktop`：遥控那台电脑，经 relay 由桌面端的 agent 跑。
+ * 手机上有三条**完全不同**的对话通路，混在一个列表里用户就分不清
+ * 「这句话是谁答的、在哪能找回」：
+ * - `ali`：阿黎——住在**电脑上**的人格（twin:ali），有记忆、能跑工具；
+ * - `desktop`：电脑——同一台电脑的通用助手会话，直接下任务遥控它干活；
+ * - `local`：本机直聊——手机直接调电脑此前推送的模型配置问云厂商，
+ *   **不连电脑、不控制电脑、没有阿黎**，就是一段普通对话。
  *
- * 两条通路的会话混在一个列表里，用户就分不清"这句话是谁答的、在哪能找回"。
  * 所以来源是**数据结构的一部分**，不是渲染时的视觉标签——列表、恢复、删除
  * 都按它分流。
  */
 
-/** 对话来源：阿黎（手机本地直连）/ 桌面（遥控那台电脑）。 */
-export type ChatSource = 'ali' | 'desktop'
+/** 对话来源：阿黎（电脑上的人格）/ 电脑（通用助手会话）/ local（本机直聊）。 */
+export type ChatSource = 'ali' | 'desktop' | 'local'
 
 /** 对话气泡（历史存储用，与 chat/index.vue 的 Bubble 同构） */
 export interface StoredBubble {
@@ -55,7 +57,7 @@ const keyFor = (id: string) => `hermix.session.${id}`
 function normalize(rec: Partial<SessionRec> & { id: string }): SessionRec {
   return {
     id: rec.id,
-    source: rec.source === 'ali' ? 'ali' : 'desktop',
+    source: rec.source === 'ali' || rec.source === 'local' ? rec.source : 'desktop',
     title: rec.title || '空白会话',
     updatedAt: rec.updatedAt || new Date(0).toISOString(),
     msgCount: typeof rec.msgCount === 'number' ? rec.msgCount : 0,
@@ -80,7 +82,7 @@ function saveSessions(list: SessionRec[]) {
 
 /** 生成会话 id（按来源分前缀，纯为排障时一眼看出归属）。 */
 export function newSessionId(source: ChatSource = 'desktop') {
-  return `${source === 'ali' ? 'a' : 's'}${Date.now()}`
+  return `${source === 'ali' ? 'a' : source === 'local' ? 'l' : 's'}${Date.now()}`
 }
 
 /** 截取标题 */

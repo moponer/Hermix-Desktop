@@ -1532,6 +1532,28 @@ mod tests {
         assert_eq!(parsed, msg);
     }
 
+    /// 手机端「跟阿黎说话」靠 `target:"twin"`：密封载荷里点名的投递目标。
+    ///
+    /// 字段名对不上时 serde 静默落回 `None`（`#[serde(default)]`），手机端的
+    /// 消息会被投给无名助手会话而不是阿黎——界面写着阿黎、答话的却是
+    /// "I am hermix"，没有任何报错。这条测试把线格式钉死。
+    #[test]
+    fn ws_client_message_send_target_twin_parses() {
+        let parsed: WsClientMessage = serde_json::from_value(serde_json::json!({
+            "type": "send",
+            "text": "阿黎，帮我盯着构建",
+            "target": "twin",
+        }))
+        .expect("target 字段必须能解析");
+        match parsed {
+            WsClientMessage::Send { text, target, .. } => {
+                assert_eq!(text, "阿黎，帮我盯着构建");
+                assert_eq!(target.as_deref(), Some("twin"));
+            }
+            other => panic!("应为 Send，实际 {other:?}"),
+        }
+    }
+
     #[test]
     fn fixtures_round_trip_across_protocol_matrix() {
         let fixtures = include_str!("../../../sdk/protocol-fixtures/ws_envelopes.json");

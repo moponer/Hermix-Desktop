@@ -167,6 +167,14 @@ pub struct HttpServerState {
     /// Broadcast of "new pending clarify snapshot available" — every
     /// WebSocket that wants to render question cards subscribes a clone.
     pub clarify_broadcast: tokio::sync::broadcast::Sender<ClarifyBroadcast>,
+    /// 手机端可见的桌面配置版本号（watch 通道）。
+    ///
+    /// 改到「手机能感知」的桌面配置的处理器（目前是模型配置推送开关，
+    /// `put_mobile_model_push`）在保存后 `send_modify` 自增它；
+    /// `handle_ws_stream` 每条 WS 会话都订阅——版本一动就向**已连接**的手机
+    /// 重推 `model.list`。没有它，开关变更只能等手机下次重连才生效
+    /// （用户在电脑上打开了推送、盯着手机却毫无变化——2026-10-25 的实报）。
+    pub mobile_config_tx: tokio::sync::watch::Sender<u64>,
     /// In-memory catalog of expert role packages. The desktop client pushes
     /// the bundled built-ins into this registry at startup; every expert
     /// surfaced in the UI must come from here.
@@ -541,6 +549,9 @@ impl HttpServerState {
         // 全局单例（P5）：成员会话的 clarify 转发要进同一 dispatcher。
         let clarify_dispatcher = hermix_tools::ClarifyDispatcher::global().clone();
         let (clarify_broadcast, _) = tokio::sync::broadcast::channel::<ClarifyBroadcast>(64);
+        // 手机可见配置的版本号：初始 0，只在配置真正变更时自增（watch 的
+        // `changed()` 不触发初值，天然免去「建连即多推一次」）。
+        let (mobile_config_tx, _) = tokio::sync::watch::channel::<u64>(0);
         // 进程级装配（C4）。`boot` 持有 service 注册 guard——必须活到
         // `HttpServerState` 析构；`boot_seams` 把同一组 provider 实例
         // 传给 `register_builtin_tools`，让 file/terminal 工具真接 Fs/Shell
@@ -855,6 +866,7 @@ impl HttpServerState {
             )),
             clarify_dispatcher,
             clarify_broadcast,
+            mobile_config_tx,
             expert_registry: hermix_skills::ExpertRegistry::new(),
             automation_scheduler: None,
             resource_patrol: None,
@@ -1021,6 +1033,9 @@ impl HttpServerState {
         // 全局单例（P5）：成员会话的 clarify 转发要进同一 dispatcher。
         let clarify_dispatcher = hermix_tools::ClarifyDispatcher::global().clone();
         let (clarify_broadcast, _) = tokio::sync::broadcast::channel::<ClarifyBroadcast>(64);
+        // 手机可见配置的版本号：初始 0，只在配置真正变更时自增（watch 的
+        // `changed()` 不触发初值，天然免去「建连即多推一次」）。
+        let (mobile_config_tx, _) = tokio::sync::watch::channel::<u64>(0);
         let pump_dispatcher = clarify_dispatcher.clone();
         let pump_broadcast = clarify_broadcast.clone();
         tokio::spawn(async move {
@@ -1178,6 +1193,7 @@ impl HttpServerState {
             )),
             clarify_dispatcher,
             clarify_broadcast,
+            mobile_config_tx,
             expert_registry: hermix_skills::ExpertRegistry::new(),
             automation_scheduler: None,
             resource_patrol: None,

@@ -88,7 +88,7 @@ export interface AsrProvider {
 export class NullAsr implements AsrProvider {
   readonly enabled = false
   async start(): Promise<void> {}
-  async push(): Promise<void> {}
+  async push(_chunk: ArrayBuffer): Promise<void> {}
   async stop(): Promise<AsrResult> {
     return { partial: '', final: null }
   }
@@ -223,7 +223,7 @@ export interface TtsProvider {
 
 export class NullTts implements TtsProvider {
   readonly enabled = false
-  async speak(): Promise<void> {}
+  async speak(_text: string): Promise<void> {}
   async flush(): Promise<void> {}
   onState(): void {}
 }

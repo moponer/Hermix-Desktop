@@ -128,7 +128,8 @@ function drbgBytes(n: number): Uint8Array {
   }
   for (let i = 0; i < 32; i++) entropy += `:${Math.random()}`;
   try {
-    const si = (uni as { getSystemInfoSync?: () => Record<string, unknown> }).getSystemInfoSync?.();
+    const si = (uni as unknown as { getSystemInfoSync?: () => Record<string, unknown> })
+      .getSystemInfoSync?.();
     if (si) entropy += `:${JSON.stringify(si).slice(0, 256)}`;
   } catch {
     /* H5 之外可能受限，少一份熵不影响可用性 */
@@ -232,6 +233,17 @@ export async function openBody(
   // tag 不符（密文/nonce/AAD 任何一个被改）noble 直接 throw —— 调用方
   // assert.rejects 与线上「拒收坏帧」共用这一条路径。
   return gcm(key, sealed.nonce, ctx.header).decrypt(sealed.ciphertext);
+}
+
+/**
+ * 密封帧的 wire 形状（base64 四件套）。crypto 与 session 两处共用同一形状，
+ * 定义在 crypto（被 session import，反向会成环）。
+ */
+export interface SealedEnvelope {
+  ct: string
+  nonce: string
+  ep: string
+  eid: string
 }
 
 /**

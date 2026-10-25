@@ -37,12 +37,12 @@ onLaunch(() => {
   // 时钟偏差必须在**配对前**就量一次：请求签名含 unix 时间戳，容许窗口只有
   // ±300 秒，设备时间不准会全部 401，而用户看到的现象是「配对成功了但连不上」
   // ——最难自查的一类故障。这里只记日志，配对屏负责展示。
-  void checkClockSkew().then((skew) => {
+  void checkClockSkew().then((probe) => {
     // null = 没能与服务端对时（离线 / 请求失败）。此时没有基准可比，
     // 告警只会是噪声。
-    if (skew === null) return
-    if (Math.abs(skew) > 30) {
-      console.warn(`[hermix-m] 设备时钟与服务端偏差 ${skew}s，可能导致签名被拒`)
+    if (probe.skew === null) return
+    if (Math.abs(probe.skew) > 30) {
+      console.warn(`[hermix-m] 设备时钟与服务端偏差 ${probe.skew}s，可能导致签名被拒`)
     }
   })
 })

@@ -15,6 +15,12 @@ export interface VoiceSttWire {
 const VOICE_STT_KEY = 'hermix.voiceStt'
 
 /**
+ * 录音管理器类型：直接取 uni API 的返回类型（`ReturnType<typeof …>`），
+ * 不引 @uni-helper 类型包——这一个类型不值得多装一个依赖。
+ */
+type RecorderManager = ReturnType<typeof uni.getRecorderManager>
+
+/**
  * 语音输入（长按说话 → 云端识别）。
  *
  * 只负责「录一轮 → 识别 → 给出文本」；识别出的文本通过 `onFinal` 交给调用方，
@@ -27,7 +33,7 @@ export function useVoiceInput(onFinal: (text: string) => void) {
   const partial = ref('')
 
   let asr: AsrProvider | null = null
-  let recorder: UniHelper.RecorderManager | null = null
+  let recorder: RecorderManager | null = null
 
   /** 配置落地：帧下发与本地缓存共用这一条路径，避免两处构建逻辑漂移。 */
   function applyConfig(cfg: VoiceSttWire | null) {
@@ -78,7 +84,7 @@ export function useVoiceInput(onFinal: (text: string) => void) {
   }
 
   /** 平台录音管理器：整轮录 MP3，松手后读文件整体上传（比逐帧推兼容面宽）。 */
-  function ensureRecorder(): UniHelper.RecorderManager {
+  function ensureRecorder(): RecorderManager {
     if (recorder) return recorder
     const rec = uni.getRecorderManager()
     rec.onStop((res) => {

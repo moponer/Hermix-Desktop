@@ -169,11 +169,12 @@ function resetPairing() {
 
 <template>
   <hm-shell title="设置" back>
-    <!-- 1. 连接状态卡：这一页唯一需要「一眼」的东西 -->
+    <!-- 1. 连接状态卡：这一页唯一需要「一眼」的东西。
+         注意措辞：配对过 ≠ 此刻在线（在线状态只在对话页的链路条里体现）。 -->
     <view class="conn" :class="{ off: !paired }">
       <view class="conn-dot" />
       <view class="conn-txt">
-        <text class="conn-t">{{ paired ? '已连接电脑' : '未连接' }}</text>
+        <text class="conn-t">{{ paired ? '已配对电脑' : '还没有配对' }}</text>
         <text class="conn-s">{{ paired ? deviceId() : '扫一次码就好，不用手填任何东西' }}</text>
       </view>
     </view>

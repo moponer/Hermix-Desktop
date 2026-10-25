@@ -45,3 +45,19 @@ export function clearModelConfig(): void {
     // 忽略：清不掉也不能因此阻断撤销流程。
   }
 }
+
+/**
+ * 改**本机直聊**用的默认模型（只改这份本地快照的 defaultModel）。
+ *
+ * 不经电脑：电脑下次推送会把整份快照覆盖回来——那本来就是唯一真相源，
+ * 本地改的只服务「电脑不在线时手机自己挑模型」这一件事。
+ */
+export function setLocalDefaultModel(model: string): void {
+  const cfg = loadModelConfig()
+  if (!cfg || cfg.defaultModel === model) return
+  try {
+    uni.setStorageSync(KEY, { ...cfg, defaultModel: model })
+  } catch {
+    // 存不进去 = 下次还是旧默认，不影响当轮对话。
+  }
+}

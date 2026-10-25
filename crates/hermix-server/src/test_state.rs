@@ -74,6 +74,7 @@ pub fn empty_state() -> HttpServerState {
     let session_persistence = Arc::new(SessionPersistence::new(&home));
     let clarify_dispatcher = hermix_tools::ClarifyDispatcher::global().clone();
     let (clarify_broadcast, _) = tokio::sync::broadcast::channel::<crate::ClarifyBroadcast>(64);
+    let (mobile_config_tx, _) = tokio::sync::watch::channel::<u64>(0);
     let agent_service: Arc<dyn AgentService> = Arc::new(NullAgentService);
     let metrics = crate::metrics::MetricsCollector::new(&home);
 
@@ -89,6 +90,7 @@ pub fn empty_state() -> HttpServerState {
         approval_registry: Default::default(),
         clarify_dispatcher,
         clarify_broadcast,
+        mobile_config_tx,
         expert_registry: hermix_skills::ExpertRegistry::new(),
         automation_scheduler: None,
         resource_patrol: None,
@@ -135,6 +137,7 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
     let session_persistence = Arc::new(SessionPersistence::new(&home));
     let clarify_dispatcher = hermix_tools::ClarifyDispatcher::global().clone();
     let (clarify_broadcast, _) = tokio::sync::broadcast::channel::<crate::ClarifyBroadcast>(64);
+    let (mobile_config_tx, _) = tokio::sync::watch::channel::<u64>(0);
     let agent_service: Arc<dyn AgentService> = Arc::new(NullAgentService);
     let metrics = crate::metrics::MetricsCollector::new(&home);
 
@@ -150,6 +153,7 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         approval_registry: Default::default(),
         clarify_dispatcher,
         clarify_broadcast,
+        mobile_config_tx,
         expert_registry: hermix_skills::ExpertRegistry::new(),
         automation_scheduler: None,
         resource_patrol: None,

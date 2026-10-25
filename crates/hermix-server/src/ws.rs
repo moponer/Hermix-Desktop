@@ -3016,7 +3016,27 @@ pub(crate) async fn handle_ws_stream(
         let _ = sender.send(frame.to_string()).await;
     }
 
-    while let Some(first) = receiver.recv().await {
+    // 手机可见配置（模型配置推送开关）变更即推：每条 WS 会话订阅同一个
+    // watch 版本号，`put_mobile_model_push` 保存后自增，这里立刻给**已连接**
+    // 的手机重推 `model.list`。没有这条，开关变更要等手机重连才生效——
+    // 用户在电脑上打开推送、盯着手机却毫无动静。
+    //
+    // 时机边界：`handle_inbound_frame` 是长 await（一整轮 agent），变更信号
+    // 只在两帧之间被 select 到——正在跑的那一轮结束后必然送达，不丢。
+    let mut mobile_config_rx = state.mobile_config_tx.subscribe();
+
+    loop {
+        let first = tokio::select! {
+            res = receiver.recv() => match res {
+                Some(text) => text,
+                None => break,
+            },
+            _ = mobile_config_rx.changed() => {
+                let _ = mobile_config_rx.borrow_and_update();
+                push_model_list(&state, &mut *sender, &trace_id_base).await;
+                continue;
+            }
+        };
         // A turn's `handle_ws_stream_send` can hand back a user message it
         // consumed mid-stream. Re-drive it here rather than waiting for the
         // user to send something else — the read cursor already advanced

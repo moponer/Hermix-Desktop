@@ -71,8 +71,14 @@ export async function getTasks(): Promise<TaskItem[]> {
   return data.tasks ?? []
 }
 
-/** POST /v1/sessions/{sid}/interrupt — 中断指定会话。 */
-export async function interruptSession(sid: string): Promise<InterruptResult> {
+/**
+ * POST /v1/sessions/{sid}/interrupt — 中断指定会话。
+ *
+ * `sid` 可为 null（当前还没有会话 / 配对流程的顺手清理）：没有会话就没有
+ * 可中断的对象，如实返回，不发那次注定无效的请求。
+ */
+export async function interruptSession(sid: string | null): Promise<InterruptResult> {
+  if (!sid) return { interrupted: false, reason: '当前没有会话' }
   const base = apiBase()
   if (!base) return { interrupted: false, reason: '未配对' }
   const path = `/v1/sessions/${encodeURIComponent(sid)}/interrupt`

@@ -657,8 +657,10 @@ pub async fn get_mobile_model_push(
     Json(MobileModelPushConfig::load(&state))
 }
 
-/// PUT /api/mobile/model-push — 桌面端保存开关。保存即生效：下一次手机连上
-/// 就按新状态推送（已在连的手机重连后更新）。
+/// PUT /api/mobile/model-push — 桌面端保存开关。保存即生效：
+/// `send_modify` 自增手机可见配置版本，`handle_ws_stream` 订阅着它——
+/// **已连接**的手机立刻收到一份新的 `model.list`（开着 = 真清单带凭据，
+/// 关着 = 空清单让手机删掉本地存的凭据），不用等它重连。
 pub async fn put_mobile_model_push(
     State(state): State<HttpServerState>,
     Json(body): Json<MobileModelPushConfig>,
@@ -667,6 +669,9 @@ pub async fn put_mobile_model_push(
         status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         message: format!("mobile_model_push.json 写入失败: {e}"),
     })?;
+    state
+        .mobile_config_tx
+        .send_modify(|v| *v = v.wrapping_add(1));
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
