@@ -78,6 +78,8 @@ export interface RouteContext {
   sessions: Session[];
   /** 切会话并跳回对话页 —— 侧栏、搜索结果用这个。 */
   handleSelectSession: (id: string) => void;
+  /** 删除会话（乐观更新宿主会话表）—— 阿黎值守页「最近会话」的删除钮用。 */
+  handleDeleteSession: (id: string) => void;
   /** 只切会话，不动当前页面 —— 工作台页面用这个。 */
   selectSessionOnly: (id: string) => void;
   /** 「助手阿黎」页的内联对话（独立发送器，见 `TwinInlineApi`）。 */
@@ -114,6 +116,8 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
           <TwinView
             sessions={ctx.sessions}
             onOpenChat={() => ctx.handleSelectSession(TWIN_SESSION_ID)}
+            onOpenSession={ctx.handleSelectSession}
+            onDeleteSession={ctx.handleDeleteSession}
             twin={ctx.twin}
           />
         </Suspense>

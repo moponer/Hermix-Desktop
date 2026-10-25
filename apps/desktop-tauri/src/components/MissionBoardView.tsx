@@ -85,6 +85,87 @@ const ROLE_TONE: Record<string, IconTone> = {
 };
 const FALLBACK_TONE: IconTone = "slate";
 
+/** 拉取失败的就地面板：说清**哪一路**失败（各路独立后这是必需的），
+ *  给手动重试；60s 自动轮询照旧，恢复后自动回到正常渲染。 */
+function LoadError({ what, text, onRetry }: { what: string; text: string; onRetry: () => void }) {
+  return (
+    <div className="rounded-[var(--radius-md)] bg-error-soft p-4 text-[length:var(--text-ui)] text-text-error">
+      <p className="flex items-start gap-1.5">
+        <CircleAlert className="icon-md mt-0.5 shrink-0" />
+        <span>
+          {what}暂时加载不出来：{text || "后端没有响应"}。下面可以重试，或等它自动再试。
+        </span>
+      </p>
+      <button
+        type="button"
+        className="mt-2 rounded-[var(--radius-sm)] px-3 py-1.5 text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-tertiary hover:text-text-primary"
+        onClick={onRetry}
+      >
+        重试
+      </button>
+    </div>
+  );
+}
+
+/** 一张工单卡。`compact` = 值守页窄容器的单行形态（宽页签用两行卡片）。 */
+function MemberCard({
+  m,
+  compact = false,
+  onOpen,
+  onStop,
+}: {
+  m: MemberSummary;
+  compact?: boolean;
+  onOpen: (id: string) => Promise<void>;
+  onStop: (id: string) => Promise<void>;
+}) {
+  const verdictClass =
+    m.review_verdict === "pass"
+      ? "text-text-success"
+      : m.review_verdict === "warn"
+        ? "text-text-warning"
+        : "text-text-error";
+  return (
+    <div
+      className={`${compact ? "flex items-center gap-2 px-3 py-2" : "flex items-start gap-2 p-3"} cursor-pointer rounded-[var(--radius-md)] border border-border-subtle bg-bg-secondary transition-colors hover:border-border-primary`}
+      onClick={() => void onOpen(m.member_id)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") void onOpen(m.member_id);
+      }}
+    >
+      <IconTile icon={<RoleGlyph role={m.role} />} tone={roleTone(m.role)} size="sm" />
+      <div className="min-w-0 flex-1">
+        <p className={`${compact ? "truncate" : "line-clamp-2"} text-[length:var(--text-ui)] text-text-primary`}>
+          {m.task}
+        </p>
+        <p className={`${compact ? "mt-0" : "mt-1"} text-[length:var(--text-meta)] text-text-faint`}>
+          {m.role} · {STATUS_LABEL[m.status]} · {m.total_turns} 轮 · {fmtTime(m.started_at)}
+        </p>
+        {m.review_verdict && (
+          <p className={`mt-0.5 text-[length:var(--text-meta)] ${verdictClass}`}>
+            验收：{m.review_verdict === "pass" ? "通过" : m.review_verdict === "warn" ? "有保留" : "未通过"}
+          </p>
+        )}
+      </div>
+      {m.status === "running" && (
+        <button
+          type="button"
+          aria-label={`中止工单 ${m.task.slice(0, 20)}`}
+          className="shrink-0 rounded-[var(--radius-sm)] p-1 text-text-muted transition-colors hover:bg-error-soft hover:text-text-error"
+          onClick={(e) => {
+            e.stopPropagation();
+            void onStop(m.member_id);
+          }}
+        >
+          <PauseCircle className="icon-md" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function roleTone(role: string): IconTone {
   return ROLE_TONE[role] ?? FALLBACK_TONE;
 }
@@ -137,7 +218,11 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
   const [members, setMembers] = useState<MemberSummary[] | null>(null);
   const [roles, setRoles] = useState<RoleEntry[] | null>(null);
   const [roleErrors, setRoleErrors] = useState<Array<{ file: string; error: string }>>([]);
+  /** 角色库拉取失败的原因；非空 = 显示错误 + 重试，而不是骨架屏。 */
+  const [rolesError, setRolesError] = useState<string | null>(null);
   const [patrol, setPatrol] = useState<PatrolSnapshot | null>(null);
+  /** 资源巡检拉取失败的原因；同上。 */
+  const [patrolError, setPatrolError] = useState<string | null>(null);
   const [roleStats, setRoleStats] = useState<RoleStats[] | null>(null);
   const [caches, setCaches] = useState<CacheEntry[] | null>(null);
   const [cacheScanning, setCacheScanning] = useState(false);
@@ -155,34 +240,37 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
     }
   }, []);
 
-  const refreshStatic = useCallback(async () => {
-    try {
-      const [r, p] = await Promise.all([
-        fetchJSON<{ roles: RoleEntry[]; errors: Array<{ file: string; error: string }> }>("/api/agent-roles"),
-        fetchJSON<PatrolSnapshot>("/api/resource/patrol"),
-      ]);
-      setRoles(r.roles);
-      setRoleErrors(r.errors ?? []);
-      setPatrol(p);
-      // 评分轻（纯聚合），随静态面一起刷新。
-      try {
-        const st = await fetchJSON<{ stats: RoleStats[] }>("/api/member-stats");
-        setRoleStats(st.stats);
-      } catch {
-        setRoleStats(null);
-      }
-    } catch {
-      // 巡检/角色面失败不打断看板：各自有缺省展示。
-    }
+  // 三路各自独立（2026-10-25 修复）：此前 `Promise.all` 把三个端点捆在一起，
+  // 任何一个失败 → roles/patrol 都停在 `null` → 「团队」「资源」两个页签
+  // **永久骨架屏**（渲染条件就是 `=== null`，而 catch 里什么都不设）。
+  // 现在各查各的：失败的那一路显示错误与重试（60s 自动重试照旧），
+  // 成功的路照常渲染。
+  const refreshStatic = useCallback(() => {
+    fetchJSON<{ roles: RoleEntry[]; errors: Array<{ file: string; error: string }> }>("/api/agent-roles")
+      .then((r) => {
+        setRoles(r.roles);
+        setRoleErrors(r.errors ?? []);
+        setRolesError(null);
+      })
+      .catch((e) => setRolesError(String(e)));
+    fetchJSON<PatrolSnapshot>("/api/resource/patrol")
+      .then((p) => {
+        setPatrol(p);
+        setPatrolError(null);
+      })
+      .catch((e) => setPatrolError(String(e)));
+    fetchJSON<{ stats: RoleStats[] }>("/api/member-stats")
+      .then((st) => setRoleStats(st.stats))
+      .catch(() => setRoleStats(null));
   }, []);
 
   useEffect(() => {
     void refreshMembers();
-    void refreshStatic();
+    refreshStatic();
     // members 快轮询；静态面（巡检/角色/评分）慢轮询——资源页签的
     // 水位要能自己恢复显示，不能只靠手动刷新（复查 P2-5）。
     const t = window.setInterval(() => void refreshMembers(), 10_000);
-    const t2 = window.setInterval(() => void refreshStatic(), 60_000);
+    const t2 = window.setInterval(refreshStatic, 60_000);
     return () => {
       window.clearInterval(t);
       window.clearInterval(t2);
@@ -233,27 +321,44 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
 
   // 看板内容（工单/团队/资源 + 详情 Modal）：独立页与阿黎值守页「任务」
   // 页签共用（总管方案 D8：任务台是阿黎能力的展示面，不是另一个应用）。
+  // 错误不再用顶部横幅：每个页签对自己的数据负责，失败就地显示 + 重试。
   const inner = (
     <>
-      {error && (
-            <p className="mb-4 flex items-start gap-1.5 text-[length:var(--text-ui)] text-text-error">
-              <CircleAlert className="icon-md mt-0.5 shrink-0" />
-              <span>后端不可达：{error}</span>
-            </p>
-          )}
-
-          {tab === "tickets" && (
-            members === null ? (
+      {tab === "tickets" && (
+            members === null && error === null ? (
               <div className="flex flex-col gap-3 py-8">
                 <SkeletonCard lines={2} />
                 <SkeletonCard lines={2} />
               </div>
+            ) : members === null ? (
+              <LoadError what="工单列表" text={error ?? ""} onRetry={() => void refreshMembers()} />
             ) : members.length === 0 ? (
               <EmptyState
                 variant="plain"
                 title="还没有成员工单"
                 description="在对话里让阿黎派活（dispatch_member），工单会出现在这里"
               />
+            ) : embedded ? (
+              /* 值守页「任务」页签的窄容器：四列看板塞进来每列只剩两指宽、
+                 大半列还是「空」占位（2026-10-25 用户实测「排版差得要命」）。
+                 嵌入态改**按状态分组的紧凑列表**：只显示非空组，一行一单。 */
+              <div className="flex flex-col gap-5">
+                {COLUMNS.map((col, i) =>
+                  grouped[i].length === 0 ? null : (
+                    <section key={col.key} aria-label={col.title}>
+                      <h2 className="mb-1.5 text-[length:var(--text-ui)] font-semibold text-text-muted">
+                        {col.title}
+                        <span className="ml-1.5 text-text-faint">{grouped[i].length}</span>
+                      </h2>
+                      <div className="flex flex-col gap-1.5">
+                        {grouped[i].map((m) => (
+                          <MemberCard key={m.member_id} m={m} compact onOpen={openDetail} onStop={stopMember} />
+                        ))}
+                      </div>
+                    </section>
+                  ),
+                )}
+              </div>
             ) : (
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
                 {COLUMNS.map((col, i) => (
@@ -269,52 +374,7 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
                         </div>
                       )}
                       {grouped[i].map((m) => (
-                        <div
-                          key={m.member_id}
-                          className="cursor-pointer rounded-[var(--radius-md)] border border-border-subtle bg-bg-secondary p-3 transition-colors hover:border-border-primary"
-                          onClick={() => void openDetail(m.member_id)}
-                          role="button"
-                          tabIndex={0}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") void openDetail(m.member_id);
-                          }}
-                        >
-                          <div className="flex items-start gap-2">
-                            <IconTile icon={<RoleGlyph role={m.role} />} tone={roleTone(m.role)} size="sm" />
-                            <div className="min-w-0 flex-1">
-                              <p className="line-clamp-2 text-[length:var(--text-ui)] text-text-primary">{m.task}</p>
-                              <p className="mt-1 text-[length:var(--text-meta)] text-text-faint">
-                                {m.role} · {STATUS_LABEL[m.status]} · {m.total_turns} 轮 · {fmtTime(m.started_at)}
-                              </p>
-                              {m.review_verdict && (
-                                <p
-                                  className={
-                                    m.review_verdict === "pass"
-                                      ? "mt-1 text-[length:var(--text-meta)] text-text-success"
-                                      : m.review_verdict === "warn"
-                                        ? "mt-1 text-[length:var(--text-meta)] text-text-warning"
-                                        : "mt-1 text-[length:var(--text-meta)] text-text-error"
-                                  }
-                                >
-                                  验收：{m.review_verdict === "pass" ? "通过" : m.review_verdict === "warn" ? "有保留" : "未通过"}
-                                </p>
-                              )}
-                            </div>
-                            {m.status === "running" && (
-                              <button
-                                type="button"
-                                aria-label={`中止工单 ${m.task.slice(0, 20)}`}
-                                className="shrink-0 rounded-[var(--radius-sm)] p-1 text-text-muted transition-colors hover:bg-error-soft hover:text-text-error"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void stopMember(m.member_id);
-                                }}
-                              >
-                                <PauseCircle className="icon-md" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
+                        <MemberCard key={m.member_id} m={m} onOpen={openDetail} onStop={stopMember} />
                       ))}
                     </div>
                   </section>
@@ -324,11 +384,19 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
           )}
 
           {tab === "team" && (
-            roles === null ? (
+            rolesError != null ? (
+              <LoadError what="角色库" text={rolesError} onRetry={refreshStatic} />
+            ) : roles === null ? (
               <div className="flex flex-col gap-3 py-8">
                 <SkeletonCard lines={2} />
                 <SkeletonCard lines={2} />
               </div>
+            ) : roles.length === 0 ? (
+              <EmptyState
+                variant="plain"
+                title="角色库是空的"
+                description="在对话里让阿黎用 agent_role_upsert 增改角色，此处热加载展示"
+              />
             ) : (
               <>
                 <p className="mb-4 text-[length:var(--text-ui)] text-text-muted">
@@ -380,7 +448,9 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
           )}
 
           {tab === "resource" && (
-            patrol === null ? (
+            patrolError != null ? (
+              <LoadError what="资源巡检" text={patrolError} onRetry={refreshStatic} />
+            ) : patrol === null ? (
               <div className="flex flex-col gap-3 py-8">
                 <SkeletonCard lines={2} />
               </div>

@@ -9,7 +9,7 @@
         "usingComponents" : true,
         "nvueStyleCompiler" : "uni-app",
         "compilerVersion" : 3,
-        "softInputMode" : "adjustResize",
+        "softinputMode" : "adjustResize",
         "splashscreen" : {
             "alwaysShowBeforeRender" : false,
             "waiting" : false,

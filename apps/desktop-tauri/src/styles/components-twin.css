@@ -1493,6 +1493,50 @@
   color: var(--color-text-faint);
   font-variant-numeric: tabular-nums;
 }
+/* 可操作的会话行（「最近会话」）：主行点开正文，尾随删除钮。
+   主行铺满、按钮挤到行尾悬停才显色——不与标题抢注意力。 */
+.twin-row--act {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+}
+.twin-row--act .twin-row__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 5px 0;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  cursor: pointer;
+}
+.twin-row--act .twin-row__open:hover .twin-row__m,
+.twin-row--act .twin-row__open:focus-visible .twin-row__m {
+  color: var(--color-text-secondary);
+}
+.twin-row--act .twin-row__del {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+.twin-row--act .twin-row__del svg {
+  width: 12px;
+  height: 12px;
+}
+.twin-row--act .twin-row__del:hover,
+.twin-row--act .twin-row__del:focus-visible {
+  background: var(--color-error-soft);
+  color: var(--color-text-error);
+}
 
 /* ── 中轴 ── */
 .twin-center {

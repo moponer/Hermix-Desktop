@@ -231,13 +231,21 @@ pub async fn refresh_and_persist(home: &std::path::Path, service: &Arc<dyn Agent
     added_total
 }
 
-/// 把确认 404 下架的模型从免费渠道清单里摘除（调用失败闭环的落地）。
+/// 把确认失效的模型从免费渠道清单里摘除（调用失败闭环的落地）。
 ///
-/// 「只增不删」防的是上游网络抖动误删条目；而 404 `does not exist` 是
-/// 上游明确的"这个 id 不存在"信号，不是抖动——不摘的话死模型会永远
-/// 留在清单里，用户每次选中都 404（实测：`minimax/minimax-m3.1-flash:free`
-/// 被上游下架后持续报错）。只动免费渠道的 provider entry，用户的自定义
-/// 与内置清单不受影响。返回是否发生改动。
+/// 「只增不删」防的是上游网络抖动误删条目；而 **404 `does not exist`**
+/// （上游明确说这个 id 不存在）与 **401**（无鉴权免费路由被拒绝访问 =
+/// 路由已死）都是明确信号，不是抖动——不摘的话死模型会永远留在清单里，
+/// 用户每次选中都失败（实测：`minimax/minimax-m3.1-flash:free` 被上游
+/// 下架后持续报错；401 同理）。只动免费渠道的 provider entry，用户的
+/// 自定义与内置清单不受影响。
+///
+/// 摘除范围是**三处一起清**（2026-10-25 补齐）：provider 的模型目录
+/// （`model` CSV / contexts / meta）、`model_selector.enabled`、以及指向
+/// 它的默认模型。此前只清目录不清 enabled——`build_model_list` 的启用
+/// 清单不按目录过滤，于是死模型从「可添加」里消失了、却永远留在聊天
+/// 下拉里：用户看到的就是「明明 401/404 了，列表里一直在」。
+/// 返回是否发生改动。
 pub async fn remove_dead_model(
     home: &std::path::Path,
     service: &Arc<dyn AgentService>,
@@ -258,10 +266,13 @@ pub async fn remove_dead_model(
         return false;
     }
     let mut changed = false;
+    // 该模型归属的免费 provider（enabled / 默认模型的清理范围按它限定）。
+    let mut owning: Vec<String> = Vec::new();
     for channel in hermix_config::free_channel::FREE_CHANNELS {
         let Some(entry) = fresh.llm_providers.get_mut(channel.id) else {
             continue;
         };
+        let mut owned_here = false;
         if let Some(csv) = entry.model.clone() {
             let present = csv.split(',').map(str::trim).any(|m| m == model_id);
             if present {
@@ -272,18 +283,62 @@ pub async fn remove_dead_model(
                     .collect();
                 entry.model = Some(kept.join(","));
                 changed = true;
+                owned_here = true;
             }
         }
         if entry.model_contexts.remove(model_id).is_some() {
             changed = true;
+            owned_here = true;
         }
         if entry.model_meta.remove(model_id).is_some() {
             changed = true;
+            owned_here = true;
+        }
+        if owned_here {
+            owning.push(channel.id.to_string());
         }
     }
     if !changed {
         return false;
     }
+
+    // enabled 与默认模型：只清理刚确认属于免费渠道的 provider 条目，
+    // 同名模型挂在用户自定义 provider 上的一概不动。
+    // （此前提返回后 `changed` 已无读者，后续改动无需再回写它。）
+    let is_owned = |pid: &str| owning.iter().any(|o| o == pid);
+    if let Some(sel) = fresh.model_selector.as_mut() {
+        sel.enabled
+            .retain(|e| !(is_owned(&e.provider_id) && e.model_id == model_id));
+        if sel
+            .default_model
+            .as_deref()
+            .and_then(|d| d.split_once(':'))
+            .map(|(p, m)| is_owned(p) && m == model_id)
+            .unwrap_or(false)
+        {
+            // 默认模型死了 → 指到剩余启用清单的第一条（build_model_list
+            // 同一口径），没有剩余就清空。
+            sel.default_model = sel
+                .enabled
+                .first()
+                .map(|e| format!("{}:{}", e.provider_id, e.model_id));
+        }
+    }
+    // 顶层 `model`（正在跑的模型）指向死模型时一并重指，否则
+    // build_model_list 会把它当孤儿又加回目录。
+    let model_dead = fresh
+        .model
+        .as_deref()
+        .and_then(|m| m.split_once(':'))
+        .map(|(p, m)| is_owned(p) && m == model_id)
+        .unwrap_or(false);
+    if model_dead {
+        fresh.model = fresh
+            .model_selector
+            .as_ref()
+            .and_then(|s| s.default_model.clone());
+    }
+
     let path = home.join("config.yaml");
     if let Err(e) = hermix_config::save_config_yaml(&path, &fresh) {
         tracing::warn!(error = %e, model = %model_id, "free channel: dead-model removal persist failed");
@@ -345,6 +400,82 @@ mod tests {
         assert!(
             !list.iter().any(|(id, _)| id.contains("claude-opus")),
             "paid models must be filtered out (isFree == false)"
+        );
+    }
+
+    /// 摘除必须三处一起清：目录（model CSV / contexts / meta）、
+    /// `model_selector.enabled`、以及指向死模型的默认模型。此前只清目录
+    /// ——`build_model_list` 的启用清单不按目录过滤，死模型于是从「可添加」
+    /// 消失、却永远留在聊天下拉里（用户实测「明明 401，列表一直在」）。
+    #[tokio::test]
+    async fn dead_model_removal_clears_catalog_enabled_and_default() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().to_path_buf();
+        let state = crate::HttpServerState::build_with_hermes_home(
+            hermix_config::GatewayConfig::default(),
+            home.clone(),
+        )
+        .await
+        .expect("build_with_hermes_home");
+
+        // 死模型挂在免费渠道且是默认；付费条目（deepseek）作对照——同轮
+        // 摘除不得误伤。
+        let mut cfg = hermix_config::load_config(home.to_str()).expect("config");
+        let entry = cfg
+            .llm_providers
+            .get_mut("custom-free-kilo")
+            .expect("free channel seeded");
+        entry.model = Some("dead-route,alive-route".to_string());
+        entry.model_contexts.insert("dead-route".to_string(), 1000);
+        cfg.model_selector = Some(hermix_config::ModelSelectorConfig {
+            enabled: vec![
+                hermix_config::ModelSelectorEntry {
+                    provider_id: "custom-free-kilo".to_string(),
+                    model_id: "dead-route".to_string(),
+                },
+                hermix_config::ModelSelectorEntry {
+                    provider_id: "custom-free-kilo".to_string(),
+                    model_id: "alive-route".to_string(),
+                },
+                hermix_config::ModelSelectorEntry {
+                    provider_id: "deepseek".to_string(),
+                    model_id: "chat".to_string(),
+                },
+            ],
+            default_model: Some("custom-free-kilo:dead-route".to_string()),
+        });
+        cfg.model = Some("custom-free-kilo:dead-route".to_string());
+        hermix_config::save_config_yaml(&home.join("config.yaml"), &cfg).expect("save");
+
+        assert!(remove_dead_model(&home, &state.agent_service, "dead-route").await);
+
+        let after = hermix_config::load_config(home.to_str()).expect("reload");
+        let entry = after.llm_providers.get("custom-free-kilo").unwrap();
+        assert!(
+            !entry.model.as_deref().unwrap().contains("dead-route"),
+            "目录里必须摘掉"
+        );
+        let sel = after.model_selector.as_ref().unwrap();
+        assert!(
+            !sel.enabled.iter().any(|e| e.model_id == "dead-route"),
+            "启用清单必须摘掉，got {:?}",
+            sel.enabled
+        );
+        assert!(
+            sel.enabled
+                .iter()
+                .any(|e| e.provider_id == "deepseek" && e.model_id == "chat"),
+            "付费条目不受影响"
+        );
+        assert_eq!(
+            sel.default_model.as_deref(),
+            Some("custom-free-kilo:alive-route"),
+            "默认模型重指到剩余启用首条"
+        );
+        assert_eq!(
+            after.model.as_deref(),
+            Some("custom-free-kilo:alive-route"),
+            "顶层运行模型同步重指"
         );
     }
 

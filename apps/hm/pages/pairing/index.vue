@@ -97,15 +97,15 @@ async function submit() {
     // 设备清掉——「连了新电脑，旧电脑就消失」正是这段删出来的。旧 token 若
     // 已被电脑端撤销，切过去会收到 401 → 横幅「去处理」→ 设备管理里移除，
     // 出路是明确的，不需要预防性清库。
-    // 起名输入的键盘还开着就 reLaunch，窗口的 adjustPan 上移状态会带进新页
-    // （键盘收起但不还原 → 对话页顶栏/底栏被裁出屏幕）。先收键盘再跳。
-    try {
-      uni.hideKeyboard()
-    } catch { /* 无键盘时可忽略 */ }
-    uni.reLaunch({ url: '/pages/chat/index' })
+    // 起名输入的键盘还开着就 reLaunch，窗口的上移状态会带进新页（键盘收起但
+    // 不还原 → 对话页顶栏/底栏被裁出屏幕）。2026-10-25 复发：hideKeyboard 只是
+    // 发起收起，紧跟 reLaunch 仍会在收起动画中途跳页——这次等键盘真正收到 0
+    // 再跳（见 reLaunchAfterKeyboardClose）。
+    reLaunchAfterKeyboardClose('/pages/chat/index')
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
-  } finally {
+    // 失败才复位按钮：成功路径要等键盘收起再跳页，期间按钮若复活，双击就是
+    // 两次配对提交。
     busy.value = false
   }
 }
@@ -113,6 +113,44 @@ async function submit() {
 function reset() {
   target.value = null
   error.value = ''
+}
+
+/**
+ * 等键盘收干净再 reLaunch（2026-10-25 复发案）。
+ *
+ * uni.hideKeyboard() 只是**发起**收起，紧跟着 reLaunch 会在收起动画中途跳页，
+ * 「窗口被顶起」的中间状态被新页继承——键盘收了、窗口不还原，对话页顶栏/底栏
+ * 被裁出屏幕。App 端用键盘高度回调等真正收到 0 再跳；回调不来（键盘本就没开、
+ * 或平台没有该 API）由超时兜底。H5 的键盘由浏览器管理、不顶窗口，直接跳。
+ */
+function reLaunchAfterKeyboardClose(url: string) {
+  const supportsListener = typeof uni.onKeyboardHeightChange === 'function'
+  let jumped = false
+  const go = () => {
+    if (jumped) return
+    jumped = true
+    uni.reLaunch({ url })
+  }
+  try {
+    uni.hideKeyboard()
+  } catch { /* 无键盘时可忽略 */ }
+  if (!supportsListener) {
+    go()
+    return
+  }
+  const onHeight = (res: { height?: number }) => {
+    if ((res.height ?? 0) > 0) return
+    try {
+      uni.offKeyboardHeightChange(onHeight)
+    } catch { /* 平台无此 API */ }
+    // 收到 0 时收起动画可能还剩最后一帧重排，稍等一拍再跳。
+    setTimeout(go, 100)
+  }
+  try {
+    uni.onKeyboardHeightChange(onHeight)
+  } catch { /* 平台无此 API */ }
+  // 兜底：键盘本来就没开时高度回调不会来，不能让人一直停在配对页。
+  setTimeout(go, 350)
 }
 </script>
 

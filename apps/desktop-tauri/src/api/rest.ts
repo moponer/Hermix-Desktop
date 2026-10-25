@@ -1419,10 +1419,28 @@ export const refreshModelContext = async (
     body: JSON.stringify({ model }),
   });
 
-/** 上报一个确认 404 下架的免费模型，后端把它从免费渠道清单摘除。
- *  失败静默（best-effort）：摘不摘都不影响错误卡片本身的展示。 */
+/** 上报一个确认失效的免费模型（404 下架 / 401 路由拒绝），后端把它从
+ *  免费渠道清单**和启用清单**里摘除。失败静默（best-effort）：摘不摘
+ *  都不影响错误卡片本身的展示。 */
 export const reportDeadModel = async (model: string): Promise<{ model: string; removed: boolean }> =>
   fetchJSON("/api/free-channel/dead-model", {
+    method: "POST",
+    body: JSON.stringify({ model }),
+  });
+
+/** 免费模型行内测试的返回：1-token 真实推理探测的结果。 */
+export interface ProbeModelResponse {
+  ok: boolean;
+  /** HTTP 状态码；0 = 网络层失败（探测请求根本没到上游）。 */
+  status: number;
+  error?: string | null;
+}
+
+/** 对一个免费模型发 1-token 真实推理请求。
+ *  GET /models 只能测网关连通，测不出单个免费模型的死活（免费池下架
+ *  只体现为调用时 401/404）——设置页免费行的「测试」走这里。 */
+export const probeFreeModel = async (model: string): Promise<ProbeModelResponse> =>
+  fetchJSON("/api/free-channel/probe-model", {
     method: "POST",
     body: JSON.stringify({ model }),
   });

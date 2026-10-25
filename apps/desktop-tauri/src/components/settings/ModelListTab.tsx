@@ -212,15 +212,38 @@ export function ModelListTab() {
     }
   }, [rows, load]);
 
-  /** 行内测试。两条路径，因为凭据存放位置不同：
+  /** 行内测试。三条路径，因为凭据存放位置不同：
    *  · 内置项：Key 只在后端 env 里，前端读不到 → 把 providerId 交给
    *    inline 端点，由服务端按 `env_var_name_for_provider` 取。Key 不过网。
    *  · 自定义项：Key 在 config.yaml → 走 provider 级 test-connection，
-   *    由服务端自己读配置。 */
+   *    由服务端自己读配置。
+   *  · 免费源：上面的端点都只打 GET /models，测不出**单个**免费模型的
+   *    死活（免费池下架只体现为调用时 401/404）→ 走 1-token 真实探测；
+   *    401/404 顺手上报摘除并刷新列表——死行当场消失，不再「明明测挂了
+   *    却一直躺在列表里」。 */
   const testRow = useCallback(async (row: ModelRow) => {
     setTestingId(row.id);
     setTestNote((n) => ({ ...n, [row.id]: "" }));
     try {
+      if (row.isFree) {
+        const r = await api.probeFreeModel(row.modelId);
+        if (r.ok) {
+          setTestNote((n) => ({ ...n, [row.id]: "连接正常 · 模型可用" }));
+        } else if (r.status === 401 || r.status === 403 || r.status === 404) {
+          setTestNote((n) => ({
+            ...n,
+            [row.id]: failure("已失效", "上游拒绝了这个模型（401/404），已从列表移除。", `HTTP ${r.status}`),
+          }));
+          const dead = await api.reportDeadModel(row.modelId);
+          if (dead.removed) await load();
+        } else {
+          setTestNote((n) => ({
+            ...n,
+            [row.id]: failure(FAILED, "网关可达，但这次探测没成功（限流/超时不算失效，不会移除）。", r.error ?? `HTTP ${r.status}`),
+          }));
+        }
+        return;
+      }
       const builtin = PROVIDERS.find((p) => p.id === row.providerId);
       if (builtin) {
         const r = await api.testProviderInline({
@@ -248,7 +271,7 @@ export function ModelListTab() {
     } finally {
       setTestingId(null);
     }
-  }, []);
+  }, [load]);
 
   const sorted = useMemo(
     () =>

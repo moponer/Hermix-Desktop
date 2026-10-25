@@ -90,7 +90,12 @@ async fn main() -> Result<(), AgentError> {
             // relay 出站连接与 HTTP 面无关，桌面端（唯一 stdio 消费者）必须有它——
             // 此前只挂在 run_server()（HTTP 模式）上，桌面端从未连过中转，
             // 配对与手机同步整条链路因此失效（设置页显示「尚未接通中转」）。
-            .with_relay_client();
+            .with_relay_client()
+            // 资源巡检同理（2026-10-25 实报）：漏挂它 → `GET /api/resource/patrol`
+            // 在桌面端恒 503 → 任务台「资源」页签永远加载中，还把当时与它
+            // Promise.all 绑在一起的「团队」页签一起拖死。run_server 挂了的
+            // builder，stdio 路径必须逐个对齐——这是同一类坑的第二次。
+            .with_resource_patrol();
         return hermix_server::stdio_session::run_stdio_server(state).await;
     }
 

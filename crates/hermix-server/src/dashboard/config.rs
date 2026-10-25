@@ -441,8 +441,8 @@ pub struct DeadModelResponse {
     pub removed: bool,
 }
 
-/// POST /api/free-channel/dead-model —— 前端收到上游 404
-/// `does not exist` 时上报，把死模型从免费渠道清单里摘除。
+/// POST /api/free-channel/dead-model —— 前端收到上游 404 `does not exist`
+/// 或 401（免费路由失效）时上报，把死模型从免费渠道清单里摘除。
 ///
 /// 这是免费清单「只增不删」策略缺失的另一半闭环：清单靠上游 `/models`
 /// 只增，下架却只体现为调用 404。不摘除的话死模型永远留在列表里，
@@ -457,6 +457,129 @@ pub async fn report_dead_model(
         crate::free_channel::remove_dead_model(&state.hermix_home, &state.agent_service, &model)
             .await;
     Json(DeadModelResponse { model, removed })
+}
+
+/// Request for `POST /api/free-channel/probe-model`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ProbeModelRequest {
+    /// 免费渠道里的模型 id（不含 provider 前缀）。
+    pub model: String,
+}
+
+/// Response for `POST /api/free-channel/probe-model`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProbeModelResponse {
+    pub ok: bool,
+    /// HTTP 状态码（0 = 网络层失败）。
+    pub status: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// POST /api/free-channel/probe-model —— 对一个免费模型发**1-token 真实
+/// 推理请求**，测它到底能不能用。
+///
+/// 为什么不用现成的测试端点：`test-connection` / `test-inline` 都只打
+/// `GET /models`（provider 级连通），对免费渠道**测不出单个模型的死活**——
+/// 网关活着不等于这个模型还能路由（免费池下架只体现为调用时 401/404）。
+/// 设置页免费行的「测试」走这里；401/404 的结论由前端接着调
+/// `report_dead_model` 闭环摘除。
+pub async fn probe_free_model(
+    State(state): State<HttpServerState>,
+    Json(body): Json<ProbeModelRequest>,
+) -> Json<ProbeModelResponse> {
+    let model = body.model.trim().to_string();
+    if model.is_empty() {
+        return Json(ProbeModelResponse {
+            ok: false,
+            status: 0,
+            error: Some("模型名为空".to_string()),
+        });
+    }
+    let cfg = current_gateway_config(&state);
+    // 找到拥有这个模型的免费渠道：用它的真实 base_url / 凭据发探测。
+    let mut target: Option<(String, Option<String>)> = None; // (base_url, api_key)
+    for channel in hermix_config::free_channel::FREE_CHANNELS {
+        let Some(entry) = cfg.llm_providers.get(channel.id) else {
+            continue;
+        };
+        let listed = entry
+            .model
+            .as_deref()
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .any(|m| m == model);
+        let known = entry.model_contexts.contains_key(&model)
+            || entry.model_meta.contains_key(&model);
+        if listed || known {
+            let base = entry
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    hermix_config::free_channel::resolved_base_url(&cfg.free_channel, channel)
+                });
+            target = Some((base, entry.api_key.clone()));
+            break;
+        }
+    }
+    let Some((base, key)) = target else {
+        return Json(ProbeModelResponse {
+            ok: false,
+            status: 0,
+            error: Some(format!("免费渠道清单里没有 {model}")),
+        });
+    };
+    // 凭据哨兵走 auth_header：`none`/空 = 不发 Authorization（与出网口径一致）。
+    let channel_key = key.or_else(|| {
+        hermix_config::free_channel::FREE_CHANNELS
+            .first()
+            .map(|c| c.api_key.to_string())
+    });
+    let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+    let client = match reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(ProbeModelResponse {
+                ok: false,
+                status: 0,
+                error: Some(e.to_string()),
+            })
+        }
+    };
+    let mut req = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "model": model,
+            "messages": [{ "role": "user", "content": "ping" }],
+            "max_tokens": 1,
+        }));
+    if let Some(value) = hermix_config::free_channel::auth_header(channel_key.as_deref()) {
+        req = req.header("Authorization", value);
+    }
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let ok = resp.status().is_success();
+            Json(ProbeModelResponse {
+                ok,
+                status,
+                error: if ok { None } else { Some(format!("HTTP {status}")) },
+            })
+        }
+        Err(e) => Json(ProbeModelResponse {
+            ok: false,
+            status: 0,
+            error: Some(e.to_string()),
+        }),
+    }
 }
 
 /// `GET /api/model/list` 的单条模型（启用/可添加通用）。

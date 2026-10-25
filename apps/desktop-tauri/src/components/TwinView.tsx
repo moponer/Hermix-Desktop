@@ -23,7 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownBody } from "./MarkdownBody";
 import { ThinkingDots } from "./ThinkingBubble";
 import { MissionBoardView } from "./MissionBoardView";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 
 import * as api from "../api";
 import type { AutomationTask, Session } from "../types";
@@ -47,6 +47,15 @@ interface TwinViewProps {
   sessions: Session[];
   /** 去看 `twin:ali` 的完整对话（工具时间线等完整形态在那个页面）。 */
   onOpenChat: () => void;
+  /**
+   * 打开「最近会话」里的某一条（切过去并回到对话页）。
+   *
+   * 列表只摆标题不可点是 2026-10-25 用户实报的问题：值守页看到的会话
+   * 必须能一键到达正文。
+   */
+  onOpenSession: (id: string) => void;
+  /** 删除某条会话（宿主负责乐观更新会话表与激活态回退）。 */
+  onDeleteSession: (id: string) => void;
   /**
    * 她自己的发送器（App 顶层的第二个 `useStreamChat` 实例）。
    *
@@ -100,7 +109,7 @@ function BoxHead({ title, meta }: { title: string; meta?: React.ReactNode }) {
   );
 }
 
-export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
+export function TwinView({ sessions, onOpenChat, onOpenSession, onDeleteSession, twin }: TwinViewProps) {
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
   const [activeRuns, setActiveRuns] = useState(0);
   /** 最近的工作日志（daily_memory）—— 左翼与右翼的真实数据源之一。 */
@@ -471,12 +480,28 @@ ${d.conclusions}`,
                 <p className="twin-muted">还没有会话记录。</p>
               ) : (
                 recentSessions.map((s) => (
-                  <div key={s.id} className="twin-row">
-                    <span className="twin-row__t">{formatRelative(s.updated_at)}</span>
-                    <span className="twin-row__m">{s.title || "未命名会话"}</span>
-                    <span className="twin-row__k">
-                      {typeof s.message_count === "number" ? `${s.message_count} 条` : "—"}
-                    </span>
+                  <div key={s.id} className="twin-row twin-row--act">
+                    <button
+                      type="button"
+                      className="twin-row__open"
+                      title="打开这个会话"
+                      onClick={() => onOpenSession(s.id)}
+                    >
+                      <span className="twin-row__t">{formatRelative(s.updated_at)}</span>
+                      <span className="twin-row__m">{s.title || "未命名会话"}</span>
+                      <span className="twin-row__k">
+                        {typeof s.message_count === "number" ? `${s.message_count} 条` : "—"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="twin-row__del"
+                      aria-label={`删除会话 ${s.title || s.id}`}
+                      title="删除这个会话"
+                      onClick={() => onDeleteSession(s.id)}
+                    >
+                      <X />
+                    </button>
                   </div>
                 ))
               )}

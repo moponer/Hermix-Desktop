@@ -2816,6 +2816,25 @@ streamPhaseRef.current = null;
                 })
                 .catch(() => undefined);
             }
+            // 401 同样是死信号——但只对**免费渠道**成立：免费路由匿名可调，
+            // 401 只能是路由被上游关掉；付费厂商 401 是用户自己的 key 坏了，
+            // 摘模型等于掩盖真实问题。后端 remove_dead_model 本就只动免费
+            // 渠道，这里再按 provider 前缀挡一道，语义双保险。
+            if (!deadModel && /(^|\D)401(\D|$)|unauthorized/i.test(rawForFriendly)) {
+              const m = sessionsRef.current.find((s) => s.id === sessionId)?.model;
+              const freeModel =
+                m && m.startsWith("custom-free-") ? m.split(":").slice(1).join(":") : undefined;
+              if (freeModel) {
+                void api
+                  .reportDeadModel(freeModel)
+                  .then((r) => {
+                    if (r.removed) {
+                      window.dispatchEvent(new CustomEvent("hermix:model-config-changed"));
+                    }
+                  })
+                  .catch(() => undefined);
+              }
+            }
             setStreamPhase(null);
             setSessions((prev) => prev.map((s) => {
               if (s.id !== sessionId) return s;
@@ -4148,6 +4167,7 @@ return {
   const routesCtx: RouteContext = {
     sessions,
     handleSelectSession,
+    handleDeleteSession,
     selectSessionOnly,
     upsertSessions,
     startCreateAppFlow,

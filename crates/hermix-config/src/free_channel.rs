@@ -54,10 +54,18 @@ pub const FREE_CHANNELS: &[FreeChannel] = &[
         // `openrouter/free` 是聚合路由（跨免费池），作为默认候选。
         seed_models: &[
             ("openrouter/free", 128_000),
+            ("kilo-auto/free", 256_000),
             ("minimax/minimax-m3.1-flash:free", 128_000),
         ],
     },
 ];
+
+/// 免费渠道的**自动路由**模型（跨免费池聚合，上游自动挑模型）。
+///
+/// 它们不参与 [`seed_default_free_models`] 的 Top-N 上下文竞争，但**始终
+/// 保证进启用清单**：聚合路由是免费池里最稳的兜底入口——具体模型会随上游
+/// 上下架来去（401/404 会被自动摘除），路由本身始终有效。
+pub const AUTO_ROUTE_MODELS: &[&str] = &["openrouter/free", "kilo-auto/free"];
 
 /// 是否为本项目写入的免费渠道 provider。
 pub fn is_free_provider(id: &str) -> bool {
@@ -223,7 +231,9 @@ pub fn ensure_seeded(config: &mut GatewayConfig) -> bool {
 /// 开箱默认启用的免费模型数量（按上下文窗口降序取前 N 个）。
 pub const DEFAULT_FREE_ENABLED: usize = 5;
 
-/// 把免费渠道里上下文最大的 N 个模型写进 `model_selector.enabled`。
+/// 把免费渠道里上下文最大的 N 个模型写进 `model_selector.enabled`，
+/// 并保证 [`AUTO_ROUTE_MODELS`]（自动路由）也在清单里——路由不参与
+/// Top-N 竞争（见常量文档）。
 ///
 /// 一次性（`set_flag=true` 且 `defaults_seeded` 已真后不再干预），因此尊重
 /// 用户后续在设置页的手动启/停。
@@ -275,11 +285,21 @@ pub fn seed_default_free_models(config: &mut GatewayConfig, set_flag: bool) -> b
 
     // 按上下文窗口降序，取前 N（上下文相同时保持稳定顺序）。
     candidates.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.cmp(&b.1)));
-    let top: Vec<(String, String)> = candidates
-        .into_iter()
+    let mut top: Vec<(String, String)> = candidates
+        .iter()
         .take(DEFAULT_FREE_ENABLED)
-        .map(|(p, m, _)| (p, m))
+        .map(|(p, m, _)| (p.clone(), m.clone()))
         .collect();
+    // 自动路由不参与 Top-N 竞争，但必须始终在启用清单里（见
+    // [`AUTO_ROUTE_MODELS`]）。渠道清单里没有的就不硬塞。
+    for route in AUTO_ROUTE_MODELS {
+        if top.iter().any(|(_, m)| m == route) {
+            continue;
+        }
+        if let Some((p, _, _)) = candidates.iter().find(|(_, m, _)| m == route) {
+            top.push((p.clone(), (*route).to_string()));
+        }
+    }
 
     let sel = config.model_selector.get_or_insert_with(Default::default);
 
@@ -447,6 +467,16 @@ fn seed_capabilities(model: &str) -> Option<crate::config::ModelCapabilities> {
             supports_tools: Some(true),
             supports_reasoning: Some(true),
             supports_vision: Some(false),
+            trains_on_prompts: true,
+        },
+        // Kilo 的自动路由：上游不透传被路由模型的能力，只敢写实测到的
+        // 上下文；tools/reasoning/vision 留 None（"没报"≠"不支持"）。
+        "kilo-auto/free" => crate::config::ModelCapabilities {
+            context_window: Some(256_000),
+            max_output_tokens: None,
+            supports_tools: None,
+            supports_reasoning: None,
+            supports_vision: None,
             trains_on_prompts: true,
         },
         "minimax/minimax-m3.1-flash:free" => crate::config::ModelCapabilities {
@@ -899,5 +929,79 @@ mod tests {
             .map(|e| e.model_id.clone())
             .collect();
         assert_eq!(free, vec!["c", "a", "b"]);
+    }
+
+    /// 自动路由不参与 Top-N 竞争，但必须**始终**进启用清单：Top-5 被
+    /// 大上下文的具体模型占满、路由上下文最小也照样追加在尾部。
+    #[test]
+    fn seed_default_locks_auto_routes_beyond_top_n() {
+        let mut cfg = seeded();
+        let entry = cfg.llm_providers.get_mut("custom-free-kilo").unwrap();
+        entry.model = Some("m1,m2,m3,m4,m5,m6,openrouter/free,kilo-auto/free".to_string());
+        for m in ["m1", "m2", "m3", "m4", "m5", "m6"] {
+            entry.model_contexts.insert(m.to_string(), 500_000);
+        }
+        // 路由上下文最小 → Top-N 竞争必败；不追加就会丢。
+        entry.model_contexts.insert("openrouter/free".to_string(), 1);
+        entry.model_contexts.insert("kilo-auto/free".to_string(), 1);
+
+        assert!(seed_default_free_models(&mut cfg, true));
+        let free: Vec<_> = cfg
+            .model_selector
+            .as_ref()
+            .unwrap()
+            .enabled
+            .iter()
+            .filter(|e| e.provider_id == "custom-free-kilo")
+            .map(|e| e.model_id.clone())
+            .collect();
+        assert_eq!(
+            free.len(),
+            DEFAULT_FREE_ENABLED + AUTO_ROUTE_MODELS.len(),
+            "Top-N + 两个自动路由，got {free:?}"
+        );
+        assert!(
+            free.ends_with(&["openrouter/free".to_string(), "kilo-auto/free".to_string()]),
+            "路由追加在 Top-N 之后，got {free:?}"
+        );
+    }
+
+    /// 路由已经在 Top-N 里（上下文够大）时不得重复追加。
+    #[test]
+    fn auto_route_already_in_top_n_is_not_duplicated() {
+        let mut cfg = seeded();
+        let entry = cfg.llm_providers.get_mut("custom-free-kilo").unwrap();
+        entry.model = Some("openrouter/free,a".to_string());
+        entry.model_contexts.insert("a".to_string(), 1);
+        entry.model_contexts.insert("openrouter/free".to_string(), 9_000_000);
+
+        assert!(seed_default_free_models(&mut cfg, true));
+        let free: Vec<_> = cfg
+            .model_selector
+            .as_ref()
+            .unwrap()
+            .enabled
+            .iter()
+            .filter(|e| e.provider_id == "custom-free-kilo")
+            .map(|e| e.model_id.clone())
+            .collect();
+        assert_eq!(
+            free.iter()
+                .filter(|m| m.as_str() == "openrouter/free")
+                .count(),
+            1,
+            "路由只出现一次，got {free:?}"
+        );
+    }
+
+    /// kilo-auto/free 必须在 seed 里：离线首启（后台刷新还没跑）就有路由可选。
+    #[test]
+    fn seed_models_include_both_auto_routes() {
+        let cfg = seeded();
+        let entry = cfg.llm_providers.get("custom-free-kilo").unwrap();
+        let csv = entry.model.as_deref().unwrap();
+        for route in AUTO_ROUTE_MODELS {
+            assert!(csv.split(',').any(|m| m == *route), "{route} 不在 seed 清单: {csv}");
+        }
     }
 }

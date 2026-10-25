@@ -30,7 +30,15 @@ function makeTwin(overrides: Partial<TwinInlineApi> = {}): TwinInlineApi {
 }
 
 function renderTwin(twin: TwinInlineApi, onOpenChat = vi.fn()) {
-  render(<TwinView sessions={[]} onOpenChat={onOpenChat} twin={twin} />);
+  render(
+    <TwinView
+      sessions={[]}
+      onOpenChat={onOpenChat}
+      onOpenSession={vi.fn()}
+      onDeleteSession={vi.fn()}
+      twin={twin}
+    />,
+  );
   return { onOpenChat };
 }
 
