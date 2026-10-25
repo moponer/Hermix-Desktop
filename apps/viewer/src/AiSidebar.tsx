@@ -71,6 +71,16 @@ export function AiSidebar({
     listRef.current?.scrollTo(0, listRef.current.scrollHeight);
   }, [messages, busy]);
 
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  /** 输入框随内容增高（autosize），封顶 ~6 行后内部滚动；清空回落两行。
+   *  固定 rows=2 时长问题要滚小窗看，等于逼用户在隧道里打字。 */
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+  }, [input]);
+
   useEffect(() => {
     void loadAiStatus().then(setBackend);
     void loadAiModels().then(setModels);
@@ -316,6 +326,7 @@ export function AiSidebar({
 
       <div className="ai-input-row">
         <textarea
+          ref={inputRef}
           className="ai-input"
           rows={2}
           placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"
