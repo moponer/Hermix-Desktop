@@ -145,15 +145,13 @@ fn resolve_provider_model(
         return None;
     }
     let p = cfg.llm_providers.get(provider);
-    // 内置免费渠道（custom-free-*）不在 llm_providers 里：它们的端点与
-    // 凭据是编译期表（free_channel.rs），而且**不要** Authorization 头。
-    let free = if p.is_none() {
-        hermix_config::free_channel::FREE_CHANNELS
-            .iter()
-            .find(|c| c.id == provider)
-    } else {
-        None
-    };
+    // 内置免费渠道（custom-free-*）：端点与凭据以编译期表为准。**不能**
+    // 只在 llm_providers 缺项时才查表——免费渠道接管会把条目写进用户
+    // config（api_key 是 "none" 哨兵），走普通分支会把字面量 "none" 当
+    // Bearer 发出去，Kilo 网关直接 401。
+    let free = hermix_config::free_channel::FREE_CHANNELS
+        .iter()
+        .find(|c| c.id == provider);
     if p.is_none() && free.is_none() {
         return None;
     }
@@ -175,7 +173,10 @@ fn resolve_provider_model(
                 Some(c.api_key.to_string())
             }
         }
-        None => resolve_provider_key(p.and_then(|p| p.api_key.as_deref()), provider),
+        // 用户 config 里的 api_key 可能也是 "none" 哨兵（免费渠道接管写入），
+        // 与主程序 auth_header 同口径：哨兵 = 不发 Authorization 头。
+        None => resolve_provider_key(p.and_then(|p| p.api_key.as_deref()), provider)
+            .filter(|k| k != hermix_config::free_channel::KEY_NO_AUTH),
     };
 
     let mut problem = None;

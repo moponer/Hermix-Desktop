@@ -1134,8 +1134,15 @@ html, body, #root {
   box-shadow: -8px 0 18px -10px rgba(15, 23, 42, 0.5);
 }
 /* 深色下投影失效（黑上投黑），同 .sidebar 的解法：面板提亮一档，
-   与预览区（--color-bg-code #1a1a1a）拉开亮度差。 */
+   与预览区（--color-bg-code #1a1a1a）拉开亮度差。
+   面板提亮后内部控件的旧配色全部倒挂（输入框/气泡 --bg-secondary
+   #1f1f1f 比面板 #202020 还暗，糊成一片）——控件整体再亮一档：
+   头部 #262626、输入框与助手气泡 #2a2a2a，placeholder 提到 muted。 */
 :root[data-theme="dark"] .ai-side { background: #202020; }
+:root[data-theme="dark"] .ai-head { background: #262626; }
+:root[data-theme="dark"] .ai-input,
+:root[data-theme="dark"] .ai-msg-assistant { background: #2e2e2e; }
+:root[data-theme="dark"] .ai-input::placeholder { color: var(--text-muted); }
 .ai-head {
   display: flex; align-items: center; gap: 8px;
   /* 高度 32px 与右侧 .tabbar / 目录列表表头同档——三栏的"标题行"
