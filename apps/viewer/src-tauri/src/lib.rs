@@ -97,6 +97,13 @@ fn spawn_singleton_listener(app: tauri::AppHandle) {
             }
             let state = app.state::<commands::ViewerState>();
             state.pending.lock().unwrap().push(PathBuf::from(&path));
+            // 藏着（--hidden 预热）或最小化的实例收到文件要弹到前面——
+            // 否则用户从搜索窗双击打开，文件开了窗口却不见。
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
             let _ = app.emit("viewer-open-file", path);
         }
     });
@@ -175,6 +182,14 @@ pub fn main() {
         return;
     }
 
+    // ── 隐藏预热模式 ──
+    // 桌面主程序启动 10s 后会带 `--hidden` 预热本进程（MCP 工具就绪，窗口
+    // 不弹——用户明确要求"启动主程序绝不能弹出查看器"）。窗口由
+    // tauri.conf.json 的 visible:false 建成隐藏态，正常启动在 setup 里
+    // 立即 show（与原先 visible:true 视觉等价）；--hidden 则一直藏着，
+    // 等单实例投递路径 / 主程序"打开文件管理器"时再弹出。
+    let hidden = args.iter().any(|a| a == "--hidden");
+
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -189,6 +204,11 @@ pub fn main() {
             CreateMutexW(std::ptr::null(), 0, wide.as_ptr());
             // ERROR_ALREADY_EXISTS (183)：已有实例 → 投递路径后退出。
             if GetLastError() == 183 {
+                // 预热撞上已有实例：静默退出。不能投递——空投递的语义是
+                // "把窗口叫到前面"，会把正在藏着的预热实例弹出窗外。
+                if hidden {
+                    return;
+                }
                 drop(args);
                 // args 已被 move，重新取环境参数投递。
                 let paths: Vec<String> = std::env::args().skip(1).collect();
@@ -313,6 +333,13 @@ pub fn main() {
             let _ = event;
         })
         .setup(move |app| {
+            // 窗口由配置建成隐藏态：正常启动这里立即 show（与原先
+            // visible:true 等价）；--hidden 预热则保持隐藏，等投递再弹。
+            if !hidden {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                }
+            }
             seed_pending(app.handle(), &init_args);
             spawn_singleton_listener(app.handle().clone());
             // 登记应用句柄：MCP 工具（web_open 等）要在没有前端参与的情况下
