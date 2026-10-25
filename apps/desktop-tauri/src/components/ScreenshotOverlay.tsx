@@ -1,32 +1,37 @@
 // 截图覆盖窗（独立 window：index.html#/screenshot-overlay）。
 // 2026-10-23 重写（决策：docs/notes/implemented/feature/2026-10-23-screenshot-rewrite.md）：
-// - 幕布帧改**事件推送**（hermix:screenshot-frame），页面解码完再回报
-//   screenshot_overlay_ready，Rust 才亮窗 → 没有黑屏/半就绪画面。
 // - **窗口自动吸附**：鼠标移动即查询光标下的窗口，画**绿色**边框 + 标题；
 //   单击该窗口即选中（不必先按模式键）。拖拽仍然照常框选自由区域。
 // - **选多大显示多大**：选区确认后 Rust 把覆盖窗缩到选区大小，编辑器
 //   只显示选中的那部分，底下不再垫一层全屏黑底。
 // - 缩放换算统一走 `devicePixelRatio`（网页自己报的缩放，Rust 不猜）。
+// 2026-10-24 幕布下沉原生（docs/notes/implemented/feature/2026-10-24-screenshot-native-backdrop.md）：
+// - 冻结画面不再进 webview——它在原生分层窗（backdrop.rs）直贴，本窗
+//   **透明**，只画选区几何。Rust 只发一条几十字节的会话信息
+//   （hermix:screenshot-session：原点/尺寸/seq），没有任何像素载荷。
+// - 页面画完选区 UI 回报 screenshot_overlay_ready，Rust 才亮窗。
+// - 进编辑态、编辑器渲染完成后调 screenshot_backdrop_hide 收掉幕布——
+//   编辑器画布与幕布是同一块像素，切换无缝。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import { CANCEL, CLOSE, CONFIRM } from "./strings";
 
-interface FramePayload {
-  data_url: string;
+/** 会话信息：选区 UI 所需的全部数据，无像素。 */
+interface SessionInfo {
   /** 虚拟桌面原点（物理像素） */
   origin_x: number;
   origin_y: number;
   /** 物理像素尺寸 */
   width: number;
   height: number;
-  /** 会话序号：丢弃上一轮迟到的帧 */
+  /** 会话序号：丢弃上一轮迟到的会话 */
   seq: number;
 }
 
-/** Rust FrameState（serde untagged）：null=编码中；Ready 平铺；Failed 带 error。 */
-type FrameState = FramePayload | { error: string };
+/** Rust SessionState（serde untagged）：null=准备中；Ready 平铺；Failed 带 error。 */
+type SessionState = SessionInfo | { error: string };
 
 interface WindowRect {
   x: number;
@@ -48,7 +53,7 @@ interface Box {
 const SNAP_THROTTLE_MS = 40;
 
 export function ScreenshotOverlay() {
-  const [frame, setFrame] = useState<FramePayload | null>(null);
+  const [session, setSession] = useState<SessionInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   /** 窗口吸附高亮（CSS 像素，窗口内坐标）。 */
   const [snap, setSnap] = useState<Box | null>(null);
@@ -58,12 +63,9 @@ export function ScreenshotOverlay() {
   const [drag, setDrag] = useState<Box | null>(null);
   /** 编辑态：非 null = 已选区，src = Rust 裁好的无损 PNG data URL。 */
   const [sel, setSel] = useState<{ src: string; scale: number } | null>(null);
-  /** 选区裁剪中：Rust 正在把窗口缩到选区，此时幕布要藏起来，
-   *  否则会闪一下"全屏照片缩在小窗口里"。 */
-  const [selecting, setSelecting] = useState(false);
 
-  const frameRef = useRef<FramePayload | null>(null);
-  frameRef.current = frame;
+  const sessionRef = useRef<SessionInfo | null>(null);
+  sessionRef.current = session;
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const lastSnapKeyRef = useRef<string>("");
   const snapAtRef = useRef(0);
@@ -72,19 +74,19 @@ export function ScreenshotOverlay() {
     void invoke("screenshot_cancel").catch(() => {});
   }, []);
 
-  // 幕布帧：先挂事件监听，再补拉一次当前帧。
-  // 顺序反了会漏掉"帧已就绪、页面刚挂载"这一帧（页面再也收不到事件）。
+  // 会话信息：先挂事件监听，再补拉一次当前会话。
+  // 顺序反了会漏掉"事件已发、页面刚挂载"这一次（页面再也收不到）。
   useEffect(() => {
     let stopped = false;
-    const unlisten = listen<FramePayload>("hermix:screenshot-frame", (e) => {
-      if (!stopped) applyFrame(e.payload);
+    const unlisten = listen<SessionInfo>("hermix:screenshot-session", (e) => {
+      if (!stopped) applySession(e.payload);
     });
     void (async () => {
       try {
-        const st = await invoke<FrameState | null>("screenshot_frame_data");
+        const st = await invoke<SessionState | null>("screenshot_session_info");
         if (stopped || !st) return;
         if ("error" in st) setLoadError(st.error);
-        else applyFrame(st);
+        else applySession(st);
       } catch (e) {
         if (!stopped) setLoadError(String(e));
       }
@@ -95,8 +97,8 @@ export function ScreenshotOverlay() {
     };
   }, []);
 
-  const applyFrame = useCallback((p: FramePayload) => {
-    setFrame(p);
+  const applySession = useCallback((p: SessionInfo) => {
+    setSession(p);
     setLoadError(null);
     setSel(null);
     setSnap(null);
@@ -106,9 +108,31 @@ export function ScreenshotOverlay() {
     lastSnapKeyRef.current = "";
   }, []);
 
+  // 选区 UI 画完（连续两帧确认已上屏）→ 回报 ready，Rust 亮窗。
+  // 幕布不等这条回报：冻结画面在原生层独立上屏。
+  useEffect(() => {
+    if (!session) return;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        void invoke("screenshot_overlay_ready").catch(() => {});
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [session]);
+
+  // 进编辑态：编辑器渲染选区像素后收掉原生幕布（同一块像素，无缝切换）。
+  useEffect(() => {
+    if (!sel) return;
+    void invoke("screenshot_backdrop_hide").catch(() => {});
+  }, [sel]);
+
   /** CSS 像素 → 虚拟屏幕物理坐标。 */
   const toPhysical = useCallback((cssX: number, cssY: number) => {
-    const f = frameRef.current;
+    const f = sessionRef.current;
     const s = window.devicePixelRatio || 1;
     if (!f) return { x: 0, y: 0 };
     return {
@@ -119,7 +143,7 @@ export function ScreenshotOverlay() {
 
   /** 虚拟屏幕物理矩形 → 窗口内 CSS 矩形。 */
   const toLocal = useCallback((r: WindowRect): Box => {
-    const f = frameRef.current;
+    const f = sessionRef.current;
     const s = window.devicePixelRatio || 1;
     if (!f) return { x: 0, y: 0, w: 0, h: 0 };
     return {
@@ -132,10 +156,9 @@ export function ScreenshotOverlay() {
 
   /** 选区确认：交给 Rust 裁剪（无损 PNG）+ 把窗口缩到选区，随后进编辑器。 */
   const beginEdit = useCallback(async (b: Box) => {
-    const f = frameRef.current;
+    const f = sessionRef.current;
     if (!f || b.w < 4 || b.h < 4) return;
     const s = window.devicePixelRatio || 1;
-    setSelecting(true);
     try {
       const src = await invoke<string>("screenshot_select", {
         x: f.origin_x + Math.round(b.x * s),
@@ -146,8 +169,6 @@ export function ScreenshotOverlay() {
       setSel({ src, scale: s });
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSelecting(false);
     }
   }, []);
 
@@ -240,7 +261,7 @@ export function ScreenshotOverlay() {
     return <ScreenshotEditor source={sel} onCancel={cancel} />;
   }
 
-  if (!frame) {
+  if (!session) {
     return (
       <div className="so-loading" aria-busy="true">
         正在截取屏幕…
@@ -261,15 +282,7 @@ export function ScreenshotOverlay() {
         cancel();
       }}
     >
-      <img
-        className="so-backdrop"
-        src={frame.data_url}
-        alt=""
-        draggable={false}
-        // 幕布解码完才亮窗：Rust 侧 show() 在此之后，窗口不会黑屏一闪。
-        onLoad={() => void invoke("screenshot_overlay_ready").catch(() => {})}
-        style={selecting ? { opacity: 0 } : undefined}
-      />
+      {/* 幕布（冻结画面）在原生分层窗里，本层全透明，只画几何 */}
 
       {/* 窗口吸附：绿色边框 + 标题（默认常驻，鼠标移到哪个窗口就吸哪个） */}
       {snap && !box && (

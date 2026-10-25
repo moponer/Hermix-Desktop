@@ -42,6 +42,10 @@ per-monitor DPI **未必一致**，猜错就是「照片和屏幕对不齐」的
 
 ### ④ 幕布帧：150ms 轮询 → 事件推送 + 页面回报后再亮窗
 
+> 2026-10-24 起，幕布帧的 dataURL 推送机制被
+> [原生分层窗直贴](./2026-10-24-screenshot-native-backdrop.md)取代（像素不再进
+> webview）；本节的「页面回报后再亮窗」时序仍然现行。
+
 旧实现前端每 150ms 轮询一次 `screenshot_frame_data`，轮询粒度本身就是感知的
 等待下限。现在 Rust 编码完 `emit("hermix:screenshot-frame")`，页面解码完**再
 回报** `screenshot_overlay_ready`，Rust 此刻才 `show()` —— 窗口要么显示已就绪的

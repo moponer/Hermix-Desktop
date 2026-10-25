@@ -1,6 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { Minus, Square, X, MessageSquare, Camera, Globe, FolderTree } from "lucide-react";
+import { Minus, Square, X, MessageSquare, Camera, FolderTree } from "lucide-react";
 import { useCallback } from "react";
 import { toastWarning } from "../hooks/useToast";
 import { CLOSE } from "./strings";
@@ -52,16 +52,6 @@ export function TitleBar({ title }: { title?: string }) {
     });
   }, []);
 
-  // 浏览器小窗入口：打开/聚焦独立子窗，实时显示无头 Edge 的 screencast
-  // 帧流。窗口与浏览器会话解耦——会话未建立时小窗显示占位，模型调用
-  // 浏览器工具后自动出画面。
-  const handleBrowserView = useCallback(() => {
-    void invoke("browser_view_open").catch((err) => {
-      console.error("[TitleBar] browser view failed:", err);
-      toastWarning(`浏览器小窗打开失败：${String(err)}`);
-    });
-  }, []);
-
   // 文件管理器入口：hermix-viewer 是独立进程（多格式预览 + 全盘搜索 +
   // 文件操作右键菜单），主程序里只有右栏一个窄窄的「浏览目录」，此前
   // 唯一能开到查看器的路径是右键菜单里的「在查看器中打开」——没有一级
@@ -110,16 +100,6 @@ export function TitleBar({ title }: { title?: string }) {
           aria-label="文件管理器"
         >
           <FolderTree className="icon-md" />
-        </button>
-        <button
-          type="button"
-          onClick={handleBrowserView}
-          className="titlebar-btn no-drag"
-          data-tauri-no-drag
-          title="浏览器小窗（实时画面）"
-          aria-label="浏览器小窗"
-        >
-          <Globe className="icon-md" />
         </button>
         <button
           type="button"

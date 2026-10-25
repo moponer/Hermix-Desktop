@@ -142,36 +142,6 @@ impl StdioBridge {
         bridge
     }
 
-    /// 浏览器帧活动检测（按会话键）：某会话距上一帧 ≥60s 视为一段新帧流
-    /// （burst）的开始，在主线程上触发小窗自动弹出。burst 内的后续帧直接
-    /// 返回（锁内一次 HashMap 比较，20fps×N 路下零成本）。
-    fn note_browser_frame(app: &tauri::AppHandle, session: &str) {
-        static LAST: std::sync::OnceLock<std::sync::Mutex<HashMap<String, std::time::Instant>>> =
-            std::sync::OnceLock::new();
-        let slot = LAST.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
-        let burst = {
-            let mut guard = match slot.lock() {
-                Ok(g) => g,
-                Err(_) => return,
-            };
-            let now = std::time::Instant::now();
-            let burst = match guard.get(session) {
-                None => true,
-                Some(t) => now.duration_since(*t) >= std::time::Duration::from_secs(60),
-            };
-            guard.insert(session.to_string(), now);
-            burst
-        };
-        if !burst {
-            return;
-        }
-        let app2 = app.clone();
-        let session2 = session.to_string();
-        let _ = app.run_on_main_thread(move || {
-            crate::browser_view_controller::on_browser_frame_burst(&app2, &session2);
-        });
-    }
-
     fn spawn_reader(&self, stdout: ChildStdout) {
         let inner = self.inner.clone();
         let app = self.app.clone();
@@ -207,18 +177,6 @@ impl StdioBridge {
                         eprintln!("[stdio-bridge] http reply without waiter, id={id}");
                     }
                 } else {
-                    // 浏览器帧活动检测：某会话一段新帧流（≥60s 空窗后恢复）
-                    // 开始时自动弹出小窗——LLM 开始操作浏览器，画面应自动现身。
-                    if frame.channel == "browser-frame" {
-                        let key = serde_json::from_str::<serde_json::Value>(&frame.payload)
-                            .ok()
-                            .and_then(|v| {
-                                v.get("session")
-                                    .and_then(|s| s.as_str().map(str::to_string))
-                            })
-                            .unwrap_or_else(|| "default".to_string());
-                        Self::note_browser_frame(&app, &key);
-                    }
                     // 流式/主通道推送：转发给前端订阅者。
                     let _ = app.emit(
                         "stdio-frame",

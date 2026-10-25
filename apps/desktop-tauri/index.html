@@ -88,8 +88,10 @@
       }
 
       html, body, #root { height: 100%; margin: 0; }
-      /* 截图覆盖窗：整页压黑，见上方 bootstrap 脚本 */
-      html[data-overlay], html[data-overlay] body { background: #000 !important; }
+      /* 截图覆盖窗：整页透明（2026-10-24 幕布下沉原生分层窗，冻结画面在
+         backdrop.rs 直贴，webview 只画选区几何，必须透出底下的画面）。
+         亮窗前 webview 一直隐藏，无需再压黑防白闪。 */
+      html[data-overlay], html[data-overlay] body { background: transparent !important; }
       /* 覆盖窗静态隐藏启动遮罩——#splash 是静态 HTML，覆盖窗加载时就先渲染
          （启动屏样式、亮色白底），JS 层移除要等 bundle 加载完。CSS 静态
          隐藏从源头堵住"兜底 show 时窗口亮成全屏启动屏"的整类问题。 */

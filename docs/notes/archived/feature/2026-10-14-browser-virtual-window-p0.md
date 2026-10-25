@@ -3,6 +3,8 @@
 Status: implemented — 2026-10-14（P0 范围）。P1（Token 纪律）/ P2（交互补全）/
 P3（清理）仍在 [proposed 同名笔记](../../proposed/feature/2026-10-13-browser-virtual-window-token-discipline.md)，
 其拆分原因与评审发现见文末"评审修正"。
+Archived: 2026-10-24
+被[浏览器小窗移除](../../implemented/feature/2026-10-24-browser-view-window-removal.md)取代：内置浏览器面板落地后小窗失去存在理由，窗口与 screencast 推流全链路移除（headless-only 纪律保留）。
 
 承接已实现的 [native-os-automation](./2026-10-13-native-os-automation.md)，
 与 [Space 与登录态](../../proposed/feature/2026-10-07-browser-space-and-login-state.md)（N2）维度不同、互补：

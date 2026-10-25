@@ -4,11 +4,9 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ScreenshotOverlay } from "./components/ScreenshotOverlay";
-import { BrowserView } from "./components/BrowserView";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { BackendConnectionProvider } from "./context/BackendConnectionContext";
 import "./styles/screenshot-overlay.css";
-import "./styles/browser-view.css";
 
 // 截图覆盖窗（独立 window，hash 路由分流）：全屏幕布 + 选区交互，不渲染主应用。
 // 覆盖窗的页面依赖集到此为止（React + ScreenshotOverlay + 一份 CSS）。
@@ -18,10 +16,6 @@ import "./styles/browser-view.css";
 // 配合 Rust 侧 3s 兜底 show，#splash（静态 HTML 启动屏）就被糊成全屏——
 // "截图启动慢 + 全屏样式"的回归根因。覆盖窗独立成小图后首帧毫秒级。
 const isOverlayWindow = window.location.hash.startsWith("#/screenshot-overlay");
-
-// 浏览器小窗（独立 window，hash 路由分流）：只渲染 screencast 帧流。
-// 同款"独立小图"理由——不拉主应用图，首帧毫秒级；Rust 侧先建后亮。
-const isBrowserViewWindow = window.location.hash.startsWith("#/browser-view");
 
 // 文件搜索小窗（独立 window，hash 路由分流）：Alt+F 全局热键唤起的
 // Everything 式搜索面板。同款"独立小图"——不拉主应用图。
@@ -37,17 +31,6 @@ if (isOverlayWindow) {
     <React.StrictMode>
       <ErrorBoundary>
         <ScreenshotOverlay />
-      </ErrorBoundary>
-    </React.StrictMode>,
-  );
-} else if (isBrowserViewWindow) {
-  // 浏览器小窗无 #splash/#overlay-boot 占位需求（帧没来也有内置占位 UI），
-  // 但启动遮罩若存在仍要移除，否则盖住小窗。
-  document.getElementById("splash")?.remove();
-  ReactDOM.createRoot(document.getElementById("root")!).render(
-    <React.StrictMode>
-      <ErrorBoundary>
-        <BrowserView />
       </ErrorBoundary>
     </React.StrictMode>,
   );

@@ -260,14 +260,16 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
         : `${Math.round((Date.now() - checkedAt) / 60_000)} 分钟前核对`;
 
   /**
-   * 自动切到数据态：只在「出现新的待办」时切一次。
+   * 自动切到数据态：只在「出现新的待审批」时切一次。
+   * 澄清（要你回答的问题）不切 —— 回答要用输入框，那是对话态的事。
    * 手动切回后 30s 内不抢屏，否则你在打字时会被反复拽走。
    */
   useEffect(() => {
     if (pending.length === 0) return;
+    if (!pending.some((p) => p.kind === "approval")) return;
     if (Date.now() - manualAtRef.current < AUTO_SWITCH_COOLDOWN_MS) return;
     setCenter("data");
-  }, [pending.length]);
+  }, [pending]);
 
   const goChat = useCallback(() => {
     manualAtRef.current = Date.now();

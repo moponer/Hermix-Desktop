@@ -1,4 +1,4 @@
-pub mod browser_view_controller;
+pub mod backdrop;
 pub mod cdp_probe;
 pub mod commands;
 pub mod commands_custom_app;
@@ -713,9 +713,6 @@ pub fn run() {
         .setup(|app| {
             // 在线更新检查：启动 30s 后首查 + 每 2h，失败静默（updater.rs）。
             updater::spawn_check_scheduler(app.handle().clone());
-            // 浏览器小窗：窗口几何记忆由 browser_view_open 在建窗时注册；
-            // 帧流经 stdio 桥（sidecar 转发 browser-frame）直达前端，本进程
-            // 不再持有帧泵（评审修正：桌面侧 screencast::receiver() 永远为 None）。
             // ── N0 CDP 探针门控（批次 N 技术验证）──────────────────
             // HERMIX_CDP_PROBE=1 启动时，等主 webview 就绪后自动跑
             // Runtime.evaluate / DOMSnapshot / Accessibility 三个 CDP
@@ -1010,9 +1007,10 @@ pub fn run() {
             commands::file_assoc_list,
             commands::file_assoc_set,
             screenshot_controller::start_screenshot,
-            screenshot_controller::screenshot_frame_data,
+            screenshot_controller::screenshot_session_info,
             screenshot_controller::screenshot_select,
             screenshot_controller::screenshot_overlay_ready,
+            screenshot_controller::screenshot_backdrop_hide,
             screenshot_controller::screenshot_commit_edited,
             screenshot_controller::screenshot_window_at,
             screenshot_controller::screenshot_cancel,
@@ -1022,8 +1020,6 @@ pub fn run() {
             file_search_controller::file_search_hotkey_status,
             cdp_probe::cdp_n0_probe,
             commands::document_to_markdown,
-            browser_view_controller::browser_view_open,
-            browser_view_controller::browser_view_set_paused,
             commands::get_runtime_info,
             boot_stage,
             // stdio bridge chokepoints — every REST call and every

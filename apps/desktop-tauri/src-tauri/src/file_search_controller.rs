@@ -5,7 +5,7 @@
 //
 // 窗口模式：关窗=隐藏（保留搜索词与滚动位置），热键再按秒级唤回；
 // Alt+F4 等真实销毁后下次 toggle 重建。先建后亮（hidden）+ 前端
-// mount 后 show，与 BrowserView 同款防白屏路径。
+// mount 后 show，与截图覆盖窗同款防白屏路径。
 
 use crate::hotkey::{HotkeySlot, HotkeyStatus};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
@@ -81,7 +81,7 @@ fn create_window(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 前端页面就绪后自行 show（BrowserView 同款）。
+/// 前端页面就绪后自行 show（与截图覆盖窗同款：先建后亮防白屏）。
 
 /// 应用配置（搜索窗设置面板）：开关 + 全局热键。
 ///

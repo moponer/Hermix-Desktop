@@ -53,8 +53,9 @@ hermix-tools = { path = "../../../crates/hermix-tools" }
 tauri-plugin-global-shortcut = "2"
 # 文件关联设置页（HKCU\Software\Classes 登记；版本与 installer 同代）。
 winreg = "0.10"
-# png：截图编辑器裁剪/剪贴板无损输出；jpeg：覆盖窗幕布（比整帧 PNG 小 5-10×、编码快 3-5×）
-image = { version = "0.25", features = ["png", "jpeg"] }
+# png：截图编辑器裁剪/剪贴板无损输出。jpeg 已随幕布下沉原生层移除
+# （backdrop.rs 直贴原始 BGRA，不编码）。
+image = { version = "0.25", features = ["png"] }
 
 # 索引遍历线程降为 BELOW_NORMAL 优先级：全盘扫描不抢 UI 线程。
 [target.'cfg(windows)'.dependencies]
@@ -80,6 +81,8 @@ windows = { version = "0.58", features = [
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
   "Win32_UI_Input_KeyboardAndMouse",
+  # 原生幕布窗（backdrop.rs）：GetModuleHandleW（窗口类注册）
+  "Win32_System_LibraryLoader",
 ] }
 
 [target.windows.dependencies]

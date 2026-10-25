@@ -20,6 +20,10 @@
 //
 // 平台：Windows-only（项目纪律，无跨平台目标）。非 Windows 编译为
 // NotFound 桩，与 commands_cua 同一模式。
+//
+// 幕布显示已下沉原生分层窗（backdrop.rs，2026-10-24）：抓出的 BGRA 原样
+// 直贴置顶窗，不编码不跨进程。本文件只剩裁剪/剪贴板/识别等纯像素与
+// 几何逻辑。
 
 use serde::Serialize;
 
@@ -79,15 +83,6 @@ pub fn crop_rgba(session: &CaptureSession, sel: Selection) -> Option<Vec<u8>> {
         }
     }
     Some(out)
-}
-
-/// BGRA→RGBA 整帧转换（覆盖窗幕布用 data URL 显示全屏照片）。
-pub fn bgra_to_rgba(pixels: &[u8]) -> Vec<u8> {
-    let mut out = pixels.to_vec();
-    for px in out.chunks_exact_mut(4) {
-        px.swap(0, 2);
-    }
-    out
 }
 
 // ── 抓屏（整块虚拟桌面）──────────────────────────────────────────
@@ -214,7 +209,7 @@ pub struct WindowRect {
 }
 
 #[cfg(windows)]
-pub fn window_rect_at(cursor: (i32, i32), exclude: isize) -> Option<WindowRect> {
+pub fn window_rect_at(cursor: (i32, i32), exclude: &[isize]) -> Option<WindowRect> {
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -222,12 +217,12 @@ pub fn window_rect_at(cursor: (i32, i32), exclude: isize) -> Option<WindowRect> 
         IsWindowVisible,
     };
 
-    // EnumWindows 按 Z 序（顶到底）枚举顶层窗口：跳过覆盖窗自身（全屏置顶，
-    // WindowFromPoint 永远先命中它），取第一个可见、未最小化、未 cloak 且
-    // 包含该点的窗口。不能用 WindowFromPoint——它只给最顶窗口，无法跳过覆盖窗。
-    struct Ctx {
+    // EnumWindows 按 Z 序（顶到底）枚举顶层窗口：跳过覆盖窗自身与原生幕布窗
+    // （都是全屏置顶，不排除的话永远先命中它们），取第一个可见、未最小化、
+    // 未 cloak 且包含该点的窗口。不能用 WindowFromPoint——它只给最顶窗口。
+    struct Ctx<'a> {
         pt: POINT,
-        exclude: isize,
+        exclude: &'a [isize],
         result: Option<WindowRect>,
     }
     unsafe extern "system" fn probe(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -235,7 +230,7 @@ pub fn window_rect_at(cursor: (i32, i32), exclude: isize) -> Option<WindowRect> 
         if ctx.result.is_some() {
             return false.into();
         }
-        if hwnd.0 as isize == ctx.exclude {
+        if ctx.exclude.contains(&(hwnd.0 as isize)) {
             return true.into();
         }
         if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
@@ -458,21 +453,8 @@ pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Strin
     Ok(buf.into_inner())
 }
 
-/// 幕布照片用 JPEG（q80）：屏幕照片多为平铺 UI 区域，q80 观感近无损，
-/// 体积比整帧 PNG 小 5-10×、编码快 3-5×，覆盖窗 IPC 传输与 <img> 解码
-/// 都跟着变小。选区编辑的无损底走 crop_rgba + encode_png 按需裁剪，
-/// 不经过幕布质量。
-/// 0.25 的 JpegEncoder::encode 只收 L8/Rgb8，RGBA 必须走 encode_image
-/// （alpha 直接丢弃——抓屏像素全不透明，无影响）。
-pub fn encode_jpeg(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
-    let img = image::RgbaImage::from_raw(width, height, rgba.to_vec())
-        .ok_or("像素长度与尺寸不匹配")?;
-    let mut buf: Vec<u8> = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 80)
-        .encode_image(&img)
-        .map_err(|e| format!("JPEG 编码失败: {e}"))?;
-    Ok(buf)
-}
+/// 幕布显示不再需要 JPEG（原生分层窗直贴原始 BGRA，见 backdrop.rs）；
+/// PNG 仍服务两条无损路径：`screenshot_select` 的编辑底图与剪贴板。
 
 #[cfg(test)]
 mod tests {
@@ -530,34 +512,5 @@ mod tests {
         let s = session_2x2();
         let sel = Selection { x: 0, y: 0, width: 10, height: 10 };
         assert!(crop_rgba(&s, sel).is_none());
-    }
-
-    #[test]
-    fn bgra_to_rgba_swaps() {
-        let out = bgra_to_rgba(&[1, 2, 3, 4]);
-        assert_eq!(out, vec![3, 2, 1, 4]);
-    }
-
-    #[test]
-    fn jpeg_roundtrip_decodable() {
-        // 32×1 RGBA：红绿蓝白各 8px（各占一个 DCT 块），q80 下块内误差 <±10。
-        // 色块宽 8 是关键——窄于块宽度时相邻色在同一 DCT 块里会互相渗色。
-        let colors: [(u8, u8, u8); 4] = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)];
-        let mut px = Vec::with_capacity(32 * 4);
-        for &(cr, cg, cb) in &colors {
-            for _ in 0..8 {
-                px.extend_from_slice(&[cr, cg, cb, 255]);
-            }
-        }
-        let out = encode_jpeg(&px, 32, 1).unwrap();
-        let img = image::load_from_memory(&out).unwrap().to_rgb8();
-        assert_eq!((img.width(), img.height()), (32, 1));
-        for (i, &(er, eg, eb)) in colors.iter().enumerate() {
-            let [r, g, b] = img.get_pixel(4 + 8 * i as u32, 0).0;
-            assert!(
-                r.abs_diff(er) <= 10 && g.abs_diff(eg) <= 10 && b.abs_diff(eb) <= 10,
-                "pixel {i}: got ({r},{g},{b}) want ±10 of ({er},{eg},{eb})"
-            );
-        }
     }
 }
