@@ -1,6 +1,6 @@
 # Decision Note: 文件索引守护进程静默化 + 宿主侧单飞拉起 + 启动预热
 
-Status: implemented — 黑框不弹、并发拉起合并为一次、索引随 server 启动就开始建，不再等第一次搜索
+Status: implemented — 黑框不弹、并发拉起合并为一次、索引随 server 启动就开始建；serve 循环重活移出 async worker；两个宿主（server + viewer）同一套治理
 
 ## Decision
 
@@ -44,6 +44,27 @@ stdio 模式（开发联调）不藏，开发控制台不受影响。
 `ensure_helper`：任务已在跑则只探活，没在跑就补拉一次。索引随应用启动
 就开始建/续增量。
 
+### 4. 守护进程"活着但对谁都不过话" = 同步重活跑在 async worker 上
+
+（2026-10-25 晚复盘）用户面板卡在"未启动"，实测守护进程 731 CPU 秒、
+端口在听、status 请求 90s 无响应——不是死锁，是**饿死**：`serve_loop`
+把 `handle()`（search 要在百万级条目上合并排序、installTask 要同步等
+PowerShell）直接跑在连接的 async 任务里，一次慢请求占死一个 worker，
+2s 一发的状态轮询把 worker 全部堵光，accept 循环与孤儿看门狗随之停摆，
+连"请它退出"都收不到。
+
+`handle` 现在整体丢进 `tokio::task::spawn_blocking`，runtime 只管收发帧。
+修复后实测：status 1-28ms、search 481ms（此前 90s+ 超时）。
+
+### 5. 第二个宿主（viewer）同款治理
+
+`apps/viewer/src-tauri/src/filesearch.rs` 是一份与 server 侧并行的客户端
+（查看器"文件索引"面板 / 路径栏模糊搜索 / 磁盘体积），同样的黑框
+（`SW_SHOWNORMAL`）与无并发防护原样存在——第一轮修复漏掉了它。现与
+server 侧对齐：`SW_HIDE` + 单飞锁（blocking 线程上用 `std::sync::Mutex`）
++ 60s 拉起失败冷却。**教训：同协议的客户端有两份实现，改一处必查另一处**
+（grep `ensure_helper` 全仓确认）。
+
 ## Alternatives considered
 
 - **exe 改 `windows_subsystem = "windows"`**：`--status` 模式要给脚本打
@@ -65,3 +86,7 @@ stdio 模式（开发联调）不藏，开发控制台不受影响。
   （status/endpoint.json）是唯一可观测面，排障靠 `--status` 与回环协议。
 - 60s 冷却期间搜索会收到明确错误文案（"上次拉起失败，60 秒后自动重试"），
   而不是卡 90s 等超时——行为变化，但用户感知更诚实。
+- 排障取证教训：**Git Bash 的 `grep -c` 在 hermix.exe 这类大二进制上会静默
+  漏报**（同一字符串 grep 数 0、python 字节搜索数 2-3）——判断"安装包里
+  有没有某修复"必须用 python `data.count(bytes)` 做指纹，别信 grep 的 0；
+  否则会得出"打包链路带了旧货"的错误结论（2026-10-25 晚实测差点误判）。

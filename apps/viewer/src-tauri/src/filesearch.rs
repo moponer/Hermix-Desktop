@@ -121,7 +121,7 @@ fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::{
         ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SHELLEXECUTEINFOW,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
     let exe_w: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
     let args_w: Vec<u16> = std::ffi::OsStr::new(args)
@@ -138,7 +138,9 @@ fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
     sei.lpVerb = verb_w.as_ptr();
     sei.lpFile = exe_w.as_ptr();
     sei.lpParameters = args_w.as_ptr();
-    sei.nShow = SW_SHOWNORMAL;
+    // SW_HIDE：控制台子系统的 helper 默认亮黑框，用户关掉黑框 = 杀掉索引
+    // 进程（daemon 侧 serve 模式还有自藏控制台的二道保险）。
+    sei.nShow = SW_HIDE;
     unsafe {
         // windows-sys 的 ShellExecuteExW 返回 BOOL（0 = 失败），不是 Result。
         if ShellExecuteExW(&mut sei) == 0 {
@@ -164,6 +166,18 @@ fn spawn_elevated(_exe: &Path, _args: &str) -> Result<(), String> {
     Err("仅支持 Windows（项目边界）".into())
 }
 
+/// 单飞锁：「探活 → 拉起 → 90s 握手轮询」全程只允许一个并发（2026-10-25）。
+/// 面板每 2s 轮询 + 路径栏搜索并发进来时，没有这把锁就是每个请求都删
+/// endpoint.json 再拉一个提权实例：连环 UAC、连环黑框、实例互杀。
+/// 这里跑在 spawn_blocking 线程上，用 std Mutex。
+static ENSURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 上次拉起失败的 Unix 秒。冷却期内直接复用失败结论——UAC 被拒后
+/// 2s 一发的轮询等于「拒一次弹一次」。
+static LAST_SPAWN_FAILURE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+const SPAWN_FAILURE_COOLDOWN_SECS: u64 = 60;
+
 /// 确保 helper 在跑；没跑就提权拉起并轮询 endpoint.json（覆盖 UAC 确认耗时）。
 fn ensure_helper() -> Result<Endpoint, String> {
     if let Ok(endpoint) = read_endpoint() {
@@ -171,21 +185,45 @@ fn ensure_helper() -> Result<Endpoint, String> {
             return Ok(endpoint);
         }
     }
+    // 单飞：拿到锁后复查——前一个持锁者可能刚把 helper 拉起来。
+    let _guard = ENSURE_LOCK.lock().map_err(|_| "索引服务锁状态异常".to_string())?;
+    if let Ok(endpoint) = read_endpoint() {
+        if process_alive(endpoint.pid) {
+            return Ok(endpoint);
+        }
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(LAST_SPAWN_FAILURE.load(std::sync::atomic::Ordering::Relaxed))
+        < SPAWN_FAILURE_COOLDOWN_SECS
+    {
+        return Err(format!(
+            "索引服务未启动：上次拉起失败（管理员授权可能被拒），{SPAWN_FAILURE_COOLDOWN_SECS} 秒后自动重试"
+        ));
+    }
+
     let _ = std::fs::remove_file(endpoint_path());
 
     let exe = locate_exe()?;
     let args = format!("--serve --data-dir \"{}\"", data_dir().display());
-    spawn_elevated(&exe, &args)?;
+    if let Err(error) = spawn_elevated(&exe, &args) {
+        LAST_SPAWN_FAILURE.store(now, std::sync::atomic::Ordering::Relaxed);
+        return Err(error);
+    }
 
     // 90s：UAC 确认 + helper 启动 + 首卷快照装载。
     for _ in 0..90 {
         std::thread::sleep(Duration::from_secs(1));
         if let Ok(endpoint) = read_endpoint() {
             if process_alive(endpoint.pid) {
+                LAST_SPAWN_FAILURE.store(0, std::sync::atomic::Ordering::Relaxed);
                 return Ok(endpoint);
             }
         }
     }
+    LAST_SPAWN_FAILURE.store(now, std::sync::atomic::Ordering::Relaxed);
     Err("等待索引服务启动超时（90s）——管理员授权可能未确认，或 helper 崩溃。".into())
 }
 

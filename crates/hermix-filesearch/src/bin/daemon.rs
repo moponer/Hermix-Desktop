@@ -232,7 +232,26 @@ async fn serve_loop(service: Arc<SearchService>, data_dir: &std::path::Path) {
                 if line.trim().is_empty() {
                     continue;
                 }
-                let response = handle(&service, &line, Some(&token), &data_dir);
+                // handle 是同步重活（search 要在百万级条目上合并排序、
+                // installTask 要同步等 PowerShell）。直接在 async worker 上跑，
+                // 一次慢请求就占死一个 worker——轮询连接一堆积，accept 循环、
+                // 孤儿看门狗全部饿死，进程活着却对谁都不过话（2026-10-25
+                // 实测：731 CPU 秒、端口在听、90s 无响应）。挪进阻塞线程池，
+                // runtime 只管收发帧。
+                let response = {
+                    let service = service.clone();
+                    let line = line.clone();
+                    let token = token.clone();
+                    let data_dir = data_dir.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        handle(&service, &line, Some(&token), &data_dir)
+                    })
+                    .await
+                    {
+                        Ok(response) => response,
+                        Err(error) => error_response(None, &format!("任务执行失败：{error}")),
+                    }
+                };
                 let _ = writer.write_all(response.as_bytes()).await;
                 let _ = writer.write_all(b"\n").await;
                 // shutdown 指令：响应已回，刷盘退出（endpoint.json 一并清掉）。
