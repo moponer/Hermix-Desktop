@@ -20,7 +20,7 @@ import {
   ChevronRight, HardDrive, ExternalLink, Sparkles, X,
   Monitor, Moon, Sun, Activity, Info, LogOut, Settings2, Pencil, List, Globe,
   LayoutGrid, PanelRightClose, PanelsTopLeft, Copy, MoreHorizontal,
-  Maximize2, Shrink,
+  Maximize2, Shrink, Loader2,
 } from "lucide-react";
 import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { resolveKind } from "@hermix/preview";
@@ -1015,9 +1015,9 @@ export function App() {
       const scope = settings.search.scope;
       setSearchQ(q);
       setSearching(true);
-      // 1. 全盘索引
+      // 1. 全盘索引。进行中的界面反馈是 spinner（见 JSX），这里不再写
+      //    长文案——「需要提权」之类细节等真失败了再随结果说明。
       if (scope !== "local") {
-        setSearchNote("正在搜索全盘索引（首次会请求管理员授权以建立索引）…");
         const global = await viewerFileSource.searchGlobal?.(q, limit);
         if (global?.ok) {
           setSearchResults(global.entries);
@@ -2252,16 +2252,26 @@ export function App() {
         )}
         {/* 搜索范围：全盘索引 vs 当前目录——两者结果差几个数量级，
             用户必须一眼看出「搜到的是不是全盘」。
-            搜索**进行中**也要有反馈（首次搜索可能要等 UAC + 索引装载，
-            几秒到几十秒不等），所以条件是 searchNote 而不是 searchScope
-            （scope 要等结果回来才定）。 */}
-        {searchNote && (
+            搜索**进行中**显示 spinner（首次可能要等索引装载几秒到几十秒；
+            「首次会请求管理员授权」这类细节挂 title 悬停可见——授权提示
+            平铺在界面上只会让用户以为出了故障）。 */}
+        {searching ? (
           <span
-            className={`search-scope ${searchScope === "global" ? "is-global" : ""}`}
-            title={searchNote}
+            className="search-scope is-searching"
+            title="正在搜索全盘索引；首次使用会请求管理员授权以建立索引"
           >
-            {searchNote}
+            <Loader2 className="icon-sm search-spin" aria-hidden="true" />
+            搜索中…
           </span>
+        ) : (
+          searchNote && (
+            <span
+              className={`search-scope ${searchScope === "global" ? "is-global" : ""}`}
+              title={searchNote}
+            >
+              {searchNote}
+            </span>
+          )
         )}
 
         {/* 目录视图切换：仅浏览态显示。预览态目录收成窄槽、强制详情
@@ -2563,13 +2573,6 @@ export function App() {
                 </tr>
               </thead>
               <tbody>
-                {visibleEntries.length === 0 && (
-                  <tr>
-                    <td colSpan={3} className="empty-cell">
-                      {searching ? "正在搜索…" : searchScope ? "无搜索结果" : "空目录"}
-                    </td>
-                  </tr>
-                )}
                 {sortedEntries.map((e) => (
                   <tr
                     key={e.path}
@@ -2610,6 +2613,14 @@ export function App() {
                 ))}
               </tbody>
             </table>
+            {/* 空状态放**表格外**：早先是 colSpan=3 的空行——窄槽下修改时间
+                列被容器查询隐藏后表格只剩 2 列，span 溢出会创建匿名列
+                吃掉一块宽，表头右侧就是用户看到的"空白一块"。 */}
+            {visibleEntries.length === 0 && (
+              <div className="entries-empty">
+                {searching ? "正在搜索…" : searchScope ? "无搜索结果" : "空目录"}
+              </div>
+            )}
             </>
           )}
         </section>

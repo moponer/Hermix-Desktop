@@ -22,7 +22,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Save, FolderOpen, Search, RotateCcw, TriangleAlert, Wand2 } from "lucide-react";
+import { Save, FolderOpen, Search, RotateCcw, TriangleAlert, Wand2, Info, X } from "lucide-react";
 import { editedName } from "./office";
 
 interface DocxParagraph {
@@ -150,6 +150,10 @@ export function DocxEditor({
   const [zoom, setZoom] = useState(100);
   /** 本机装了 WordCraft 的话，给一个「用它编辑」的入口（开源 Rust 文字处理器）。 */
   const [wordcraft, setWordcraft] = useState<string | null>(null);
+  /** 说明与状态侧栏：**默认收起**——窄预览栏里它吃掉 248px、正文档就
+   *  没了；说明是读一次就够的东西，收成右下角浮动图标，要看再展开。
+   *  有 note（导出结果等动态反馈）时图标带红点提醒。 */
+  const [sideOpen, setSideOpen] = useState(false);
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const styleRef = useRef<HTMLDivElement | null>(null);
@@ -486,32 +490,56 @@ export function DocxEditor({
           )}
         </div>
 
-        <aside className="ed-side">
-          <div className="sb-head">状态</div>
-          <div className="ed-status">
-            {doc ? `${doc.total} 段` : "—"} · 已改 {changedCount} 段
-          </div>
-          <div className="ed-status">
-            直接在文档上点击段落即可改字（表格单元格里的段落同样可改）。
-          </div>
-          <div className="ed-status">
-            只改你动过的段落，其余原样保留（样式、图片、页眉页脚不丢）。
-          </div>
-          <div className="ed-status">
-            被改写的段落会采用该段首个文本 run 的格式，段内局部混排会拉平。
-          </div>
-          <div className="ed-status">原文件不会被改动，导出为新文件。</div>
-          {note && (
-            <div className="ed-note">
-              {note}
-              {note.startsWith("已导出") && (
-                <button type="button" className="img-link" onClick={() => void reveal()}>
-                  在资源管理器中显示
-                </button>
-              )}
+        {sideOpen ? (
+          <aside className="ed-side">
+            <div className="sb-head">
+              状态
+              <button
+                type="button"
+                className="ed-side-close"
+                onClick={() => setSideOpen(false)}
+                aria-label="收起说明"
+                title="收起"
+              >
+                <X className="icon-sm" />
+              </button>
             </div>
-          )}
-        </aside>
+            <div className="ed-status">
+              {doc ? `${doc.total} 段` : "—"} · 已改 {changedCount} 段
+            </div>
+            <div className="ed-status">
+              直接在文档上点击段落即可改字（表格单元格里的段落同样可改）。
+            </div>
+            <div className="ed-status">
+              只改你动过的段落，其余原样保留（样式、图片、页眉页脚不丢）。
+            </div>
+            <div className="ed-status">
+              被改写的段落会采用该段首个文本 run 的格式，段内局部混排会拉平。
+            </div>
+            <div className="ed-status">原文件不会被改动，导出为新文件。</div>
+            {note && (
+              <div className="ed-note">
+                {note}
+                {note.startsWith("已导出") && (
+                  <button type="button" className="img-link" onClick={() => void reveal()}>
+                    在资源管理器中显示
+                  </button>
+                )}
+              </div>
+            )}
+          </aside>
+        ) : (
+          <button
+            type="button"
+            className="ed-side-fab"
+            onClick={() => setSideOpen(true)}
+            title="编辑说明与状态"
+            aria-label="编辑说明与状态"
+          >
+            <Info className="icon-sm" />
+            {note && <span className="ed-side-dot" aria-hidden="true" />}
+          </button>
+        )}
       </div>
     </div>
   );

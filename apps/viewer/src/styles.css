@@ -492,6 +492,11 @@ html, body, #root {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .search-scope.is-global { color: var(--accent); background: var(--bg-accent-soft); }
+/* 搜索进行中：spinner + 「搜索中…」。授权 / 装载这类细节挂 title，
+   不平铺在界面上。 */
+.search-scope.is-searching { color: var(--text-secondary); }
+.search-spin { animation: search-rotate 0.9s linear infinite; }
+@keyframes search-rotate { to { transform: rotate(360deg); } }
 
 /* 键盘焦点指示——无障碍必需，但**不用描边**（2026-10-23）。
    旧版是 2px 实线 outline，与主程序统一扁平化后改为强调色淡晕
@@ -748,6 +753,15 @@ html, body, #root {
   user-select: none;
 }
 .entries-grid .empty-cell { grid-column: 1 / -1; }
+/* 详情表的空状态（搜索中 / 无结果 / 空目录）：表格外的一行居中文本。
+   早先是 colSpan=3 的空行——窄槽下 mtime 列隐藏后 span 溢出创建
+   匿名列，表头右侧空出一块；挪出表格后列结构恒定。 */
+.entries-empty {
+  padding: 26px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
 .entry-tile {
   display: flex; flex-direction: column; align-items: center; gap: 7px;
   padding: 12px 6px 9px; border-radius: 8px;
@@ -1392,7 +1406,36 @@ html, body, #root {
 .ed-body,
 .img-body {
   display: flex; flex: 1 1 0%; min-height: 0;
+  /* ed-side 收起后的浮动说明图标以这里为锚。 */
+  position: relative;
 }
+/* 说明侧栏的浮动入口（默认收起）：圆钮浮在编辑区右下角，不占布局宽。 */
+.ed-side-fab {
+  position: absolute; right: 14px; bottom: 14px;
+  width: 32px; height: 32px;
+  border: none; border-radius: 50%;
+  background: var(--bg-primary); color: var(--text-secondary);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.22);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.ed-side-fab:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+.ed-side-fab .icon-sm { width: 15px; height: 15px; }
+/* 有 note（导出结果等动态反馈）时红点提醒，别让收起吃掉重要提示。 */
+.ed-side-dot {
+  position: absolute; top: 5px; right: 5px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--danger);
+}
+.ed-side .sb-head { position: relative; }
+.ed-side-close {
+  position: absolute; right: 6px; top: 6px;
+  border: none; background: transparent; color: var(--text-secondary);
+  cursor: pointer; padding: 3px; border-radius: 4px;
+  display: inline-flex;
+}
+.ed-side-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+.ed-side-close .icon-sm { width: 13px; height: 13px; }
 .ed-panel {
   flex: 1 1 auto; min-width: 0; min-height: 0;
   overflow: auto;
