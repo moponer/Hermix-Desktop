@@ -20,6 +20,7 @@ import {
   ChevronRight, HardDrive, ExternalLink, Sparkles, X,
   Monitor, Moon, Sun, Activity, Info, LogOut, Settings2, Pencil, List, Globe,
   LayoutGrid, PanelRightClose, PanelsTopLeft, Copy, MoreHorizontal,
+  Maximize2, Shrink,
 } from "lucide-react";
 import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { resolveKind } from "@hermix/preview";
@@ -448,6 +449,14 @@ export function App() {
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   /** 垂直标签列表（标签太多时点开挑）。 */
   const [tabListOpen, setTabListOpen] = useState(false);
+  /** 预览铺满：目录槽 / AI 槽 / 驱动器栏全部让位，预览区独占主宽。
+   *  组件只是 display:none 不卸载，Esc / 关闭预览即恢复——看大图
+   *  时不再被左侧目录吃掉四分之一窗口。 */
+  const [previewFull, setPreviewFull] = useState(false);
+  /** 标签条右端的动作区（DOM 节点）：PreviewHost 经 portal 把编辑 /
+   *  钉住 / 视图切换投进来，文件名行由此从预览区顶部消失（文件名
+   *  标签上已有，显示两遍就是重复）。 */
+  const [tabActionsEl, setTabActionsEl] = useState<HTMLElement | null>(null);
   const tabbarRef = useRef<HTMLDivElement | null>(null);
   /** 当前激活的标签（预览区、顶栏地址栏、菜单都要用）。 */
   const active = tabs.find((t) => t.id === activeTabId) ?? null;
@@ -1843,6 +1852,8 @@ export function App() {
     setTabs([]);
     openedRef.current.clear();
     setActiveTabId(null);
+    // 回浏览态必然重排：铺满态别带到下一次预览。
+    setPreviewFull(false);
   }, []);
 
   /** 菜单要用的状态与动作（一次算好，菜单打开时直接取）。 */
@@ -1957,6 +1968,10 @@ export function App() {
           setMenu(null);
           return;
         }
+        if (previewFull) {
+          setPreviewFull(false);
+          return;
+        }
         if (searchScope) exitSearch();
         return;
       }
@@ -2008,6 +2023,7 @@ export function App() {
     back,
     closeTab,
     copyPath,
+    previewFull,
     currentPath,
     exitSearch,
     forward,
@@ -2053,13 +2069,15 @@ export function App() {
   }, []);
 
   /** 布局状态机（预览优先）：三个区域怎么排，见文件头注释与 CSS 状态规则。 */
-  const layoutState: "browse" | "preview" | "preview-ai" | "pure" =
+  const layoutState: "browse" | "preview" | "preview-ai" | "preview-full" | "pure" =
     mode === "pure"
       ? "pure"
       : active !== null
-        ? aiOpen
-          ? "preview-ai"
-          : "preview"
+        ? previewFull
+          ? "preview-full"
+          : aiOpen
+            ? "preview-ai"
+            : "preview"
         : "browse";
   /** 目录栏当前视图：预览态强制详情（窄槽装不下大图）；浏览态用用户手选。 */
   const dirEffView: DirView = layoutState === "browse" ? dirView : "rows";
@@ -2635,6 +2653,22 @@ export function App() {
               ))}
               <div className="tabbar-spacer" onClick={() => setTabListOpen((v) => !v)} />
             </div>
+            {/* 动作区：PreviewHost 经 portal 把「编辑 / 钉住 / 视图切换」
+                投进来（heavy 模式）——原先它们占独立一行且文件名与标签
+                重复，合并后预览区顶部少一行。 */}
+            <div className="tabbar-actions" ref={setTabActionsEl} />
+            {mode === "heavy" && (
+              <button
+                type="button"
+                className="tab-list-btn"
+                onClick={() => setPreviewFull((v) => !v)}
+                title={previewFull ? "退出铺满（Esc）" : "铺满窗口：隐藏目录与 AI 栏（Esc 退出）"}
+                aria-label={previewFull ? "退出铺满窗口" : "铺满窗口"}
+                aria-pressed={previewFull}
+              >
+                {previewFull ? <Shrink className="icon-sm" /> : <Maximize2 className="icon-sm" />}
+              </button>
+            )}
             <button
               type="button"
               className={tabListOpen ? "tab-list-btn is-active" : "tab-list-btn"}
@@ -2723,6 +2757,7 @@ export function App() {
                   canEdit={mode === "heavy"}
                   editRequest={editRequest}
                   showName={mode !== "pure"}
+                  actionsSlot={tabActionsEl}
                 />
               </Suspense>
             )}

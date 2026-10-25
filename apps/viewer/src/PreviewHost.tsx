@@ -7,6 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { lazy, Suspense } from "react";
+import { createPortal } from "react-dom";
 import { Pencil, Pin, Play, RotateCcw } from "lucide-react";
 import {
   loadPreview,
@@ -167,6 +168,7 @@ export function PreviewHost({
   canEdit = false,
   editRequest = 0,
   showName = true,
+  actionsSlot = null,
 }: {
   path: string;
   name: string;
@@ -184,6 +186,13 @@ export function PreviewHost({
    * 就是同一串文件名隔 30px 出现两次。
    */
   showName?: boolean;
+  /**
+   * 标签条右端的动作区（heavy 模式由 App 传入）。工具按钮（编辑 / 钉住 /
+   * 视图切换）经 portal 投到这里——它们原先占独立一行，且行内的文件名
+   * 与标签条重复；并入标签行后预览区顶部少一行。
+   * showName=false（纯净模式）时不用 portal，走自带工具行。
+   */
+  actionsSlot?: HTMLElement | null;
 }) {
   const [state, setState] = useState<PreviewState>({ status: "loading", kind: "text" });
   const [viewMode, setViewMode] = useState<ViewMode>("layout");
@@ -271,135 +280,151 @@ export function PreviewHost({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editRequest]);
 
+  /** 工具区控件（编辑 / 钉住 / 视图切换 / 缩放）。heavy 模式经 portal
+   *  投进标签条右端动作区（文件名标签上已有，独立一行只重复它）；
+   *  纯净模式没有标签条，走自带工具行。 */
+  const controls = (
+    <>
+      {editorKind !== "none" && !editing && (
+        <button
+          type="button"
+          className="tb-btn"
+          onClick={() => setEditor(editorKind)}
+          title={EDITOR_HINT[editorKind]}
+          aria-label={EDITOR_HINT[editorKind]}
+        >
+          <Pencil className="icon-sm" />
+          编辑
+        </button>
+      )}
+      {!editing && (
+        <button
+          type="button"
+          className="tb-btn"
+          onClick={() => {
+            void pinPreview(path).then((r) => {
+              setPinError("error" in r ? r.error : null);
+            });
+          }}
+          title="钉住到独立浮窗（可挪到屏幕任意位置，方便对比）"
+          aria-label="钉住到独立浮窗"
+        >
+          <Pin className="icon-sm" />
+          钉住
+        </button>
+      )}
+      {pinError && <span className="tb-error">{pinError}</span>}
+      {editing && (
+        <button
+          type="button"
+          className="tb-btn"
+          onClick={() => setEditor("none")}
+          title="返回预览"
+          aria-label="返回预览"
+        >
+          返回预览
+        </button>
+      )}
+      {/* Word / Excel：编辑 ↔ 预览。原先这里是「排版 / 文本」，对 Office
+          文档点了什么都不会变（applyViewMode 对 docx/pptx 原样返回）。 */}
+      {officeKind && (
+        <div className="seg" role="group" aria-label="编辑与预览">
+          <button
+            type="button"
+            className={officeMode === "edit" ? "is-active" : ""}
+            onClick={() => setOfficeMode("edit")}
+            aria-pressed={officeMode === "edit"}
+          >
+            编辑
+          </button>
+          <button
+            type="button"
+            className={officeMode === "preview" ? "is-active" : ""}
+            onClick={() => setOfficeMode("preview")}
+            aria-pressed={officeMode === "preview"}
+          >
+            预览
+          </button>
+        </div>
+      )}
+      {!officeKind && !editing && supportsTextView(kind) && (
+        <div className="seg">
+          <button
+            type="button"
+            className={viewMode === "layout" ? "is-active" : ""}
+            onClick={() => setViewMode("layout")}
+          >
+            排版
+          </button>
+          <button
+            type="button"
+            className={viewMode === "text" ? "is-active" : ""}
+            onClick={() => setViewMode("text")}
+          >
+            文本
+          </button>
+        </div>
+      )}
+      {!editing && !officeEditing && supportsZoom(effectiveKind) && (
+        <div className="seg" role="group" aria-label="预览缩放">
+          <button
+            type="button"
+            onClick={() => setZoom((z) => Math.max(ZOOM_MIN, z - 10))}
+            disabled={zoom <= ZOOM_MIN}
+            title="缩小"
+            aria-label="缩小预览"
+          >
+            −
+          </button>
+          <span className="seg-val">{zoom}%</span>
+          <button
+            type="button"
+            onClick={() => setZoom((z) => Math.min(ZOOM_MAX, z + 10))}
+            disabled={zoom >= ZOOM_MAX}
+            title="放大"
+            aria-label="放大预览"
+          >
+            ＋
+          </button>
+          {/* 重置按钮只在偏离 100% 时出现：常驻的话，默认缩放下工具条
+              里会并排出现两个 "100%"（当前值 + 写死的重置值），看着像重复。 */}
+          {zoom !== 100 && (
+            <button
+              type="button"
+              className="seg-reset"
+              onClick={() => setZoom(100)}
+              title="重置为 100%"
+              aria-label="重置预览缩放"
+            >
+              <RotateCcw className="icon-sm" />
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+
   return (
     <div className="preview-pane">
       {/* 预览工具条常驻：Office 的「编辑 / 预览」切换、缩放、钉住都在这里。
           Office 编辑器自己那条工具条只管导出 / 另存为。 */}
-      <div className="preview-toolbar">
-        {/* 编辑态下文件名由编辑器那条工具条显示，这里不再重复一遍。 */}
-        {showName && !officeEditing && (
-          <span className="preview-toolbar-name" title={path}>
-            {name}
-          </span>
-        )}
-        <span className="preview-toolbar-spacer" />
-        {editorKind !== "none" && !editing && (
-          <button
-            type="button"
-            className="tb-btn"
-            onClick={() => setEditor(editorKind)}
-            title={EDITOR_HINT[editorKind]}
-            aria-label={EDITOR_HINT[editorKind]}
-          >
-            <Pencil className="icon-sm" />
-            编辑
-          </button>
-        )}
-        {!editing && (
-          <button
-            type="button"
-            className="tb-btn"
-            onClick={() => {
-              void pinPreview(path).then((r) => {
-                setPinError("error" in r ? r.error : null);
-              });
-            }}
-            title="钉住到独立浮窗（可挪到屏幕任意位置，方便对比）"
-            aria-label="钉住到独立浮窗"
-          >
-            <Pin className="icon-sm" />
-            钉住
-          </button>
-        )}
-        {pinError && <span className="tb-error">{pinError}</span>}
-        {editing && (
-          <button
-            type="button"
-            className="tb-btn"
-            onClick={() => setEditor("none")}
-            title="返回预览"
-            aria-label="返回预览"
-          >
-            返回预览
-          </button>
-        )}
-        {/* Word / Excel：编辑 ↔ 预览。原先这里是「排版 / 文本」，对 Office
-            文档点了什么都不会变（applyViewMode 对 docx/pptx 原样返回）。 */}
-        {officeKind && (
-          <div className="seg" role="group" aria-label="编辑与预览">
-            <button
-              type="button"
-              className={officeMode === "edit" ? "is-active" : ""}
-              onClick={() => setOfficeMode("edit")}
-              aria-pressed={officeMode === "edit"}
-            >
-              编辑
-            </button>
-            <button
-              type="button"
-              className={officeMode === "preview" ? "is-active" : ""}
-              onClick={() => setOfficeMode("preview")}
-              aria-pressed={officeMode === "preview"}
-            >
-              预览
-            </button>
-          </div>
-        )}
-        {!officeKind && !editing && supportsTextView(kind) && (
-          <div className="seg">
-            <button
-              type="button"
-              className={viewMode === "layout" ? "is-active" : ""}
-              onClick={() => setViewMode("layout")}
-            >
-              排版
-            </button>
-            <button
-              type="button"
-              className={viewMode === "text" ? "is-active" : ""}
-              onClick={() => setViewMode("text")}
-            >
-              文本
-            </button>
-          </div>
-        )}
-        {!editing && !officeEditing && supportsZoom(effectiveKind) && (
-          <div className="seg" role="group" aria-label="预览缩放">
-            <button
-              type="button"
-              onClick={() => setZoom((z) => Math.max(ZOOM_MIN, z - 10))}
-              disabled={zoom <= ZOOM_MIN}
-              title="缩小"
-              aria-label="缩小预览"
-            >
-              −
-            </button>
-            <span className="seg-val">{zoom}%</span>
-            <button
-              type="button"
-              onClick={() => setZoom((z) => Math.min(ZOOM_MAX, z + 10))}
-              disabled={zoom >= ZOOM_MAX}
-              title="放大"
-              aria-label="放大预览"
-            >
-              ＋
-            </button>
-            {/* 重置按钮只在偏离 100% 时出现：常驻的话，默认缩放下工具条
-                里会并排出现两个 "100%"（当前值 + 写死的重置值），看着像重复。 */}
-            {zoom !== 100 && (
-              <button
-                type="button"
-                className="seg-reset"
-                onClick={() => setZoom(100)}
-                title="重置为 100%"
-                aria-label="重置预览缩放"
-              >
-                <RotateCcw className="icon-sm" />
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      {/* 工具按钮：heavy 经 portal 进标签条动作区（actionsSlot 已在
+          App mount 完成后传入，lazy 的本组件首渲即有值，不会闪空）；
+          纯净模式无标签条，走自带工具行并显示文件名。 */}
+      {showName && actionsSlot ? (
+        createPortal(<div className="tabbar-actions-inner">{controls}</div>, actionsSlot)
+      ) : (
+        <div className="preview-toolbar">
+          {/* 编辑态下文件名由编辑器那条工具条显示，这里不再重复一遍。 */}
+          {!officeEditing && (
+            <span className="preview-toolbar-name" title={path}>
+              {name}
+            </span>
+          )}
+          <span className="preview-toolbar-spacer" />
+          {controls}
+        </div>
+      )}
       <div className="preview-pane-inner">
         {isMedia ? (
           <MediaView

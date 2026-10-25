@@ -708,24 +708,29 @@ html, body, #root {
 
 /* 驱动器栏只在浏览态出现。 */
 .app[data-state="preview"] .sidebar,
-.app[data-state="preview-ai"] .sidebar { display: none; }
+.app[data-state="preview-ai"] .sidebar,
+.app[data-state="preview-full"] .sidebar { display: none; }
 
-/* 目录栏：浏览态铺满主宽；预览态收成固定槽；preview-ai 态整体让位。 */
+/* 目录栏：浏览态铺满主宽；预览态收成固定槽；preview-ai / preview-full 态
+   整体让位——铺满是「看大图」的形态，预览区独占主宽。 */
 .app[data-state="browse"] .explorer { flex: 1 1 auto; width: auto; }
 .app[data-state="preview"] .explorer {
   flex: none; width: var(--dir-slot); min-width: 0;
   border-right: 1px solid var(--border-subtle);
 }
-.app[data-state="preview-ai"] .explorer { display: none; }
+.app[data-state="preview-ai"] .explorer,
+.app[data-state="preview-full"] .explorer { display: none; }
 
 /* AI 栏：组件常驻挂载、默认不占位（对话状态跨开关保留）；浏览态在右缘
-   吃 --ai-w（可拖），preview-ai 态顶替目录槽 → 与目录同宽。 */
+   吃 --ai-w（可拖），preview-ai 态顶替目录槽 → 与目录同宽；铺满态让位
+   （组件不卸载，Esc 退出即恢复对话）。 */
 .app .ai-side { display: none; }
 .app[data-state="browse"][data-ai="open"] .ai-side { display: flex; }
 .app[data-state="preview-ai"] .ai-side {
   display: flex; width: var(--dir-slot);
   border-right: 1px solid var(--border-subtle);
 }
+.app[data-state="preview-full"] .ai-side { display: none; }
 /* 窄窗下目录槽与 AI 槽用同一把尺一起收缩，宽度不变在任何窗口宽度成立。 */
 @media (max-width: 1100px) {
   .app[data-state="preview"] .explorer,
@@ -837,6 +842,24 @@ html, body, #root {
 }
 .tab-list-btn:hover, .tab-list-btn.is-active { background: var(--bg-hover); color: var(--text-primary); }
 .tab-list-count { font-variant-numeric: tabular-nums; }
+/* 标签条右端动作区：PreviewHost 的编辑 / 钉住 / 视图切换经 portal 住这里。
+   高度压到 22 与 tab-list-btn 同档（在 32px 标签行内居中）；seg / tb-btn
+   原本为 28px 行设计，统一压档后视觉上仍是"一行工具"。 */
+.tabbar-actions {
+  display: flex; align-items: center; gap: 2px;
+  flex: none; align-self: center;
+  margin: 0 2px;
+}
+.tabbar-actions-inner { display: flex; align-items: center; gap: 2px; }
+.tabbar-actions .tb-btn,
+.tabbar-actions .seg button {
+  height: 22px; font-size: 12px;
+}
+.tabbar-actions .tb-btn { padding: 0 7px; }
+.tabbar-actions .tb-error {
+  flex: none; max-width: 180px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .tab-list-pop {
   position: absolute; top: calc(100% + 2px); right: 6px;
   z-index: 60;
