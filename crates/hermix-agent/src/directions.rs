@@ -327,20 +327,25 @@ const WEB_AUTOMATION_GUIDANCE: &str = "\
 - `url_safety` — 只做链接安全策略检查，不访问页面。
 - `web_search` / `web_extract` — 搜索 + 抓取**公开**网页正文。**读网页内容的首选**：\
 不启动浏览器、最快、零审批；只有页面需要 JS 渲染或登录态时才降级到浏览器线。
-- 浏览器自动化由**查看器**提供（MCP 工具名带 `viewer__` 前缀，如 `viewer__browser_open`）：\
-`browser_open(url, session, headed)` — `headed=false` 无头（抓数据，默认）、`headed=true` 有头\
+- 浏览器自动化由**查看器**提供（MCP 工具名前缀 = 服务器名，完整形如 `hermix-viewer__browser_open`）：\
+`browser_open(url, session, headed, profile)` — `headed=false` 无头（抓数据，默认）、`headed=true` 有头\
 （弹真实浏览器窗口，用户看得见、能接管、能自己登录）。每个 session 独立进程 + 独立 profile。\
-配套：`browser_text`（读页面文本，比截图省 token）、`browser_eval`（执行 JS）、\
+配套：`hermix-viewer__browser_text`（读页面文本，比截图省 token）、`browser_eval`（执行 JS）、\
 `browser_click`（坐标）、`browser_screenshot`。**需要登录的站点一律 headed=true**。
-- 桌面自动化由查看器提供：`desktop_list_windows / desktop_list_controls / desktop_click / \
+- 桌面自动化由查看器提供：`hermix-viewer__desktop_list_windows / desktop_list_controls / desktop_click / \
 desktop_set_text / desktop_read_text / desktop_press_key`。
 - `cronjob` — 定时任务/自动化（「每天自动…」「定时提醒…」）。用户要自动化时用 cronjob，不要为此创建自定义应用。
 - `workflow` — 把跑通的流程存成带参数的可重跑工作流（用户在「自动化 → 工作流」页面一键重跑）。用户要「保存/复用这套流程」时用 workflow；跨会话的经验沉淀才用 skill。
 - **验证码**：有头浏览器打开后 `viewer__browser_screenshot` 截图，用 `read_image` 亲眼看图（你有原生视觉）——\
 普通字符码读出填入并让用户核对；滑块/点选类请用户在浏览器窗口里自己操作。\
 不要声称「视觉识别失败」就放弃，也不要尝试绕过验证码。\
-若你的工具列表里没有任何 `viewer__browser_*` / `viewer__webview_*`，说明查看器未运行或 MCP 未连接——\
-先用 `web_extract` 兜底，并如实告知用户打开查看器应用。";
+若你的工具列表里没有任何 `hermix-viewer__browser_*`，按序排查（每步给结论，不要跳步）：\
+1. **等一次重试**：桌面端启动会自动拉起查看器，server 对 MCP 连接失败每 60s 自动重试\
+   （最多 30 分钟）——工具刚缺时先等 1-2 分钟再下结论，大概率自愈。\
+2. **仍缺** → 告知用户查看器未运行或其「设置 → MCP 服务」未开启，请用户打开后稍等重试。\
+3. **不要用 PowerShell/curl 手动探测端口下「JSON 非法」结论**——探测脚本自身的编码/转义\
+   会产生误报（2026-10-25 实测：直连 MCP 握手完全正常，脚本误报带偏一整轮）。\
+   以 `tool_search` / 本轮工具表为准。";
 
 /// 渐进式工具披露（progressive disclosure）的使用规则。
 ///
