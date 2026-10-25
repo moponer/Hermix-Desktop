@@ -104,6 +104,18 @@ pub async fn document_to_markdown(file_path: String) -> Result<MarkdownResult, S
         .unwrap_or("")
         .to_ascii_lowercase();
     if !SUPPORTED.contains(&ext.as_str()) {
+        // 旧版二进制 Office（.doc/.ppt 及 WPS 系）没有任何开源解析器
+        // （markitdown 只认 OOXML）。报错要给出路：系统程序能开、另存为
+        // 新格式后可预览——而不是一句「暂不支持」把人晾在原地。
+        const LEGACY_BINARY: &[&str] = &[
+            "doc", "ppt", "dot", "pot", "wps", "et", "dps", "rtf",
+        ];
+        if LEGACY_BINARY.contains(&ext.as_str()) {
+            return Err(format!(
+                "旧版二进制格式 .{ext} 没有浏览器内的解析器。点下方「用系统程序打开」\
+                 （Word / WPS 均可）；在 Office 里另存为 .docx / .pptx 后就能直接预览与编辑。"
+            ));
+        }
         return Err(format!("暂不支持 .{ext} 的文本抽取"));
     }
 

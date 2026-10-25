@@ -12,6 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tauri::Emitter;
 
 use crate::settings::{self, ViewerSettings};
 
@@ -368,13 +369,17 @@ fn completions_url(base_url: &str) -> String {
 }
 
 /// 发一次请求，返回（状态码, 原始响应文本）。
-/// 刻意返回文本而不是直接 `json()`：解析失败时调用方要能把原文展示出来。
-async fn send_once(
+/// 流式发一轮对话：SSE 逐 delta 经 `ai-delta` 事件推给前端（打字机），
+/// 返回 `(status, content, raw_fallback)`。status != 200 时 content 为空、
+/// raw_fallback 为错误原文（调用方走与 send_once 时代相同的错误映射）。
+/// 200 但内容为空（finish_reason=stop 的抽风网关）在这里就报空回复。
+async fn send_stream(
+    app: Option<&tauri::AppHandle>,
     client: &reqwest::Client,
     url: &str,
     body: &Value,
     api_key: Option<&str>,
-) -> Result<(u16, String), String> {
+) -> Result<(u16, String, String), String> {
     let mut req = client.post(url).json(body);
     if let Some(key) = api_key {
         req = req.bearer_auth(key);
@@ -384,11 +389,64 @@ async fn send_once(
         .await
         .map_err(|e| format!("连接 AI 端点失败（{url}）：{e}"))?;
     let status = resp.status().as_u16();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| format!("读取 AI 响应失败（{url}）：{e}"))?;
-    Ok((status, text))
+    if status != 200 {
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取 AI 响应失败（{url}）：{e}"))?;
+        return Ok((status, String::new(), text));
+    }
+
+    use futures::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    let mut content = String::new();
+    let mut reasoning = String::new();
+    let mut finish = String::new();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| format!("流式响应读取失败（{url}）：{e}"))?;
+        buf.push_str(&String::from_utf8_lossy(&bytes));
+        // SSE 按行分帧：chunk 可能切断一行，留在 buf 里等下一个 chunk。
+        while let Some(pos) = buf.find('\n') {
+            let line: String = buf.drain(..=pos).collect();
+            let line = line.trim();
+            let Some(data) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data == "[DONE]" {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+            if let Some(delta) = v["choices"][0]["delta"]["content"].as_str() {
+                if !delta.is_empty() {
+                    content.push_str(delta);
+                    if let Some(app) = app { let _ = app.emit("ai-delta", delta); }
+                }
+            }
+            // 推理模型（deepseek-reasoner 等）把正文放 reasoning_content：
+            // 先攒着，正文为空时整体作为回复一次性下发。
+            if let Some(r) = v["choices"][0]["delta"]["reasoning_content"].as_str() {
+                reasoning.push_str(r);
+            }
+            if let Some(f) = v["choices"][0]["finish_reason"].as_str() {
+                finish = f.to_string();
+            }
+        }
+    }
+    if content.trim().is_empty() && !reasoning.trim().is_empty() {
+        content = reasoning;
+        if let Some(app) = app { let _ = app.emit("ai-delta", content.as_str()); }
+    }
+    if content.trim().is_empty() {
+        return Err(format!(
+            "AI 端点返回了空回复（finish_reason={}）——稍后重试或换一个模型",
+            if finish.is_empty() { "unknown" } else { finish.as_str() },
+        ));
+    }
+    Ok((status, content, String::new()))
 }
 
 /// 400 是否因为「不支持的参数」而非真的请求错误。
@@ -401,6 +459,7 @@ fn looks_like_param_reject(text: &str) -> bool {
 }
 
 pub async fn chat(
+    app: Option<&tauri::AppHandle>,
     endpoint: &ResolvedEndpoint,
     system_prompt: &str,
     history: &[ChatTurn],
@@ -438,7 +497,7 @@ pub async fn chat(
     let mut body = json!({
         "model": endpoint.info.model,
         "messages": messages,
-        "stream": false,
+        "stream": true,
     });
     if let Some(t) = temperature {
         body["temperature"] = json!(t);
@@ -447,41 +506,48 @@ pub async fn chat(
         body["max_tokens"] = json!(m);
     }
 
+    // 流式没有"整体 180s"的概念（长回复会一直有字节到来），超时只兜
+    // 连接 + 单段读取：600s 覆盖极慢的免费渠道。
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| format!("HTTP client 构建失败: {e}"))?;
 
     let url = completions_url(&endpoint.info.base_url);
-    let (status, text) = send_once(&client, &url, &body, endpoint.api_key.as_deref()).await?;
+    let (status, text, raw) =
+        send_stream(app, &client, &url, &body, endpoint.api_key.as_deref()).await?;
 
     // 400 兼容重试：o1/o3/deepseek-reasoner 这类推理模型不接受 temperature
     // 与 max_tokens（有的只认 max_completion_tokens），会把整个请求直接打回
     // 400。这不是配置错误，是同一件事的两种方言 —— 去掉这两个可选参数重发
-    // 一次即可，用户不该为此去改配置。
-    let (status, text) = if status == 400 && looks_like_param_reject(&text) {
+    // 一次即可，用户不该为此去改配置。第一遍 400 时没有任何 delta 下发，
+    // 重试不会造成前端内容重复。
+    let (status, text, raw) = if status == 400 && looks_like_param_reject(&raw) {
         let mut relaxed = body.clone();
         if let Some(obj) = relaxed.as_object_mut() {
             obj.remove("temperature");
             obj.remove("max_tokens");
         }
-        send_once(&client, &url, &relaxed, endpoint.api_key.as_deref()).await?
+        send_stream(app, &client, &url, &relaxed, endpoint.api_key.as_deref()).await?
     } else {
-        (status, text)
+        (status, text, raw)
     };
 
-    let raw: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+
     if status != 200 {
-        let detail = raw
+        // raw 是错误响应原文（send_stream 对非 200 不做流式）。错误体多为
+        // JSON，尽量解出 message；解不出把前 300 字带上（网关回 HTML 错误
+        // 页时那是唯一线索）。
+        let parsed: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+        let detail = parsed
             .get("error")
             .and_then(|v| v.get("message").and_then(|m| m.as_str()))
-            .or_else(|| raw.get("error").and_then(|v| v.as_str()))
-            .or_else(|| raw.get("message").and_then(|v| v.as_str()))
+            .or_else(|| parsed.get("error").and_then(|v| v.as_str()))
+            .or_else(|| parsed.get("message").and_then(|v| v.as_str()))
             .map(|s| s.to_string())
-            // 解不出 JSON 时把原文前 300 字带上：最常见的是网关返回 HTML 错误页
-            // 或 SSE 流，以前统一显示「(无详情)」，等于把唯一线索扔掉了。
             .unwrap_or_else(|| {
-                let t = text.trim();
+                let t = raw.trim();
                 if t.is_empty() { "(响应体为空)".to_string() }
                 else { format!("{}…", t.chars().take(300).collect::<String>()) }
             });
@@ -505,49 +571,8 @@ pub async fn chat(
             _ => format!("AI 端点返回 {status}（{url}）：{detail}"),
         });
     }
-    let content = raw
-        .get("choices")
-        .and_then(|v| v.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            raw.get("choices")
-                .and_then(|v| v.get(0))
-                .and_then(|c| c.get("text"))
-                .and_then(|v| v.as_str())
-        })
-        .unwrap_or("")
-        .to_string();
-    if content.trim().is_empty() {
-        // 推理模型（deepseek-reasoner / o 系列）有时把正文放在 reasoning_content，
-        // content 为空。直接报「空回复」会让用户以为模型没反应。
-        let reasoning = raw
-            .get("choices")
-            .and_then(|v| v.get(0))
-            .and_then(|c| c.get("message"))
-            .and_then(|m| m.get("reasoning_content"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if !reasoning.is_empty() {
-            return Ok(reasoning);
-        }
-        // 空回复也把 finish_reason 带出来：length 表示被 max_tokens 截断，
-        // content_filter 表示被安全策略拦了，二者处理方式完全不同。
-        let finish = raw
-            .get("choices")
-            .and_then(|v| v.get(0))
-            .and_then(|c| c.get("finish_reason"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        return Err(format!(
-            "AI 端点返回了空回复（finish_reason={finish}，模型 {}）",
-            endpoint.info.model
-        ));
-    }
-    Ok(content)
+    // 200：content 由流式累积（空回复的检查在 send_stream 内完成）。
+    Ok(text)
 }
 
 #[cfg(test)]

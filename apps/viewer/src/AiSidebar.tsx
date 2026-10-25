@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isImageExt } from "@hermix/preview";
 import { Bot, ChevronDown, ChevronsRight } from "lucide-react";
 import { ContextMenu } from "./ContextMenu";
@@ -55,6 +56,11 @@ export function AiSidebar({
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  /** 流式中的部分回复：null = 还没有 delta（显示思考动效）。
+   *  与 busy 分开：busy 覆盖「请求已发、等首字节」+「流式接收中」两段。 */
+  const [streamText, setStreamText] = useState<string | null>(null);
+  /** 流式文本的同步镜像：catch 里要把已到的部分内容留住，state 闭包读不到。 */
+  const streamRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** 当前生效的 AI 后端（设置 → AI 助手）。面板顶部要让人一眼看出在跟谁说话。 */
   const [backend, setBackend] = useState<AiStatus | null>(null);
@@ -69,12 +75,27 @@ export function AiSidebar({
 
   useEffect(() => {
     listRef.current?.scrollTo(0, listRef.current.scrollHeight);
-  }, [messages, busy]);
+  }, [messages, busy, streamText]);
 
   useEffect(() => {
     void loadAiStatus().then(setBackend);
     void loadAiModels().then(setModels);
     void loadSettings().then(setAiSettings);
+  }, []);
+
+  // 流式：Rust 侧每个 delta 发一次 ai-delta。busy 且 streamText 为 null =
+  // 还没收到首字节（思考动效）；非 null = 打字机进行中。
+  useEffect(() => {
+    let un: UnlistenFn | undefined;
+    void listen<string>("ai-delta", (e) => {
+      streamRef.current = (streamRef.current ?? "") + e.payload;
+      setStreamText(streamRef.current);
+    }).then((u) => {
+      un = u;
+    });
+    return () => {
+      un?.();
+    };
   }, []);
 
   /** 头部下拉选模型：写 settings.ai.selectedModel 并刷新生效状态。
@@ -102,6 +123,9 @@ export function AiSidebar({
       setInput("");
       setError(null);
       setBusy(true);
+      // 流式状态复位：null = 未收到首字节（思考动效）。
+      streamRef.current = null;
+      setStreamText(null);
       setMessages((m) => [...m, { role: "user", text: trimmed }]);
       try {
         // 直连模式没有服务端会话，**历史由前端带**——否则每一轮都是
@@ -120,9 +144,16 @@ export function AiSidebar({
           { role: "assistant", text: reply.reply || "(空回复)" },
         ]);
       } catch (e) {
+        // 出错但流式已到一部分：把已到的部分留为正式消息，别白看半截。
+        if (streamRef.current) {
+          const partial = streamRef.current;
+          setMessages((m) => [...m, { role: "assistant", text: partial }]);
+        }
         setError(String(e instanceof Error ? e.message : e));
       } finally {
         setBusy(false);
+        streamRef.current = null;
+        setStreamText(null);
       }
     },
     [busy, filePath, messages, selection],
@@ -262,7 +293,23 @@ export function AiSidebar({
             {m.text}
           </div>
         ))}
-        {busy && <div className="ai-msg ai-msg-assistant ai-busy">思考中…</div>}
+        {/* 等首字节：三点跳动；流式进行中：打字机文本 + 闪烁光标。 */}
+        {busy && streamText === null && (
+          <div className="ai-msg ai-msg-assistant ai-thinking" aria-live="polite">
+            <span className="ai-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            思考中…
+          </div>
+        )}
+        {busy && streamText !== null && (
+          <div className="ai-msg ai-msg-assistant ai-streaming" aria-live="polite">
+            {streamText}
+            <span className="ai-cursor" aria-hidden="true" />
+          </div>
+        )}
       </div>
 
       {error && <div className="ai-error">{error}</div>}

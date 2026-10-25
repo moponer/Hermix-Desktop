@@ -13,11 +13,9 @@ import {
   loadPreview,
   PreviewSurface,
   resolveKind,
-  applyViewMode,
   type FileSource,
   type LoadOutcome,
   type PreviewState,
-  supportsTextView,
   supportsZoom,
   type PreviewKind,
   type ViewMode,
@@ -195,7 +193,6 @@ export function PreviewHost({
   actionsSlot?: HTMLElement | null;
 }) {
   const [state, setState] = useState<PreviewState>({ status: "loading", kind: "text" });
-  const [viewMode, setViewMode] = useState<ViewMode>("layout");
   const [zoom, setZoom] = useState(100);
   const [editor, setEditor] = useState<EditorKind>("none");
   /** 钉住浮窗失败的原因（工具条里显示，别让「点了没反应」变成谜）。 */
@@ -203,7 +200,10 @@ export function PreviewHost({
   const loadToken = useRef(0);
 
   const kind: PreviewKind = useMemo(() => resolveKind(name), [name]);
-  const effectiveKind = applyViewMode(kind, viewMode);
+  /** 「排版 / 文本」切换已收：恒排版视图（用户拍板——打开默认就是预览，
+   *  文本模式没有使用价值），viewMode 状态随之删除。 */
+  const viewMode: ViewMode = "layout";
+  const effectiveKind = kind;
   /** 媒体走 asset 协议，不进共享预览管线（几百 MB 的文件不经 IPC 搬）。 */
   const isMedia = useMemo(() => isMediaFile(name), [name]);
 
@@ -347,24 +347,9 @@ export function PreviewHost({
           </button>
         </div>
       )}
-      {!officeKind && !editing && supportsTextView(kind) && (
-        <div className="seg">
-          <button
-            type="button"
-            className={viewMode === "layout" ? "is-active" : ""}
-            onClick={() => setViewMode("layout")}
-          >
-            排版
-          </button>
-          <button
-            type="button"
-            className={viewMode === "text" ? "is-active" : ""}
-            onClick={() => setViewMode("text")}
-          >
-            文本
-          </button>
-        </div>
-      )}
+      {/* 「排版 / 文本」切换已收（2026-10-25 用户拍板）：打开默认就是排版
+          预览，文本模式（markitdown 抽取）没有使用价值。viewMode 恒
+          layout，applyViewMode 不再参与调度。 */}
       {!editing && !officeEditing && supportsZoom(effectiveKind) && (
         <div className="seg" role="group" aria-label="预览缩放">
           <button

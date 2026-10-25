@@ -1145,9 +1145,11 @@ pub struct AiReply {
 // 配的端点发，不经第三方中转。
 // ---------------------------------------------------------------------------
 
-/// 非流式问一轮。历史由前端带（直连模式下没有服务端会话可依赖）。
+/// 问一轮（流式）：SSE 逐 delta 经 `ai-delta` 事件推给前端，命令返回时
+/// 回复完整。历史由前端带（直连模式下没有服务端会话可依赖）。
 #[tauri::command]
 pub async fn ai_send(
+    app: tauri::AppHandle,
     text: String,
     file_path: Option<String>,
     selection: Option<String>,
@@ -1173,6 +1175,7 @@ pub async fn ai_send(
     prompt.push_str(&text);
 
     let reply = crate::ai::chat(
+        Some(&app),
         &endpoint,
         &settings.ai.system_prompt,
         &history.unwrap_or_default(),

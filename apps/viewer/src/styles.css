@@ -710,45 +710,36 @@ html, body, #root {
   .entries .col-mtime { display: none; }
 }
 
-/* ─── 预览优先布局状态机（2026-10-24）────────────────
+/* ─── 预览优先布局状态机（2026-10-24；2026-10-25 取消 preview-ai）──
    .app[data-state] 三态（heavy 模式；pure 模式不受影响）：
-     browse      驱动器栏 + 目录(主宽) [+ AI 右缘]
-     preview     目录(--dir-slot 详情窄栏) + 预览(flex)
-     preview-ai  AI(同 --dir-slot) + 预览 —— 目录与 AI 是**同一个槽位的
-                 两种占用**，槽宽相同 → 「AI 展开预览宽度不变」是结构性
-                 保证，不依赖测量。栏宽规则只在此处声明。 */
+     browse        驱动器栏 + 目录(主宽) [+ AI 右缘]
+     preview       目录(--dir-slot 详情窄栏) + 预览(flex) [+ AI 右缘]
+     preview-full  预览独占主宽
+   AI 栏不再顶替目录槽（旧 preview-ai 态取消）：搜索结果显示在目录栏里，
+   AI 开着也必须看得见——AI 恒在右缘吃 --ai-w，与任何态共存（铺满态除外）。 */
 .app { --dir-slot: 336px; }
 
 /* 驱动器栏只在浏览态出现。 */
 .app[data-state="preview"] .sidebar,
-.app[data-state="preview-ai"] .sidebar,
 .app[data-state="preview-full"] .sidebar { display: none; }
 
-/* 目录栏：浏览态铺满主宽；预览态收成固定槽；preview-ai / preview-full 态
-   整体让位——铺满是「看大图」的形态，预览区独占主宽。 */
+/* 目录栏：浏览态铺满主宽；预览态收成固定槽；铺满态整体让位。 */
 .app[data-state="browse"] .explorer { flex: 1 1 auto; width: auto; }
 .app[data-state="preview"] .explorer {
   flex: none; width: var(--dir-slot); min-width: 0;
   border-right: 1px solid var(--border-subtle);
 }
-.app[data-state="preview-ai"] .explorer,
 .app[data-state="preview-full"] .explorer { display: none; }
 
-/* AI 栏：组件常驻挂载、默认不占位（对话状态跨开关保留）；浏览态在右缘
-   吃 --ai-w（可拖），preview-ai 态顶替目录槽 → 与目录同宽；铺满态让位
-   （组件不卸载，Esc 退出即恢复对话）。 */
+/* AI 栏：组件常驻挂载、默认不占位（对话状态跨开关保留）；开即在右缘
+   吃 --ai-w（browse / preview 两态同位——槽位互斥的旧设计已废）；
+   铺满态让位（组件不卸载，Esc 退出即恢复对话）。 */
 .app .ai-side { display: none; }
-.app[data-state="browse"][data-ai="open"] .ai-side { display: flex; }
-/* preview-ai 态的左缘分隔由 .ai-side 自带的左投影承担（原 border-right
-   加在了贴窗口边缘的一侧，本来就分不到层）。 */
-.app[data-state="preview-ai"] .ai-side {
-  display: flex; width: var(--dir-slot);
-}
+.app[data-ai="open"] .ai-side { display: flex; }
 .app[data-state="preview-full"] .ai-side { display: none; }
-/* 窄窗下目录槽与 AI 槽用同一把尺一起收缩，宽度不变在任何窗口宽度成立。 */
+/* 窄窗下目录槽收缩，AI 槽跟随 --ai-w 的窄窗上限。 */
 @media (max-width: 1100px) {
-  .app[data-state="preview"] .explorer,
-  .app[data-state="preview-ai"] .ai-side { width: min(var(--dir-slot), 32vw); }
+  .app[data-state="preview"] .explorer { width: min(var(--dir-slot), 32vw); }
 }
 
 /* ─── 大图列表（浏览态默认视图；预览态由 data-view 强制详情）──── */
@@ -1180,6 +1171,34 @@ html, body, #root {
   background: var(--bg-secondary);
 }
 .ai-busy { color: var(--text-secondary); }
+/* 思考中：三点跳动（等首字节）。 */
+.ai-thinking {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--text-secondary);
+}
+.ai-dots { display: inline-flex; gap: 3px; }
+.ai-dots i {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor;
+  animation: ai-bounce 1.2s infinite ease-in-out;
+}
+.ai-dots i:nth-child(2) { animation-delay: 0.15s; }
+.ai-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes ai-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+/* 流式进行中：末尾闪烁光标（打字机）。 */
+.ai-cursor {
+  display: inline-block; width: 2px; height: 13px;
+  background: var(--accent);
+  margin-left: 2px; vertical-align: -2px;
+  animation: ai-blink 0.9s step-end infinite;
+}
+@keyframes ai-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .ai-dots i, .ai-cursor { animation: none; }
+}
 .ai-error { color: var(--danger); font-size: 12px; padding: 4px 10px; }
 .ai-quick { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px 0; flex: none; }
 .ai-quick-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

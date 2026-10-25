@@ -4,9 +4,9 @@
 // docs/notes/implemented/feature/2026-10-24-viewer-preview-centric-layout.md）：
 //   browse     驱动器栏 + 目录（默认大图列表，可切详情）+ 可选 AI（右缘）
 //   preview    点文件进入：驱动器收起、目录自动切详情窄栏、预览吃剩余宽度
-//   preview-ai 再展开 AI：目录折叠、AI 顶替目录槽位（同宽）→ 预览宽度不变
-// 关预览回 browse。状态挂在 .app[data-state]/[data-ai] 上由 CSS 排布，
-// 「AI 展开预览宽度不变」是槽位互换的结构性结果，不是量出来的。
+//              AI（开着时）仍在右缘与目录栏共存——不顶替目录槽：搜索结果
+//              显示在目录栏里，AI 开着也看得见（旧 preview-ai 槽位互斥已废）
+// 关预览回 browse。状态挂在 .app[data-state]/[data-ai] 上由 CSS 排布。
 //
 // 共享包走 @hermix/preview —— 与桌面 app 用同一份解析器、同一份样式层。
 
@@ -2068,16 +2068,16 @@ export function App() {
     void invoke("web_exec", { script }).catch(() => undefined);
   }, []);
 
-  /** 布局状态机（预览优先）：三个区域怎么排，见文件头注释与 CSS 状态规则。 */
-  const layoutState: "browse" | "preview" | "preview-ai" | "preview-full" | "pure" =
+  /** 布局状态机（预览优先）：区域怎么排见 CSS 状态规则。AI 栏不再占用
+   *  目录槽（旧 preview-ai 态已取消）——它恒在右缘，与目录栏共存：搜索
+   *  结果显示在目录栏里，AI 开着也看得见。 */
+  const layoutState: "browse" | "preview" | "preview-full" | "pure" =
     mode === "pure"
       ? "pure"
       : active !== null
         ? previewFull
           ? "preview-full"
-          : aiOpen
-            ? "preview-ai"
-            : "preview"
+          : "preview"
         : "browse";
   /** 目录栏当前视图：预览态强制详情（窄槽装不下大图）；浏览态用用户手选。 */
   const dirEffView: DirView = layoutState === "browse" ? dirView : "rows";
@@ -2756,7 +2756,7 @@ export function App() {
         )}
 
         {/* AI 栏常驻挂载（hidden 由 CSS 按状态收放，对话状态跨开关保留）：
-            浏览态在右缘（可拖宽），preview-ai 态顶替目录槽位。 */}
+            开即在右缘（browse / preview 同位），拖宽柄目前只服务浏览态。 */}
         {mode === "heavy" && layoutState === "browse" && aiOpen && (
           <Resizer onDelta={onAiDelta} label="调整 AI 栏宽度" />
         )}

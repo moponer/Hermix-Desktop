@@ -3414,6 +3414,7 @@ dependencies = [
 name = "hermix-viewer"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "hermix-config",
  "image",
  "indexmap 1.9.3",

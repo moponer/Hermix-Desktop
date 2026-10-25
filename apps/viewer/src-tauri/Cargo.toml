@@ -54,7 +54,8 @@ windows = { version = "0.58", features = [
 # AI 右栏：直连 OpenAI 兼容端点（继承主程序 = 读同一份 config.yaml + .env；
 # 独立模型 = 查看器自己一套）。不走本地 server 的 /v1/：桌面端 sidecar 是
 # --stdio，不绑端口，那条路在「只开主程序」时根本没人监听。
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
+futures = "0.3"
 # 主程序的配置层（config.yaml / .env / 路径解析）。viewer 要「继承主程序」
 # 的模型与供应商，就该读**同一份**文件，而不是自己存一份密钥。
 hermix-config = { path = "../../../crates/hermix-config" }

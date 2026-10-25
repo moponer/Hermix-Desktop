@@ -155,6 +155,7 @@ pub async fn cleanup_ai_advise(items: Vec<AiCandidate>) -> Result<AiAdviceReport
     );
 
     let reply = ai::chat(
+        None, // 后台批量任务：不向前端发流式事件
         &endpoint,
         SYSTEM_PROMPT,
         &[],
