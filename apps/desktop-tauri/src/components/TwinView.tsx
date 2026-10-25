@@ -334,19 +334,17 @@ ${d.conclusions}`,
     <div className="twin-screen">
       {/* ── 顶栏 ───────────────────────────────────────────── */}
       <header className="twin-head">
-        <div className="twin-head__side">
-          <span className="twin-head__deco" aria-hidden />
+        <div className="twin-head__main">
+          <h1 className="twin-head__title">阿黎</h1>
           <span
-            className={`twin-head__live${activeRuns > 0 ? " is-live" : ""}`}
+            className={`twin-head__state${activeRuns > 0 ? " is-live" : ""}`}
             title={stateText}
           >
             <i aria-hidden />
             {activeRuns > 0 ? "值守中" : "静默"}
           </span>
+          <span className="twin-head__sub">{stateText}</span>
         </div>
-
-        <h1 className="twin-head__title">阿黎 · 值守总览</h1>
-
         <div className="twin-head__side twin-head__side--r">
           <span className="twin-head__kv">
             在跑 <b>{activeRuns}</b>
@@ -366,7 +364,6 @@ ${d.conclusions}`,
           >
             {level === "full" ? "放手模式" : "默认权限"}
           </button>
-          <span className="twin-head__deco twin-head__deco--r" aria-hidden />
         </div>
       </header>
 
@@ -434,27 +431,39 @@ ${d.conclusions}`,
             <BoxHead title="此刻" meta={checkedText} />
             <div className="twin-grid">
               <div>
-                <div className="twin-grid__v">{activeRuns}</div>
+                <div
+                  className={`twin-grid__v${activeRuns > 0 ? " is-live" : " is-zero"}`}
+                >
+                  {activeRuns}
+                </div>
                 <div className="twin-grid__k">在跑</div>
               </div>
               <div>
-                <div className="twin-grid__v">{enabledTasks.length}</div>
+                <div
+                  className={`twin-grid__v${enabledTasks.length > 0 ? "" : " is-zero"}`}
+                >
+                  {enabledTasks.length}
+                </div>
                 <div className="twin-grid__k">已启用</div>
               </div>
               <div>
-                <div className={`twin-grid__v${pending.length > 0 ? " is-hot" : ""}`}>
+                <div className={`twin-grid__v${pending.length > 0 ? " is-hot" : " is-zero"}`}>
                   {pending.length}
                 </div>
                 <div className="twin-grid__k">待批</div>
               </div>
               <div>
-                <div className="twin-grid__v">{tasks.length}</div>
+                <div
+                  className={`twin-grid__v${tasks.length > 0 ? "" : " is-zero"}`}
+                >
+                  {tasks.length}
+                </div>
                 <div className="twin-grid__k">任务总数</div>
               </div>
             </div>
           </section>
 
-          <section className="twin-box twin-box--grow">
+          <section className="twin-box twin-box--grow twin-box--quiet">
             <BoxHead title="最近会话" meta={`${recentSessions.length} 条`} />
             <div className="twin-rows">
               {recentSessions.length === 0 ? (
@@ -473,7 +482,7 @@ ${d.conclusions}`,
             </div>
           </section>
 
-          <section className="twin-box">
+          <section className="twin-box twin-box--quiet">
             <BoxHead title="最近工作日志" meta={`${workDays.length} 条`} />
             <div className="twin-rows">
               {workDays.length === 0 ? (
@@ -783,7 +792,7 @@ ${d.conclusions}`,
 
         {/* ── 右翼：现在要你做什么 ─────────────────────────── */}
         <aside className="twin-wing twin-wing--r">
-          <section className="twin-box">
+          <section className={`twin-box${pending.length > 0 ? " twin-box--attn" : ""}`}>
             <BoxHead title="等你决定" meta={`${pending.length} 件`} />
             {pending.length === 0 ? (
               <p className="twin-muted">队列是空的。有事她会直接在这儿问她。</p>
@@ -829,7 +838,7 @@ ${d.conclusions}`,
             )}
           </section>
 
-          <section className="twin-box twin-box--grow">
+          <section className="twin-box twin-box--grow twin-box--quiet">
             <BoxHead title="刚才发生" meta={`${workDays.length} 条`} />
             <div className="twin-rows">
               {workDays.length === 0 ? (

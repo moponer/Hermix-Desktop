@@ -1202,57 +1202,58 @@
 
 /* ── 顶栏 ── */
 .twin-head {
-  position: relative;
   flex: none;
   height: 58px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  gap: 16px;
   padding: 0 20px;
   background: var(--color-bg-card);
 }
-.twin-head__side {
-  position: absolute;
-  top: 50%;
-  left: 20px;
-  transform: translateY(-50%);
+.twin-head__main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.twin-head__side--r {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-.twin-head__side--r {
-  left: auto;
-  right: 20px;
-}
-.twin-head__deco {
-  width: 44px;
-  height: 1px;
-  background: var(--color-border-secondary);
-}
-.twin-head__deco--r {
-  order: 99;
-}
 .twin-head__title {
   font-size: var(--text-title);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.16em;
   color: var(--color-text-primary);
 }
-.twin-head__live {
+/* 状态是页头的主视觉：值守中点亮 accent，静默保持低调灰。 */
+.twin-head__state {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: var(--text-tiny);
-  color: var(--color-text-tertiary);
+  font-size: var(--text-ui);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
 }
-.twin-head__live i {
-  width: 6px;
-  height: 6px;
+.twin-head__state i {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--color-text-faint);
 }
-.twin-head__live.is-live i {
+.twin-head__state.is-live {
+  color: var(--color-accent);
+}
+.twin-head__state.is-live i {
   background: var(--color-accent);
+}
+.twin-head__sub {
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .twin-head__kv {
   font-size: var(--text-tiny);
@@ -1302,6 +1303,15 @@
   flex-direction: column;
   padding: 10px 12px 9px;
   background: var(--color-bg-primary);
+}
+/* 待办在队列里时，「等你决定」是全页唯一的强调块。 */
+.twin-box--attn {
+  background: var(--color-warning-soft);
+}
+/* 次要信息（最近会话/工作日志/刚才发生）：去底色纯列表，把视觉预算
+   让给状态与待办。 */
+.twin-box--quiet {
+  background: transparent;
 }
 .twin-box--grow {
   flex: 1 1 auto;
@@ -1426,10 +1436,16 @@
   background: var(--color-bg-card);
 }
 .twin-grid__v {
-  font-size: var(--text-title);
+  font-size: var(--text-display);
   line-height: 1.1;
   color: var(--color-text-primary);
   font-variant-numeric: tabular-nums;
+}
+.twin-grid__v.is-zero {
+  color: var(--color-text-faint);
+}
+.twin-grid__v.is-live {
+  color: var(--color-accent);
 }
 .twin-grid__v.is-hot {
   color: var(--color-warning);
