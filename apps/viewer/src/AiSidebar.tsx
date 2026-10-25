@@ -14,7 +14,15 @@ import {
   aiOutputName,
   type AiPromptTemplate,
 } from "./aiPrompts";
-import { loadAiStatus, type AiStatus } from "./settings";
+import {
+  loadAiModels,
+  loadAiStatus,
+  loadSettings,
+  saveSettings,
+  type AiModelOption,
+  type AiStatus,
+  type ViewerSettings,
+} from "./settings";
 
 interface Msg {
   role: "user" | "assistant";
@@ -47,6 +55,10 @@ export function AiSidebar({
   const [error, setError] = useState<string | null>(null);
   /** 当前生效的 AI 后端（设置 → AI 助手）。面板顶部要让人一眼看出在跟谁说话。 */
   const [backend, setBackend] = useState<AiStatus | null>(null);
+  /** 主程序里启用过的模型清单 + 当前查看器 AI 设置：头部直接切模型，
+   *  不用再绕设置对话框。custom 模式的模型是手填的（无清单），下拉置灰。 */
+  const [models, setModels] = useState<AiModelOption[]>([]);
+  const [aiSettings, setAiSettings] = useState<ViewerSettings | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   // 会话 id 随面板生命周期：首条消息建会话，后续复用（多轮上下文在
   // server 侧）；面板收起即视为对话结束，再开是新会话。
@@ -58,6 +70,26 @@ export function AiSidebar({
 
   useEffect(() => {
     void loadAiStatus().then(setBackend);
+    void loadAiModels().then(setModels);
+    void loadSettings().then(setAiSettings);
+  }, []);
+
+  /** 头部下拉选模型：写 settings.ai.selectedModel 并刷新生效状态。
+   *  空值 = 跟随主程序默认。存不进去不阻塞：本次会话仍按旧值走。 */
+  const pickModel = useCallback(async (id: string) => {
+    setAiSettings((cur) => {
+      if (!cur) return cur;
+      const next: ViewerSettings = {
+        ...cur,
+        ai: { ...cur.ai, selectedModel: id === "" ? null : id },
+      };
+      void saveSettings(next)
+        .then((saved) => setAiSettings(saved))
+        .then(() => loadAiStatus())
+        .then(setBackend)
+        .catch(() => undefined);
+      return next;
+    });
   }, []);
 
   const send = useCallback(
@@ -114,6 +146,12 @@ export function AiSidebar({
     [send, fileName, outName],
   );
 
+  // 头部下拉的当前值：custom 模式无清单（模型是手填的），置灰显示生效模型。
+  const customMode = aiSettings?.ai.mode === "custom";
+  const modelValue = customMode
+    ? (backend?.model ?? "")
+    : (aiSettings?.ai.selectedModel ?? "");
+
   return (
     <aside className="ai-side">
       <div className="ai-head">
@@ -123,18 +161,48 @@ export function AiSidebar({
             {filePath.split(/[\\/]/).pop()}
           </span>
         )}
+        {/* 模型选择：inherit 模式列出主程序启用过的模型（跟随默认 + 手选）；
+            custom 模式没有清单（端点/模型在设置里手填），置灰显示生效值。
+            原来这条信息是头部下面一行只读文字——不能选，用户只能绕设置。 */}
+        <select
+          className={`ai-model-select${backend && !backend.ready ? " is-bad" : ""}`}
+          value={modelValue}
+          disabled={customMode || !aiSettings}
+          title={
+            customMode
+              ? "独立模型模式：端点与模型在 设置 → AI 助手 中配置"
+              : backend?.ready
+                ? `对话模型（生效：${backend.model}）`
+                : "对话模型"
+          }
+          aria-label="对话模型"
+          onChange={(e) => void pickModel(e.target.value)}
+        >
+          {customMode ? (
+            <option value="">{backend?.model || "独立模型"}</option>
+          ) : (
+            <>
+              <option value="">跟随主程序默认</option>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                  {m.isDefault ? "（默认）" : ""}
+                  {m.ready ? "" : "（不可用）"}
+                </option>
+              ))}
+            </>
+          )}
+        </select>
         <button className="ai-close" onClick={onClose} aria-label="收起 AI 栏">
           »
         </button>
       </div>
 
-      {/* 在跟谁说话：继承主程序的模型还是查看器自己的独立模型。配置不全时
-          直接把原因摆出来，别让用户对着一个永远失败的输入框猜。 */}
-      {backend && (
-        <div className={`ai-backend ${backend.ready ? "" : "is-bad"}`} title={backend.baseUrl}>
-          {backend.ready
-            ? `${backend.source} · ${backend.model}`
-            : `未就绪：${backend.problem ?? "配置不完整"}`}
+      {/* 未就绪的原因要摆出来，别让用户对着一个永远失败的输入框猜；
+          就绪时模型信息已由头部下拉承担，不再占一行。 */}
+      {backend && !backend.ready && (
+        <div className="ai-backend is-bad" title={backend.baseUrl}>
+          未就绪：{backend.problem ?? "配置不完整"}
         </div>
       )}
 
