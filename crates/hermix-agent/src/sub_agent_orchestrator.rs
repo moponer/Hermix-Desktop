@@ -246,7 +246,8 @@ impl SubAgentRole {
 }
 
 /// Tools available to the Explore role (read-only).
-const EXPLORE_ROLE_TOOLS: &[&str] = &[
+/// 成员角色的 `read_only` toolset 复用这同一份白名单（成员模块引用）。
+pub(crate) const EXPLORE_ROLE_TOOLS: &[&str] = &[
     "read_file",
     "list_files",
     "search_files",

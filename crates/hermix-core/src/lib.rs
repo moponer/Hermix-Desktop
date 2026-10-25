@@ -21,6 +21,9 @@ pub mod path_security;
 pub mod console_decode;
 #[cfg(windows)]
 pub mod win_job;
+// 总管方案 P0：资源治理原语（scratch 配额 / 磁盘水位），Windows 专属。
+#[cfg(windows)]
+pub mod resource_governor;
 pub mod text_utils;
 pub mod plugin_abi;
 pub mod runtime;

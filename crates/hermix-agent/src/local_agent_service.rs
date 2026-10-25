@@ -970,6 +970,7 @@ impl LocalAgentService {
         agent_tool_registry: Arc<crate::agent_loop::ToolRegistry>,
         provider: Arc<dyn LlmProvider>,
         on_chunk: Arc<dyn Fn(StreamChunk) + Send + Sync>,
+        member_events_live: bool,
     ) -> AgentLoop {
         let hermix_home = agent_config.hermix_home.clone();
         let compressor_model = agent_config.model.clone();
@@ -1222,7 +1223,7 @@ impl LocalAgentService {
         let sub_agent_hermix_home: PathBuf = hh_owned.clone().into();
         let mut orch = crate::sub_agent_orchestrator::SubAgentOrchestrator::from_parent(
             &agent,
-            sub_agent_hermix_home,
+            sub_agent_hermix_home.clone(),
             Some(on_chunk.clone()),
         );
         // §3.3 热路径生产者：服务携带的 TaskRecord sink 透传给
@@ -1231,6 +1232,19 @@ impl LocalAgentService {
             orch = orch.with_task_record_sink(sink);
         }
         agent = agent.with_sub_agent_orchestrator(Arc::new(orch));
+
+        // 总管方案 P1：成员运行器（dispatch_member 的执行侧）。与上面的
+        // 子代理编排器并存且互不沾染——成员是兄弟会话（depth 重置、无
+        // 12 轮/8K 上限），不是 delegate_task 子代理（决策 D0）。工具本体
+        // 在 server state 构建时注册一次；执行侧进程级**首装一次**（running
+        // map 必须跨会话存活，否则 stop 对在跑成员失效），后续会话调用只
+        // 刷新成员事件 emitter（跟当前 WS 通道走）。
+        let member_runner = Arc::new(crate::member::runner::MemberRunner::from_parent(
+            &agent,
+            sub_agent_hermix_home,
+            Some(on_chunk.clone()),
+        ));
+        crate::member::runner::install_member_runner(member_runner, member_events_live);
 
         agent
     }
@@ -2056,6 +2070,7 @@ impl AgentService for LocalAgentService {
             // dropped via a no-op emitter. The orchestrator still runs so
             // `delegate_task` works.
             Arc::new(|_chunk: StreamChunk| {}),
+            false,
         );
         // 主轮次也落一条 TaskRecord（与 active 句柄同一生命周期），
         // 这样「上一轮跑完没有」可以读终态而不是猜。task 描述用固定值：
@@ -3365,6 +3380,7 @@ impl AgentService for LocalAgentService {
                 agent_tool_registry,
                 provider,
                 on_chunk_for_orchestrator,
+                true,
             )
             .with_callbacks(callbacks);
         // Register the agent's InterruptController + steer buffer so the

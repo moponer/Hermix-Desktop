@@ -1695,6 +1695,61 @@ pub(crate) async fn handle_ws_stream_send(
                                 },
                             }
                         }
+                        "member_update" => {
+                            // 成员工单实时事件（总管方案 P4.4）：runner 的
+                            // chunk emitter 产出，转发为 `MemberEvent` 供
+                            // 前端「成员」面板滚动显示。与 sub_agent_update
+                            // 平行但通道独立（成员 ≠ 子代理，D0）。
+                            let member_id = extra
+                                .get("member_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if member_id.is_empty() {
+                                return;
+                            }
+                            let phase = extra
+                                .get("phase")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let task = extra
+                                .get("task")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let turns = extra
+                                .get("turns")
+                                .and_then(|v| v.as_u64())
+                                .map(|v| v as u32);
+                            let error = extra
+                                .get("error")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            let recent_steps = extra
+                                .get("recent_steps")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|s| s.as_str().map(String::from))
+                                        .collect::<Vec<String>>()
+                                });
+                            WsEnvelope {
+                                version: 1,
+                                request_id: request_id.clone(),
+                                trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
+                                 attachment_id: None,
+                                event: StreamEvent::MemberEvent {
+                                    member_id,
+                                    phase,
+                                    task,
+                                    turns,
+                                    error,
+                                    recent_steps,
+                                },
+                            }
+                        }
                         _ => {
                             tracing::debug!(event = %event_type, "unknown extra event type; skipping");
                             return;

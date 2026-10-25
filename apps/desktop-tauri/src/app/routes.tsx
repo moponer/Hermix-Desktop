@@ -8,6 +8,7 @@ import { Skeleton, SkeletonCard } from "../components/ui";
 // 重视图（ECharts / 大表单 / 全量列表）懒加载：首次进入才求值模块并挂载，
 // 且切走即卸载，不占常驻内存。chat 页面是首屏主路径，保持静态导入。
 const AutomationView = lazy(() => import("../components/AutomationView").then((m) => ({ default: m.AutomationView })));
+const MissionBoardView = lazy(() => import("../components/MissionBoardView").then((m) => ({ default: m.MissionBoardView })));
 const AgentsView = lazy(() => import("../components/AgentsView").then((m) => ({ default: m.AgentsView })));
 const AnalyticsView = lazy(() => import("../components/AnalyticsView").then((m) => ({ default: m.AnalyticsView })));
 const CustomAppsView = lazy(() => import("../components/CustomAppsView").then((m) => ({ default: m.CustomAppsView })));
@@ -118,6 +119,8 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
           />
         </Suspense>
       );
+    case "mission":
+      return <Suspense fallback={<RouteLoading />}><MissionBoardView /></Suspense>;
     case "automation":
       return <Suspense fallback={<RouteLoading />}><AutomationView openChat={ctx.openChat} onCreateWorkflow={ctx.startCreateWorkflowFlow} /></Suspense>;
     case "experts":

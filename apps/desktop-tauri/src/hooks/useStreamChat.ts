@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo, type SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AcuiDirective } from "../acui/types";
-import type { ApprovalRequestItem, SubAgentEventPayload } from "../types";
+import type { ApprovalRequestItem, SubAgentEventPayload, MemberEventPayload } from "../types";
 
 /** Wire shape of the orchestration-bus events the server bridges onto
  *  the WS stream (`OrchestrationEvent::to_stream_event` in
@@ -190,6 +190,10 @@ export interface StreamCallbacks {
     turnNumber: number;
   }) => void;
   onSubAgentEvent?: (info: SubAgentEventPayload) => void;
+  /** 成员工单实时事件（MemberEvent，总管方案 P4.4）。 */
+  onMemberEvent?: (info: MemberEventPayload) => void;
+  /** 资源闸门边沿（resource_breach / resource_recovered）。 */
+  onResourceAlert?: (kind: string, message: string) => void;
   /** Orchestration-bus events bridged onto the WS stream (see
    *  `ws.rs`'s orchestration listener). The desktop client handles a
    *  subset: plan confirmation renders a card, automation triggers

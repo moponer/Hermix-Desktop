@@ -72,7 +72,7 @@ pub fn empty_state() -> HttpServerState {
     // the first call site that needs it.
     let home = std::path::PathBuf::from("::mem::ws_grace::tests::empty_state");
     let session_persistence = Arc::new(SessionPersistence::new(&home));
-    let clarify_dispatcher = ClarifyDispatcher::new();
+    let clarify_dispatcher = hermix_tools::ClarifyDispatcher::global().clone();
     let (clarify_broadcast, _) = tokio::sync::broadcast::channel::<crate::ClarifyBroadcast>(64);
     let agent_service: Arc<dyn AgentService> = Arc::new(NullAgentService);
     let metrics = crate::metrics::MetricsCollector::new(&home);
@@ -91,6 +91,7 @@ pub fn empty_state() -> HttpServerState {
         clarify_broadcast,
         expert_registry: hermix_skills::ExpertRegistry::new(),
         automation_scheduler: None,
+        resource_patrol: None,
         user_allowlist: Arc::new(std::sync::Mutex::new(None)),
         session_bypass: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         consciousness_tracker: hermix_agent::ConsciousnessTracker::new(),
@@ -132,7 +133,7 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
     let config = Arc::new(GatewayConfig::default());
     let tool_registry = Arc::new(ToolRegistry::new());
     let session_persistence = Arc::new(SessionPersistence::new(&home));
-    let clarify_dispatcher = ClarifyDispatcher::new();
+    let clarify_dispatcher = hermix_tools::ClarifyDispatcher::global().clone();
     let (clarify_broadcast, _) = tokio::sync::broadcast::channel::<crate::ClarifyBroadcast>(64);
     let agent_service: Arc<dyn AgentService> = Arc::new(NullAgentService);
     let metrics = crate::metrics::MetricsCollector::new(&home);
@@ -151,6 +152,7 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         clarify_broadcast,
         expert_registry: hermix_skills::ExpertRegistry::new(),
         automation_scheduler: None,
+        resource_patrol: None,
         user_allowlist: Arc::new(std::sync::Mutex::new(None)),
         session_bypass: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         consciousness_tracker: hermix_agent::ConsciousnessTracker::new(),

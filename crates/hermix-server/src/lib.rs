@@ -12,6 +12,8 @@ pub mod free_channel;
 pub mod test_env;
 mod automation_trigger;
 mod orchestration_bus;
+mod resource_patrol;
+mod member_api;
 mod task_tracker_adapter;
 mod task_record_sink;
 mod security;
@@ -330,6 +332,17 @@ pub fn router(state: HttpServerState) -> Router {
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/shutdown", get(shutdown_server))
+        // 任务台（总管方案 P4.1）：成员工单 / 资源巡检 / 角色库的桌面数据面。
+        .route("/api/members", get(member_api::list_members))
+        .route("/api/members/{member_id}", get(member_api::get_member))
+        .route("/api/members/{member_id}/stop", post(member_api::stop_member))
+        .route("/api/resource/patrol", get(member_api::resource_patrol))
+        .route("/api/agent-roles", get(member_api::list_roles))
+        .route("/api/member-stats", get(member_api::member_stats))
+        .route("/api/resource/caches", get(member_api::scan_caches))
+        // 手机面（P4.5）：relay 配对设备的成员工单访问。
+        .route("/v1/members", get(member_api::mobile_list_members))
+        .route("/v1/members/{member_id}/stop", post(member_api::mobile_stop_member))
         // 本地文件搜索：提权 helper（hermix-filesearch.exe）的 HTTP 面。
         // helper 未运行时首个请求会触发 UAC（弹一次）。
         .route("/v1/filesearch/search", get(filesearch::search))
@@ -338,9 +351,6 @@ pub fn router(state: HttpServerState) -> Router {
         // shutdown：前端无调用点（窗口常驻，关闭走 helper 自身生命周期）。
         // 保留给排障/脚本——helper 卡死时手工关掉重来。
         .route("/v1/filesearch/shutdown", post(filesearch::shutdown))
-        // 浏览器小窗暂停/恢复：桌面端小窗隐藏时把「停 Chrome 侧 screencast 编码」
-        // 的指令发到 sidecar（浏览器会话在那），desktop 自己进程里的 pause 是空操作。
-        .route("/api/browser-view/paused", post(browser_view_paused))
         // 手机端（Hermix M）经自建 relay 从公网接入的流式面。
         //
         // **这个端点曾经被删**（`181a51aa`，2026-09-26 端点审计）：当时的
@@ -593,6 +603,8 @@ pub async fn run_server(addr: SocketAddr, config: GatewayConfig) -> Result<(), A
     let state = HttpServerState::build(config)
         .await?
         .with_automation_scheduler()
+        // 资源水位巡检（总管方案 P0.5）：C 盘水位 + scratch 配额 + 停派门。
+        .with_resource_patrol()
         // 启动 relay 出站连接。未配地址时它自己直接返回，不产生任何流量。
         .with_relay_client();
     // §5.5 第 2 层：TLS 监听器由 HERMIX_TLS_ADDR 显式开启（可选双监听器：
@@ -792,34 +804,6 @@ pub async fn run_server_with_tls(
     .with_graceful_shutdown(shutdown)
     .await
     .map_err(|e| AgentError::Io(e.to_string()))
-}
-
-/// 浏览器小窗暂停/恢复。桌面端小窗最小化/遮挡时调用：真正停/恢复的是 sidecar
-/// 里 headless Edge 的 screencast 编码（CPU 闸门），不是桌面进程里的什么——
-/// 桌面进程没有浏览器会话，调用它自己的 `screencast::pause()` 只会静默 no-op。
-async fn browser_view_paused(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
-    let paused = body
-        .get("paused")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    // 多会话（2026-10-17）：暂停/恢复按会话键作用——小窗当前显示哪个
-    // 会话就停哪路编码。缺省回退 "default"（与工具侧键规则一致）。
-    let session = body
-        .get("session")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("default")
-        .to_string();
-    if paused {
-        hermix_tools::tools::os_auto::browser::screencast::pause(&session).await;
-    } else {
-        hermix_tools::tools::os_auto::browser::screencast::resume(&session).await;
-    }
-    (
-        [("content-type", "application/json")],
-        "{\"ok\":true}",
-    )
-        .into_response()
 }
 
 async fn health() -> impl IntoResponse {

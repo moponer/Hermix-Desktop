@@ -238,6 +238,16 @@ pub struct ClarifyDispatcher {
     notify: Arc<tokio::sync::Notify>,
 }
 
+impl ClarifyDispatcher {
+    /// 进程级单例（P5 成员转发用）：成员会话的 clarify 要进**同一个**
+    /// dispatcher 才能被主会话的 WS 泵转发给用户。Server state 构建时
+    /// 应取这个实例而不是 new 一个。
+    pub fn global() -> &'static ClarifyDispatcher {
+        static GLOBAL: std::sync::OnceLock<ClarifyDispatcher> = std::sync::OnceLock::new();
+        GLOBAL.get_or_init(ClarifyDispatcher::new)
+    }
+}
+
 impl Default for ClarifyDispatcher {
     fn default() -> Self {
         Self {

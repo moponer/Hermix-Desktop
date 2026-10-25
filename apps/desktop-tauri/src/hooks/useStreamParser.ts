@@ -330,6 +330,37 @@ export function createMessageHandler(
         return;
       }
 
+      if (evtType === "member_event") {
+        // 成员工单实时事件（总管方案 P4.4）：与 sub_agent_event 平行，
+        // 驱动「成员工单」面板（MemberPanel）。
+        ctx.hasAnyStreamEvent = true;
+        ctx.setLastActivityAt(Date.now());
+        const ev = data?.event ?? data;
+        ctx.callbacks.onMemberEvent?.({
+          memberId: ev?.member_id,
+          phase: ev?.phase,
+          task: typeof ev?.task === "string" ? ev.task : "",
+          turns: typeof ev?.turns === "number" ? ev.turns : undefined,
+          error: typeof ev?.error === "string" ? ev.error : undefined,
+          recentSteps: Array.isArray(ev?.recent_steps)
+            ? ev.recent_steps.filter((s: unknown) => typeof s === "string")
+            : undefined,
+        });
+        return;
+      }
+
+      if (evtType === "resource_alert") {
+        // 资源闸门边沿（总管方案 P0.5）：breach/recovered 弹通知。
+        ctx.hasAnyStreamEvent = true;
+        ctx.setLastActivityAt(Date.now());
+        const ev = data?.event ?? data;
+        ctx.callbacks.onResourceAlert?.(
+          String(ev?.kind ?? ""),
+          String(ev?.message ?? ""),
+        );
+        return;
+      }
+
       // Orchestration-bus events (bridged in `ws.rs`). Without these
       // branches the server's Task lifecycle / automation / plan
       // events arrived on the wire and were silently dropped by the

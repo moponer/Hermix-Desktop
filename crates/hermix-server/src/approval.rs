@@ -755,6 +755,7 @@ mod approval_registry_tests {
             },
             expert_registry: hermix_skills::ExpertRegistry::new(),
             automation_scheduler: None,
+            resource_patrol: None,
             user_allowlist: Arc::new(std::sync::Mutex::new(None)),
             session_bypass: Arc::new(std::sync::Mutex::new(HashMap::new())),
             consciousness_tracker: hermix_agent::ConsciousnessTracker::new(),

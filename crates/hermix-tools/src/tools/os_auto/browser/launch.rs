@@ -20,10 +20,11 @@
 //!
 //! **Always headless, permanently.** The browser is never meant to appear as a
 //! real window: a headed Edge steals focus, lands in Alt+Tab, and can be closed
-//! by a mis-click. The operator watches the session through the screencast fed
-//! `browser-view` sub-window instead. There is deliberately no headed path here
-//! — the schema is the model's behavioural boundary, so a headed mode must not
-//! be re-added without a product decision (see the proposal's escape hatch).
+//! by a mis-click. The human-facing surface is the embedded WebView2 panel
+//! (`panel`) — the tools attach to it over CDP when one is registered; this
+//! headless fallback runs with no picture for humans. There is deliberately no
+//! headed path here — the schema is the model's behavioural boundary, so a
+//! headed mode must not be re-added without a product decision.
 
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
@@ -114,15 +115,42 @@ pub fn parse_dev_tools_active_port(raw: &str) -> Option<(u16, String)> {
 /// Every failure path drops the [`Job`], which is what guarantees there is no
 /// orphan: we never leave an Edge running that hermix can no longer reach.
 pub async fn launch() -> Result<LaunchedBrowser, String> {
+    launch_named(None).await
+}
+
+/// 同 [`launch`]，但 `profile` 给名时使用**持久** profile 目录
+/// `~/.hermix/browser/profiles/<name>`（P5 账号运营：登录态跨会话保活）。
+/// 与一次性 profile 的取舍：持久目录会累积站点数据（磁盘占用），只给
+/// 需要登录态的场景用；名字只允许 `[a-z0-9_-]`（防路径穿越）。
+pub async fn launch_named(profile: Option<&str>) -> Result<LaunchedBrowser, String> {
     let exe = resolve_edge_exe().ok_or_else(|| {
         "未找到 Microsoft Edge 可执行文件；请安装 Edge 或设置 HERMIX_BROWSER_PATH 指向 Chromium 内核浏览器".to_string()
     })?;
 
-    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-    let seq = PROFILE_SEQ.fetch_add(1, Ordering::Relaxed);
-    let user_data_dir = hermix_config::paths::hermix_home()
-        .join("browser")
-        .join(format!("profile-{stamp}-{seq}"));
+    let user_data_dir = match profile {
+        Some(name) => {
+            let clean: String = name
+                .chars()
+                .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-' || *c == '_')
+                .collect();
+            if clean.is_empty() || clean != name {
+                return Err(format!(
+                    "profile 名只允许小写字母/数字/`-`/`_`（得到 `{name}`）"
+                ));
+            }
+            hermix_config::paths::hermix_home()
+                .join("browser")
+                .join("profiles")
+                .join(&clean)
+        }
+        None => {
+            let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+            let seq = PROFILE_SEQ.fetch_add(1, Ordering::Relaxed);
+            hermix_config::paths::hermix_home()
+                .join("browser")
+                .join(format!("profile-{stamp}-{seq}"))
+        }
+    };
     std::fs::create_dir_all(&user_data_dir)
         .map_err(|e| format!("创建浏览器 profile 目录失败 ({}): {e}", user_data_dir.display()))?;
 

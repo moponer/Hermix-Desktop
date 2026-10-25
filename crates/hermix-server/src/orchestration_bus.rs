@@ -76,6 +76,12 @@ pub enum OrchestrationEvent {
         task_id: String,
         plan_text: String,
     },
+    /// 资源闸门边沿（总管方案 P0.5）：`resource_breach` = 停派新工单，
+    /// `resource_recovered` = 恢复派单。来源 `resource_patrol`。
+    ResourceAlert {
+        kind: String,
+        message: String,
+    },
 }
 
 impl OrchestrationEvent {
@@ -149,6 +155,10 @@ impl OrchestrationEvent {
             } => StreamEvent::PlanConfirmationRequired {
                 task_id: task_id.clone(),
                 plan_text: plan_text.clone(),
+            },
+            Self::ResourceAlert { kind, message } => StreamEvent::ResourceAlert {
+                kind: kind.clone(),
+                message: message.clone(),
             },
         }
     }

@@ -24,12 +24,13 @@ import type { Artifact } from "../utils/artifacts";
 import { DocCanvasView, docCanvasStore, htmlToXlsxBytes, htmlToDocxBytes } from "@hermix/preview";
 import { saveBinaryFile } from "../desktopBridge";
 import { toastSuccess, toastError } from "../hooks/useToast";
-import type { ChatMessage, SubAgentState } from "../types";
+import type { ChatMessage, SubAgentState, MemberTicketState } from "../types";
 import { ComputerTab } from "./ComputerTab";
 import { PreviewPanel } from "./PreviewPanel";
 import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { ReviewTab } from "./ReviewTab";
 import { SubAgentTab } from "./SubAgentTab";
+import { MemberPanel } from "./MemberPanel";
 
 /** 浏览目录是单例标签：固定 id，重复点只是切回它，不会开第二个。 */
 export const BROWSER_TAB_ID = "browser";
@@ -136,6 +137,7 @@ export function PreviewBar({
   onOpenSubagent,
   messages,
   subAgents,
+  memberTickets,
   workspaceRoot,
   onAddFileToChat,
   onPreviewFile,
@@ -155,6 +157,8 @@ export function PreviewBar({
   messages?: ChatMessage[] | null;
   /** 辅助对话视图的数据源。 */
   subAgents: Record<string, SubAgentState>;
+  /** 成员工单实时状态（总管方案 P4.4）。 */
+  memberTickets?: Record<string, MemberTicketState>;
   workspaceRoot?: string | null;
   onAddFileToChat?: (path: string) => void;
   onPreviewFile: (path: string, name: string) => void;
@@ -245,6 +249,7 @@ export function PreviewBar({
       ) : active?.type === "subagent" ? (
         <div className="min-h-0 flex-1 flex flex-col">
           <SubAgentTab subAgents={subAgents} />
+          <MemberPanel tickets={memberTickets ?? {}} />
         </div>
       ) : active?.type === "canvas" ? (
         <div className="min-h-0 flex-1 flex flex-col">

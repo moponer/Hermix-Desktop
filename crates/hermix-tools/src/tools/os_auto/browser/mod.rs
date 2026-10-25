@@ -13,8 +13,10 @@
 //!   writes it to `DevToolsActivePort` inside *our* throwaway profile.
 //! - The model never sees raw HTML ([`a11y`]). It sees an accessibility tree
 //!   with our own `ref=` handles, capped on both axes.
-//! - The browser is always headless; the operator watches it through the
-//!   screencast fed to the `browser-view` sub-window ([`screencast`]).
+//! - The browser is always headless. The human-facing surface is the embedded
+//!   WebView2 panel ([`panel`]): when one is registered the tools attach to it
+//!   over CDP and the user watches that window; the headless fallback has no
+//!   picture for humans — the model works off the AX tree ([`a11y`]).
 //!
 //! Everything runs on one session guarded by a `tokio::sync::Mutex`: the tools
 //! are registered `is_interactive`, so the dispatcher already serialises them,
@@ -26,7 +28,6 @@ pub mod job;
 pub mod launch;
 /// Embedded WebView2 panel bridge (port registry + CDP discovery).
 pub mod panel;
-pub mod screencast;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -166,7 +167,7 @@ pub fn register(registry: &ToolRegistry) {
 // ---------------------------------------------------------------------------
 
 struct Session {
-    /// 本会话的键（`_session_id`）；Drop 清 screencast 时要拿它找通道。
+    /// 本会话的键（`_session_id`），会话表的键。
     key: String,
     browser: Browser,
     page: Page,
@@ -200,10 +201,6 @@ impl Drop for Session {
         // The handler task waits on a WebSocket owned by `browser`; aborting it
         // first avoids a task that outlives the session it was serving.
         self._handler_task.abort();
-        // Clear THIS session's screencast channel so a later session with the
-        // same key starts a fresh one. Chrome-side pushing dies with the page
-        // on its own — this is the synchronous bookkeeping half only.
-        screencast::shutdown(&self.key);
         // Panel-attached sessions own no profile: the WebView2 panel lives in
         // the app's own user-data folder and is closed by the UI.
         if let Some(launched) = self._launched.as_ref() {
@@ -227,6 +224,13 @@ fn sessions() -> &'static Mutex<HashMap<String, Session>> {
 /// `_session_id` 注入 params（多会话并行用浏览器的隔离键）；无上下文
 /// （测试 / headless 调度）落回 `"default"`。
 fn session_key(params: &Value) -> String {
+    // 持久 profile（P5）：带 profile 的调用键控到 profile 名上 —— 同名
+    // profile 的后续调用复用同一浏览器会话（登录态在，不用重登）。
+    if let Some(name) = params.get("profile").and_then(Value::as_str) {
+        if !name.is_empty() {
+            return format!("profile:{name}");
+        }
+    }
     params
         .get("_session_id")
         .and_then(Value::as_str)
@@ -237,13 +241,11 @@ fn session_key(params: &Value) -> String {
 
 /// The live session for `key`, starting one if needed.
 ///
-/// The browser is always headless and the screencast starts with the session:
-/// the `browser-view` sub-window has frames from the very first navigation,
-/// and the model has no parameter that could produce a real, focus-stealing
-/// window.
+/// The browser is always headless and the model has no parameter that could
+/// produce a real, focus-stealing window.
 ///
-/// 键控多会话（2026-10-17）：每个对话独立 Edge 实例（独立 profile、独立
-/// screencast），互不串页面。整张表共用一把锁——单次调用串行化，足以
+/// 键控多会话（2026-10-17）：每个对话独立 Edge 实例（独立 profile），
+/// 互不串页面。整张表共用一把锁——单次调用串行化，足以
 /// 防止 click/snapshot 交错；跨对话的调用序列隔离由键本身保证。
 async fn ensure(key: &str) -> Result<MutexGuard<'static, HashMap<String, Session>>, ToolError> {
     let mut guard = sessions().lock().await;
@@ -304,9 +306,6 @@ async fn ensure(key: &str) -> Result<MutexGuard<'static, HashMap<String, Session
                     if let Err(e) = set_download_dir(&page).await {
                         tracing::warn!(error = %e, "设置面板下载目录失败（保持默认）");
                     }
-                    if let Err(e) = screencast::start(key, &page).await {
-                        tracing::warn!(error = %e, "面板 screencast 启动失败（工具不受影响）");
-                    }
                     tracing::info!(
                         port = state.port,
                         ws = %ws,
@@ -346,7 +345,9 @@ async fn ensure(key: &str) -> Result<MutexGuard<'static, HashMap<String, Session
         }
     }
 
-    let launched = launch::launch()
+    // 持久 profile（P5）：键形如 `profile:<name>`（见 session_key）。
+    let profile_name = key.strip_prefix("profile:").map(str::to_string);
+    let launched = launch::launch_named(profile_name.as_deref())
         .await
         .map_err(ToolError::ExecutionFailed)?;
     let (browser, mut handler) = Browser::connect(launched.ws_url.clone())
@@ -366,13 +367,6 @@ async fn ensure(key: &str) -> Result<MutexGuard<'static, HashMap<String, Session
     // process CWD and dialogs block the navigation that raised them.
     if let Err(e) = set_download_dir(&page).await {
         tracing::warn!(error = %e, "设置浏览器下载目录失败（下载行为保持默认）");
-    }
-    // Frames flow from the first navigation on: the sub-window never has
-    // to wait for a tool call to "turn the camera on".
-    if let Err(e) = screencast::start(key, &page).await {
-        // Losing the picture must not kill the session — the model works
-        // off the AX tree; the window is for the operator.
-        tracing::warn!(error = %e, "screencast 启动失败（浏览器小窗将无画面，工具不受影响）");
     }
     tracing::info!(ws = %launched.ws_url, session = %key, "automation browser started");
     guard.insert(
@@ -892,7 +886,7 @@ impl ToolHandler for BrowserHandler {
                 "description": format!("`ref=` handle from the latest browser_snapshot ({what})")
             })
         };
-        let (name, desc, props, required): (&str, &str, IndexMap<String, Value>, Vec<String>) =
+        let (name, desc, mut props, required): (&str, &str, IndexMap<String, Value>, Vec<String>) =
             match self.op {
                 Op::Navigate => (
                     "browser_navigate",
@@ -964,6 +958,12 @@ impl ToolHandler for BrowserHandler {
                 vec![],
             ),
             };
+        // 持久 profile（P5）：所有浏览器工具统一接受可选 `profile`，
+        // 同名复用同一会话与登录态；缺省一次性 profile。
+        props.insert(
+            "profile".to_string(),
+            json!({"type": "string", "description": "持久 profile 名（小写字母/数字/-/_）。同名调用复用同一浏览器会话与登录态（~/.hermix/browser/profiles/<名>）；缺省用一次性 profile。需要网站登录态时才用。"}),
+        );
         tool_schema(name, desc, JsonSchema::object(props, required))
     }
 }

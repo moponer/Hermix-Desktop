@@ -14,11 +14,12 @@ import { AgentActivityIndicator, WaitForInputIndicator } from "./ChatIndicators"
 import { StreamingBubble } from "./StreamingBubble";
 import { TodoListCard } from "./TodoListCard";
 import { SubAgentPanel } from "./SubAgentPanel";
+import { MemberPanel } from "./MemberPanel";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
 import { PrefetchIntentChip } from "./MessageBubble";
 import { shouldShowAssistantHeader } from "./chatUtils";
 import { SkeletonCard } from "./ui";
-import type { ChatMessage, SubAgentState } from "../types";
+import type { ChatMessage, SubAgentState, MemberTicketState } from "../types";
 import type { StreamPhase, TodoSnapshotItem, StreamChatApi } from "../hooks/useStreamChat";
 
 export type TodoGroup = {
@@ -55,6 +56,8 @@ export interface MessageListProps {
   streamRow: StreamRow[];
   showHeaderFlags: boolean[];
   subAgents?: Record<string, SubAgentState>;
+  /** 成员工单实时状态（总管方案 P4.4），MemberPanel 渲染。 */
+  memberTickets?: Record<string, MemberTicketState>;
   prefetchIntent?: {
     intent: string;
     confidence: number;
@@ -128,6 +131,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     streamRow,
     showHeaderFlags,
     subAgents,
+    memberTickets,
     prefetchIntent,
     inlineCompactionDismissed,
     setInlineCompactionDismissed,
@@ -456,6 +460,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           })()}
 
           <SubAgentPanel subAgents={subAgents ?? {}} />
+          <MemberPanel tickets={memberTickets ?? {}} />
 
           {streamingMsg && prefetchIntent && (
             <PrefetchIntentChip

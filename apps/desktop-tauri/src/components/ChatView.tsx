@@ -12,8 +12,7 @@ import type {
   QueuedImage,
   QueuedFile,
   SubAgentState,
-  Session,
-} from "../types";
+  Session, MemberTicketState } from "../types";
 import type { ChatOverrides, StreamPhase, TodoSnapshotItem } from "../hooks/useStreamChat";
 import type { ConfigCategory } from "./SettingsDialog";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
@@ -297,6 +296,8 @@ interface ChatViewProps {
     itemsById: Record<string, TodoSnapshotItem>;
   }>;
   subAgents?: Record<string, SubAgentState>;
+  /** 成员工单实时状态（总管方案 P4.4），转发给 MessageList。 */
+  memberTickets?: Record<string, MemberTicketState>;
   onTodoPatch?: (id: string, patch: { status?: string; title?: string; priority?: string }) => Promise<unknown>;
   justPatchedTodoRef?: React.MutableRefObject<Set<string>>;
   streamingText?: string;
@@ -389,6 +390,7 @@ export const ChatView = memo(function ChatView({
   onOpenSearch,
   todoGroups, onTodoPatch, justPatchedTodoRef,
   subAgents,
+  memberTickets,
   onApproveApproval,
   onDenyApproval,
   onApproveBatchApproval,
@@ -1385,6 +1387,7 @@ export const ChatView = memo(function ChatView({
         streamRow={streamRow}
         showHeaderFlags={showHeaderFlags}
         subAgents={subAgents}
+        memberTickets={memberTickets}
         prefetchIntent={prefetchIntent}
         inlineCompactionDismissed={inlineCompactionDismissed}
         setInlineCompactionDismissed={setInlineCompactionDismissed}

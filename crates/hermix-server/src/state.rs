@@ -175,6 +175,9 @@ pub struct HttpServerState {
     /// schedule. Started automatically by `build*`; can be shut down via
     /// `AutomationScheduler::shutdown()`.
     pub automation_scheduler: Option<Arc<crate::dashboard::automation::AutomationScheduler>>,
+    /// 资源水位巡检（总管方案 P0.5）：C 盘水位 + scratch 配额 + 停派门。
+    /// `None` = 未启动巡检（如 stdio 模式下的最小装配）。
+    pub resource_patrol: Option<Arc<crate::resource_patrol::ResourcePatrol>>,
     /// Persistent user "always allow" command list, loaded from
     /// `$HERMIX_HOME/approval_allowlist.json` at startup. Mutated
     /// when the user picks `Always` on a `RequestApproval` card.
@@ -535,7 +538,8 @@ impl HttpServerState {
         // for the desktop UI to render a question card and reply, instead of
         // returning a JSON envelope that the model then re-parses as
         // ordinary tool output.
-        let clarify_dispatcher = hermix_tools::ClarifyDispatcher::new();
+        // 全局单例（P5）：成员会话的 clarify 转发要进同一 dispatcher。
+        let clarify_dispatcher = hermix_tools::ClarifyDispatcher::global().clone();
         let (clarify_broadcast, _) = tokio::sync::broadcast::channel::<ClarifyBroadcast>(64);
         // 进程级装配（C4）。`boot` 持有 service 注册 guard——必须活到
         // `HttpServerState` 析构；`boot_seams` 把同一组 provider 实例
@@ -604,6 +608,10 @@ impl HttpServerState {
             Some(custom_app_manager.clone()),
             Some(boot_seams.clone()),
         );
+        // 总管方案 P1：成员工具（dispatch_member / get_member_result /
+        // stop_member）注册进进程级注册表。执行侧（MemberRunner）由各会话
+        // 构建时安装（local_agent_service），这里只管工具面。
+        hermix_agent::member::runner::register_member_tools(&tool_registry);
         // with whatever the user last persisted in
         // `enabled_toolsets.json`. Without this, every restart
         // would silently reset every toggle the user made in
@@ -613,6 +621,12 @@ impl HttpServerState {
             &tool_registry,
             &hermix_home,
         );
+        // 持久化 enabled_toolsets.json 是「上次保存设置时的穷举快照」——
+        // 版本升级带来的**新 toolset** 不在快照里，上面的 apply 会把它当
+        // 「用户已禁用」关掉（dispatch_member 冒烟实测踩中）。新工具集
+        // 的正确默认是放行；用户真想关，去设置里关，下次持久化会记录。
+        // 每次随版本发新 toolset，在这里补一行。
+        tool_registry.set_toolset_enabled("member", true);
 
 
         //★ P1-② : load native plugins (.dll) from
@@ -864,6 +878,7 @@ impl HttpServerState {
             clarify_broadcast,
             expert_registry: hermix_skills::ExpertRegistry::new(),
             automation_scheduler: None,
+            resource_patrol: None,
             user_allowlist: Arc::new(std::sync::Mutex::new(user_allowlist)),
             session_bypass: Arc::new(std::sync::Mutex::new(HashMap::new())),
             consciousness_tracker,            tickloop_manager: hermix_runtime::TickLoopManager::new(
@@ -894,7 +909,11 @@ impl HttpServerState {
                 let repo = std::sync::Arc::new(hermix_task::TaskRepository::new(
                     session_persistence.db_path().to_path_buf(),
                 ));
-                let _ = repo.ensure_schema();
+                // 不要吞：迁移失败 = 此后每条 task_* 查询都在运行期报
+                // "no such column"，用户只会看到任务工具神秘失效。
+                if let Err(e) = repo.ensure_schema() {
+                    tracing::error!(error = %e, "tasks 表 ensure_schema 失败（任务工具将不可用）");
+                }
                 Some(std::sync::Arc::new(hermix_task::TaskService::new(repo)))
             },
             // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db）。
@@ -1020,7 +1039,8 @@ impl HttpServerState {
         ));
         let skill_provider: Arc<dyn hermix_core::SkillProvider> =
             Arc::new(hermix_skills::SkillManager::new(skill_store));
-        let clarify_dispatcher = hermix_tools::ClarifyDispatcher::new();
+        // 全局单例（P5）：成员会话的 clarify 转发要进同一 dispatcher。
+        let clarify_dispatcher = hermix_tools::ClarifyDispatcher::global().clone();
         let (clarify_broadcast, _) = tokio::sync::broadcast::channel::<ClarifyBroadcast>(64);
         let pump_dispatcher = clarify_dispatcher.clone();
         let pump_broadcast = clarify_broadcast.clone();
@@ -1079,6 +1099,10 @@ impl HttpServerState {
             Some(custom_app_manager.clone()),
             Some(boot_seams.clone()),
         );
+        // 总管方案 P1：成员工具（dispatch_member / get_member_result /
+        // stop_member）注册进进程级注册表。执行侧（MemberRunner）由各会话
+        // 构建时安装（local_agent_service），这里只管工具面。
+        hermix_agent::member::runner::register_member_tools(&tool_registry);
 
         // MCP wiring (mirrors `build_with_hermes_home`). Construct
         // the manager and eagerly connect every enabled server from
@@ -1191,6 +1215,7 @@ impl HttpServerState {
             clarify_broadcast,
             expert_registry: hermix_skills::ExpertRegistry::new(),
             automation_scheduler: None,
+            resource_patrol: None,
             user_allowlist: Arc::new(std::sync::Mutex::new(user_allowlist)),
             session_bypass: Arc::new(std::sync::Mutex::new(HashMap::new())),
             consciousness_tracker: hermix_agent::ConsciousnessTracker::new(),
@@ -1220,7 +1245,11 @@ impl HttpServerState {
                 let repo = std::sync::Arc::new(hermix_task::TaskRepository::new(
                     session_persistence.db_path().to_path_buf(),
                 ));
-                let _ = repo.ensure_schema();
+                // 不要吞：迁移失败 = 此后每条 task_* 查询都在运行期报
+                // "no such column"，用户只会看到任务工具神秘失效。
+                if let Err(e) = repo.ensure_schema() {
+                    tracing::error!(error = %e, "tasks 表 ensure_schema 失败（任务工具将不可用）");
+                }
                 Some(std::sync::Arc::new(hermix_task::TaskService::new(repo)))
             },
             // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db）。
@@ -1289,6 +1318,27 @@ impl HttpServerState {
         );
         self
     }
+    /// 启动资源水位巡检（总管方案 P0.5）：C 盘水位 + scratch 配额，
+    /// 越限/恢复的边沿上 `OrchestrationEventBus`（→ WS → 桌面端）。
+    /// 停派门由成员派单侧在发工单前查询（`dispatch_blocked`）。
+    pub fn with_resource_patrol(mut self) -> Self {
+        let patrol = Arc::new(crate::resource_patrol::ResourcePatrol::default_c_drive(
+            self.orchestration_bus.clone(),
+        ));
+        // 停派门接线（D5）：成员工单派发前查询巡检状态；巡检未跑过
+        // 第一拍前放行（首次 tick 在 run 循环里 60s 内发生）。
+        let gate_patrol = patrol.clone();
+        hermix_agent::member::runner::install_dispatch_gate(Arc::new(move || {
+            gate_patrol.dispatch_blocked()
+        }));
+        let runner = patrol.clone();
+        tokio::spawn(async move {
+            runner.run().await;
+        });
+        self.resource_patrol = Some(patrol);
+        self
+    }
+
     /// 启动 relay 出站连接循环。
     ///
     /// ## 为什么必须显式调用

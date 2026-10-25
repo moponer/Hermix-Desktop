@@ -367,6 +367,49 @@ const TOOL_DISCOVERY_GUIDANCE: &str = "\
 - 一次找不到就换关键词再 `tool_search`（中英文都可试），不要连续用同一个错参数重试。
 - 桥本身也是工具：`tool_search` / `tool_describe` / `tool_call` 不在 tools 数组里时，说明本轮没有任何工具被桥接，全部工具都已直接可见。";
 
+const ACCOUNT_OPS_GUIDANCE: &str = "# 账号注册与运营纪律（用户已启用，2026-10-24）
+任务需要账号时**自主注册**，不要先问「要不要注册」——这是被授权的能力。
+
+## 决策序
+1. 任务遇到登录墙/需要账号 → 直接办：小注册自己上（浏览器工具 + clarify 问验证码）；
+   完整注册流程（多步表单 + 邮箱 + 保活）派 `registrar` 成员。
+2. 平台要手机验证码 → clarify 向用户要（用户的手机/邮箱收码，你在对话里问，
+   他答完成员继续）。30 分钟没人应 → 挂起并如实汇报卡点，不猜不绕。
+3. 实在办不了（需要证件/实名/明令禁自动化）→ 如实告知用户需要什么，请求协助。
+4. 注册成功 → 凭据 `vault_import` 入库 + browser_open 的 `profile=平台名` 持久
+   profile 保活登录态，并把「平台-用户名 / profile 名 / vault 条目名」记进结论。
+
+## 运营模式
+用户交代「去运营/发帖/维护 xx」时才启动；内容未经用户过目不发；频率保守（日级）；
+异常（封号迹象/验证码轰炸）即停即报。已有账号先 `vault_list` 查，不重复注册。
+
+## 红线
+一平台一账号；不接码、不打码、不批量养号、不伪造身份；密码随机不复用、
+明文不进对话正文（vault 是唯一存放处）。";
+
+const MEMBER_ORCHESTRATION_GUIDANCE: &str = "# 团队编排纪律（dispatch_member / delegate_task 分轨）\n\
+你是总管：可以把**长任务工单**派给团队成员，也可以派**子代理**取数据。\
+两条通道严格分轨，混用即错。\n\
+\n\
+## 分轨\n\
+- `delegate_task` = 数据通道：一次性读/分析，回传 ≤8K 结论，几秒到几分钟。\
+大文件摘要、多文件检索、图片/PDF 分析走这里。\n\
+- `dispatch_member` = 执行单元：独立会话承包整张工单（默认 100 轮 / 4 小时），\
+交付完整报告。编码、修 bug、长调查、批量处理、评审走这里。\n\
+\n\
+## 派单纪律\n\
+1. 工单必须带 `acceptance_criteria`（可核验的判据列表）——它是成员的完成定义，\
+也是验收依据。给不出判据的任务先自己拆解，不要裸派。\n\
+2. 派单即返回，不要原地等待；用 `get_member_result` 查进度（含最近步骤日志）。\n\
+3. 并发成员默认 ≤2 个；资源闸门越限会直接拒单，收到拒单告知用户清理空间。\n\
+4. 成员完成 ≠ 验收通过：用 `review_member(member_id)` 走独立评审\
+（只读 reviewer 对照判据核验交付物），得到 pass / warn / reject 三态判定。\n\
+5. reject → 把 reviewer 的证据附进新工单重派；同一工单最多重派 2 次，\
+仍不过就停止重派，把证据摆给用户定夺。\n\
+6. 汇报时消化成员报告：给用户结论与关键证据，不是转发整份报告。\n\
+7. 需要新工种时用 `agent_role_list` / `agent_role_upsert` 管理角色库\
+（内置 reviewer / coder；角色文件在 `~/.hermix/agents/`）。";
+
 /// Inform the model that context compression may occur.
 const COMPRESSION_AWARENESS_GUIDANCE: &str = "\
 # Context compression\n\
@@ -569,7 +612,10 @@ First-class Task objects for tracking work units.
 - Same-turn create + complete is valid — the database is always correct even if the UI lags.
 - Keep task titles short and action-oriented; describe the user's outcome, not your investigation steps.
 - Always transition to terminal state — don't leave tasks dangling in `in_progress`.
-- `task_list` returns this session's tasks plus the ones nobody has claimed yet. Only entries with `\"mine\": true` belong to this session — **do not update the ones with `\"mine\": false`**, they belong to another conversation.
+- `task_list` returns this session's tasks plus the ones nobody has claimed yet. Read the marks precisely:
+  - `\"mine\": true` — yours. Update freely.
+  - `\"mine\": false` **and no `session_id` field** — an old task nobody owns (created before tasks were session-scoped). If it is what the user is asking about, take it over: the first `task_update` on it stamps your session on it, and it becomes yours from then on.
+  - `\"mine\": false` **with a `session_id`** — another conversation's task. **Do not update it.**
 
 ## State invariants
 
@@ -989,6 +1035,25 @@ Always close `</think>` before visible text. The think block is for reasoning, n
             "context_budget.guide",
             DirRoute::HasBatchKeyword,
             CONTEXT_BUDGET_GUIDANCE,
+        ));
+    }
+    // 账号注册与运营纪律（P5，用户 2026-10-24 显式启用）。
+    // 门用 hermix-viewer__browser_open（现行浏览器面 = viewer MCP；MCP
+    // 工具前缀 = mcp_servers.json 里的服务器名 `hermix-viewer`。viewer 未
+    // 连接时本块自然缺席——没有浏览器能力时谈注册纪律没有意义）。
+    if tool_names.contains("hermix-viewer__browser_open") {
+        dirs.push(SystemDir::new(
+            "account.ops",
+            DirRoute::Always,
+            ACCOUNT_OPS_GUIDANCE,
+        ));
+    }
+    // 总管编排纪律：dispatch_member 可用时注入（分轨 + 派单/验收纪律）。
+    if tool_names.contains("dispatch_member") {
+        dirs.push(SystemDir::new(
+            "member.guide",
+            DirRoute::Always,
+            MEMBER_ORCHESTRATION_GUIDANCE,
         ));
     }
     // Orchestration-engine task tracker guidance.

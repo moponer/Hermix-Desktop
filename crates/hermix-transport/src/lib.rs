@@ -542,6 +542,29 @@ pub enum StreamEvent {
         /// compression types.
         snapshot: serde_json::Value,
     },
+    /// 资源闸门边沿（总管方案 P0.5）：`resource_breach` = 磁盘水位或
+    /// scratch 配额越限、停派新工单；`resource_recovered` = 恢复派单。
+    /// 前端在接到前把稳态巡检当背景，只在此边沿上弹通知。
+    ResourceAlert {
+        kind: String,
+        message: String,
+    },
+    /// 成员工单实时事件（总管方案 P4.4）：`dispatched` → `running` →
+    /// `done` / `failed` / `timeout` / `cancelled`，验收后跟
+    /// `review_pass` / `review_warn` / `review_reject`。前端「成员」
+    /// 面板据此滚动显示（对齐 SubAgentEvent 的机制，但通道与语义独立）。
+    MemberEvent {
+        member_id: String,
+        phase: String,
+        task: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turns: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        /// Rolling step log, newest last（与成员记录的 recent_steps 同源）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recent_steps: Option<Vec<String>>,
+    },
     /// Per-turn token usage snapshot for the live
     /// "cache hit" chip in the chat header. Emitted after every
     /// successful LLM response so the front-end can update its

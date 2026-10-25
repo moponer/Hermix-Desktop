@@ -7,6 +7,7 @@ import {
   Settings, PanelLeftClose, Search, LayoutDashboard, KeyRound, TabletSmartphone, Clock,
   Sparkles,
   type LucideIcon,
+  KanbanSquare,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
@@ -73,6 +74,7 @@ const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
   { icon: Sparkles, label: "助手阿黎", page: "twin" },
   { icon: Boxes,    label: "应用",    page: "customapps" },
   { icon: LayoutDashboard, label: "工作台", page: "workbench" },
+  { icon: KanbanSquare, label: "任务台", page: "mission" },
   { icon: Clock,    label: "自动化",  page: "automation" },
   { icon: KeyRound, label: "凭据库", page: "vault" },
 ];

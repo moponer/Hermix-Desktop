@@ -31,6 +31,8 @@ pub mod compression_ops;
 pub mod compression_pipeline;
 pub mod json_crusher;
 pub mod semantic_dedup;
+// 成员（总管方案的执行单元）——区别于子代理（数据通道）。
+pub mod member;
 pub use hermix_tools::spill;
 pub mod context;
 pub mod context_files;

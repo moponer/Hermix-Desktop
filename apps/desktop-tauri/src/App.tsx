@@ -38,7 +38,7 @@ import {
   updateToolStepStdout,
 } from "./app/streamEvents";
 import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
-import type { SubAgentState, SubAgentEventPayload } from "./types";
+import type { SubAgentState, SubAgentEventPayload, MemberEventPayload, MemberTicketState } from "./types";
 import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useArtifacts } from "./hooks/useArtifacts";
@@ -1138,6 +1138,8 @@ setPage("chat");
   // `onSubAgentEvent` from the WS stream and rendered by `SubAgentPanel`
   // inside ChatView. Cleared when the active session changes.
   const [subAgents, setSubAgents] = useState<Record<string, SubAgentState>>({});
+  // 成员工单实时状态（总管方案 P4.4）：MemberEvent 流驱动，MemberPanel 渲染。
+  const [memberTickets, setMemberTickets] = useState<Record<string, MemberTicketState>>({});
   const todoGroupsByIdRef = useRef<Map<string, TodoGroup>>(new Map());
   /**
    * Shared mutable set between App.tsx and every TodoListCard. Card
@@ -3189,6 +3191,29 @@ return {
               },
             }));
           },
+          onMemberEvent: (info: MemberEventPayload) => {
+            if (!info?.memberId) return;
+            setMemberTickets((prev) => ({
+              ...prev,
+              [info.memberId]: {
+                memberId: info.memberId,
+                phase: info.phase,
+                task: info.task,
+                turns: info.turns,
+                error: info.error,
+                recentSteps: info.recentSteps,
+                updatedAt: Date.now(),
+              },
+            }));
+          },
+          onResourceAlert: (kind, message) => {
+            // 资源闸门边沿（总管方案 P0.5）：breach 红通知、recovered 常规通知。
+            if (kind === "resource_breach") {
+              toastError(message || "资源闸门越限，已停派新工单");
+            } else if (kind === "resource_recovered") {
+              toastInfo(message || "资源闸门恢复，重新放行派单");
+            }
+          },
           onApprovalRequest,
           onApprovalBatchRequest,
           onClarifyRequest,
@@ -4070,6 +4095,7 @@ return {
       // group right after the originating assistant message.
       todoGroups={todoGroups}
       subAgents={subAgents}
+        memberTickets={memberTickets}
       onTodoPatch={handleTodoPatch}
       justPatchedTodoRef={justPatchedTodoRef}
       onOpenExperts={openExperts}
@@ -4291,6 +4317,7 @@ return {
             onOpenSubagent={openSubagentTab}
             messages={activeSession?.messages}
             subAgents={subAgents}
+        memberTickets={memberTickets}
             workspaceRoot={workspaceRoot}
             onAddFileToChat={handleAddFileToChat}
             onPreviewFile={handlePreviewFileFromExplorer}
