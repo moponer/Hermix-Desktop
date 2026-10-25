@@ -189,7 +189,17 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
       ]);
       setTasks(list);
       setActiveRuns(active);
-      setWorkDays(days);
+      // 值守口径：daily_memory 的行首是 `[sessionId] …`。只有阿黎工作域
+      // 的会话（她的对话 twin:ali / 自动化 automati* / 成员工单 member::）
+      // 才进「最近工作日志」与「刚才发生」——普通主对话的用户消息流水
+      // 会把面板刷成聊天记录（实测 smoke 测试会话泄漏进来）。
+      const dutyScope = (d: api.DailyMemoryDay) =>
+        /^\[(twin:|automati|member::)/m.test(
+          `${d.goals}
+${d.progress}
+${d.conclusions}`,
+        );
+      setWorkDays(days.filter(dutyScope));
       setCheckedAt(Date.now());
     } catch (e) {
       setError(String(e));
@@ -215,10 +225,16 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
 
   const recentSessions = useMemo(
     () =>
-      // 排除她自己的会话：`twin:ali` 一旦发过消息就进了宿主会话表，混进
-      // 「最近会话」会变成"她自己的对话出现在她的近期记录里"。
+      // 值守口径（2026-10-25 用户验收）：这里只显示**阿黎工作域**的会话
+      // ——她的对话（twin:）、成员工单（member::）、自动化触发的会话。
+      // 全部主对话的 New chat 流水与值守总览无关，混进来就是噪音。
       sessions
-        .filter((s) => !s.id.startsWith("twin:"))
+        .filter(
+          (s) =>
+            s.id.startsWith("twin:") ||
+            s.id.startsWith("member::") ||
+            s.id.startsWith("automati"),
+        )
         .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))
         .slice(0, 5),
     [sessions],
@@ -457,10 +473,10 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
           </section>
 
           <section className="twin-box">
-            <BoxHead title="最近工作日志" meta={`${workDays.length} 天`} />
+            <BoxHead title="最近工作日志" meta={`${workDays.length} 条`} />
             <div className="twin-rows">
               {workDays.length === 0 ? (
-                <p className="twin-muted">daily_memory 里还没有记录。</p>
+                <p className="twin-muted">还没有值守日志。</p>
               ) : (
                 workDays.slice(0, 3).map((d) => (
                   <div key={d.date} className="twin-row">
@@ -807,7 +823,7 @@ export function TwinView({ sessions, onOpenChat, twin }: TwinViewProps) {
             <div className="twin-rows">
               {workDays.length === 0 ? (
                 <p className="twin-muted">
-                  daily_memory 里还没有记录。任务跑起来后她会在这里留下痕迹。
+                  她还没有值守记录。派成员、跑自动化或跟她聊过后，这里会出现工作日志。
                 </p>
               ) : (
                 workDays.slice(0, 8).map((d) => (

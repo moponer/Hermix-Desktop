@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
+// MarkdownBody 的 markdown→hast 在 jsdom 下缺 ArrayBuffer 依赖
+//（satteri hast-reader），主对话测试同样 mock 掉——本文件只测接线。
+vi.mock("./MarkdownBody", () => ({
+  MarkdownBody: ({ content }: { content: string }) => <div data-testid="md">{content}</div>,
+}));
 import { TwinView } from "./TwinView";
 import type { TwinInlineApi } from "../app/routes";
 
