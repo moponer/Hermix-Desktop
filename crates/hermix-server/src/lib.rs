@@ -344,7 +344,8 @@ pub fn router(state: HttpServerState) -> Router {
         .route("/v1/members", get(member_api::mobile_list_members))
         .route("/v1/members/{member_id}/stop", post(member_api::mobile_stop_member))
         // 本地文件搜索：提权 helper（hermix-filesearch.exe）的 HTTP 面。
-        // helper 未运行时首个请求会触发 UAC（弹一次）。
+        // 启动 5s 后自动预热（见 run_server_with_state）；未在跑时拉起会
+        // 触发一次 UAC。
         .route("/v1/filesearch/search", get(filesearch::search))
         .route("/v1/filesearch/status", get(filesearch::status))
         .route("/v1/filesearch/filter", post(filesearch::filter))
@@ -684,6 +685,18 @@ pub async fn run_server_with_tls(
 
     // Start TickLoop by default (powers conscious ECG, watchdog).
     tickloop_mgr.start(Some(tracker)).await;
+
+    // 文件索引预热：启动 5s 后确保提权 helper 在跑——开机自启任务通常已经
+    // 拉起，这里只探活；没在跑就补拉一次。索引随应用启动就开始建/续增量，
+    // 而不是等用户第一次搜索（2026-10-25 用户实测「程序开了几小时，一搜索
+    // 才开始建索引」）。失败静默：UAC 被拒 / exe 未构建时首次搜索仍会按需
+    // 拉起，ensure_helper 内部有单飞锁与失败冷却，不会连环弹。
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        if let Err(error) = filesearch::ensure_helper().await {
+            tracing::debug!(error = %error, "filesearch warmup skipped");
+        }
+    });
 
     let mut shutdown_rx = shutdown_rx;
     // TLS 联动用副本：shutdown 闭包 move 走原 rx。

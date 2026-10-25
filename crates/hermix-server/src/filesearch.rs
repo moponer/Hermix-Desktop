@@ -1,7 +1,7 @@
 //! 本地文件搜索（hermix-filesearch.exe 提权守护进程）的宿主侧客户端。
 //!
-//! 生命周期：首次请求时若 helper 未运行 → `ShellExecuteExW("runas")` 拉起
-//! （UAC 弹一次）→ helper bind 127.0.0.1:0 并把 port+token 写进
+//! 生命周期：启动预热 / 首次请求时若 helper 未运行 → `ShellExecuteExW("runas")`
+//! 拉起（UAC 弹一次）→ helper bind 127.0.0.1:0 并把 port+token 写进
 //! `%LOCALAPPDATA%\hermix\filesearch\endpoint.json` → 本模块轮询该文件握手。
 //! 跨提权边界无法继承 stdio 管道，因此走回环 TCP + token（仅本机同用户可达）。
 
@@ -103,13 +103,15 @@ fn process_alive(pid: u32) -> bool {
     }
 }
 
-/// 拉起提权 helper（UAC 弹一次；已是管理员则静默）。
+/// 拉起提权 helper（UAC 弹一次；已是管理员则静默）。SW_HIDE：控制台子系统
+/// 的 exe 默认会亮出自己的黑框——用户看到黑框只会去关它，关掉 = daemon 被
+/// 杀（daemon 侧 serve 模式还有自藏控制台的二道保险）。
 fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::{
         ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
     };
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
     let exe_w: Vec<u16> = exe
         .as_os_str()
@@ -128,7 +130,7 @@ fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
         lpVerb: PCWSTR(verb_w.as_ptr()),
         lpFile: PCWSTR(exe_w.as_ptr()),
         lpParameters: PCWSTR(args_w.as_ptr()),
-        nShow: SW_SHOWNORMAL.0,
+        nShow: SW_HIDE.0,
         ..Default::default()
     };
     unsafe {
@@ -153,6 +155,28 @@ fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
 static AUTOSTART_INSTALLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// 单飞锁：「探活 → 拉起 → 90s 握手轮询」全程只允许一个并发。
+/// 搜索窗每 2s 轮询一次 status——没有这把锁时，每个发现 helper 未就绪的
+/// 请求都会删掉 endpoint.json 再拉一个提权实例，而新实例的交接逻辑
+/// （stop-request）会请走正在装载快照的旧实例：连环互杀、黑框连环弹、
+/// 索引永远建不完（2026-10-25 用户实测）。锁内复查探活——前一个持锁者
+/// 可能刚把 helper 拉起来。
+static ENSURE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// 上次拉起失败的 Unix 秒。冷却期内直接复用失败结论——UAC 被拒后若不加
+/// 冷却，2s 一发的 status 轮询等于「拒一次弹一次」。
+static LAST_SPAWN_FAILURE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+const SPAWN_FAILURE_COOLDOWN_SECS: u64 = 60;
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// 确保 helper 在跑；没跑就提权拉起并轮询 endpoint.json（覆盖 UAC 确认耗时）。
 /// 握手成功后 fire-and-forget 发一次 `installTask`（在提权的 daemon 里注册
 /// 开机自启计划任务）——索引开机即就绪，用户不必手动启动服务。
@@ -163,21 +187,41 @@ pub async fn ensure_helper() -> Result<(), String> {
             return Ok(());
         }
     }
-    let _ = std::fs::remove_file(endpoint_path());
+    let _guard = ENSURE_LOCK.lock().await;
+    // 拿到锁后复查：前面排队的调用可能刚完成一次成功的拉起。
+    if let Ok(endpoint) = read_endpoint() {
+        if endpoint_alive(&endpoint).await {
+            install_autostart_once().await;
+            return Ok(());
+        }
+    }
+    if unix_now().saturating_sub(LAST_SPAWN_FAILURE.load(std::sync::atomic::Ordering::Relaxed))
+        < SPAWN_FAILURE_COOLDOWN_SECS
+    {
+        return Err(format!(
+            "索引服务未启动：上次拉起失败（UAC 可能被拒），{SPAWN_FAILURE_COOLDOWN_SECS} 秒后自动重试"
+        ));
+    }
 
+    let _ = std::fs::remove_file(endpoint_path());
     let exe = locate_exe()?;
     let args = format!("--serve --data-dir \"{}\"", data_dir().display());
-    spawn_elevated(&exe, &args)?;
+    if let Err(error) = spawn_elevated(&exe, &args) {
+        LAST_SPAWN_FAILURE.store(unix_now(), std::sync::atomic::Ordering::Relaxed);
+        return Err(error);
+    }
 
     for _ in 0..90 {
         tokio::time::sleep(Duration::from_millis(1000)).await;
         if let Ok(endpoint) = read_endpoint() {
             if endpoint_alive(&endpoint).await {
+                LAST_SPAWN_FAILURE.store(0, std::sync::atomic::Ordering::Relaxed);
                 install_autostart_once().await;
                 return Ok(());
             }
         }
     }
+    LAST_SPAWN_FAILURE.store(unix_now(), std::sync::atomic::Ordering::Relaxed);
     Err("等待 hermix-filesearch 启动超时（90s）——UAC 可能未确认，或 helper 崩溃。".to_string())
 }
 
