@@ -565,6 +565,10 @@ html, body, #root {
   background: var(--bg-secondary);
   overflow-y: auto;
   padding: 8px 4px;
+  /* 与中间目录栏分层：浅色靠底色差（secondary vs primary）即可辨，
+     深色两档黑太接近（#1f1f1f vs #141414）糊成一片——补右投影，
+     黑影两主题通用（与 .ai-side 的左投影对称）。 */
+  box-shadow: 6px 0 14px -12px rgba(0, 0, 0, 0.55);
 }
 .sb-head {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
