@@ -149,10 +149,17 @@ fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 开机自启是否已注册过（进程级一次；daemon 侧 schtasks /F 幂等）。
+static AUTOSTART_INSTALLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// 确保 helper 在跑；没跑就提权拉起并轮询 endpoint.json（覆盖 UAC 确认耗时）。
+/// 握手成功后 fire-and-forget 发一次 `installTask`（在提权的 daemon 里注册
+/// 开机自启计划任务）——索引开机即就绪，用户不必手动启动服务。
 pub async fn ensure_helper() -> Result<(), String> {
     if let Ok(endpoint) = read_endpoint() {
         if endpoint_alive(&endpoint).await {
+            install_autostart_once().await;
             return Ok(());
         }
     }
@@ -166,11 +173,26 @@ pub async fn ensure_helper() -> Result<(), String> {
         tokio::time::sleep(Duration::from_millis(1000)).await;
         if let Ok(endpoint) = read_endpoint() {
             if endpoint_alive(&endpoint).await {
+                install_autostart_once().await;
                 return Ok(());
             }
         }
     }
     Err("等待 hermix-filesearch 启动超时（90s）——UAC 可能未确认，或 helper 崩溃。".to_string())
+}
+
+/// 请求 daemon 注册开机自启（daemon 是提权的，schtasks 才不会拒绝）。
+/// 失败静默——自启只是体验优化，按需拉起仍然兜底。
+async fn install_autostart_once() {
+    use std::sync::atomic::Ordering;
+    if AUTOSTART_INSTALLED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if let Err(error) = request("installTask", json!({})).await {
+        tracing::debug!(error = %error, "filesearch autostart install skipped");
+        // 失败允许重试（下次 ensure 再试一次）。
+        AUTOSTART_INSTALLED.store(false, Ordering::Release);
+    }
 }
 
 /// 单次请求：连接 → 发 JSONL → 收一行响应（无长连接，请求级生命周期）。

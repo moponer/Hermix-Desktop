@@ -14,6 +14,7 @@ use std::{
     path::PathBuf,
     process::exit,
     sync::Arc,
+    time::Duration,
 };
 
 use hermix_filesearch::{core::storage, SearchService};
@@ -24,6 +25,7 @@ fn main() {
     let mut status_only = false;
     let mut serve = false;
     let mut stop_only = false;
+    let mut install_task = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -43,10 +45,12 @@ fn main() {
             "--status" => status_only = true,
             "--serve" => serve = true,
             "--stop" => stop_only = true,
+            "--install-task" => install_task = true,
             "--help" | "-h" => {
                 println!(
                     "用法: hermix-filesearch [--volumes C:,D:] [--data-dir <path>] [--status] [--serve] [--stop]\n\
-                     --stop  停掉正在运行的另一个自己（提权进程只能让它自己退出）"
+                     --stop  停掉正在运行的另一个自己（提权进程只能让它自己退出）
+                     --install-task  注册开机自启计划任务（幂等；索引开机即就绪，用户无需手动启动）"
                 );
                 return;
             }
@@ -65,6 +69,14 @@ fn main() {
     // 停掉正在跑的另一个自己（不需要管理员权限）。
     if stop_only {
         stop_running_helper(&data_dir);
+        return;
+    }
+
+    // 开机自启（幂等）：计划任务以最高权限跑本 exe --serve。
+    // 由宿主在 ensure_helper 成功后调用一次（提权上下文里静默成功）。
+    // 索引开机即装载，用户随时搜索零等待——不再"每次都要先拉起服务"。
+    if install_task {
+        install_autostart_task(&exe_path(), &data_dir);
         return;
     }
 
@@ -92,7 +104,14 @@ fn main() {
     if serve {
         // 被提权拉起时的模式：跨提权边界无法继承 stdio 管道，
         // 改用 127.0.0.1 回环 + token 握手（endpoint.json 供宿主发现）。
-        runtime.block_on(serve_loop(service, data_dir));
+        //
+        // **单实例互斥**（2026-10-25）：server 与 viewer 两个宿主各自
+        // ensure_helper，竞态下会拉起第二个实例——旧实例变孤儿（白吃
+        // 几百 MB 内存），若快照还没落盘则两个实例同时全盘扫描，用户
+        // 看到"每次都在重建"。起自身之前先请走旧的：shutdown 会让它
+        // 刷盘退出，快照+增量安全交接给本实例装载。
+        stop_running_helper(&data_dir);
+        runtime.block_on(serve_loop(service, &data_dir));
         return;
     }
 
@@ -107,7 +126,7 @@ fn main() {
             if line.trim().is_empty() {
                 continue;
             }
-            let response = handle(&service, &line, None);
+            let response = handle(&service, &line, None, &data_dir);
             let mut stdout = std::io::stdout().lock();
             let _ = writeln!(stdout, "{response}");
             let _ = stdout.flush();
@@ -119,7 +138,7 @@ fn main() {
 }
 
 /// 回环 TCP 模式：bind 127.0.0.1:0 → 写 endpoint.json（port+token+pid）→ 逐连接处理 JSONL。
-async fn serve_loop(service: Arc<SearchService>, data_dir: PathBuf) {
+async fn serve_loop(service: Arc<SearchService>, data_dir: &std::path::Path) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let token = generate_token();
@@ -139,20 +158,55 @@ async fn serve_loop(service: Arc<SearchService>, data_dir: PathBuf) {
     if let Some(parent) = endpoint_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    let started_at: u64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let endpoint = serde_json::json!({
         "port": port,
         "token": token,
         "pid": std::process::id(),
-        "startedAt": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+        "startedAt": started_at,
     });
     if let Err(error) = std::fs::write(&endpoint_path, endpoint.to_string()) {
         eprintln!("[filesearch] 写 endpoint.json 失败：{error}");
         exit(1);
     }
     eprintln!("[filesearch] 服务已启动（回环 :{port}），等待指令。");
+
+    // 孤儿看门狗：endpoint.json 被新实例覆盖后，旧实例收不到协议 shutdown
+    //（它不在新实例的 endpoint 里）。约定一个停止请求文件：新实例拉起前
+    // 写入，所有实例周期检查——时间戳新于自己启动时间就刷盘退出。
+    // 这是"提权进程只能让它自己退出"约束下唯一能罩住孤儿的通道。
+    {
+        let service = service.clone();
+        let data_dir = data_dir.to_path_buf();
+        let my_started_at = started_at;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                let Ok(raw) = std::fs::read_to_string(data_dir.join("stop-request.json"))
+                else {
+                    continue;
+                };
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
+                let ts = v.get("requestedAt").and_then(|x| x.as_u64()).unwrap_or(0);
+                if ts > my_started_at {
+                    eprintln!("[filesearch] 收到停止请求（新实例交接），刷盘退出。");
+                    let svc = service.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_secs(60));
+                        exit(0);
+                    });
+                    tokio::task::spawn_blocking(move || {
+                        svc.flush_all();
+                        exit(0);
+                    });
+                    return;
+                }
+            }
+        });
+    }
 
     loop {
         let Ok((stream, _addr)) = listener.accept().await else {
@@ -161,6 +215,7 @@ async fn serve_loop(service: Arc<SearchService>, data_dir: PathBuf) {
         let service = service.clone();
         let token = token.clone();
         let endpoint_path = endpoint_path.clone();
+        let data_dir = data_dir.to_path_buf();
         tokio::spawn(async move {
             let (reader, mut writer) = stream.into_split();
             let mut lines = BufReader::new(reader).lines();
@@ -168,7 +223,7 @@ async fn serve_loop(service: Arc<SearchService>, data_dir: PathBuf) {
                 if line.trim().is_empty() {
                     continue;
                 }
-                let response = handle(&service, &line, Some(&token));
+                let response = handle(&service, &line, Some(&token), &data_dir);
                 let _ = writer.write_all(response.as_bytes()).await;
                 let _ = writer.write_all(b"\n").await;
                 // shutdown 指令：响应已回，刷盘退出（endpoint.json 一并清掉）。
@@ -179,7 +234,20 @@ async fn serve_loop(service: Arc<SearchService>, data_dir: PathBuf) {
                 // 用户遇到的现象）。这里丢进 spawn_blocking，另加一个看门狗，
                 // 刷盘卡住也一定退得掉。
                 if response.contains("\"shuttingDown\":true") {
-                    let _ = std::fs::remove_file(&endpoint_path);
+                    // 只删**自己的** endpoint.json：交接场景下新实例可能
+                    // 已经写入了它的 port+pid（它的 stop_running_helper
+                    // 正是本实例的 shutdown 调用方），删了会让宿主找不到
+                    // 新实例，90s 轮询超时。
+                    if let Ok(cur) = std::fs::read_to_string(&endpoint_path) {
+                        let mine = serde_json::from_str::<serde_json::Value>(&cur)
+                            .ok()
+                            .and_then(|v| v.get("pid").and_then(|p| p.as_u64()))
+                            .map(|p| p as u32 == std::process::id())
+                            .unwrap_or(false);
+                        if mine {
+                            let _ = std::fs::remove_file(&endpoint_path);
+                        }
+                    }
                     let service = service.clone();
                     // 看门狗：刷盘最多等 60s，超时直接退（快照丢了只是下次
                     // 重建索引，不能变成"永远关不掉"）。
@@ -207,6 +275,22 @@ async fn serve_loop(service: Arc<SearchService>, data_dir: PathBuf) {
 /// （`os error 5`）。但它**能自己退出**：回环协议里有 `shutdown` 方法，
 /// 收到后刷盘、删 endpoint.json、退出。所以停它的正确姿势是"请它走"，
 /// 而不是"杀它"。
+/// 写停止请求文件：罩住收不到协议 shutdown 的孤儿实例
+/// （endpoint.json 已被新实例覆盖的旧 daemon）。
+fn write_stop_request(data_dir: &std::path::Path) {
+    let path = data_dir.join("stop-request.json");
+    let body = serde_json::json!({
+        "requestedAt": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    });
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, body.to_string());
+}
+
 fn stop_running_helper(data_dir: &std::path::Path) {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
@@ -215,6 +299,9 @@ fn stop_running_helper(data_dir: &std::path::Path) {
     let endpoint_path = data_dir.join("endpoint.json");
     let Ok(raw) = std::fs::read_to_string(&endpoint_path) else {
         println!("索引服务未在运行（没有 endpoint.json）");
+        // endpoint 缺失 ≠ 没有实例：孤儿（endpoint 被覆盖/已损坏）可能
+        // 还在跑。写停止请求，让看门狗罩住它。
+        write_stop_request(data_dir);
         return;
     };
     let Ok(endpoint) = serde_json::from_str::<serde_json::Value>(&raw) else {
@@ -236,6 +323,7 @@ fn stop_running_helper(data_dir: &std::path::Path) {
         Ok(stream) => stream,
         Err(error) => {
             println!("连接索引服务失败（可能已退出）：{error}");
+            write_stop_request(data_dir);
             return;
         }
     };
@@ -266,7 +354,12 @@ fn generate_token() -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn handle(service: &Arc<SearchService>, line: &str, expected_token: Option<&str>) -> String {
+fn handle(
+    service: &Arc<SearchService>,
+    line: &str,
+    expected_token: Option<&str>,
+    data_dir: &std::path::Path,
+) -> String {
     let Ok(request) = serde_json::from_str::<serde_json::Value>(line) else {
         return error_response(None, "请求不是合法 JSON");
     };
@@ -293,6 +386,13 @@ fn handle(service: &Arc<SearchService>, line: &str, expected_token: Option<&str>
             json_response(id, &service.search(query, limit))
         }
         "status" => json_response(id, &service.status()),
+        // 开机自启注册（宿主握手成功后发一次）。必须在 daemon 进程里执行
+        // ——它是提权的，schtasks /Create 才不会被拒绝（宿主侧执行实测
+        // "拒绝访问"）。幂等：/F 覆盖旧任务。
+        "installTask" => {
+            install_autostart_task(&exe_path(), data_dir);
+            json_response(id, &serde_json::json!({ "ok": true }))
+        }
         // 重建索引：忽略现有快照重新扫 MFT。
         // **立即返回**（一次全盘扫描要几十秒到几分钟，协议读取超时只有 15s），
         // 进度走 status 轮询。
@@ -398,6 +498,57 @@ fn lower_process_priority() {
 
 #[cfg(not(windows))]
 fn lower_process_priority() {}
+
+/// 当前 exe 的绝对路径（任务计划指向它）。
+fn exe_path() -> std::path::PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("hermix-filesearch.exe"))
+}
+
+/// 注册开机自启计划任务（幂等）：SYSTEM 启动时以最高权限跑
+/// `hermix-filesearch.exe --serve --data-dir <dir>`。
+/// 失败只打日志不致命——自启只是体验优化，首次搜索仍会按需拉起。
+fn install_autostart_task(exe: &std::path::Path, data_dir: &std::path::Path) {
+    // 用 PowerShell Register-ScheduledTask 而非 schtasks /XML：后者在提权
+    // daemon 进程里玄学报"找不到文件"（XML 存在、路径规范、绝对路径调用
+    // 全试过；同命令非提权 shell 报"拒绝访问"=文件其实可达）。cmdlet 参数
+    // 直接 argv 传递，无引号/XML 编码问题。powershell 用绝对路径（提权
+    // daemon 的 PATH 不可信）。路径一律正斜杠——Windows 进程创建接受，
+    // 且免去 Rust 字符串里的反斜杠转义。
+    let ps = format!(
+        "{}/System32/WindowsPowerShell/v1.0/powershell.exe",
+        std::env::var("SystemRoot")
+            .unwrap_or_else(|_| "C:/Windows".to_string())
+            .replace(std::path::MAIN_SEPARATOR, "/")
+    );
+    // 单引号字符串里只需转义单引号本身（路径含单引号的概率忽略）。
+    let q = |v: &str| format!("'{}'", v.replace('\'', "''"));
+    let script = format!(
+        "Register-ScheduledTask -TaskName HermixFileSearch -Force \
+         -Action (New-ScheduledTaskAction -Execute {} -Argument {}) \
+         -Trigger (New-ScheduledTaskTrigger -AtLogOn) \
+         -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)) \
+         -RunLevel Highest",
+        q(&exe.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")),
+        q(&format!("--serve --data-dir \"{}\"", data_dir.display())),
+    );
+    let output = std::process::Command::new(&ps)
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            eprintln!("[filesearch] 开机自启已注册（计划任务 HermixFileSearch）。");
+        }
+        Ok(out) => {
+            eprintln!(
+                "[filesearch] 注册开机自启失败（{}）：stderr={} stdout={}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim(),
+                String::from_utf8_lossy(&out.stdout).trim()
+            );
+        }
+        Err(error) => eprintln!("[filesearch] 注册开机自启失败：{error}"),
+    }
+}
 
 fn default_data_dir() -> PathBuf {
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
