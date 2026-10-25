@@ -23,7 +23,10 @@ export function editorFor(kind: PreviewKind, name: string): EditorKind {
   if (isMediaFile(name)) return "none";
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (kind === "image") return isEditableImage(name) ? "image" : "none";
-  if (kind === "pdf") return "pdf";
+  // PDF 点开只读预览：编辑器（删页/排序/旋转/插页）能力未成熟，先不设
+  // 编辑入口——右键菜单、Ctrl+E、工具条按钮随本判定一并消失。能力成熟
+  // 后把 "none" 换回 "pdf" 即恢复。
+  if (kind === "pdf") return "none";
   // csv/tsv 是纯文本：按文本改最直接（也保得住编码与分隔符）。
   // xlsx/xlsm 走表格编辑器，docx 走文档编辑器，两者都在预览层就地编辑，
   // 不经过这里的「编辑模式」。
