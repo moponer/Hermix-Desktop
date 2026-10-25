@@ -87,41 +87,84 @@ pub fn resolve(settings: &ViewerSettings) -> Result<ResolvedEndpoint, String> {
     hermix_config::loader::load_dotenv();
     let cfg = hermix_config::loader::load_config(None)
         .map_err(|e| format!("读取主程序配置失败: {e}"))?;
+    resolve_inherit(&cfg, settings.ai.selected_model.as_deref())
+        .ok_or_else(|| "主程序还没配默认模型".to_string())
+}
+
+/// inherit 模式的纯核心（可测，不读全局配置）：手选模型（`selected_model`）
+/// 优先于主程序默认——默认模型可能是凭据池/OAuth 认证（viewer 直连拿不到
+/// key，表现为 401），用户选一个静态 key 就绪的即可用。`None` = 供应商
+/// 不存在且没有默认可落。
+fn resolve_inherit(
+    cfg: &hermix_config::GatewayConfig,
+    selected: Option<&str>,
+) -> Option<ResolvedEndpoint> {
+    // 手选命中 → 用它；手选指向不存在的供应商 → 落回默认。
+    if let Some(sel) = selected {
+        let (sp, sm) = split_model_ref(Some(sel));
+        if !sp.is_empty() {
+            if let Some(sm) = sm.as_deref() {
+                if !sm.is_empty() {
+                    if let Some(resolved) = resolve_provider_model(cfg, &sp, Some(sm)) {
+                        return Some(resolved);
+                    }
+                }
+            }
+        }
+    }
 
     let model_ref = cfg
         .model_selector
         .as_ref()
         .and_then(|s| s.default_model.clone())
         .or_else(|| cfg.model.clone());
-    let (provider, model_from_ref) = match &model_ref {
+    let (provider, model_from_ref) = split_model_ref(model_ref.as_deref());
+    resolve_provider_model(cfg, &provider, model_from_ref.as_deref())
+}
+
+/// `"provider:model"` → `(provider, Some(model))`；裸 model → `("", Some(model))`。
+fn split_model_ref(model_ref: Option<&str>) -> (String, Option<String>) {
+    match model_ref {
         Some(m) => match m.split_once(':') {
             Some((p, m)) => (p.to_string(), Some(m.to_string())),
             None => (String::new(), Some(m.to_string())),
         },
         None => (String::new(), None),
-    };
+    }
+}
 
-    let p = if provider.is_empty() {
-        None
-    } else {
-        cfg.llm_providers.get(&provider)
-    };
+/// 解析主程序配置里的一个「供应商 + 模型」为可用端点。
+/// 返回 `None` = 供应商不存在（llm_providers 与免费渠道都没有）。
+/// 就绪与否看 `info.ready` / `info.problem`（缺 key / 缺 base_url 不是 None）。
+fn resolve_provider_model(
+    cfg: &hermix_config::GatewayConfig,
+    provider: &str,
+    model: Option<&str>,
+) -> Option<ResolvedEndpoint> {
+    if provider.is_empty() {
+        return None;
+    }
+    let p = cfg.llm_providers.get(provider);
     // 内置免费渠道（custom-free-*）不在 llm_providers 里：它们的端点与
     // 凭据是编译期表（free_channel.rs），而且**不要** Authorization 头。
-    let free = if p.is_none() && !provider.is_empty() {
+    let free = if p.is_none() {
         hermix_config::free_channel::FREE_CHANNELS
             .iter()
             .find(|c| c.id == provider)
     } else {
         None
     };
+    if p.is_none() && free.is_none() {
+        return None;
+    }
     let base_url = p
         .and_then(|p| p.base_url.clone())
         .or_else(|| free.map(|c| c.base_url.to_string()))
-        .or_else(|| builtin_base_url(&provider).map(str::to_string))
+        .or_else(|| builtin_base_url(provider).map(str::to_string))
         .map(|s| s.trim().trim_end_matches('/').to_string())
         .unwrap_or_default();
-    let model = model_from_ref
+    let model = model
+        .map(str::to_string)
         .or_else(|| p.and_then(|p| p.model.clone()))
         .unwrap_or_default();
     let api_key = match free {
@@ -132,13 +175,11 @@ pub fn resolve(settings: &ViewerSettings) -> Result<ResolvedEndpoint, String> {
                 Some(c.api_key.to_string())
             }
         }
-        None => resolve_provider_key(p.and_then(|p| p.api_key.as_deref()), &provider),
+        None => resolve_provider_key(p.and_then(|p| p.api_key.as_deref()), provider),
     };
 
     let mut problem = None;
-    if provider.is_empty() {
-        problem = Some("主程序还没配默认模型（config.yaml 的 model 或模型选择器）".into());
-    } else if base_url.is_empty() {
+    if base_url.is_empty() {
         problem = Some(format!("主程序的供应商「{provider}」没有 base_url"));
     } else if model.is_empty() {
         problem = Some(format!("主程序的供应商「{provider}」没有模型 id"));
@@ -146,10 +187,10 @@ pub fn resolve(settings: &ViewerSettings) -> Result<ResolvedEndpoint, String> {
         problem = Some(format!("主程序的供应商「{provider}」还没配 API Key"));
     }
     let ready = problem.is_none();
-    Ok(ResolvedEndpoint {
+    Some(ResolvedEndpoint {
         info: AiEndpointInfo {
             source: "主程序配置".into(),
-            provider,
+            provider: provider.to_string(),
             base_url,
             model,
             has_key: api_key.is_some(),
@@ -166,6 +207,103 @@ fn builtin_base_url(provider: &str) -> Option<&str> {
         .iter()
         .find(|(id, _)| *id == provider)
         .map(|(_, url)| *url)
+}
+
+/// 查看器可选的一个模型项（**不含明文 key**——只报就绪态）。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiModelOption {
+    /// `"provider:model"`，写回 settings.ai.selected_model 的值。
+    pub id: String,
+    /// 展示名（供应商显示名/免费渠道名 · 模型 id）。
+    pub label: String,
+    pub provider: String,
+    pub model: String,
+    pub has_key: bool,
+    pub ready: bool,
+    /// 不可用原因（就绪时为 null）。
+    pub problem: Option<String>,
+    /// 是否是主程序当前的默认模型（下拉里置顶标注）。
+    pub is_default: bool,
+}
+
+/// 主程序里**用户启用过的模型清单**（model_selector.enabled）+
+/// 各供应商自身的 model 兜底 + 免费渠道 seed 模型。
+/// 供设置界面下拉：用户手选后写 `settings.ai.selected_model`，
+/// `resolve()` 会优先用它——主程序默认模型走凭据池/OAuth 时
+/// viewer 直连 401，选一个静态 key 就绪的即可用。
+pub fn list_models() -> Result<Vec<AiModelOption>, String> {
+    hermix_config::loader::load_dotenv();
+    let cfg = hermix_config::loader::load_config(None)
+        .map_err(|e| format!("读取主程序配置失败: {e}"))?;
+    let default_ref = cfg
+        .model_selector
+        .as_ref()
+        .and_then(|s| s.default_model.clone())
+        .or_else(|| cfg.model.clone());
+
+    let mut out: Vec<AiModelOption> = Vec::new();
+    let mut push = |provider: &str, model: &str, display: String| {
+        if provider.is_empty() || model.is_empty() {
+            return;
+        }
+        let id = format!("{provider}:{model}");
+        if out.iter().any(|o| o.id == id) {
+            return;
+        }
+        let resolved = resolve_provider_model(&cfg, provider, Some(model));
+        let (has_key, ready, problem, base_empty) = match &resolved {
+            Some(r) => (r.info.has_key, r.info.ready, r.info.problem.clone(), r.info.base_url.is_empty()),
+            None => (false, false, Some("供应商不存在".to_string()), true),
+        };
+        // 供应商存在但连 base_url 都没有——报出来让用户知道为什么不就绪。
+        let problem = if base_empty && problem.is_none() {
+            Some(format!("供应商「{provider}」没有 base_url"))
+        } else {
+            problem
+        };
+        out.push(AiModelOption {
+            label: format!("{display} · {model}"),
+            is_default: default_ref.as_deref() == Some(id.as_str()),
+            id,
+            provider: provider.to_string(),
+            model: model.to_string(),
+            has_key,
+            ready,
+            problem,
+        });
+    };
+
+    // ① 用户在主程序模型切换器里启用过的（主程序列表的真实口径）。
+    if let Some(sel) = &cfg.model_selector {
+        for e in &sel.enabled {
+            let display = cfg
+                .llm_providers
+                .get(&e.provider_id)
+                .and_then(|p| p.display_name.clone())
+                .unwrap_or_else(|| e.provider_id.clone());
+            push(&e.provider_id, &e.model_id, display);
+        }
+    }
+    // ② 各供应商自己的默认 model（配了 provider 但没进切换器的）。
+    //    主程序允许一个供应商配**逗号分隔的 fallback 链**（免费渠道轮换），
+    //    整串当模型 id 推出去会得到一个把全部候选拼在一起的坏选项，
+    //    原生下拉的弹层还被它撑到横跨整窗——按链拆开逐个推，push 内去重。
+    for (id, p) in &cfg.llm_providers {
+        if let Some(m) = &p.model {
+            let display = p.display_name.clone().unwrap_or_else(|| id.clone());
+            for one in m.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                push(id, one, display.clone());
+            }
+        }
+    }
+    // ③ 免费渠道 seed 模型。
+    for c in hermix_config::free_channel::FREE_CHANNELS {
+        for (m, _) in c.seed_models {
+            push(c.id, m, c.display_name.to_string());
+        }
+    }
+    Ok(out)
 }
 
 /// 供应商密钥：先看配置里的字面量 / `${ENV}` 引用，再退回按供应商 id 找环境变量。
@@ -419,6 +557,44 @@ mod tests {
             resolve_provider_key(Some("sk-literal"), "openai"),
             Some("sk-literal".into())
         );
+    }
+
+    /// 手选模型（selected_model）优先于主程序默认——401 消除路径的锚点。
+    #[test]
+    fn resolve_prefers_selected_model_over_default() {
+        let mut cfg = hermix_config::GatewayConfig::default();
+        cfg.llm_providers.insert(
+            "good".to_string(),
+            hermix_config::LlmProviderConfig {
+                display_name: Some("好的".into()),
+                api_key: Some("sk-ok".into()),
+                base_url: Some("https://good.example.com/v1".into()),
+                model: Some("good-model".into()),
+                ..Default::default()
+            },
+        );
+        let ep = resolve_inherit(&cfg, Some("good:good-model")).expect("resolve");
+        assert_eq!(ep.info.provider, "good");
+        assert_eq!(ep.info.model, "good-model");
+        assert!(ep.info.ready, "ready={:?}", ep.info.problem);
+    }
+
+    /// selected_model 指向不存在的供应商 → 回落主程序默认，不报错。
+    #[test]
+    fn resolve_falls_back_when_selected_model_unknown() {
+        let mut cfg = hermix_config::GatewayConfig::default();
+        cfg.model = Some("openai:gpt-4o".into());
+        cfg.llm_providers.insert(
+            "openai".to_string(),
+            hermix_config::LlmProviderConfig {
+                api_key: Some("sk-x".into()),
+                base_url: Some("https://api.openai.com/v1".into()),
+                model: Some("gpt-4o".into()),
+                ..Default::default()
+            },
+        );
+        let ep = resolve_inherit(&cfg, Some("ghost:nope")).expect("resolve");
+        assert_eq!(ep.info.provider, "openai", "应回落默认");
     }
 
     #[test]
