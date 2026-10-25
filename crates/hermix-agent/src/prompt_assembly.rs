@@ -1470,15 +1470,21 @@ mod tests {
         let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model, 0);
 
         let stable = slot.lock().unwrap().stable.clone().expect("stable layer");
-        for marker in [
-            "Tool failure rule",     // TOOL_FAILURE_GUIDANCE
-            "Environment & Shell",   // ENVIRONMENT_SHELL_GUIDANCE
-            "Git safety protocol",   // GIT_SAFETY_GUIDANCE
-            "URL safety",            // URL_SAFETY_GUIDANCE
-        ] {
+        // Every block, not a sample of four: the previous version probed
+        // 4 of the 13, so dropping any of the other nine from
+        // `collect_stable_guidance` went unnoticed. The probe is the
+        // block's own body prefix (a hand-written marker table drifts
+        // silently when the wording changes), and the count assertion
+        // catches a block being dropped from the list.
+        let blocks = crate::directions::collect_stable_guidance();
+        assert_eq!(blocks.len(), 13, "always-on 块的数量变了，请同步注释与笔记");
+        for d in &blocks {
+            let probe: String = d.body.chars().take(40).collect();
             assert!(
-                stable.contains(marker),
-                "stable layer must contain the always-on block ({marker:?})"
+                stable.contains(&probe),
+                "stable 层缺少 always-on 块 {}（探针 {:?}）",
+                d.tag,
+                probe
             );
         }
     }

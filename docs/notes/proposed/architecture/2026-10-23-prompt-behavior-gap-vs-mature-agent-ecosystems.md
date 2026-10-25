@@ -65,7 +65,9 @@ Status: proposed — A 批 / M6 / B 批 / T1 / T2 / C2 / C3 / 任务作用域 �
 
 ### B 批：行为质量条款（纯提示词 / schema 文本，零架构）
 
-全部写进 `directions.rs` 既有常量或工具 description，**不新增系统提示长度**（净变化目标 ≤ +1,200 字符，且 A 批 M6 拆层后有腾挪空间）。
+全部写进 `directions.rs` 既有常量或工具 description，**不新增系统提示长度**（原目标 ≤ +1,200 字符，且 A 批 M6 拆层后有腾挪空间）。
+
+> 目标 vs 实际（2026-10-23 验收实测）：三条**新增** always-on 块合计 **2,435 字符**（B1 832 + B4 737 + B5 866），仅 B4+B5 就已超过原定 1,200 的上限。因为它们在 stable 层、每轮零边际成本，绝对增量不再是「每轮付的钱」；但「≤1,200」这个当初的预算约束**没有守住**，不要再被引用为已达成。
 
 | 措施 | 内容要点 | 依据 | 落点 |
 |---|---|---|---|
@@ -138,7 +140,7 @@ M6 原提案只有一句「把 always-on 的 10,313 字符移进 stable 层」�
 | 措施 | 做法 | 落点 |
 |---|---|---|
 | **M6a** 工具名清单从 stable 层**移到系统提示词尾部** | 它是每轮都变的块，在中间会作废其后所有字节；放尾部只作废尾部 | `prompt_assembly.rs`（`build_system_prompt` / `build_system_prompt_with_tool_errors` 两处） |
-| **M6b** 10 个无条件 always-on 块从 per-turn 的 `directions` 层搬进 **stable 层** | 内容是编译期常量、路由无条件，每轮重算毫无收益 | `directions.rs::collect_stable_guidance` |
+| **M6b** 10 个无条件 always-on 块从 per-turn 的 `directions` 层搬进 **stable 层**（B 批又加了 3 个，现为 **13 个 / 12,553 字符**；M6 当时的 10 个实测 **10,118 字符**） | 内容是编译期常量、路由无条件，每轮重算毫无收益 | `directions.rs::collect_stable_guidance` |
 | **M6c** stable 缓存键从「工具名有序哈希」换成「`has_tools` 布尔 + 覆写文件指纹」 | 清单搬走后，工具**集合**不再影响 stable 文本，只剩协议标记里的一个布尔；而 stable 层现在渲染了 guidance 块，覆写文件被改必须能失效缓存 | `agent_helpers.rs::compute_prompt_cache_key` |
 
 **M6c 的覆写失效**：`$HERMIX_HOME/guidance/*.md` 可以在会话中途替换 guidance 块。stable 层缓存的是渲染结果，所以覆写文件被改后必须让缓存失效——做法是把 guidance 目录里每个文件的 `(名字, mtime, 大小)` 哈希进缓存键，每轮一次 `stat`，与原本 per-turn 覆写路径的成本相同（原来也是每块一次 `stat`）。
@@ -146,6 +148,8 @@ M6 原提案只有一句「把 always-on 的 10,313 字符移进 stable 层」�
 **留在 per-turn 层的两个 always-on 块**：`skill_usage`（tools≠∅ 才注入）与 `tool_discovery`（`tool_describe` 在场才注入）——它们**内容**是常量，但**是否出现**取决于本轮路由出的工具集，搬进 stable 层就会对没有这些工具的会话说废话。
 
 **M6 的净效果**：stable 层从 13,428 → 约 23,300 字符且**完全 turn-invariant**（工具集变化不再影响它），每轮变动的区域从 19,628 缩到约 9,700 字符，缓存失效点后移约 10K 字符。
+
+> 口径说明（2026-10-23 验收实测）：上面 23,300 是**估算**（由 13,428 + 块体推算），没有跑装配取真值。可实测的是块体本身：M6 搬的 10 个块合计 **10,118 字符**，B 批新增 3 个块合计 **2,435 字符**，13 个块合计 **12,553 字符**。笔记里曾经把「13 个块」和「10,227 字符」（当时的 10 个块口径）并列，是两个口径混用。
 
 **M6 修好了 A2 的一个副作用**：A2 把工具集加进 stable 缓存键是为了修「清单与实际 tools 数组不一致」；清单搬去尾部后它本来就每轮新鲜，**工具集对 stable 文本不再有任何影响**，所以键里换成布尔即可——正确性靠「清单永远新鲜」保证，而不是靠「每次都让缓存失效」。
 
@@ -195,11 +199,34 @@ M6 原提案只有一句「把 always-on 的 10,313 字符移进 stable 层」�
 | **系统提示确实送出、确实计量、确实可缓存** | 58,000 字符 → 12,068 token；重复请求 12,032（99.7%），两次独立跑都复现 | **强** |
 | **位置决定代价**（块级前缀缓存） | 改系统提示**末尾**保留前缀；改**开头**作废 | **强**（机制层面） |
 | **工具数组位于缓存区尾部**，它自身约 512~640 token | 数组重排/换集合时的差值始终在这个量级 | **中**（在噪声带边缘） |
-| ⇒ **M6 方向正确且已生效** | always-on 的 10,227 字符原本在「每轮变动点之后」，现在挪到了变动点**之前** | **强**（结构性：变动块必须在变动点之后） |
+| ⇒ **M6 方向正确且已生效** | always-on 的块体（M6 时 10 个 / 10,118 字符，现 13 个 / 12,553 字符）原本在「每轮变动点之后」，现在挪到了变动点**之前** | **强**（结构性：变动块必须在变动点之后） |
 | ⇒ **T1 / T2 值得做** | T2 避免的代价是 context 层的 35,552 字符（≈8,000 token），远高于噪声带；T1 的差值与噪声同量级，但「同集合 → 同字节」**结构上不可能更差** | T2 强 / T1 中 |
 | **被推翻**：「工具集一变整个前缀作废」 | 第一次实验的 R3/R4 模式在复现时消失；差值始终只等于数组自身大小 | — |
 | **被推翻**：「这个网关会丢弃系统提示」 | 只对顶层 `system` 字段成立；我们用的是 messages 条目，完好 | — |
 
+
+### 用户自有 provider 复测（MiniMax，2026-10-24）
+
+用用户自己配置的 `minimax`（`--provider minimax --model MiniMax-M3`，`api.minimax.chat/v1`）复跑同一套探针。这家**稳定、无噪声**（同一 body 第二次起 100% 命中，且跨运行保持），因此单次即可判读：
+
+| 探针（该 body **首次**出现） | prompt | cached | 读法 |
+|---|---|---|---|
+| 同一请求（首次 → 第二次） | 12,207 | 128 → **12,206（99.99%）** | 上限就是 100% |
+| 系统提示 + 8 工具 | 13,378 | 13,377（99.99%） | 我们真实的传输形态可缓存 |
+| 工具数组**重排** | 5,362 | **4,204（78.4%）** | 只丢工具块 ≈1,158 token（21.6%） |
+| 工具数组**换集合** | 5,363 | **5,077（94.7%）** | 只丢一个工具 ≈285 token |
+| 系统提示**末尾追加** | 5,365 | **128** | **整条系统提示作废** |
+| 系统提示**开头插入** | 5,365 | **128** | 同上 |
+| 系统提示**中间改一个空格** | 4,192 | **128** | 同上 |
+| 系统提示之后**追加一条消息** | 4,217 | 4,190（99.4%） | 系统块不受影响 |
+| 再插一条 system 消息 | 4,194 | **128** | system 组整体参与缓存键 |
+
+**结论（与 kilo 的"前缀缓存"不同）**：MiniMax 的缓存单位是**消息块 + 内容寻址**，不是 token 前缀。于是：
+
+- **M6 在这家上收益为零**：把 10K 字符在系统提示内部搬家，整条系统提示要么全中要么全丢，搬到哪里都一样。
+- **T2 在这家上收益也为零**：R5 就是"末尾追加"，和 R8"开头插入"结果相同（128）。
+- **T1 是唯一有收益的**：工具数组是独立块，重排付 1,158 token，排序后同集合同字节就不再付。
+- **下一个杠杆因此换了**：不是"把变动块往后挪"，而是"**让整条系统提示逐字节不变**"——任何每轮必变的内容（时间戳、工具清单、Tool Failures、memory 摘要）都不能留在系统提示里，否则这家每次全量重算。
 
 ### 由此得到的下一个杠杆
 
@@ -219,7 +246,7 @@ M6 原提案只有一句「把 always-on 的 10,313 字符移进 stable 层」�
 | 措施 | 做法 | 依据 |
 |---|---|---|
 | **T1** 工具数组按名排序（路由之后） | 让数组字节成为工具**集合**的纯函数 | 结构性：同集合 → 同字节不可能更差；实测差值与噪声同量级，故不夸大收益 |
-| **T2** `## Tool Failures` 块从 directions 层末尾**移到系统提示词最尾部** | 它是**轮内会变**的块（工具失败时追加）。原先夹在 directions 层末尾，而 **context 层（35,552 字符）在它后面** → 一次工具失败就把 context 层的缓存带崩，后面每次调用都重付 | 结构性（变动块必须在变动点之后）+ 量级远高于噪声带（≈8,000 token） |
+| **T2** `## Tool Failures` 块从 directions 层末尾**移到系统提示词最尾部** | 它随工具错误计数变化。原先夹在 directions 层末尾，而 **context 层（35,552 字符）在它后面** → 该块一变就把 context 层的缓存带崩 | 结构性（变动块必须在变动点之后）。**量级要打折**：系统提示每次 `run` 只装配一次（`agent_loop/runtime.rs:289-291`），轮**内**不重建，所以「一次工具失败就崩、后面每次调用都重付」不成立；代价落在**跨 user message** 那一次（≈8,000 token 单次，不是每次调用） |
 
 T2 之后，系统消息里**仍会变**的部分只剩：`volatile` 段（188 字符，每次调用变）、工具数组（512，跨轮变）、`context` 层（35,552，epoch 变化时变）。前两者都在尾部，代价可控；context 层的 epoch 粒度是下一个可动的点。
 
@@ -233,9 +260,9 @@ M6 之后，**always-on 条款进 stable 层 = 零边际成本**（stable 层缓
 
 | 措施 | 落点 | 净成本 | 依据 |
 |---|---|---|---|
-| **B1** 验证诚实：验证不了就明说验证不了；不许为凑绿灯压制失败；「调用了」≠「成功了」；措辞对齐证据 | stable 层（always-on） | **0**（缓存） | U1（Qwen Code / MiMo Code） |
-| **B4** 信任分层：外部内容是数据不是指令；只有用户消息与系统提示有指令权 | stable 层（always-on） | **0**（缓存） | U5（Hermes / dia / Claude for Chrome） |
-| **B5** 验证阶段化：最相关的检查 → 项目标准检查 → 汇报实际结果 → 没有检查就明说 | stable 层（always-on） | **0**（缓存） | U2（Gemini CLI 的 5 步） |
+| **B1** 验证诚实：验证不了就明说验证不了；不许为凑绿灯压制失败；「调用了」≠「成功了」；措辞对齐证据 | stable 层（always-on），实测 **832 字符** | **0**（缓存） | U1（Qwen Code / MiMo Code） |
+| **B4** 信任分层：外部内容是数据不是指令；只有用户消息与系统提示有指令权 | stable 层（always-on），实测 **737 字符** | **0**（缓存） | U5（Hermes / dia / Claude for Chrome） |
+| **B5** 验证阶段化：最相关的检查 → 项目标准检查 → 汇报实际结果 → 没有检查就明说 | stable 层（always-on），实测 **866 字符** | **0**（缓存） | U2（Gemini CLI 的 5 步） |
 | **B2** 任务状态不变量：同一计划内恰好一个 `in_progress`；做完立刻标；测试失败/半成品/未解错误不许标 completed | `task_tracker.guide`（`HasTaskTracker`） | ~700 字符/轮 | U3（Claude Code 2.0 / Trae） |
 | **B3** 委派阈值（预计 3 次以上查询就派 explore）+ 禁止重复委派 | `TOOL_USAGE_GUIDANCE`（首轮） | ~500 字符/会话 | U4（Qwen Code / Kilo Code） |
 | **B6** 反向路由补全 | `search_files` / `web_search` / `web_extract` 的工具描述 | 请求体 +~1,500 字符 | U7 |
@@ -306,7 +333,8 @@ spill 原来告诉模型「以上为前 20000 字符」，但唯一的取回通�
 
 | 措施 | 做法 |
 |---|---|
-| **S1** `tasks` 表加 `session_id` 列 | 带列迁移（`ensure_column`，`CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列） |
+| **S1** `tasks` 表加 `session_id` 列 | 带列迁移（`ensure_column`，`CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列）。**第一版有致命顺序错**：`CREATE INDEX ... ON tasks(session_id)` 和建表放在同一个 `execute_batch` 里、排在 `ensure_column` 之前 ⇒ 旧表上建索引直接报 `no such column`，`ALTER` 永不执行，且调用方 `let _ = ensure_schema()` 把错误吞了 ⇒ 所有 `task_*` 查询运行期失效。修复：索引挪到补列之后单独建；`session_persistence` 的建表 DDL 同步补列；错误改为 `tracing::error!`；补一条「旧表 10 列 → ensure → 可读写 + 索引存在」的迁移测试 |
+| **S6** 未归属任务可被接手 | `task_update` 遇到 `session_id IS NULL` 的老任务时先 `claim`（`WHERE session_id IS NULL` 由 SQLite 保证只认领一次），属于别会话的任务直接拒绝。没有这条时老任务是「可见但永远不可动」的死数据 |
 | **S2** `task_create` 打标 | session id 来自 `params["_session_id"]`——调度器本来就会注入（`registry.rs::inject_session_id`） |
 | **S3** `task_list` 按会话过滤 | `session_id = ?2 OR session_id IS NULL`：**本会话的 + 尚未归属的**。老任务不会凭空消失 |
 | **S4** 每条任务带 `mine` 标记 | 模型据此分辨「哪些是我的」；`TASK_TRACKER_GUIDANCE` 同步加了这条规则 |
@@ -325,7 +353,7 @@ spill 原来告诉模型「以上为前 20000 字符」，但唯一的取回通�
 | 措施 | 做法 |
 |---|---|
 | **C2a** 摘要追加任务树小节 | `ContextCompressor` 持有可选的 `TaskTreeSource`（注册表 + session id），`generate_summary` 在拿到 LLM 摘要后追加 `## Task Tree (authoritative)` 小节 |
-| **C2b** 走 `task_list` 工具取树 | 不是另开一条读库路径，而是**调用模型自己用的那个 `task_list` 工具**（`dispatch_async_with_context`）⇒ 注入的和模型看到的**必然一致**，不会出现「摘要里的任务列表 ≠ 模型自己查到的」 |
+| **C2b** 走 `task_list` 工具取树 | 不是另开一条读库路径，而是调用 `task_list` 工具本身。**第一版这里写错了**：它用的是 `dispatch_async_with_context`，而 `_session_id` 的注入只发生在 `dispatch_with_context`（`registry.rs:722-730`）⇒ 工具收到 `None`，返回**全局列表**、`mine` 判断退化成「未归属 == 无会话」，标记完全反了。修复：两条派发路径都注入（`registry.rs:799`），并把「摘要里的任务列表 = 模型自己查到的」钉成断言 |
 | **C2c** 只列未完成的任务 | `completed` / `archived` 不列（对下一步没有信息量）；`pending` / `planning` / `in_progress` / `failed` 列 |
 | **C2d** 幂等 | 追加前先剥掉上一次注入的小节 —— 二次压缩会把**上一次摘要**（已含小节）再总结一遍，不剥就会出现两份 |
 | **C2e** 上限 30 行 | 小节不能吃掉摘要的 token 预算（预算是按对话复盘算的） |
@@ -363,6 +391,22 @@ spill 原来告诉模型「以上为前 20000 字符」，但唯一的取回通�
 | 全量工具常驻 | 我方 109 个工具是桌面形态（浏览器 / 办公 / 媒体 / 智能家居）的体量优势，不适用 CLI 的 8~29 工具假设 |
 | 逐字搬运上游条款 | 上游是泄露 / 提取物，措辞不保证原版；且中英混杂会破坏我方提示词的单一语言风格。所有采纳项按我方语境重写 |
 | 逐模型一套提示词 | 上游 OpenCode 同一产品内两套完全不同 prompt 家族，边界随模型漂移，不可维护。我方按**模型族**路由已够 |
+
+## 独立验收及其修复（2026-10-23 晚）
+
+第三方逐条证伪后，本批有 2 个真缺口和 5 处「宣称与实际不符」，已全部修复：
+
+| # | 问题（验收结论） | 修复落点 |
+|---|---|---|
+| 1 | **任务工具全线失效**：建索引排在补列之前 ⇒ 旧表/新库（`session_persistence` 先建表且无该列）都报 `no such column`，`ALTER` 不执行，错误被 `let _` 吞掉 | `hermix-task/src/repository.rs`（索引后置）、`session_persistence/schema.rs`（建表补列）、`hermix-server/src/state.rs`（错误可见）、迁移测试 |
+| 2 | **C2 摘要拿到全局任务列表且 `mine` 反转**：`dispatch_async_with_context` 不注入 `_session_id` | `hermix-tools/src/registry.rs`（两条派发路径一致注入）+ 摘要测试改为断言收到的 session |
+| 3 | **advisory 排在它所批评的回复之前**（闸门在 assistant 落库前注入） | `acceptance_gate.rs`（`queue_advisory` 队列）、`session_lifecycle.rs`（`flush_acceptance_advisory`）、`run_loop.rs` 4 个落点（run/run_stream × finalize/continue） |
+| 4 | **`is_spilled` 用中文短语「已落盘」当哨兵** ⇒ 正文含该词的超长结果被判为已落盘、跳过落盘 | `hermix-tools/src/spill.rs`（哨兵改 `[[hermix-spill:`）+ 回归测试 |
+| 5 | **A2 误报**：`已{verb}的` 定语与「删除的文件还能恢复吗？」这类问句都凑齐三信号 | `acceptance_gate.rs`（定语/反问排除；问句且无祈使框架不算动作请求） |
+| 6 | **不 load-bearing 的测试**：双落盘的第二个 guard 无覆盖；「不重复注入」实为第 2 条的克隆；注册表常量自证；13 个块只测 4 个 | `tool_result_processor.rs`（第二落盘点回归）、`tests/acceptance_gate_wiring.rs`（改测注入顺序 + 增加问句误报用例）、`result_budget.rs`（改用真实默认值）、`prompt_assembly.rs`（13 块逐一探针） |
+| 7 | **老任务永久孤儿**：`mine=false` 且无认领路径 | `TaskTrackerBackend::claim` + `task_update` 自动接手/跨会话拒绝、`hermix-task` 的 `claim`、`TASK_TRACKER_GUIDANCE` 三态说明 |
+
+状态：C2 已随 `79f89827` 入库（它把 `local_agent_service.rs` 里的 `progress_cb` 接线一并带了进来，提交范围比 C2 大）；上表 7 项修复在本次验收会话的**工作区**里，尚未提交。C1（Verify 态）与 B7/B8 维持原决定。
 
 ## Alternatives considered
 

@@ -256,12 +256,15 @@ async fn no_advisory_for_a_question_that_merely_mentions_completion() {
 }
 
 #[tokio::test]
-async fn advisory_does_not_accumulate_across_the_session() {
-    // The advisory is per qualifying turn, not per call: once a tool
-    // has run, the session has tool evidence and the check is silent
-    // for the rest of the run.
+async fn advisory_lands_after_the_reply_it_refers_to() {
+    // The gate runs inside `process_post_response`, which happens
+    // **before** the assistant reply is committed to the context
+    // (`prepare_assistant_turn` is what pushes it). Injecting from
+    // inside the gate put the reminder — "your previous reply claimed
+    // an action" — in front of the very reply it criticises. The loop
+    // must flush it after the commit.
     let calls = Arc::new(AtomicUsize::new(0));
-    let provider = Arc::new(ToolThenTextProvider {
+    let provider = Arc::new(TextOnlyProvider {
         text: COMPLETION_CLAIM.to_string(),
         calls: calls.clone(),
     });
@@ -272,15 +275,55 @@ async fn advisory_does_not_accumulate_across_the_session() {
         .await
         .expect("agent loop should succeed");
 
+    let messages = &result.messages;
+    let advisory_at = messages
+        .iter()
+        .position(|m| {
+            m.role == hermix_core::MessageRole::System
+                && m.content
+                    .as_deref()
+                    .map(|c| c.contains(ADVISORY_MARKER))
+                    .unwrap_or(false)
+        })
+        .expect("the qualifying turn must produce an advisory");
+    let claim_at = messages
+        .iter()
+        .position(|m| {
+            m.role == hermix_core::MessageRole::Assistant
+                && m.content
+                    .as_deref()
+                    .map(|c| c.contains(COMPLETION_CLAIM))
+                    .unwrap_or(false)
+        })
+        .expect("the reply the advisory talks about must be in the context");
+
+    assert!(
+        advisory_at > claim_at,
+        "advisory (index {advisory_at}) must come *after* the reply it refers to (index {claim_at})"
+    );
+}
+
+#[tokio::test]
+async fn no_advisory_when_the_user_only_asked_about_a_state() {
+    // 「删除的文件还能恢复吗？」 names a mutating verb but asks a
+    // question, and the reply *describes* deleted files ("已删除的文件…")
+    // instead of claiming the assistant deleted anything. All three
+    // signals used to line up here and produce a baseless advisory.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = Arc::new(TextOnlyProvider {
+        text: "已删除的文件通常可以从回收站恢复。".to_string(),
+        calls: calls.clone(),
+    });
+    let engine = AgentLoop::new(config(), Arc::new(registry_with_echo_tool()), provider);
+
+    let result = engine
+        .run(vec![Message::user("删除的文件还能恢复吗？")], None)
+        .await
+        .expect("agent loop should succeed");
+
     let found = advisories(&result.messages);
     assert!(
         found.is_empty(),
-        "the advisory must not repeat once tool evidence exists, got {found:?}"
-    );
-    // And the run really did make more than one LLM call, otherwise
-    // the assertion above would pass vacuously.
-    assert!(
-        calls.load(Ordering::SeqCst) >= 2,
-        "expected a tool turn followed by a reply turn"
+        "a question about state must not be treated as an action request, got {found:?}"
     );
 }

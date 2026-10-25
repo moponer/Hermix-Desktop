@@ -250,6 +250,16 @@ pub struct AcceptanceGate {
     consecutive_rejections: u32,
     /// Configuration.
     config: GateConfig,
+    /// Advisory waiting for a place in the context.
+    ///
+    /// It is **queued**, not injected on the spot: the gate runs inside
+    /// `process_post_response`, which happens *before* the assistant
+    /// reply is committed to the context (`prepare_assistant_turn` is
+    /// what pushes it). Injecting there put the reminder — "your
+    /// previous reply claimed X" — *in front of* the very reply it is
+    /// talking about. The loop flushes it right after the assistant
+    /// message lands.
+    pending_advisory: Option<String>,
 }
 
 impl AcceptanceGate {
@@ -263,12 +273,25 @@ impl AcceptanceGate {
         Self {
             consecutive_rejections: 0,
             config,
+            pending_advisory: None,
         }
     }
 
     /// Reset the rejection counter (call on successful acceptance).
     pub fn reset_rejections(&mut self) {
         self.consecutive_rejections = 0;
+    }
+
+    /// Queue an advisory for the loop to inject after the assistant
+    /// reply has been committed to the context.
+    pub fn queue_advisory(&mut self, text: String) {
+        self.pending_advisory = Some(text);
+    }
+
+    /// Take the queued advisory, if any. `None` means there is nothing
+    /// to inject (the usual case).
+    pub fn take_pending_advisory(&mut self) -> Option<String> {
+        self.pending_advisory.take()
     }
 
     /// Get the current number of consecutive rejections.
@@ -643,26 +666,80 @@ const ACTION_PAST_EN: &[&str] = &[
 ];
 
 /// Does the user's message ask for a mutating action?
+///
+/// A **question** that merely mentions the verb is not a request: 删除的
+/// 文件还能恢复吗？ / 文档保存了吗？ both name an action without asking
+/// for one, and the natural reply describes state (已删除的文件…). In
+/// that case an imperative frame is required (帮我 / 请 / please …).
 pub fn user_requests_action(text: &str) -> bool {
-    if ACTION_VERBS_ZH.iter().any(|v| text.contains(v)) {
+    let has_verb = if ACTION_VERBS_ZH.iter().any(|v| text.contains(v)) {
+        true
+    } else {
+        let words = ascii_words(text);
+        ACTION_VERBS_EN.iter().any(|v| words.iter().any(|w| w == v))
+    };
+    if !has_verb {
+        return false;
+    }
+    if is_question(text) && !has_imperative_frame(text) {
+        return false;
+    }
+    true
+}
+
+/// Interrogative framing (zh + en).
+fn is_question(text: &str) -> bool {
+    if text.contains('?') || text.contains('？') || text.contains('吗') {
+        return true;
+    }
+    if ["怎么", "如何", "为什么", "是否", "能否", "可不可以", "什么时候", "能不能"]
+        .iter()
+        .any(|k| text.contains(k))
+    {
         return true;
     }
     let words = ascii_words(text);
-    ACTION_VERBS_EN.iter().any(|v| words.iter().any(|w| w == v))
+    ["how", "what", "why", "whether", "does", "is", "can", "should"]
+        .iter()
+        .any(|k| words.iter().any(|w| w == k))
+}
+
+/// Imperative framing (zh + en) — "do this for me".
+fn has_imperative_frame(text: &str) -> bool {
+    if ["帮我", "请", "给我", "麻烦", "替我", "帮忙"]
+        .iter()
+        .any(|k| text.contains(k))
+    {
+        return true;
+    }
+    let words = ascii_words(text);
+    ["please", "can", "could", "would"]
+        .iter()
+        .any(|k| words.iter().any(|w| w == k))
 }
 
 /// Does the reply assert that such an action was performed?
 ///
 /// Chinese frames: `已{verb}` / `已经{verb}` / `{verb}了`.
 /// English frames: `successfully {past}` / `i've {past}` /
-/// `i have {past}` / `has been {past}` / `{past} successfully`.
+/// `i have {past}` / `{past} successfully`.
+///
+/// Two exclusions, both learned from false positives:
+/// - **Attributive** `已{verb}的…` describes a noun, it does not assert
+///   that the assistant did anything: 已删除的文件可以从回收站恢复。
+/// - **Interrogative** `{verb}了吗？/了？` asks, it does not claim.
+/// - English `has been {past}` is dropped: it is passive and routinely
+///   describes state in documentation ("the config has been updated").
 pub fn claims_completed_action(text: &str) -> bool {
     for verb in ACTION_VERBS_ZH {
-        if text.contains(&format!("已{verb}"))
-            || text.contains(&format!("已经{verb}"))
-            || text.contains(&format!("{verb}了"))
-        {
-            return true;
+        for frame in [
+            format!("已{verb}"),
+            format!("已经{verb}"),
+            format!("{verb}了"),
+        ] {
+            if let Some(hit) = matched_claim_frame(text, &frame) {
+                return hit;
+            }
         }
     }
     let lower = text.to_lowercase();
@@ -670,13 +747,36 @@ pub fn claims_completed_action(text: &str) -> bool {
         if lower.contains(&format!("successfully {past}"))
             || lower.contains(&format!("i've {past}"))
             || lower.contains(&format!("i have {past}"))
-            || lower.contains(&format!("has been {past}"))
             || lower.contains(&format!("{past} successfully"))
         {
             return true;
         }
     }
     false
+}
+
+/// Scan every occurrence of `frame`; return `Some(true)` if at least one
+/// occurrence is an assertion rather than an attributive/interrogative
+/// mention, `None` if the frame never occurs.
+fn matched_claim_frame(text: &str, frame: &str) -> Option<bool> {
+    let mut from = 0;
+    let mut seen = false;
+    while let Some(pos) = text[from..].find(frame) {
+        seen = true;
+        let end = from + pos + frame.len();
+        let tail = &text[end..];
+        let attributive = tail.starts_with('的');
+        // 「删除了吗？」 / 「删除了？」 ask; they do not claim.
+        let interrogative = tail.starts_with('吗')
+            || tail.starts_with('？')
+            || tail.starts_with('?')
+            || tail.starts_with("没有");
+        if !attributive && !interrogative {
+            return Some(true);
+        }
+        from = end;
+    }
+    seen.then_some(false)
 }
 
 /// Split ASCII words out of arbitrary text for token comparison.
@@ -920,6 +1020,35 @@ mod tests {
         assert!(claims_completed_action("Successfully created the report."));
         assert!(claims_completed_action("The file was successfully renamed."));
         assert!(!claims_completed_action("I will delete the temp files."));
+    }
+
+    /// The claim detector must not fire on attributive / interrogative
+    /// mentions. These are the exact inputs that made the production
+    /// profile inject an advisory with no basis: the user asked *about*
+    /// a deletion, and the reply *described* deleted files.
+    #[test]
+    fn attributive_and_interrogative_frames_are_not_claims() {
+        assert!(
+            !claims_completed_action("已删除的文件通常可以从回收站恢复。"),
+            "「已删除的X」是定语，不是完成声明"
+        );
+        assert!(!claims_completed_action("文件删除了吗？"), "反问不是声明");
+        // …while the real claim still fires.
+        assert!(claims_completed_action("已删除桌面上的临时文件，共 3 个。"));
+    }
+
+    /// A question that merely names the verb is not an action request.
+    /// Without this, 「删除的文件还能恢复吗？」 + 「已删除的文件…」 tripped
+    /// all three signals and produced a pointless advisory.
+    #[test]
+    fn a_question_that_mentions_the_verb_is_not_an_action_request() {
+        assert!(!user_requests_action("删除的文件还能恢复吗？"));
+        assert!(!user_requests_action("文档保存了吗"));
+        assert!(!user_requests_action("how do I update the config?"));
+        // An imperative still counts, with or without the question mark.
+        assert!(user_requests_action("帮我删除这些临时文件"));
+        assert!(user_requests_action("please delete the temp files"));
+        assert!(user_requests_action("帮我把配置更新一下"));
     }
 
     #[test]

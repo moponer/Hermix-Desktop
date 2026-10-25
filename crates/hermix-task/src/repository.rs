@@ -91,13 +91,22 @@ impl TaskRepository {
                 session_id      TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-            CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);
-            CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);"#,
+            CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);"#,
         )?;
         // Column migration: `CREATE TABLE IF NOT EXISTS` does not add
         // columns to an existing table, and every install that predates
         // the session column has a `tasks` table without it.
         Self::ensure_column(&conn, "tasks", "session_id", "TEXT")?;
+        // ★ The session index must be created **after** the column
+        // exists. It used to sit in the batch above, i.e. *before*
+        // `ensure_column` — and on a table without `session_id` (every
+        // pre-existing install, plus every fresh install, because
+        // `SessionPersistence::ensure_db` creates `tasks` without the
+        // column and runs first) `CREATE INDEX ... ON tasks(session_id)`
+        // fails with "no such column". `execute_batch` stops at the
+        // first error, so the `ALTER TABLE` never ran and every
+        // `task_*` query then failed at runtime.
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);")?;
         Ok(())
     }
 
@@ -244,6 +253,27 @@ impl TaskRepository {
             return Err(TaskRepositoryError::NotFound(id.to_string()));
         }
         Ok(())
+    }
+
+    /// Stamp the owning session onto a task that has none yet.
+    ///
+    /// Only `NULL` owners are claimable — a task already owned by another
+    /// session must not change hands by accident (`WHERE session_id IS
+    /// NULL` is the whole guard, evaluated by SQLite).
+    pub fn claim(&self, id: &str, session_id: &str) -> Result<Task, TaskRepositoryError> {
+        let conn = open_with_wal(&self.db_path)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let affected = conn.execute(
+            "UPDATE tasks SET session_id = ?2, updated_at = ?3 \
+             WHERE id = ?1 AND session_id IS NULL",
+            rusqlite::params![id, session_id, now],
+        )?;
+        if affected == 0 {
+            // Missing, or already owned by someone else. `NotFound` is
+            // the honest answer for both: nothing was claimed.
+            return Err(TaskRepositoryError::NotFound(id.to_string()));
+        }
+        self.get(id)
     }
 
     /// Delete a task by ID (hard delete).
@@ -484,6 +514,98 @@ mod tests {
         let pending = repo.list(Some(TaskStatus::Pending), None).unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].id, t2.id);
+    }
+
+    /// 老库升级：`CREATE TABLE IF NOT EXISTS` 不补列，而索引一旦引用尚不
+    /// 存在的列，`execute_batch` 就在建索引处失败 —— 排在它后面的
+    /// `ALTER TABLE` 永远不执行（调用方 `let _ = ensure_schema()` 还会把
+    /// 错误丢掉），此后每条 `task_*` 查询都在运行期报 no such column。
+    /// 这条测试先造一张没有 `session_id` 的旧表，再跑迁移。
+    #[test]
+    fn ensure_schema_migrates_a_legacy_tasks_table_without_the_session_column() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("legacy.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                r#"CREATE TABLE tasks (
+                    id              TEXT PRIMARY KEY,
+                    title           TEXT NOT NULL,
+                    workspace_path  TEXT NOT NULL,
+                    mode            TEXT NOT NULL DEFAULT 'craft',
+                    status          TEXT NOT NULL DEFAULT 'pending',
+                    parent_task_id  TEXT,
+                    context_json    TEXT NOT NULL DEFAULT '{}',
+                    result_refs_json TEXT NOT NULL DEFAULT '[]',
+                    created_at      INTEGER NOT NULL,
+                    updated_at      INTEGER NOT NULL
+                );
+                INSERT INTO tasks (id, title, workspace_path, created_at, updated_at)
+                VALUES ('old-1', 'legacy', '.', 1, 1);"#,
+            )
+            .unwrap();
+        }
+
+        let repo = TaskRepository::new(&path);
+        repo.ensure_schema().expect("老库升级不能失败");
+
+        // The legacy row survives, unclaimed, and stays readable.
+        let scoped = repo.list(None, Some("sess-1")).unwrap();
+        assert!(scoped.iter().any(|t| t.id == "old-1"), "老任务不能凭空消失");
+        assert!(
+            scoped.iter().all(|t| t.session_id.is_none()),
+            "迁移出来的老行必须是无归属状态"
+        );
+        assert!(repo.get("old-1").is_ok(), "按下标取值的 SELECT 必须能跑");
+
+        // Idempotent: duplicate column / duplicate index must not fire.
+        repo.ensure_schema().unwrap();
+
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='tasks'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "idx_tasks_session"),
+            "会话索引必须在补列之后建出来，实际：{names:?}"
+        );
+    }
+
+    /// A `NULL`-owned row is claimable exactly once; a row already owned
+    /// by another session must not change hands.
+    #[test]
+    fn claim_takes_over_only_unowned_tasks() {
+        let (repo, _tmp) = repo();
+        let unowned = Task::new("Orphan", "/ws", TaskMode::Craft);
+        let mut theirs = Task::new("Theirs", "/ws", TaskMode::Craft);
+        theirs.session_id = Some("sess-2".to_string());
+        repo.create(&unowned).unwrap();
+        repo.create(&theirs).unwrap();
+
+        let claimed = repo.claim(&unowned.id, "sess-1").expect("未归属任务可被接手");
+        assert_eq!(claimed.session_id.as_deref(), Some("sess-1"));
+        assert_eq!(
+            repo.get(&unowned.id).unwrap().session_id.as_deref(),
+            Some("sess-1"),
+            "接手后必须落库"
+        );
+
+        // Already owned → nothing changes.
+        assert!(repo.claim(&unowned.id, "sess-3").is_err());
+        assert_eq!(
+            repo.get(&unowned.id).unwrap().session_id.as_deref(),
+            Some("sess-1")
+        );
+        // Another session's task is not claimable at all.
+        assert!(repo.claim(&theirs.id, "sess-1").is_err());
+        assert_eq!(
+            repo.get(&theirs.id).unwrap().session_id.as_deref(),
+            Some("sess-2")
+        );
     }
 
     #[test]

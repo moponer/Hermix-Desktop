@@ -35,7 +35,14 @@ pub const SPILL_INLINE_CHARS: usize = 20_000;
 /// the file the first one had just written — with the *preview* in place
 /// of the full result — so the pointer the model was given led back to
 /// the preview. The retrieval path was a loop.
-pub const SPILL_POINTER_MARKER: &str = "已落盘";
+///
+/// It is a **machine token**, not prose. An earlier version matched the
+/// Chinese phrase `已落盘`, which any tool result can legitimately
+/// contain (a `git log -p` of the commit that introduced it, this very
+/// file, a grep for the feature): such a result looks "already
+/// spilled", so the spill is skipped and the oversized payload goes
+/// straight to the registry's unrecoverable middle-cut.
+pub const SPILL_POINTER_MARKER: &str = "[[hermix-spill:";
 
 /// Does this content already carry a spill pointer?
 pub fn is_spilled(content: &str) -> bool {
@@ -90,11 +97,12 @@ impl SpillSink {
             Ok(path) => {
                 self.evict_if_needed();
                 let omitted = total - head.chars().count();
+                let marker = SPILL_POINTER_MARKER;
                 if total_lines > 1 && head_lines > 0 {
                     // Line-addressable: hand back the exact offset.
                     let next_line = head_lines + 1;
                     format!(
-                        "{head}\n\n[... 完整结果 {total} 字符 / {total_lines} 行已落盘：{} ...]\n\
+                        "{head}\n\n{marker} 完整结果 {total} 字符 / {total_lines} 行]] 已落盘：{}\n\
                          以上是前 {head_lines} 行（共 {total_lines} 行），第 {next_line} 行起未展示。\n\
                          取回缺失部分：read_file(path=\"{}\", offset={next_line}, limit=200) —— \
                          按行号续读，逐段取回，不要一次性全读进上下文。",
@@ -106,7 +114,7 @@ impl SpillSink {
                     // budget): line addressing cannot help here, so fall
                     // back to reporting characters.
                     format!(
-                        "{head}\n\n[... 完整结果 {total} 字符已落盘：{} ...]\n\
+                        "{head}\n\n{marker} 完整结果 {total} 字符]] 已落盘：{}\n\
                          以上为前 {} 字符，其余 {omitted} 字符未展示。\n\
                          需要完整内容时用 read_file 读取该路径（配合 offset/limit 分段读），\
                          不要一次性全读进上下文。",
@@ -155,10 +163,11 @@ impl SpillSink {
         let path = self.write(&key, content).ok()?;
         self.evict_if_needed();
         let total = content.chars().count();
+        let marker = SPILL_POINTER_MARKER;
         if total_lines > 1 && head_lines > 0 {
             let next_line = head_lines + 1;
             Some(format!(
-                "{head}\n\n[... 完整结果 {total} 字符 / {total_lines} 行已落盘：{} ...]\n\
+                "{head}\n\n{marker} 完整结果 {total} 字符 / {total_lines} 行]] 已落盘：{}\n\
                  以上是前 {head_lines} 行（共 {total_lines} 行），第 {next_line} 行起未展示。\n\
                  取回缺失部分：read_file(path=\"{}\", offset={next_line}, limit=200) —— \
                  按行号续读，逐段取回，不要一次性全读进上下文。",
@@ -167,7 +176,7 @@ impl SpillSink {
             ))
         } else {
             Some(format!(
-                "{head}\n\n[... 完整结果 {total} 字符已落盘：{} ...]\n\
+                "{head}\n\n{marker} 完整结果 {total} 字符]] 已落盘：{}\n\
                  以上为前 {} 字符，其余 {} 字符未展示。\n\
                  需要完整内容时用 read_file 读取该路径（配合 offset/limit 分段读），\
                  不要一次性全读进上下文。",
@@ -354,7 +363,10 @@ mod tests {
         // The preview is whole lines only: it is a prefix of the
         // original AND the original's next character is a newline —
         // i.e. the cut fell on a line boundary, not inside a line.
-        let preview = out.split("\n\n[... 完整结果").next().unwrap();
+        let preview = out
+            .split(&format!("\n\n{SPILL_POINTER_MARKER}"))
+            .next()
+            .unwrap();
         assert!(body.starts_with(preview), "预览必须是原文的前缀");
         let next = &body[preview.len()..];
         assert!(
@@ -394,7 +406,10 @@ mod tests {
 
         // The line at that offset must be **exactly** the line after
         // the preview's last line — that is the whole contract.
-        let preview = out.split("\n\n[... 完整结果").next().unwrap();
+        let preview = out
+            .split(&format!("\n\n{SPILL_POINTER_MARKER}"))
+            .next()
+            .unwrap();
         let preview_last = preview.lines().last().expect("预览至少一行");
         let path = s.dir().join("call_offset.txt");
         let on_disk = std::fs::read_to_string(&path).unwrap();
@@ -424,6 +439,30 @@ mod tests {
         let out = s.maybe_spill("call_one", &body, 100);
         assert!(!out.contains("offset="), "单行结果不能报行 offset：{out}");
         assert!(out.contains("字符"), "单行结果必须回落到字符口径：{out}");
+    }
+
+    /// A payload that merely *mentions* the pointer text must still be
+    /// spilled. The marker used to be the prose phrase 「已落盘」, which
+    /// real output contains (a `git log -p` of the commit that
+    /// introduced it, this module's own source, a grep for the term):
+    /// such a result read as "already spilled", skipped the spill, and
+    /// went straight to the registry's unrecoverable middle cut.
+    #[test]
+    fn payload_mentioning_the_marker_still_spills() {
+        let s = sink("marker-prose");
+        let body = format!("{}已落盘\n", "x".repeat(30_000));
+        assert!(
+            !is_spilled(&body),
+            "散文里出现「已落盘」不构成落盘标记（哨兵必须是机器 token）"
+        );
+
+        let out = s.maybe_spill("call_prose", &body, 1_000);
+        assert!(is_spilled(&out), "含该短语的超长结果必须照常落盘：{out}");
+        assert_eq!(
+            fs::read_to_string(s.dir().join("call_prose.txt")).unwrap(),
+            body,
+            "落盘文件必须是完整原文"
+        );
     }
 
     #[test]

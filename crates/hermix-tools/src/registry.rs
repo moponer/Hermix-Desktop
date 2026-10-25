@@ -262,22 +262,27 @@ pub struct ToolRegistry {
     inner: Arc<RwLock<ToolRegistryInner>>,
 }
 
+/// Default registry-level result cap: the **outer safety net**, not a
+/// working budget.
+///
+/// It is the largest per-tool budget on purpose. When it was 50 000 —
+/// below `terminal`'s 60 000 and `read_file`'s 80 000 — the registry's
+/// middle-cut fired first, so the per-tool (spill-backed, recoverable)
+/// caps never bound anything and the cut that did fire discarded bytes
+/// nobody could get back.
+pub const DEFAULT_MAX_RESULT_CHARS: usize = crate::result_budget::READ_FILE_CHARS;
+
 impl ToolRegistry {
     /// Create a new empty registry with default global max result size.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(ToolRegistryInner {
                 tools: HashMap::new(),
-                // ★ The registry-level cap is the **outer safety net**,
-                // not the working budget. It used to be 50 000 — below
-                // `terminal`'s own 60 000 and `read_file`'s 80 000 — so
-                // the registry's middle-cut fired *first*: the per-tool
-                // budgets in `result_budget` never bound anything, and
-                // the cut that did fire was the one that discards the
-                // middle. It is now the largest per-tool budget, so the
-                // tool's own (recoverable, spill-backed) cap governs and
-                // the registry only catches runaway output.
-                global_max_result_size_chars: crate::result_budget::READ_FILE_CHARS,
+                // ★ See `DEFAULT_MAX_RESULT_CHARS`: this is the outer
+                // safety net, so it must not be smaller than any
+                // per-tool budget (it used to be 50 000, below
+                // `terminal` 60 000 / `read_file` 80 000).
+                global_max_result_size_chars: DEFAULT_MAX_RESULT_CHARS,
                 terminal_workspace: Arc::new(std::sync::RwLock::new(None)),
                 terminal_approval_ctx: Arc::new(std::sync::Mutex::new(
                     TerminalApprovalContext::default(),
@@ -797,6 +802,13 @@ impl ToolRegistry {
         };
 
         let params = Self::coerce_args(&schema, params);
+        // ★ Same injection as `dispatch_with_context`. It used to be
+        // missing here, so a caller that went through *this* path (the
+        // compaction summary's `task_list`, for one) saw no session: the
+        // tool fell back to the global list and computed `mine` against
+        // `None` — i.e. it reported "not this session" for this
+        // session's rows and "this session" for the unclaimed ones.
+        let params = Self::inject_session_id(params, &ctx.session_id);
 
         // Await inside the match so the `Arc<dyn ContextAware>` (ca)
         // stays alive for the duration of the future. Extracting the

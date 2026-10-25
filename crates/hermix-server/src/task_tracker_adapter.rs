@@ -108,6 +108,18 @@ impl TaskTrackerBackend for TaskTrackerBackendImpl {
         Ok(task_to_info(&task))
     }
 
+    async fn claim(
+        &self,
+        task_id: &str,
+        session_id: &str,
+    ) -> Result<TaskTrackerInfo, hermix_core::ToolError> {
+        let task = self
+            .service
+            .claim(task_id, session_id)
+            .map_err(map_error)?;
+        Ok(task_to_info(&task))
+    }
+
     async fn list(
         &self,
         status_filter: Option<&str>,

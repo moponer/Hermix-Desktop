@@ -473,6 +473,10 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                                 &response,
                                 &mut state.message_cache,
                             );
+                            crate::session_lifecycle::flush_acceptance_advisory(
+                                &mut ctx,
+                                &mut state.acceptance_gate,
+                            );
                             return Ok(self.finalize_agent_result(
                                 &ctx,
                                 total_turns,
@@ -509,6 +513,10 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 &mut ctx,
                 &response,
                 &mut state.message_cache,
+            );
+            crate::session_lifecycle::flush_acceptance_advisory(
+                &mut ctx,
+                &mut state.acceptance_gate,
             );
 
             // Truncated-args gate (same as run_stream): streaming can end
@@ -1353,6 +1361,10 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                                 &response,
                                 &mut state.message_cache,
                             );
+                            crate::session_lifecycle::flush_acceptance_advisory(
+                                &mut ctx,
+                                &mut state.acceptance_gate,
+                            );
                             self.persist_session_terminal(
                                 &ctx,
                                 session_id,
@@ -1392,6 +1404,10 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 &mut ctx,
                 &response,
                 &mut state.message_cache,
+            );
+            crate::session_lifecycle::flush_acceptance_advisory(
+                &mut ctx,
+                &mut state.acceptance_gate,
             );
             if response.finish_reason.as_deref() == Some("length")
                 && assistant_msg

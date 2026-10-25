@@ -192,6 +192,12 @@ impl TaskService {
         self.repo.list(status_filter, session_id).map_err(Into::into)
     }
 
+    /// Take over a task that no session owns yet (see
+    /// [`TaskRepository::claim`]).
+    pub fn claim(&self, id: &str, session_id: &str) -> Result<Task, TaskServiceError> {
+        self.repo.claim(id, session_id).map_err(Into::into)
+    }
+
     /// List child tasks of a parent.
     pub fn list_children(&self, parent_task_id: &str) -> Result<Vec<Task>, TaskServiceError> {
         self.repo

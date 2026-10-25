@@ -11,9 +11,10 @@
 //!    tool — only the **character budget handed to the model** lives here.
 //!
 //! The registry-level `max_result_size_chars` remains the outer safety net
-//! (default 50 000 in `ToolRegistry::new`, overridable per registration);
-//! these constants govern the point where a tool decides to stop *building*
-//! a result, which is earlier and cheaper than truncating afterwards.
+//! (default [`crate::registry::DEFAULT_MAX_RESULT_CHARS`], overridable per
+//! registration); these constants govern the point where a tool decides to
+//! stop *building* a result, which is earlier and cheaper than truncating
+//! afterwards.
 
 /// `read_file` body cap.
 ///
@@ -53,14 +54,28 @@ mod tests {
     }
 
     #[test]
-    fn budgets_exceed_the_registry_default() {
-        // A per-tool budget below the registry default would be dead code
-        // (the tool stops building before the registry would have cut it) —
-        // that is fine, but these particular tools are explicitly meant to
-        // use their own budget, so they must be at least the default.
-        const REGISTRY_DEFAULT: usize = 50_000;
-        assert!(READ_FILE_CHARS >= REGISTRY_DEFAULT);
-        assert!(TERMINAL_OUTPUT_CHARS >= REGISTRY_DEFAULT);
-        assert!(PDF_TEXT_CHARS >= REGISTRY_DEFAULT);
+    fn the_registry_default_is_the_outer_safety_net() {
+        // The registry cap must not preempt a per-tool budget: when it
+        // did (50 000 vs `terminal` 60 000 / `read_file` 80 000) the
+        // registry's unrecoverable middle-cut fired first and the
+        // spill-backed per-tool caps never bound anything.
+        //
+        // It compares against the **real** default now. The previous
+        // version asserted against a locally written `REGISTRY_DEFAULT =
+        // 50_000`, i.e. a constant that had silently drifted from the
+        // implementation: it stayed green after the default moved to
+        // 80 000 and could never catch a regression.
+        const REGISTRY_DEFAULT: usize = crate::registry::DEFAULT_MAX_RESULT_CHARS;
+        assert!(
+            REGISTRY_DEFAULT >= READ_FILE_CHARS,
+            "注册表默认 {REGISTRY_DEFAULT} 低于 read_file 预算 {READ_FILE_CHARS}"
+        );
+        assert!(
+            REGISTRY_DEFAULT >= TERMINAL_OUTPUT_CHARS,
+            "注册表默认 {REGISTRY_DEFAULT} 低于 terminal 预算 {TERMINAL_OUTPUT_CHARS}"
+        );
+        // `pdf` deliberately keeps its own, smaller cap — it stops
+        // building earlier, which the registry must not override.
+        assert!(PDF_TEXT_CHARS <= READ_FILE_CHARS);
     }
 }

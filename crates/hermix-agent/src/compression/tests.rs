@@ -465,6 +465,17 @@ use hermix_core::types::ContentPart;
             _status_filter: Option<&str>,
             session_id: Option<&str>,
         ) -> Result<Vec<hermix_tools::tools::task_tracker::TaskTrackerInfo>, hermix_core::ToolError> {
+            // ★ Load-bearing: the summary reads the tree through the
+            // `task_list` tool, so the session id has to survive the
+            // dispatch. It used to be dropped here (`None`), which made
+            // the summary list the global table and invert the
+            // "this session" marking — and the assertions below could
+            // not see it because this stub echoed back whatever it got.
+            assert_eq!(
+                session_id,
+                Some("sess-1"),
+                "task_list 必须收到注入的会话 id（否则摘要里是全局列表 + 归属反转）"
+            );
             let now = 0i64;
             Ok(vec![
                 hermix_tools::tools::task_tracker::TaskTrackerInfo {
@@ -548,9 +559,20 @@ use hermix_core::types::ContentPart;
             summary.contains("别的会话的任务"),
             "未归属/他会话的任务也要列出（模型才能分辨）"
         );
+        // The mark must land on the *right* row. Asserting only that
+        // "本会话" appears somewhere passed even when the marking was
+        // inverted, so it is pinned to the row it belongs to.
         assert!(
-            summary.contains("本会话"),
-            "必须标出哪些是本会话的"
+            summary.contains("[本会话] 收尾验收"),
+            "「本会话」标记必须落在本会话的任务上：{summary}"
+        );
+        let theirs = summary
+            .lines()
+            .find(|l| l.contains("别的会话的任务"))
+            .expect("他会话任务必须单独成行");
+        assert!(
+            !theirs.contains("本会话"),
+            "他会话的任务不能被标成本会话：{theirs}"
         );
     }
 

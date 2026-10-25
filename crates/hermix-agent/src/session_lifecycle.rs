@@ -644,7 +644,29 @@ fn run_acceptance_gate(
             advisory = %advisory,
             "acceptance_gate: advisory queued for the next turn"
         );
-        ctx.add_message(Message::system(message));
+        // ★ Queue, do not inject here. This runs inside
+        // `process_post_response`, which is called **before** the
+        // assistant reply is committed (`prepare_assistant_turn`).
+        // Injecting at this point put the reminder in front of the
+        // reply it criticises, so "上一回复声称已完成" pointed at the
+        // user's message. The loop flushes it right after the
+        // assistant message lands — see `flush_acceptance_advisory`.
+        gate.queue_advisory(message);
+    }
+}
+
+/// Put a queued acceptance advisory into the context.
+///
+/// Called by the loop **after** `prepare_assistant_turn`, i.e. after the
+/// assistant reply is in the context. A warning is a comment on that
+/// reply, so it has to follow it; injected earlier it would describe a
+/// message the model has not "said" yet in the transcript it reads.
+pub(crate) fn flush_acceptance_advisory(
+    ctx: &mut ContextManager,
+    gate: &mut crate::acceptance_gate::AcceptanceGate,
+) {
+    if let Some(text) = gate.take_pending_advisory() {
+        ctx.add_message(Message::system(text));
     }
 }
 

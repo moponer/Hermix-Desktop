@@ -568,10 +568,18 @@ impl SessionPersistence {
                 context_json    TEXT NOT NULL DEFAULT '{}',
                 result_refs_json TEXT NOT NULL DEFAULT '[]',
                 created_at      INTEGER NOT NULL,
-                updated_at      INTEGER NOT NULL
+                updated_at      INTEGER NOT NULL,
+                -- Owning session (conversation). Kept here as well as in
+                -- `hermix_task::TaskRepository::ensure_schema` because
+                -- whichever creator runs first decides the shape of the
+                -- table: this one runs at startup, before the task
+                -- repository, so leaving the column out made every fresh
+                -- install look like a legacy install to the migration.
+                session_id      TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
             CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
 
             -- Automation definition table: user-defined scheduled tasks
             -- (recurring via RRULE or one-shot). Decoupled from the

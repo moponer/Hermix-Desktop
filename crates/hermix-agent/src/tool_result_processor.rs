@@ -679,6 +679,41 @@ mod tests {
             .unwrap_or(false)
     }
 
+    /// ★ Regression for the **second** spill site.
+    ///
+    /// The budget layer (`budget::enforce_budget_with_spill`) spills
+    /// first, with the same `tool_call_id`. When this site spilled again
+    /// it overwrote the full result on disk with its own preview, so the
+    /// pointer the model was handed led back to the preview and the
+    /// missing bytes were gone. The guard is `!is_spilled(…)`; without it
+    /// the content comes back rewritten — this assertion catches that.
+    #[test]
+    fn an_already_spilled_result_is_not_spilled_again() {
+        let mut ctx = make_ctx();
+        let tc = make_tool_call("call_spilled");
+        let preview = format!(
+            "{}\n\n{} 完整结果 999999 字符 / 40000 行]] 已落盘：/tmp/spill/call_spilled.txt",
+            "line\n".repeat(5_000),
+            crate::spill::SPILL_POINTER_MARKER,
+        );
+        assert!(
+            preview.chars().count() > crate::spill::SPILL_INLINE_CHARS,
+            "precondition: the preview itself exceeds the inline ceiling (that is why it used to re-spill)"
+        );
+
+        push_tool_result(&mut ctx, &[tc], "call_spilled", &preview);
+
+        let pushed = ctx
+            .get_messages()
+            .last()
+            .and_then(|m| m.content.clone())
+            .unwrap_or_default();
+        assert_eq!(
+            pushed, preview,
+            "已落盘的预览不得在这里被二次落盘改写（否则完整结果被预览覆盖）"
+        );
+    }
+
     #[test]
     fn no_note_for_normal_success() {
         let ctx = run_inject(None);

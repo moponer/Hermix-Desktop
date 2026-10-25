@@ -60,6 +60,29 @@ pub trait TaskTrackerBackend: Send + Sync {
         status: &str,
     ) -> Result<TaskTrackerInfo, ToolError>;
 
+    /// Stamp `session_id` onto a task that nobody owns yet.
+    ///
+    /// Rows written before the session column existed have
+    /// `session_id = NULL`: they are visible in every session (so no
+    /// task silently disappears) but `mine: false` everywhere, so the
+    /// guidance "only touch `mine: true`" would make them permanently
+    /// untouchable — visible but dead. Touching one claims it.
+    ///
+    /// A task already owned by another session must **not** change
+    /// hands; the backend enforces that, not the model.
+    ///
+    /// Default: unsupported (a backend that cannot claim simply keeps
+    /// the old behaviour). Overridden by the server adapter.
+    async fn claim(
+        &self,
+        _task_id: &str,
+        _session_id: &str,
+    ) -> Result<TaskTrackerInfo, ToolError> {
+        Err(ToolError::ExecutionFailed(
+            "this backend cannot claim tasks".into(),
+        ))
+    }
+
     /// List Tasks, optionally filtered by status.
     ///
     /// `session_id` scopes the list to that session plus the tasks not
@@ -319,6 +342,39 @@ impl ToolHandler for TaskUpdateHandler {
             .get("status")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'status' parameter".into()))?;
+
+        // ★ Ownership. Tasks created before the session column existed
+        // are `NULL`-owned and show up as `mine: false` in every
+        // session; touching one takes it over (otherwise they are
+        // visible forever and usable never). A task owned by a
+        // *different* session is refused: `task_list` hides those, so
+        // reaching one means the id came from somewhere else.
+        let session_id = params
+            .get("_session_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        if let Some(sid) = session_id {
+            if let Ok(existing) = self.backend.get(task_id).await {
+                match existing.session_id.as_deref() {
+                    None => {
+                        if let Err(e) = self.backend.claim(task_id, sid).await {
+                            tracing::debug!(
+                                task_id,
+                                error = %e,
+                                "task_update: claim of an unowned task failed; updating anyway"
+                            );
+                        }
+                    }
+                    Some(owner) if owner != sid => {
+                        return Err(ToolError::ExecutionFailed(format!(
+                            "任务 {task_id} 属于另一个会话（{owner}），不能在这里修改；\
+                             需要动它请在该会话里操作，或让用户新建一个任务"
+                        )));
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
 
         let task = self.backend.update_status(task_id, status).await?;
 
