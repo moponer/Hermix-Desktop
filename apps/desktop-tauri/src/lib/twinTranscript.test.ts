@@ -70,4 +70,21 @@ describe("mergeTranscript", () => {
     const live = [row("assistant", "出错了")];
     expect(mergeTranscript(history, live).map((r) => r.text)).toEqual(["早", "出错了"]);
   });
+
+  it("纯工具轮次降级为活动行（🔧 工具名），不再渲染成空白块", () => {
+    const rows = toTranscriptRows([
+      { role: "user", content: "继续去超星学习" },
+      { role: "assistant", content: "", tool_calls: [{ name: "browser_open" }, { function: { name: "browser_text" } }] },
+      { role: "assistant", content: "查看器已经启动了。" },
+      { role: "assistant", content: "" },
+    ]);
+    const acts = rows.filter((r) => r.kind === "activity");
+    // 只有一条带 tool_calls 的空轮生成活动行；无 tool_calls 的空轮被丢弃。
+    expect(acts.length).toBe(1);
+    expect(acts[0].text).toContain("🔧");
+    expect(acts[0].text).toContain("browser_open");
+    expect(acts[0].text).toContain("browser_text");
+    // 无可见文本的行不出现在转录里
+    expect(rows.some((r) => r.text.trim() === "")).toBe(false);
+  });
 });

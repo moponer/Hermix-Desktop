@@ -17,20 +17,46 @@ export const TRANSCRIPT_CAP = 6;
 export interface TranscriptRow {
   role: string;
   text: string;
+  /** 工具活动行（该轮只有 tool_calls、没有可见文本）——渲染为小字活动，
+   *  与正式回复区分。没有它，工具轮次在阿黎页就是一段空洞
+   *  （2026-10-25 用户实测截图的三个空块）。 */
+  kind?: "activity";
 }
 
 /** 单行最大字符数：面板最多两行，超长文本截断后仍是同一句。 */
 const ROW_MAX_CHARS = 300;
 
-/** 只取能直接读的对话行：user / assistant 的非空文本。工具卡、审批卡不在此面板。 */
+/** 只取能直接读的对话行：user / assistant 的非空文本；纯工具轮次降级为
+ *  活动行（🔧 工具名），不再渲染成空白块。 */
 export function toTranscriptRows(
-  messages: { role: string; content?: string | null }[],
+  messages: {
+    role: string;
+    content?: string | null;
+    tool_calls?: unknown[] | null;
+  }[],
 ): TranscriptRow[] {
   const rows: TranscriptRow[] = [];
   for (const m of messages) {
     if (m.role !== "user" && m.role !== "assistant") continue;
     const text = (m.content ?? "").trim();
-    if (!text) continue;
+    if (!text) {
+      // 纯工具轮次：提取本轮工具名，保留过程可见性。
+      // ChatMessage.ToolCall 是平铺 {name}；wire 形状是 {function:{name}}——两者兼容。
+      const names = (m.tool_calls ?? [])
+        .map((tc) => {
+          const t = tc as { name?: string; function?: { name?: string } } | null;
+          return t?.name ?? t?.function?.name;
+        })
+        .filter((n): n is string => Boolean(n));
+      if (names.length > 0) {
+        rows.push({
+          role: "assistant",
+          text: `🔧 ${names.join("、")}`,
+          kind: "activity",
+        });
+      }
+      continue;
+    }
     rows.push({
       role: m.role,
       text: text.length > ROW_MAX_CHARS ? `${text.slice(0, ROW_MAX_CHARS - 1)}…` : text,

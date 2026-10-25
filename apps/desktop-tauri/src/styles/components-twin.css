@@ -1599,6 +1599,12 @@
   color: var(--color-text-primary);
   white-space: pre-wrap;
 }
+/* 工具活动行：小字灰，交代"她在用什么"——工具轮次不再渲染成空洞。 */
+.twin-msg__act {
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+  font-family: var(--font-mono, monospace);
+}
 .twin-msg.is-user .twin-msg__tx {
   padding: 6px 10px;
   background: var(--color-bg-card);

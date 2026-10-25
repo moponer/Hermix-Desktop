@@ -21,6 +21,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownBody } from "./MarkdownBody";
+import { ThinkingDots } from "./ThinkingBubble";
 import { MissionBoardView } from "./MissionBoardView";
 import { AlertTriangle } from "lucide-react";
 
@@ -570,22 +571,29 @@ ${d.conclusions}`,
                     key={i}
                     className={`twin-msg${m.role === "user" ? " is-user" : ""}`}
                   >
-                    <span className="twin-msg__who">
-                      {m.role === "user" ? "你" : "阿黎"}
-                    </span>
-                    {m.role === "user" ? (
-                      <p className="twin-msg__tx">{m.text}</p>
+                    {m.kind === "activity" ? (
+                      <p className="twin-msg__act">{m.text}</p>
                     ) : (
-                      <MarkdownBody content={m.text} />
+                      <>
+                        <span className="twin-msg__who">
+                          {m.role === "user" ? "你" : "阿黎"}
+                        </span>
+                        {m.role === "user" ? (
+                          <p className="twin-msg__tx">{m.text}</p>
+                        ) : (
+                          <MarkdownBody content={m.text} />
+                        )}
+                      </>
                     )}
                   </div>
                 ))}
                 {twin.streaming ? (
                   <div className="twin-msg is-live">
-                    <span className="twin-msg__who">阿黎</span>
-                    <p className="twin-msg__tx">
-                      {twin.turn?.activity ? `正在用 ${twin.turn.activity}` : "正在执行"}
-                    </p>
+                    <ThinkingDots
+                      label={
+                        twin.turn?.activity ? `正在用 ${twin.turn.activity}` : "正在执行"
+                      }
+                    />
                   </div>
                 ) : null}
 
