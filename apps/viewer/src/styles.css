@@ -1205,7 +1205,7 @@ html, body, #root {
 }
 .ai-quick-btn:disabled { opacity: 0.5; cursor: default; }
 .ai-input-row {
-  display: flex; align-items: stretch; gap: 6px; padding: 8px 10px;
+  display: flex; align-items: flex-end; gap: 6px; padding: 8px 10px;
   margin-top: 6px; flex: none;
 }
 .ai-input {
@@ -1217,15 +1217,15 @@ html, body, #root {
   font-size: 13px; padding: 6px 8px;
   font-family: inherit;
   line-height: 1.5;
-  /* 高度由 autosize 管理（随内容增高、封顶 ~6 行），超限内部滚动。 */
+  /* 固定两行高，内容多时框内滚动——autosize 的测量在容器伸缩下不稳，
+     用户拍板固定大小。 */
+  height: 46px; min-height: 46px; max-height: 46px;
   overflow-y: auto;
-  display: block;
 }
 .ai-send {
   border: none; background: var(--accent); color: #fff;
-  border-radius: 8px; width: 34px; cursor: pointer;
-  /* 与输入框同高（stretch 跟随 autosize 的高度变化）。 */
-  align-self: stretch; height: auto;
+  border-radius: 8px; width: 34px; height: 46px; cursor: pointer;
+  flex: none;
   display: inline-flex; align-items: center; justify-content: center;
 }
 .ai-send:disabled { opacity: 0.5; cursor: default; }
