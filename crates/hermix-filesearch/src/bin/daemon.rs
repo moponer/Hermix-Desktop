@@ -84,6 +84,14 @@ fn main() {
     // （全盘 MFT 扫描期间实测能吃满一个核，用户直接感到卡顿）。
     lower_process_priority();
 
+    // serve 模式从第一毫秒起就不能亮黑框：宿主 runas 拉起 / 开机计划任务 /
+    // 用户双击都会给控制台子系统的 exe 一个控制台，而下面的快照装载要几十
+    // 秒——藏晚了 = 黑框挂半分钟，用户关掉它 = daemon 被杀、索引建不完
+    // （2026-10-25 用户实测的"灾难现场"）。stdio 模式（开发联调）不藏。
+    if serve {
+        hide_console_window();
+    }
+
     eprintln!("[filesearch] 数据目录：{}", data_dir.display());
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
@@ -104,6 +112,7 @@ fn main() {
     if serve {
         // 被提权拉起时的模式：跨提权边界无法继承 stdio 管道，
         // 改用 127.0.0.1 回环 + token 握手（endpoint.json 供宿主发现）。
+        // 控制台已在 ensure_started 之前藏掉（见上），装载期也不亮框。
         //
         // **单实例互斥**（2026-10-25）：server 与 viewer 两个宿主各自
         // ensure_helper，竞态下会拉起第二个实例——旧实例变孤儿（白吃
@@ -499,6 +508,24 @@ fn lower_process_priority() {
 #[cfg(not(windows))]
 fn lower_process_priority() {}
 
+/// 藏掉自己的控制台窗口（serve 模式专用）。没有控制台（被 CREATE_NO_WINDOW
+/// 拉起 / stdio 管道模式）时是空操作。与宿主侧 spawn_elevated 的 SW_HIDE
+/// 构成双保险——计划任务与双击路径没有宿主，全靠这里。
+#[cfg(windows)]
+fn hide_console_window() {
+    use windows_sys::Win32::System::Console::GetConsoleWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+    unsafe {
+        let hwnd = GetConsoleWindow();
+        if !hwnd.is_null() {
+            ShowWindow(hwnd, SW_HIDE);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn hide_console_window() {}
+
 /// 当前 exe 的绝对路径（任务计划指向它）。
 fn exe_path() -> std::path::PathBuf {
     std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("hermix-filesearch.exe"))
@@ -531,9 +558,15 @@ fn install_autostart_task(exe: &std::path::Path, data_dir: &std::path::Path) {
         q(&exe.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")),
         q(&format!("--serve --data-dir \"{}\"", data_dir.display())),
     );
-    let output = std::process::Command::new(&ps)
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output();
+    let mut command = std::process::Command::new(&ps);
+    command.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW：daemon 自己的控制台已藏，子进程也别再亮窗。
+        command.creation_flags(0x0800_0000);
+    }
+    let output = command.output();
     match output {
         Ok(out) if out.status.success() => {
             eprintln!("[filesearch] 开机自启已注册（计划任务 HermixFileSearch）。");
