@@ -132,7 +132,7 @@ function fmtGiB(bytes: number | null): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GiB`;
 }
 
-export function MissionBoardView() {
+export function MissionBoardView({ embedded = false }: { embedded?: boolean } = {}) {
   const [tab, setTab] = useState<BoardTab>("tickets");
   const [members, setMembers] = useState<MemberSummary[] | null>(null);
   const [roles, setRoles] = useState<RoleEntry[] | null>(null);
@@ -231,26 +231,11 @@ export function MissionBoardView() {
     return cols;
   }, [members]);
 
-  return (
-    <div className="flex h-full flex-col">
-      <PageHeader icon={<KanbanSquare className="icon-lg" />} title="任务台" count={members?.length ?? 0}>
-        <SegmentedControl
-          label="任务台视图"
-          as="tablist"
-          size="sm"
-          value={tab}
-          onChange={setTab}
-          options={[
-            { value: "tickets", label: `任务${members ? ` ${members.length}` : ""}` },
-            { value: "team", label: "团队" },
-            { value: "resource", label: "资源" },
-          ]}
-        />
-      </PageHeader>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-6">
-        <div className="mx-auto max-w-6xl">
-          {error && (
+  // 看板内容（工单/团队/资源 + 详情 Modal）：独立页与阿黎值守页「任务」
+  // 页签共用（总管方案 D8：任务台是阿黎能力的展示面，不是另一个应用）。
+  const inner = (
+    <>
+      {error && (
             <p className="mb-4 flex items-start gap-1.5 text-[length:var(--text-ui)] text-text-error">
               <CircleAlert className="icon-md mt-0.5 shrink-0" />
               <span>后端不可达：{error}</span>
@@ -467,9 +452,6 @@ export function MissionBoardView() {
               </div>
             )
           )}
-        </div>
-      </div>
-
       {/* 工单详情抽屉：判据 / 步骤日志 / 最终报告 / 评审证据 */}
       <Modal
         open={detail !== null || detailLoading}
@@ -539,6 +521,53 @@ export function MissionBoardView() {
           </div>
         )}
       </Modal>
+    </>
+  );
+
+  if (embedded) {
+    // 阿黎值守页中轴「任务」页签：窄容器、自带分段条与滚动。
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex h-10 shrink-0 items-center px-4">
+          <SegmentedControl
+            label="任务台视图"
+            as="tablist"
+            size="sm"
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: "tickets", label: `工单${members ? ` ${members.length}` : ""}` },
+              { value: "team", label: "团队" },
+              { value: "resource", label: "资源" },
+            ]}
+          />
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+          <div className="mx-auto max-w-5xl">{inner}</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <PageHeader icon={<KanbanSquare className="icon-lg" />} title="任务台" count={members?.length ?? 0}>
+        <SegmentedControl
+          label="任务台视图"
+          as="tablist"
+          size="sm"
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: "tickets", label: `任务${members ? ` ${members.length}` : ""}` },
+            { value: "team", label: "团队" },
+            { value: "resource", label: "资源" },
+          ]}
+        />
+      </PageHeader>
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-6">
+        <div className="mx-auto max-w-6xl">{inner}</div>
+      </div>
     </div>
   );
 }

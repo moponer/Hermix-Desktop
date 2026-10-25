@@ -21,6 +21,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownBody } from "./MarkdownBody";
+import { MissionBoardView } from "./MissionBoardView";
 import { AlertTriangle } from "lucide-react";
 
 import * as api from "../api";
@@ -57,7 +58,7 @@ interface TwinViewProps {
 type Mode = "watch" | "dispatch" | "summary";
 
 /** 中轴两态。数据态不是装饰：它承载「现在这一刻最该看的那个数」。 */
-type CenterMode = "chat" | "data";
+type CenterMode = "chat" | "data" | "tasks";
 
 const MODES: { id: Mode; label: string }[] = [
   { id: "watch", label: "盯住" },
@@ -514,6 +515,14 @@ ${d.conclusions}`,
             >
               数据
             </button>
+            <button
+              type="button"
+              className="twin-ctab"
+              aria-pressed={center === "tasks"}
+              onClick={() => setCenter("tasks")}
+            >
+              任务
+            </button>
             <span className="twin-ctabs__spacer" />
             {pending.length > 0 ? (
               center === "data" ? (
@@ -532,7 +541,7 @@ ${d.conclusions}`,
                 {presenceLine}
               </span>
             )}
-            {center === "data" ? (
+            {center !== "chat" ? (
               <button type="button" className="twin-ctab twin-ctab--back" onClick={goChat}>
                 回到对话
               </button>
@@ -684,6 +693,8 @@ ${d.conclusions}`,
                 </div>
               </form>
             </div>
+          ) : center === "tasks" ? (
+            <MissionBoardView embedded />
           ) : (
             <div className="twin-data">
               <div className="twin-ring">

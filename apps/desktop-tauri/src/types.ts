@@ -743,7 +743,7 @@ export interface PluginSettings {
   tool_code_exec: boolean;
 }
 
-export type NavPage = "chat" | "twin" | "mission" | "automation" | "experts" | "analytics" | "customapps" | "workbench" | "vault";
+export type NavPage = "chat" | "twin" | "automation" | "experts" | "analytics" | "customapps" | "workbench" | "vault";
 // ↑ "twin" 是助手阿黎的独立入口（components/TwinView.tsx）：三栏信息板而非
 //   对话流，所以它不能复用 "chat"。侧栏项见 Sidebar.tsx 的 NAV_ITEMS。
 // ↑ 无 "search"：搜索是动作不是页面，改由标题栏图标触发浮层

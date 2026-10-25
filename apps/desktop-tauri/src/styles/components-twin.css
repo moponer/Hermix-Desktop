@@ -1497,6 +1497,8 @@
 .twin-ctab {
   height: 24px;
   padding: 0 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
   font-size: var(--text-tiny);
   color: var(--color-text-tertiary);
   border: 1px solid transparent;
@@ -1521,7 +1523,11 @@
   gap: 6px;
   font-size: var(--text-tiny);
   color: var(--color-text-secondary);
-  max-width: 46ch;
+  /* 收缩让位给页签/按钮，但不折行——折行会把「对话/数据」压成竖排
+     （2026-10-25 用户实测截图）。省略号兜底。 */
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
