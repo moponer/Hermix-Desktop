@@ -721,7 +721,11 @@
     0 1px 3px rgba(0, 0, 0, 0.12);
   user-select: none;
   -webkit-user-drag: none;
+  /* 可拖（滚轮缩放 / 平移）。没有这个提示，用户放大后不知道能拖着看
+     边缘——"放大只能在区域内"的实际根源。 */
+  cursor: grab;
 }
+.preview-image-stage:active .preview-image-img { cursor: grabbing; }
 
 /* ── 状态：载入 / 错误 / 纯文本 ────────────────────────────── */
 .preview-state-center {

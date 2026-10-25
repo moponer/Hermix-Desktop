@@ -36,7 +36,7 @@
 
    ─────────────────────────────────────────────────────────────── */
 
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import type { CSSProperties } from "react";
 
 /** Per-extension visual: brand color + 1-3 char label.
@@ -330,10 +330,14 @@ export function FileTypeIcon({
   // "一部分重点加粗带背景色的特殊词汇……界面有点乱"）。
   const soft = variant === "soft";
 
-  // Per-icon gradient id.  Embedding the bg in the id avoids the
-  // "two PDF icons share a gradient" bug when the page has
-  // multiple artifacts of the same type.
-  const gid = `fti-${variant}-${label}-${bg}`.replace(/[^a-zA-Z0-9-]/g, "");
+  // Per-instance gradient id.  曾经按 (variant,label,bg) 生成——同一目录里
+  // 十个 PDF 就是十个相同 id 的 <linearGradient>，url(#…) 全解析到文档里
+  // 第一个实例；预览态下大图标网格被 display:none，那个「第一个实例」
+  // 不再渲染，渐变引用整体失效 → 列表图标只剩白色字母（浅色主题下 =
+  // 「图标看不见」）。id 必须每实例唯一，useId 保证。
+  // useId 返回值含 ':'（HTML id 合法，拼 URL 片段前保险去掉）。
+  const uid = useId().replace(/:/g, "");
+  const gid = `fti-${uid}-${variant}-${label}`.replace(/[^a-zA-Z0-9-]/g, "");
 
   return (
     <svg

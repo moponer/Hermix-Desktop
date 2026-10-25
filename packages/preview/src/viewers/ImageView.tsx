@@ -89,6 +89,7 @@ export function ImageView({
           className="head-action"
           onClick={() => pzRef.current?.reset()}
           aria-label="适应窗口"
+          title="适应窗口（双击图片也可在适应与 100% 间切换）"
         >
           <Maximize className="icon-md" />
         </button>
@@ -108,7 +109,20 @@ export function ImageView({
               draggable={false}
               onError={() => setFailed(true)}
               onClick={onOpenViewer}
-              style={{ cursor: onOpenViewer ? "pointer" : "default" }}
+              onDoubleClick={() => {
+                // 放大态 → 回适应；适应态 → 100% 实际像素。img 被
+                // max-width/max-height 压小过，实际大小 = naturalWidth
+                // 与当前盒宽之比，不能写死 1。
+                const pz = pzRef.current;
+                const img = imgRef.current;
+                if (!pz || !img || !img.clientWidth) return;
+                if (pz.getScale() > 1.05) {
+                  pz.reset();
+                } else {
+                  pz.zoom(Math.max(1, img.naturalWidth / img.clientWidth));
+                }
+              }}
+              style={{ cursor: onOpenViewer ? "pointer" : undefined }}
             />
           </div>
         )}
