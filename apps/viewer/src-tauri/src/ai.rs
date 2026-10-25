@@ -485,7 +485,20 @@ pub async fn chat(
                 else { format!("{}…", t.chars().take(300).collect::<String>()) }
             });
         return Err(match status {
-            401 | 403 => format!("AI 端点拒绝了请求（{status}）：{detail}"),
+            // 免费渠道（kilo 等）的凭据是主程序登录态派生的 token，过期时
+            // 端点回「Please sign in again」——报错带上指引，别让用户对着
+            // 一句英文猜该去哪登录。
+            401 | 403 => {
+                let hint = if detail.contains("sign in")
+                    || detail.contains("authentication")
+                    || detail.contains("token")
+                {
+                    "。该模型的凭据可能已过期：免费渠道类模型请回主程序重新登录后重试，或在上方下拉改选其它模型"
+                } else {
+                    ""
+                };
+                format!("AI 端点拒绝了请求（{status}）：{detail}{hint}")
+            }
             404 => format!("AI 端点路径不对（{url}）：{detail}"),
             429 => format!("AI 端点限流了（{status}）：{detail}"),
             _ => format!("AI 端点返回 {status}（{url}）：{detail}"),

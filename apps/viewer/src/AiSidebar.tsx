@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isImageExt } from "@hermix/preview";
+import { Bot, ChevronsRight } from "lucide-react";
 import {
   GENERAL_PROMPTS,
   IMAGE_PROMPTS,
@@ -156,18 +157,12 @@ export function AiSidebar({
     <aside className="ai-side">
       <div className="ai-head">
         <span className="ai-title">AI 助手</span>
-        {filePath && (
-          <span className="ai-file" title={filePath}>
-            {filePath.split(/[\\/]/).pop()}
-          </span>
-        )}
-        {/* 模型选择：inherit 模式列出主程序启用过的模型（跟随默认 + 手选）；
-            custom 模式没有清单（端点/模型在设置里手填），置灰显示生效值。
-            原来这条信息是头部下面一行只读文字——不能选，用户只能绕设置。 */}
-        <select
-          className={`ai-model-select${backend && !backend.ready ? " is-bad" : ""}`}
-          value={modelValue}
-          disabled={customMode || !aiSettings}
+        {/* 模型选择占标题栏剩余宽度：inherit 模式列出主程序启用过的模型
+            （跟随默认 + 手选）；custom 模式没有清单（端点/模型在设置里
+            手填），置灰显示生效值。文件名不占这里——标签上已有，空态里
+            也提示上下文。 */}
+        <span
+          className={`ai-model-wrap${backend && !backend.ready ? " is-bad" : ""}`}
           title={
             customMode
               ? "独立模型模式：端点与模型在 设置 → AI 助手 中配置"
@@ -175,26 +170,39 @@ export function AiSidebar({
                 ? `对话模型（生效：${backend.model}）`
                 : "对话模型"
           }
-          aria-label="对话模型"
-          onChange={(e) => void pickModel(e.target.value)}
         >
-          {customMode ? (
-            <option value="">{backend?.model || "独立模型"}</option>
-          ) : (
-            <>
-              <option value="">跟随主程序默认</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                  {m.isDefault ? "（默认）" : ""}
-                  {m.ready ? "" : "（不可用）"}
-                </option>
-              ))}
-            </>
-          )}
-        </select>
-        <button className="ai-close" onClick={onClose} aria-label="收起 AI 栏">
-          »
+          <Bot className="icon-sm" aria-hidden="true" />
+          <select
+            className="ai-model-select"
+            value={modelValue}
+            disabled={customMode || !aiSettings}
+            aria-label="对话模型"
+            onChange={(e) => void pickModel(e.target.value)}
+          >
+            {customMode ? (
+              <option value="">{backend?.model || "独立模型"}</option>
+            ) : (
+              <>
+                <option value="">跟随主程序默认</option>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                    {m.isDefault ? "（默认）" : ""}
+                    {m.ready ? "" : "（不可用）"}
+                  </option>
+                ))}
+              </>
+            )}
+          </select>
+        </span>
+        <button
+          type="button"
+          className="ai-close"
+          onClick={onClose}
+          aria-label="收起 AI 栏"
+          title="收起 AI 栏"
+        >
+          <ChevronsRight className="icon-sm" />
         </button>
       </div>
 
