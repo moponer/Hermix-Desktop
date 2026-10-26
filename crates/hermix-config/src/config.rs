@@ -559,6 +559,18 @@ pub struct LlmProviderConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub model_meta: HashMap<String, ModelCapabilities>,
 
+    /// 逐模型的上游说明（**免责 / 使用条款**），来自上游 `GET /models` 的
+    /// `description` 字段（免费渠道刷新时写入）。
+    ///
+    /// 为什么单独存：社区免费网关的**每个模型条目都自带逐条免责**，实测
+    /// Kilo 网关：`kilo-auto/free` 的描述里写着 "Prompts may be logged by
+    /// the upstream provider and used to improve their services. Not
+    /// suitable for production or sensitive data workloads."；NVIDIA 的
+    /// `:free` 端点则写明 "Trial use only"。这些条款只存在于上游清单的
+    /// description 里，不落盘 = 用户永远看不到自己同意了谁的条款。
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub model_notes: HashMap<String, String>,
+
     /// Optional context window override (tokens) used when a model served
     /// by this provider isn't covered by the static catalog and we have no
     /// per-model value (see `model_contexts`). When set, this value wins

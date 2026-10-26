@@ -161,7 +161,7 @@ fn archive_dir_for(hermix_home: &Path, now: &DateTime<Local>) -> PathBuf {
 fn session_index_path(hermix_home: &Path, session_id: &str) -> PathBuf {
     hermix_home
         .join("sessions")
-        .join(session_id)
+        .join(crate::agent_config::fs_safe_session_id(session_id))
         .join("archive-index.jsonl")
 }
 
@@ -232,7 +232,10 @@ pub fn append_rollup_archive(
     if originals.is_empty() {
         return;
     }
-    let path = hermix_home.join("sessions").join(sid).join("tool-rollup-archive.md");
+    let path = hermix_home
+        .join("sessions")
+        .join(crate::agent_config::fs_safe_session_id(&sid))
+        .join("tool-rollup-archive.md");
     if let Some(parent) = path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
             tracing::warn!(

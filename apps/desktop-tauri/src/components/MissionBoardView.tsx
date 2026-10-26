@@ -360,25 +360,32 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
                 )}
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
-                {COLUMNS.map((col, i) => (
-                  <section key={col.key} aria-label={col.title}>
-                    <h2 className="mb-2 flex items-center gap-2 text-[length:var(--text-ui)] font-semibold text-text-muted">
-                      {col.title}
-                      <span className="text-text-faint">{grouped[i].length}</span>
-                    </h2>
-                    <div className="flex flex-col gap-2">
-                      {grouped[i].length === 0 && (
-                        <div className="rounded-[var(--radius-md)] border border-border-subtle px-3 py-4 text-center text-[length:var(--text-meta)] text-text-faint">
-                          空
-                        </div>
-                      )}
-                      {grouped[i].map((m) => (
-                        <MemberCard key={m.member_id} m={m} onOpen={openDetail} onStop={stopMember} />
-                      ))}
-                    </div>
-                  </section>
-                ))}
+              /* 列数按**容器**宽度决定，不按视口。
+                 此前用 `lg:grid-cols-4`（视口断点）：值守页中轴只有 ~300px 宽，
+                 但窗口是 1280px → `lg:` 命中 → 四列硬塞进 300px → 每列 40px →
+                 中文逐字竖排（2026-10-25 用户实测截图）。这个布局里视口宽度与
+                 容器宽度不是一回事，断点必须按容器来（@container）。 */
+              <div className="@container">
+                <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-2 @5xl:grid-cols-4">
+                  {COLUMNS.map((col, i) => (
+                    <section key={col.key} aria-label={col.title}>
+                      <h2 className="mb-2 flex items-center gap-2 text-[length:var(--text-ui)] font-semibold text-text-muted">
+                        {col.title}
+                        <span className="text-text-faint">{grouped[i].length}</span>
+                      </h2>
+                      <div className="flex flex-col gap-2">
+                        {grouped[i].length === 0 && (
+                          <div className="rounded-[var(--radius-md)] border border-border-subtle px-3 py-4 text-center text-[length:var(--text-meta)] text-text-faint">
+                            空
+                          </div>
+                        )}
+                        {grouped[i].map((m) => (
+                          <MemberCard key={m.member_id} m={m} onOpen={openDetail} onStop={stopMember} />
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
               </div>
             )
           )}

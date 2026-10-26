@@ -88,4 +88,24 @@ describe("行内路径链接（PathLink）", () => {
     expect(html).toContain(">App.tsx<");
     expect(html).toContain("md-path-link--bare");
   });
+
+  it("整枚行内代码就是一个路径时退掉芯片，直接渲染成链接", () => {
+    // `` `App.tsx` ``（带反引号）与 App.tsx（字面量）此前是两种形态：
+    // 前者还是「药丸底里嵌下划线链接」的叠加态。现在统一为 PathLink。
+    const html = renderToStaticMarkup(
+      <>{linkifyChildren(<code className="md-inline-code">App.tsx</code>, noop)}</>,
+    );
+    expect(html).toContain("md-path-link--bare");
+    expect(html).toContain(">App.tsx<");
+    expect(html).not.toContain("md-inline-code");
+  });
+
+  it("同一文件名重复出现，只有首个带文件类型图标", () => {
+    const html = render("先改 App.tsx，再跑 App.tsx 的测试", true);
+    // 两次出现都是可点链接，但图标只画一次
+    const links = html.split("md-path-link--bare").length - 1;
+    const icons = html.split("md-path-link__icon").length - 1;
+    expect(links).toBe(2);
+    expect(icons).toBe(1);
+  });
 });

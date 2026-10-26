@@ -48,15 +48,17 @@ export function PageHeader({
           {icon}
         </span>
       )}
-      <Tag className="text-[length:var(--text-title)] font-semibold leading-[var(--leading-heading)] text-[var(--color-text-primary)]">
+      <Tag className="shrink-0 whitespace-nowrap text-[length:var(--text-title)] font-semibold leading-[var(--leading-heading)] text-[var(--color-text-primary)]">
         {title}
       </Tag>
       {count != null && count !== "" && (
-        <span className="rounded-full border-[var(--color-border-primary)] bg-[var(--color-bg-card)] px-2 py-px font-mono text-[length:var(--text-meta)] text-[var(--color-text-faint)]">
+        <span className="shrink-0 whitespace-nowrap rounded-full border-[var(--color-border-primary)] bg-[var(--color-bg-card)] px-2 py-px font-mono text-[length:var(--text-meta)] text-[var(--color-text-faint)]">
           {count}
         </span>
       )}
-      {children != null && <div className="ml-4 flex items-center gap-2">{children}</div>}
+      {/* min-w-0：窄容器里中间插槽要能被压缩（里面的 SegmentedControl 自带横向滚动），
+          否则它撑不开 → 标题/页签被挤成竖排字。 */}
+      {children != null && <div className="ml-4 flex min-w-0 items-center gap-2">{children}</div>}
       {actions != null && <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>}
     </header>
   );

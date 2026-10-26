@@ -57,7 +57,9 @@ export function SegmentedControl<T extends string>({
       role={as}
       aria-label={label}
       className={cx(
-        "inline-flex gap-0.5 bg-[var(--color-bg-tertiary)] p-0.5",
+        /* max-w-full + overflow-x-auto：窄容器里**横向滚动**，而不是把每个页签
+           压成竖排字（中文没有词内换行点 → 一压就是一列字）。宽容器无变化。 */
+        "inline-flex max-w-full gap-0.5 overflow-x-auto bg-[var(--color-bg-tertiary)] p-0.5",
         APPEARANCE[appearance],
         layout === "fill" && "flex w-full",
         className,
@@ -85,7 +87,7 @@ export function SegmentedControl<T extends string>({
             disabled={o.disabled}
             onClick={() => onChange(o.value)}
             className={cx(
-              "inline-flex items-center justify-center gap-1.5 px-3 font-medium transition-colors duration-150",
+              "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap px-3 font-medium transition-colors duration-150",
               "disabled:cursor-not-allowed disabled:opacity-50",
               layout === "fill" && "flex-1",
               SIZE[size],
