@@ -389,8 +389,9 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 | 文件 | 内容 |
 |---|---|
-| `local_agent_service/mod.rs` | 组合根（**4754 行**，−899 / −15.9%） |
+| `local_agent_service/mod.rs` | 组合根（**4418 行**，−1235 / **−21.8%**） |
 | `local_agent_service/assembler.rs` | `spawn_agent_loop`（307 行）—— 把配置 + 注册表 + 回调按固定顺序拼成 `AgentLoop` |
+| `local_agent_service/dispatch_policy.rs` | `resource_guard` + `decide_pre_tool_dispatch` + `relabel_automation_turn`（366 行）—— 派发前的审批决策矩阵 |
 | `local_agent_service/messages.rs` | `strip_transient_nudges` / `merge_consecutive_assistant_messages` / `with_attached_files_note`（无 IO、无 `self`） |
 | `local_agent_service/reply_fallback.rs` | `summarize_tool_results_for_empty_reply`（110 行，输入只有 `&[Message]`） |
 | `local_agent_service/prefetch_adapter.rs` | `SafeRegistryWrapper`（33 行，`Arc<ToolRegistry>` → prefetch `SafeToolRegistry` 桥接） |
@@ -409,7 +410,11 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 4. ~~`register_active` / `unregister_active` / `begin_turn_record` / `end_turn_record` / `interrupt_*` / `steer_*` + `TurnOutcome`~~ **已做**（`turn_registry.rs`）
 5. ~~`spawn_agent_loop`（290 行）+ `build_agent_config` 装配~~ **已做**（`assembler.rs`，307 行）
 
-**还剩一段**：`resource_guard`（82 行）+ `decide_pre_tool_dispatch`（243 行）—— 属于"工具派发前的审批决策"，可以搬到 `dispatch_policy.rs`，但那两块与 `TirithSecurity` / `PermissionProfile` 的判断交织，需要先确认没有第二份实现在 `tools/permission_guard.rs` 里。
+**还剩一段**：~~`resource_guard` + `decide_pre_tool_dispatch`~~ **已做**（`dispatch_policy.rs`）
+
+拆分前置核实过一件事：`dispatch_policy::resource_guard` 与 `hermix_tools::permission_guard` **不是重复实现** —— 前者管"用户给这一轮的授权范围到哪里"（按 `PermissionProfile` 判破坏性操作是否越界），后者管"工具不许改写权限治理文件"（防自我提权）。两层都在，少一层就有绕过面。
+
+`mod.rs` 剩下的都是真正的组合根职责：会话读写、`AgentService` trait 实现、构造器与配置 setter。
 
 **为什么不在这一轮全做完**：3/4/5 各自要动共享状态（`Arc<Mutex<...>>` 注册表、`AgentLoop` 装配参数），一旦搬错就是运行期行为差异，而不是编译错误。1/2 是纯函数，可以继续按同样方式推进；3 之后再往下必须先补"装配结果快照"测试。
 
