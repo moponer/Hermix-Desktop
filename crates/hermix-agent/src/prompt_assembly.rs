@@ -29,6 +29,7 @@ use hermix_focus::MemoryRouter;
 use crate::agent_config::AgentConfig;
 use crate::agent_helpers::AgentCallbacks;
 use crate::context::{load_builtin_memory_snapshot, load_soul_md, resolve_personality, SystemPromptBuilder};
+use crate::context::DEFAULT_AGENT_IDENTITY;
 use crate::context_files::{load_hermes_context_files, load_workspace_context};
 use crate::ContextManager;
 use hermix_intelligence::{DomainMode, DomainModeDetector};
@@ -933,7 +934,26 @@ fn build_stable_layer(
 
     // Miss: render the stable layer end-to-end.
     let soul = load_soul_md();
-    let mut builder = SystemPromptBuilder::new().with_personality(soul.as_deref());
+    //
+    // A **named** personality is the acting entity's identity — it takes
+    // the identity slot (the first thing the model reads), not a block
+    // appended after the Hermix/SOUL identity. Appending made the model
+    // read "你好，我是 Hermix" first and answer under the wrong name:
+    // the twin:ali session introduced itself as "hermix" even though the
+    // `ali` profile was active. Inline personality text (freeform, not a
+    // named profile) keeps the old append behavior — it IS a style, not
+    // an entity. SOUL.md remains the identity only when no named
+    // personality is active.
+    let named_profile = config
+        .personality
+        .as_ref()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .and_then(|p| resolve_personality(p, config.hermix_home.as_deref()));
+    let mut builder = match named_profile.as_deref() {
+        Some(profile) => SystemPromptBuilder::new().with_personality(Some(profile)),
+        None => SystemPromptBuilder::new().with_personality(soul.as_deref()),
+    };
     if let Some(base) = config.system_prompt.as_deref() {
         builder = builder.with_system_message(base);
     }
@@ -958,11 +978,9 @@ fn build_stable_layer(
     if let Some(ref personality) = config.personality {
         let requested = personality.trim();
         if !requested.is_empty() {
-            if let Some(profile) =
-                resolve_personality(requested, config.hermix_home.as_deref())
-            {
-                builder = builder
-                    .with_block(&format!("## Active Personality ({requested})\n{profile}"));
+            if named_profile.is_some() {
+                // Named profile already occupies the identity slot above —
+                // appending it again would duplicate the whole card.
             } else if requested.contains(char::is_whitespace) {
                 builder = builder.with_block(&format!("Personality: {requested}"));
                 tracing::warn!(
@@ -1268,29 +1286,41 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
     // re-read the Context layer from disk so in-session `memory` tool
     // edits (add/replace/remove) take effect on the next user message
     // instead of only after a session restart.
+    //
+    // ★ Stale-identity check: the stored prompt freezes the identity
+    // layer at first turn, so a persona change (named personality bound
+    // to the session — e.g. twin:ali — or a SOUL.md edit) would never
+    // reach an existing session and the assistant keeps answering under
+    // the old name. When the current identity's first line is absent
+    // from the stored text, rebuild once; the rebuilt prompt carries the
+    // anchor and goes back to being reused.
     let (prompt, restored) = if !force_rebuild {
-        if let Some(ref s) = config.stored_system_prompt {
-            let t = s.trim();
-            if !t.is_empty() {
-                (s.clone(), true)
-            } else {
-                (
-                    build_system_prompt_with_tool_errors(
-                        config,
-                        prompt_cache,
-                        memory_router,
-                        user_message,
-                        tool_schemas,
-                        &config.model,
-                        tool_call_count,
-                        tool_error_counts,
-                        context_epoch,
-                    ),
-                    false,
-                )
+        match config.stored_system_prompt.as_deref().map(str::trim) {
+            Some(t) if !t.is_empty() => {
+                match identity_anchor_line(config) {
+                    Some(anchor) if !t.contains(anchor.as_str()) => {
+                        tracing::info!(
+                            "stored system prompt predates the current identity layer; rebuilding"
+                        );
+                        (
+                            build_system_prompt_with_tool_errors(
+                                config,
+                                prompt_cache,
+                                memory_router,
+                                user_message,
+                                tool_schemas,
+                                &config.model,
+                                tool_call_count,
+                                tool_error_counts,
+                                context_epoch,
+                            ),
+                            false,
+                        )
+                    }
+                    _ => (t.to_string(), true),
+                }
             }
-        } else {
-            (
+            _ => (
                 build_system_prompt_with_tool_errors(
                     config,
                     prompt_cache,
@@ -1303,7 +1333,7 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
                     context_epoch,
                 ),
                 false,
-            )
+            ),
         }
     } else {
         (
@@ -1370,8 +1400,43 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
     (final_prompt, restored)
 }
 
-/// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
-/// Thin shim over [`resolve_initial_system_prompt_with_tool_errors`] with
+/// First line of the identity layer as it would be rendered **now**.
+///
+/// Used to detect stale stored prompts: `sessions.system_prompt` freezes
+/// the whole prompt at first turn, so an identity change (a named
+/// personality bound to the session — e.g. twin:ali — or a SOUL.md edit)
+/// would never reach an existing session and the assistant keeps
+/// answering under the old name. `resolve_initial_system_prompt_with_tool_errors`
+/// rebuilds once when this anchor is absent from the stored text; the
+/// rebuilt prompt carries the anchor and goes back to being reused.
+///
+/// `None` = the first line is too short to discriminate (bare heading /
+/// empty) — the caller skips the check rather than force pointless
+/// rebuilds.
+fn identity_anchor_line(config: &AgentConfig) -> Option<String> {
+    let named = config
+        .personality
+        .as_ref()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .and_then(|p| resolve_personality(p, config.hermix_home.as_deref()));
+    let body = named.or_else(load_soul_md);
+    let line = body
+        .as_deref()
+        .unwrap_or(DEFAULT_AGENT_IDENTITY)
+        .lines()
+        .next()?
+        .trim()
+        .to_string();
+    if line.chars().count() < 12 {
+        return None;
+    }
+    Some(line)
+}
+
+/// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh
+/// `build_system_prompt`. Thin shim over
+/// [`resolve_initial_system_prompt_with_tool_errors`] with
 /// `tool_error_counts = None`. Preserves the legacy call sites that
 /// pre-date (17 callers in `agent_loop` tests).
 pub fn resolve_initial_system_prompt(
@@ -1403,6 +1468,72 @@ pub fn resolve_initial_system_prompt(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    // ---------------------------------------------------------------
+    // Persona identity — named personalities & stored-prompt staleness
+    // ---------------------------------------------------------------
+
+    /// A named personality must occupy the **identity slot** (first thing
+    /// the model reads) and must NOT be duplicated as a later block.
+    /// Regression guard for twin:ali introducing itself as "Hermix": the
+    /// `ali` card used to land *after* the hard-coded Hermix identity.
+    #[test]
+    fn named_personality_takes_the_identity_slot() {
+        let mut cfg = AgentConfig::default();
+        cfg.personality = Some("ali".to_string());
+        let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+        let (prompt, restored) = resolve_initial_system_prompt(
+            &cfg, &slot, None, &AgentCallbacks::default(), "你好", &[], 0, 0, false,
+        );
+        assert!(!restored);
+        assert!(prompt.contains("### Identity\n你是助手阿黎（Ali）"));
+        assert!(!prompt.contains("你好，我是 Hermix"), "default identity must not leak into a persona session");
+        assert!(!prompt.contains("## Active Personality (ali)"));
+    }
+
+    /// A stored prompt frozen before the persona was bound must rebuild
+    /// once (stale-identity anchor check), then the fresh prompt — which
+    /// carries the anchor — is reused again on the next call.
+    #[test]
+    fn stale_stored_prompt_with_old_identity_rebuilds_once() {
+        let mut cfg = AgentConfig::default();
+        cfg.personality = Some("ali".to_string());
+        cfg.stored_system_prompt = Some(
+            "### Identity\nYou are Hermix, a direct, audit-first assistant.\n### Active tools\nx"
+                .to_string(),
+        );
+        let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+        let (prompt, restored) = resolve_initial_system_prompt(
+            &cfg, &slot, None, &AgentCallbacks::default(), "你好", &[], 0, 0, false,
+        );
+        assert!(!restored, "frozen prompt lacks the ali anchor → rebuild");
+        assert!(prompt.contains("你是助手阿黎（Ali）"));
+
+        // Second call: the rebuilt prompt carries the anchor → reused.
+        cfg.stored_system_prompt = Some(prompt);
+        let (_, restored2) = resolve_initial_system_prompt(
+            &cfg, &slot, None, &AgentCallbacks::default(), "你好", &[], 0, 0, false,
+        );
+        assert!(restored2, "fresh prompt carries the anchor → reuse");
+    }
+
+    /// A stored prompt whose identity still matches (default identity) is
+    /// reused untouched — the anchor check must not churn healthy sessions.
+    #[test]
+    fn matching_stored_prompt_is_still_reused() {
+        let cfg = AgentConfig::default();
+        let stored = format!("### Identity\n{DEFAULT_AGENT_IDENTITY}");
+        let mut cfg = cfg;
+        cfg.stored_system_prompt = Some(stored);
+        let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+        let (_, restored) = resolve_initial_system_prompt(
+            &cfg, &slot, None, &AgentCallbacks::default(), "你好", &[], 0, 0, false,
+        );
+        assert!(restored);
+    }
 
     // ---------------------------------------------------------------
     // M6 — the always-on guidance lives in the cached stable layer

@@ -406,7 +406,7 @@ fn score_skill_md_inner(
     b.bonus_section_count = if count_headings(body) > 3 { 1.0 } else { 0.0 };
 
     let composite = b.composite();
-    if log_warning && composite < 0.5 {
+    if log_warning && composite < 0.5 && should_warn_once(path, composite) {
         tracing::warn!(
             skill_path = %path.display(),
             composite = composite,
@@ -416,6 +416,23 @@ fn score_skill_md_inner(
     }
 
     b
+}
+
+/// Emit each `(skill path, score)` WARN at most once per process.
+///
+/// The scan it runs on is memoized (see
+/// `skill_orchestrator::SKILL_SCAN_MEMO`), but a rebuild — every skill
+/// install or edit — would otherwise re-print the same advisory line
+/// for every unhealthy skill. On this machine that was ~36 lines per
+/// turn and 83% of `agent.log`, which buried the lines that matter.
+/// Keyed on the score too, so a skill that regresses warns again.
+fn should_warn_once(path: &std::path::Path, composite: f32) -> bool {
+    static WARNED: std::sync::Mutex<Option<std::collections::HashSet<(std::path::PathBuf, u32)>>> =
+        std::sync::Mutex::new(None);
+    let mut guard = WARNED.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .get_or_insert_with(std::collections::HashSet::new)
+        .insert((path.to_path_buf(), composite.to_bits()))
 }
 
 #[cfg(test)]

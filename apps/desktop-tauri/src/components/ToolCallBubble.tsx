@@ -683,6 +683,16 @@ export function UnifiedTimelineRenderer({
         </div>
       )}
 
+      {/* 正文占位：这一轮只有工具、没有正文 → 正文区写清调了什么。
+          见 `ToolRunNote` 的注释（空白的正文区读起来像卡住）。 */}
+      {!hasAnyTextStep && (hasAnyToolStep || hasTools) && (
+        <ToolRunNote
+          steps={steps}
+          toolCalls={toolCalls}
+          streaming={Boolean(isStreaming)}
+        />
+      )}
+
       {/* Gap thinking animation: only shown when tools are running
           but we have NOT yet rendered any tool cards.
           NOTE: must also require isStreaming — once the stream settles,
@@ -702,6 +712,68 @@ export function UnifiedTimelineRenderer({
           <ThinkingDots label="等待回复" />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 工具轮的正文占位。
+ *
+ * 一个只调工具、没写正文的轮次，正文区是**整段空白** —— 被折叠的过程区里
+ * 字一直在动，正文却一个字没有。实测一次 30 轮的请求里 23 轮如此，读起来
+ * 像「卡住了」。这里在正文位置写一行结构化事实：这一轮调了什么、几次。
+ *
+ * 它不是模型说过的话（不塞进 `content`、不进历史、不影响复制），只是把
+ * `execution_timeline` 已经记录的事实摆到用户正在看的位置。
+ */
+export function ToolRunNote({
+  steps,
+  toolCalls,
+  streaming,
+}: {
+  steps: TimelineStep[];
+  /** Legacy `tool_calls` rows only — the timeline is authoritative. */
+  toolCalls?: Array<{ name?: string }>;
+  streaming: boolean;
+}) {
+  const summary = useMemo(() => {
+    const names: string[] = [];
+    let calls = 0;
+    for (const s of steps) {
+      if (s.kind !== "tools") continue;
+      for (const e of s.events) {
+        if (e.type !== "tool_start") continue;
+        calls += 1;
+        const name = e.tool;
+        if (name && !names.includes(name)) names.push(name);
+      }
+    }
+    // Pre-migration rows have no timeline events — fall back to tool_calls.
+    if (names.length === 0) {
+      for (const tc of toolCalls ?? []) {
+        if (tc.name && !names.includes(tc.name)) names.push(tc.name);
+      }
+      calls = calls || (toolCalls?.length ?? 0);
+    }
+    return { names, calls };
+  }, [steps, toolCalls]);
+
+  if (summary.calls === 0) return null;
+  const shown = summary.names.slice(0, 4).join("、");
+  const tail =
+    summary.names.length > 4 ? ` 等 ${summary.names.length} 种` : "";
+  return (
+    <div className="tl-toolrun-note">
+      <span>
+        {streaming ? "本轮已调用" : "本轮调用了"} {summary.calls} 个工具
+      </span>
+      {shown && (
+        <span className="tl-toolrun-note-tools">
+          {shown}
+          {tail}
+        </span>
+      )}
+      {!streaming && <span className="tl-toolrun-note-tail">无文字结论</span>}
     </div>
   );
 }

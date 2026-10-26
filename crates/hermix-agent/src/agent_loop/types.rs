@@ -146,6 +146,9 @@ pub(crate) struct LoopState {
     /// warnings are injected into the next turn's context so the model
     /// can correct itself.
     pub(crate) acceptance_gate: crate::acceptance_gate::AcceptanceGate,
+    /// 零新信息守卫：连续几轮工具结果与历史某批逐字相同，就取消后续
+    /// 轮次的工具 schema，逼模型收尾（每轮一次 LLM 往返，实测占比 88%）。
+    pub(crate) repeat_guard: RepeatGuard,
 }
 
 impl LoopState {
@@ -162,6 +165,62 @@ impl LoopState {
             ),
             ..Default::default()
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 零新信息守卫（收敛：省往返）
+// ---------------------------------------------------------------------------
+
+/// 连续多少个"零新信息"批次后禁用工具。
+///
+/// 一次实测请求跑了 30 轮、每轮一次 LLM 往返（约 9 秒）。其中至少三批
+/// 工具结果与先前批次**逐字相同**（1838 字符×3、23021 字符×2），即那些
+/// 往返没有带回任何新信息。再给一轮它还会重复，所以第 2 批就没必要继续。
+const REPEAT_DISABLE_TOOLS_STREAK: u32 = 2;
+
+/// 「零新信息」守卫。
+///
+/// 判据是**这批工具结果的指纹**，不是工具名或参数：写完文件再读同一路径
+/// 会得到不同内容，天然放行；而"把同一批只读调用再发一遍"得到逐字相同的
+/// 结果，被判为零进展。命中 2 轮后，下一轮请求不再携带工具 schema ——
+/// 模型只能给出结论，空转就此结束（这是唯一能真正减少往返的硬约束，
+/// 其余"提醒模型别重复"都依赖模型服从度）。
+#[derive(Debug, Default)]
+pub(crate) struct RepeatGuard {
+    /// 见过的批次指纹。
+    seen_batches: std::collections::HashSet<u64>,
+    /// 连续"结果与历史某批完全相同"的轮数。
+    streak: u32,
+    /// 是否已禁用后续轮次的工具 schema。
+    tools_disabled: bool,
+}
+
+impl RepeatGuard {
+    /// 记录一批结果的指纹，返回当前连续零新信息轮数。
+    pub(crate) fn observe_batch(&mut self, fingerprint: u64) -> u32 {
+        if self.seen_batches.insert(fingerprint) {
+            self.streak = 0;
+        } else {
+            self.streak = self.streak.saturating_add(1);
+        }
+        self.streak
+    }
+
+    /// 本批是否触发"禁用工具"（连续零新信息达到阈值）。
+    pub(crate) fn should_disable_tools(&self) -> bool {
+        !self.tools_disabled && self.streak >= REPEAT_DISABLE_TOOLS_STREAK
+    }
+
+    /// 一次幂等启用：`true` 表示本次调用完成了从"未禁用"到"禁用"的翻转。
+    pub(crate) fn disable_tools(&mut self) -> bool {
+        let first = !self.tools_disabled;
+        self.tools_disabled = true;
+        first
+    }
+
+    pub(crate) fn tools_disabled(&self) -> bool {
+        self.tools_disabled
     }
 }
 
@@ -307,11 +366,24 @@ impl LoopPhase {
 
     /// Legal next phases (ZCode `TurnPhase.canTransitionTo` analog).
     ///
-    /// The loop is a straight pipeline with one loop-back edge
-    /// (`PostToolExec → PreTurnSetup`). Anything else means a branch skipped
-    /// a stage — historically that is what a "turn silently stopped" looks
-    /// like from the inside. Re-emitting the same phase is allowed (the LLM
-    /// retry loop legitimately stays in `LlmCall`).
+    /// The loop is a straight pipeline plus the loop-back edges that the
+    /// code actually takes — anything else means a branch skipped a stage,
+    /// which is what a "turn silently stopped" looks like from the inside.
+    /// Re-emitting the same phase is allowed (the LLM retry loop
+    /// legitimately stays in `LlmCall`).
+    ///
+    /// The three loop-backs below are not stage skips, they are real
+    /// branch edges (`run_loop.rs` / `run_loop/pre_turn.rs`):
+    /// - `PreTurnSetup → LlmCall` — `run_stream` has no `Prefetch` stage
+    ///   (`do_prefetch` is only wired into `run()`).
+    /// - `PostLlmCall → PreTurnSetup` — a post-LLM fallback outcome
+    ///   (empty reply / thinking-only retry) restarts the turn.
+    /// - `ToolValidation → PreTurnSetup` — `ToolPrep::SkipTurn` (every
+    ///   call deduped or rejected) has nothing to execute.
+    ///
+    /// Before this was written down, each of them logged a WARN; a
+    /// streaming session produced one per turn and the warning stopped
+    /// meaning anything.
     pub(crate) fn can_transition_to(&self, next: &Self) -> bool {
         use LoopPhase::*;
         if self == next {
@@ -319,11 +391,11 @@ impl LoopPhase {
         }
         match self {
             Init => matches!(next, PreTurnSetup | Finalize),
-            PreTurnSetup => matches!(next, Prefetch | Finalize),
+            PreTurnSetup => matches!(next, Prefetch | LlmCall | Finalize),
             Prefetch => matches!(next, LlmCall | Finalize),
             LlmCall => matches!(next, PostLlmCall | Finalize),
-            PostLlmCall => matches!(next, ToolValidation | Finalize),
-            ToolValidation => matches!(next, ToolExecution | Finalize),
+            PostLlmCall => matches!(next, ToolValidation | PreTurnSetup | Finalize),
+            ToolValidation => matches!(next, ToolExecution | PreTurnSetup | Finalize),
             ToolExecution => matches!(next, PostToolExec | Finalize),
             PostToolExec => matches!(next, PreTurnSetup | Finalize),
             Finalize => false,

@@ -583,6 +583,54 @@ impl AgentLoop {
             }
         }
 
+        // --- 零新信息守卫（收敛）---
+        // 指纹只看「工具名 + 是否失败 + 结果正文」，故意不含 tool_call_id
+        // （每轮新生成）。写完文件重读同一路径会得到不同内容 → 不算重复；
+        // 把同一批只读调用再发一遍 → 逐字相同 → 判定零进展。命中阈值就
+        // 取消后续轮次的工具 schema（真正的硬约束，见 RepeatGuard）。
+        {
+            let mut parts: Vec<(String, bool, &str)> = results
+                .iter()
+                .map(|r| {
+                    let name = tool_calls
+                        .iter()
+                        .find(|tc| tc.id == r.tool_call_id)
+                        .map(|tc| tc.function.name.as_str())
+                        .unwrap_or("");
+                    (name.to_string(), r.is_error, r.content.as_str())
+                })
+                .collect();
+            parts.sort();
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            use std::hash::{Hash, Hasher};
+            for p in &parts {
+                p.hash(&mut hasher);
+            }
+            let fingerprint = hasher.finish();
+
+            let streak = state.repeat_guard.observe_batch(fingerprint);
+            if state.repeat_guard.should_disable_tools() && state.repeat_guard.disable_tools() {
+                tracing::warn!(
+                    turn = total_turns,
+                    streak,
+                    calls = results.len(),
+                    "no new information: identical tool results repeated — disabling tools to force a wrap-up"
+                );
+                self.emit_status(
+                    "lifecycle",
+                    &format!(
+                        "连续 {streak} 轮工具结果与之前完全相同（零新信息）——已停用工具，直接汇报。"
+                    ),
+                );
+                ctx.add_message(Message::system(format!(
+                    "[SYSTEM] The last {streak} tool batches returned results identical to earlier \
+                     batches — they added no new information. Tools are now DISABLED for this run. \
+                     Reply to the user in one message: what is done, what was actually verified, \
+                     and what is blocked. Do not ask for more tool calls."
+                )));
+            }
+        }
+
         // --- post-tool execution ---
         tracing::debug!(
             phase = %LoopPhase::PostToolExec,

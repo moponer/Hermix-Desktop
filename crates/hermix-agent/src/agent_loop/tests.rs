@@ -1119,7 +1119,11 @@ use super::*;
             Arc::new(DummyProvider),
         );
         let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.prompt_cache, agent.memory_router.as_deref(), "", &[], "gpt-4o", 0);
-        assert!(prompt.contains("## Active Personality (coder)"));
+        // A named personality now occupies the identity slot (persona card,
+        // not an appended style block) — see build_stable_layer.
+        assert!(prompt.contains("### Identity"));
+        assert!(prompt.contains("你是「工程师」角色。"));
+        assert!(!prompt.contains("## Active Personality (coder)"));
         // Localized to Chinese — verify the role label is present.
         assert!(prompt.contains("工程师"));
     }
@@ -3305,10 +3309,43 @@ let u = UsageStats {
     }
 
     #[test]
+    pub(crate) fn repeat_guard_disables_tools_after_two_identical_batches() {
+        use crate::agent_loop::RepeatGuard;
+
+        let mut g = RepeatGuard::default();
+        // A batch nobody has seen before is progress, not repetition.
+        assert_eq!(g.observe_batch(1), 0);
+        assert!(!g.should_disable_tools());
+        assert!(!g.tools_disabled());
+
+        // Same results again: one wasted round-trip, but give it room.
+        assert_eq!(g.observe_batch(1), 1);
+        assert!(!g.should_disable_tools(), "one repeat is tolerated");
+
+        // Second identical batch: stop paying for round-trips.
+        assert_eq!(g.observe_batch(1), 2);
+        assert!(g.should_disable_tools());
+        assert!(g.disable_tools(), "first flip must report true");
+        assert!(g.tools_disabled());
+        // Idempotent: a second flip is a no-op.
+        assert!(!g.disable_tools());
+
+        // New information resets the streak but never re-arms the tools —
+        // the wrap-up directive has already been injected.
+        assert_eq!(g.observe_batch(2), 0);
+        assert!(!g.should_disable_tools());
+        assert!(g.tools_disabled());
+    }
+
+    #[test]
     pub(crate) fn loop_phase_transition_contract() {
         use crate::agent_loop::LoopPhase as P;
-        // The one legal loop-back edge.
+        // The normal loop-back edge.
         assert!(P::PostToolExec.can_transition_to(&P::PreTurnSetup));
+        // Loop-backs that are real branch edges, not skipped stages.
+        assert!(P::PreTurnSetup.can_transition_to(&P::LlmCall)); // run_stream: no Prefetch
+        assert!(P::PostLlmCall.can_transition_to(&P::PreTurnSetup)); // empty-reply fallback
+        assert!(P::ToolValidation.can_transition_to(&P::PreTurnSetup)); // ToolPrep::SkipTurn
         // Straight pipeline edges.
         assert!(P::Init.can_transition_to(&P::PreTurnSetup));
         assert!(P::PostLlmCall.can_transition_to(&P::ToolValidation));

@@ -41,6 +41,7 @@ import { Avatar } from "./Avatar";
 import { MarkdownBody } from "./MarkdownBody";
 import { parseContent } from "./messageParser";
 import { ProcessTimeline, MessageCopyAction } from "./MessageBubble";
+import { ToolRunNote } from "./ToolCallBubble";
 import { StreamingArtifactCard } from "./StreamingArtifactCard";
 import type { StreamPhase } from "../hooks/useStreamChat";
 import type { ExecutionTimelineEvent, TimelineStep } from "../types";
@@ -280,6 +281,11 @@ function StreamingBubbleImpl({
                    settled MessageBubble picks it up on re-render. */
                 onPathClick={onPathClick}
               />
+              {/* 正文占位：工具在跑、正文还没字时，把「调了什么」写在
+                  正文位置，避免整段空白读起来像卡住。 */}
+              {!parsedStream.body?.trim() && (
+                <ToolRunNote steps={effectiveSteps} streaming={isStreamingPhase} />
+              )}
             </div>
           );
         })()}

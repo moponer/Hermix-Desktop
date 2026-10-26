@@ -300,6 +300,48 @@ fn slugify_skill_name(name: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Scan memo
+// ---------------------------------------------------------------------------
+
+/// Fingerprint of the skill files seen by the last full scan, plus the
+/// resulting command map. `prompt_assembly` builds a skills block on
+/// every turn; without this the whole library is re-read and
+/// re-health-scored per turn (69 SKILL.md files here), which is both
+/// hot-path I/O and a WARN flood in the operator log.
+///
+/// Keyed on `(path, mtime, len)` so an install / removal / edit
+/// rebuilds and an unchanged library does not.
+static SKILL_SCAN_MEMO: std::sync::Mutex<
+    Option<(Vec<(PathBuf, u64, u64)>, HashMap<String, SkillCommandInfo>)>,
+> = std::sync::Mutex::new(None);
+
+fn skill_scan_memo_get(
+    fingerprint: &[(PathBuf, u64, u64)],
+) -> Option<HashMap<String, SkillCommandInfo>> {
+    let guard = SKILL_SCAN_MEMO.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.as_ref() {
+        Some((fp, cmds)) if fp == fingerprint => Some(cmds.clone()),
+        _ => None,
+    }
+}
+
+fn skill_scan_memo_put(
+    fingerprint: Vec<(PathBuf, u64, u64)>,
+    commands: &HashMap<String, SkillCommandInfo>,
+) {
+    let mut guard = SKILL_SCAN_MEMO.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some((fingerprint, commands.clone()));
+}
+
+/// Drop the memo — for tests that mutate skill files in place and
+/// expect the next scan to re-read them.
+#[cfg(test)]
+pub fn clear_scan_memo() {
+    let mut guard = SKILL_SCAN_MEMO.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = None;
+}
+
+// ---------------------------------------------------------------------------
 // SkillOrchestrator
 // ---------------------------------------------------------------------------
 
@@ -365,15 +407,15 @@ impl SkillOrchestrator {
     /// dropped with first-write-wins, mirroring the prior
     /// single-dir behavior exactly (no behavioral regression
     /// for callers that only used `skills_dir`).
+    ///
+    /// Memoized per skill-file fingerprint: prompt assembly calls
+    /// this on **every turn**, and re-reading + re-scoring every
+    /// SKILL.md there was pure hot-path I/O (69 files on this
+    /// machine). The fingerprint is `(path, mtime, len)` — stat
+    /// only, no file reads — so any install / removal / edit
+    /// rebuilds, and a steady backlog rebuilds nothing.
     pub fn scan_skill_commands(&mut self) -> &HashMap<String, SkillCommandInfo> {
         self.commands.clear();
-
-        //while we have every SKILL.md in hand for the scan,
-        // we also compute its health score and warn on anything
-        // below 0.5. The score is NOT used to gate loading — we
-        // never want a stale skill to silently disappear — but the
-        // log line helps operators triage their library.
-        let mut seen_names = std::collections::HashSet::new();
 
         // Snapshot the directories so we can drop the immutable
         // borrow on `self.extra_dirs` before mutably borrowing
@@ -382,69 +424,82 @@ impl SkillOrchestrator {
         let extras: Vec<PathBuf> = self.extra_dirs.clone();
 
         // Primary root first (commands from here always win).
+        let mut files = Vec::new();
         if primary.exists() {
-            self.scan_directory_with_health(&primary, &mut seen_names);
+            Self::collect_skill_files(&primary, true, &mut files);
         }
         for extra in &extras {
             if extra.exists() {
-                self.scan_directory_with_health(extra, &mut seen_names);
+                Self::collect_skill_files(extra, true, &mut files);
             }
         }
 
+        let fingerprint: Vec<(PathBuf, u64, u64)> = files
+            .iter()
+            .map(|p| {
+                let (mtime, len) = std::fs::metadata(p)
+                    .ok()
+                    .and_then(|m| {
+                        let t = m.modified().ok()?;
+                        Some((t.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos() as u64, m.len()))
+                    })
+                    .unwrap_or((0, 0));
+                (p.clone(), mtime, len)
+            })
+            .collect();
+
+        if let Some(cached) = skill_scan_memo_get(&fingerprint) {
+            self.commands = cached;
+            return &self.commands;
+        }
+
+        // While we have every SKILL.md in hand we also compute its
+        // health score and warn on anything below 0.5. The score is
+        // NOT used to gate loading — we never want a stale skill to
+        // silently disappear — but the log line helps operators
+        // triage their library.
+        let mut seen_names = std::collections::HashSet::new();
+        for skill_md in &files {
+            if let Ok(content) = std::fs::read_to_string(skill_md) {
+                crate::skill_health::score_skill_md(skill_md, &content);
+            }
+            self.register_skill(skill_md, &mut seen_names);
+        }
+
+        skill_scan_memo_put(fingerprint, &self.commands);
         &self.commands
     }
 
-    /// Recursively scan a directory for SKILL.md files, scoring
-    /// each one's health for log diagnostics.
-    /// `dir` is the directory to scan now (we process it
-    /// unconditionally, regardless of its name). Subsequent
-    /// recursion skips hidden subdirectories so a malicious /
-    /// junk sibling like `.git/` can't smuggle in stray SKILL.md
-    /// files.
-    fn scan_directory_with_health(
-        &mut self,
-        dir: &Path,
-        seen_names: &mut std::collections::HashSet<String>,
-    ) {
-        self.scan_directory_inner(dir, seen_names, true);
-    }
 
-    fn scan_directory_inner(
-        &mut self,
-        dir: &Path,
-        seen_names: &mut std::collections::HashSet<String>,
-        is_root: bool,
-    ) {
+    /// Recursively collect `<dir>/<skill>/SKILL.md` paths in
+    /// registration order (a directory's own SKILL.md before its
+    /// children's), so first-write-wins name collisions keep the same
+    /// outcome as the pre-memo depth-first walk.
+    ///
+    /// Hidden subdirectories are skipped below the root so a malicious
+    /// / junk sibling like `.git/` can't smuggle in stray SKILL.md
+    /// files. The root's own children are exempt: a root may itself
+    /// live under `.agents/skills/`.
+    fn collect_skill_files(dir: &Path, is_root: bool, out: &mut Vec<PathBuf>) {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return,
         };
-
-            for entry in entries.flatten() {
-                let path = entry.path();
-
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    // Skip hidden directories at any recursion depth —
-                    // we never want a `.git/` or `.trash/` to leak in
-                    // SKILL.md files. The only exception is the very
-                    // first level we were called with, which may
-                    // legitimately live under `.agents/skills/` etc.
-                    if !is_root && name.starts_with('.') {
-                        continue;
-                    }
-                }
-
-                if path.is_dir() {
-                    let skill_md = path.join("SKILL.md");
-                    if skill_md.exists() {
-                        if let Ok(content) = std::fs::read_to_string(&skill_md) {
-                            crate::skill_health::score_skill_md(&skill_md, &content);
-                        }
-                        self.register_skill(&skill_md, seen_names);
-                    }
-                    self.scan_directory_inner(&path, seen_names, false);
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if !is_root && name.starts_with('.') {
+                    continue;
                 }
             }
+            if path.is_dir() {
+                let skill_md = path.join("SKILL.md");
+                if skill_md.is_file() {
+                    out.push(skill_md);
+                }
+                Self::collect_skill_files(&path, false, out);
+            }
+        }
     }
 
     /// Register a single SKILL.md file.
@@ -1076,5 +1131,40 @@ allowed-tools:
         assert_eq!(orch.get_commands().len(), 1);
         assert!(orch.get_commands().contains_key("/lonely"));
         assert_eq!(orch.extra_dirs(), &[nonexistent]);
+    }
+
+    #[test]
+    fn rescan_is_memoized_but_still_sees_edits() {
+        // `prompt_assembly` rescans on every turn. The memo must not
+        // freeze the library: an edited SKILL.md has to be re-read.
+        clear_scan_memo();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("demo");
+        fs::create_dir_all(&dir).unwrap();
+        let md = dir.join("SKILL.md");
+        fs::write(&md, "---\nname: demo\ndescription: first desc\n---\nbody").unwrap();
+
+        let mut first = SkillOrchestrator::new(tmp.path());
+        assert_eq!(
+            first.scan_skill_commands()["/demo"].description,
+            "first desc"
+        );
+
+        // Unchanged tree: a fresh orchestrator gets the memoized map.
+        let mut second = SkillOrchestrator::new(tmp.path());
+        assert_eq!(second.scan_skill_commands().len(), 1);
+        assert_eq!(second.get_commands()["/demo"].description, "first desc");
+
+        // Edited tree: fingerprint (path, mtime, len) changes → rebuild.
+        fs::write(
+            &md,
+            "---\nname: demo\ndescription: second descriptive text\n---\nbody",
+        )
+        .unwrap();
+        let mut third = SkillOrchestrator::new(tmp.path());
+        assert_eq!(
+            third.scan_skill_commands()["/demo"].description,
+            "second descriptive text"
+        );
     }
 }

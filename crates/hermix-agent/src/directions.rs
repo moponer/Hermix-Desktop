@@ -71,9 +71,9 @@ The Tirith pre-check engine **blocks** tool calls whose arguments match any of t
 const PLAN_BEFORE_EXECUTE_GUIDANCE: &str = "\
 # Planning format
 
-When you plan, keep it to one or two natural-language sentences in the reasoning flow: state the concrete outcome, the next step, and what will confirm success. Do not emit a standalone `Plan` section or a generic numbered checklist in the final answer.
+Before your tool calls in a turn, write **one short user-facing sentence** of visible text saying what you are about to do ('先看下 run_loop 的调用点', '跑一遍测试确认'). Put the analysis behind it in the reasoning flow — the reasoning is collapsed in the UI, so a turn with empty visible text reads as \"nothing happened\". One sentence is enough; do not add a `Plan` section or a numbered checklist.
 
-**Announcing a step is not doing it.** The moment you name a next action, that action belongs in a tool call *in this same turn*. Ending the turn on a plan — '接下来我会…', '1. … 2. … 3. …', 'Let me…' — is the most common way this loop stalls: the user gets a plan and has to type \"继续\". If a tool fails, state the new route in one clause, then call it.";
+**Announcing a step is not doing it.** That lead-in sentence does not replace the call: the next action belongs in a tool call *in this same turn*. Ending the turn on a plan — '接下来我会…', '1. … 2. … 3. …', 'Let me…' — is the most common way this loop stalls: the user gets a plan and has to type \"继续\". If a tool fails, state the new route in one clause, then call it.";
 
 const EXPLORE_EFFICIENCY_GUIDANCE: &str = "\
 # Exploration efficiency
@@ -90,7 +90,7 @@ const PARALLEL_EXECUTION_GUIDANCE: &str = "\
 # Parallel tool execution
 When you have two or more tool calls whose arguments do NOT depend on each other's results, issue them in the same turn in parallel rather than queuing them one per turn. Only serialize when a later call genuinely needs an earlier result (e.g. 'use the path the previous call returned').";
 
-const TOOL_USE_ENFORCEMENT_GUIDANCE: &str = "# Tool-use enforcement\nYou MUST use your tools to take action. Do not describe what you would do without actually doing it. When you say you will perform an action, make the corresponding tool call in the same response. Every response should either (a) contain tool calls that make progress, or (b) deliver a final result.";
+const TOOL_USE_ENFORCEMENT_GUIDANCE: &str = "# Tool-use enforcement\nYou MUST use your tools to take action. Do not describe what you would do without actually doing it. When you say you will perform an action, make the corresponding tool call in the same response. Every response should either (a) contain tool calls that make progress, or (b) deliver a final result. A tool-call turn still needs one visible sentence of lead-in text — a bare tool call with empty content leaves the user staring at a spinner.";
 
 /// Where files may be written. Injected into every agent's system
 /// prompt (J1 of the 2026-09-30 plan).
@@ -149,7 +149,8 @@ A task is complete only when you have produced a **verified outcome**:
 - Tools before questions. Look it up, try it, or vary the approach before \
   asking the user.
 - If a tool fails, switch tools or arguments — don't repeat what already failed.
-- Non-final turns: advance with tool calls, not promises.";
+- Non-final turns: advance with tool calls — preceded by one visible sentence naming \
+  the step, not a promise of it.";
 
 /// Safety guardrail — always-on, independent of autonomous mode.
 /// Injected unconditionally. Does not replace the tool-level approval engine;
@@ -307,7 +308,7 @@ Structure every reply as two parts:\n\
 1. `<think>...</think>` — internal reasoning (private, user sees it as a collapsible section).\n\
 2. Your reply, starting on the next line after `</think>`.\n\n\
 **Always close `</think>` before any visible text.** Forgetting this breaks the renderer — the user sees nothing. If you have nothing to reason about, emit `<think></think>`. Use only `<think>...</think>`, never `<thinking>`.\n\n\
-Write your visible reply in clean, structured Markdown: use `##`/`###` headings to separate topics, `-`/`1.` lists for steps and enumerations, `**bold**` for key terms, and fenced code blocks (```lang) for commands or code. Substantive answers (multi-step, comparisons, causes/conclusions, or anything beyond a one-liner) must be organized this way so the reader can scan it fast — do not dump a wall of plain prose.\n\n";
+Write your visible reply in clean, structured Markdown: use `##`/`###` headings to separate topics, `-`/`1.` lists for steps and enumerations, and fenced code blocks (```lang) for commands or code. Use `**bold**` sparingly — at most one key term per paragraph, and never bold file names, paths, or commands; too many emphases read as noise. Write file names as plain text without backticks (the UI linkifies them automatically), and reserve backticks for real identifiers, commands, and path values — not ordinary words. Substantive answers (multi-step, comparisons, causes/conclusions, or anything beyond a one-liner) must be organized this way so the reader can scan it fast — do not dump a wall of plain prose.\n\n";
 
 /// Safety instruction: do not generate or guess URLs.
 const URL_SAFETY_GUIDANCE: &str = "\
@@ -885,7 +886,7 @@ pub fn collect_directions(
             "format.short",
             DirRoute::Subsequent,
             format!(
-                "## 语气与格式\n用自然语言聊,像真人对话一样有温度、有干劲,不端着。但**最终回答必须用结构化 Markdown 呈现**:凡涉及多步骤、对比、原因/结论、或任何超过三句话的实质内容,使用标题(## / ###)、有序/无序列表、加粗关键词、代码块(```lang)与表格组织层次,让重点一目了然。极简单行回复(如一次性命令确认)可直接说人话。信息密度要高,不啰嗦但绝不漏掉关键点。\n\n\
+                "## 语气与格式\n用自然语言聊,像真人对话一样有温度、有干劲,不端着。但**最终回答必须用结构化 Markdown 呈现**:凡涉及多步骤、对比、原因/结论、或任何超过三句话的实质内容,使用标题(## / ###)、有序/无序列表、代码块(```lang)与表格组织层次,让重点一目了然。强调要节制,重音太多等于没有重音:加粗每段至多一处,只标记该段结论性关键词;文件名/路径直接写字面量,不带反引号(界面会自动渲染成可点链接),也不加粗;反引号只包真实标识符、命令与路径值,不包普通名词。极简单行回复(如一次性命令确认)可直接说人话。信息密度要高,不啰嗦但绝不漏掉关键点。\n\n\
                 {REPORT_SECTIONING}"
             ),
         ));
@@ -930,7 +931,7 @@ Always close `</think>` before visible text. The think block is for reasoning, n
         dirs.push(SystemDir::new(
             "plan.short",
             DirRoute::Subsequent,
-            "## Plan format\nWhen planning, keep it to one or two natural-language sentences in the reasoning flow. Don't emit a standalone Plan section or a generic checklist in the final answer.",
+            "## Plan format\nWhen planning, put one short user-facing sentence of visible text ahead of your tool calls; keep the analysis in the reasoning flow. Don't emit a standalone Plan section or a generic checklist in the final answer.",
         ));
     }
     // File-write discipline (J1). Same FirstTurn/Subsequent split as
@@ -1286,18 +1287,15 @@ pub(crate) fn build_workbench_context(workbench_id: &str) -> Result<String, Stri
 /// 具体数据由 agent 用 db_query 网关工具现查；零上下文膨胀的设计原意不变。
 /// 库不存在/为空/查询失败都返回空串（静默降级）。
 fn build_workbench_data_summary(workbench_id: &str) -> String {
-    use rusqlite::Connection;
-
-
     let db_path = hermix_plugin::workbench::workbench_dir(workbench_id)
         .join("data")
         .join("workbench.db");
     if !db_path.exists() {
         return String::new();
     }
-    let conn = match Connection::open_with_flags(
+    let conn = match hermix_store::open_connection(
         &db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        hermix_store::OpenMode::ReadOnly,
     ) {
         Ok(c) => c,
         Err(e) => {

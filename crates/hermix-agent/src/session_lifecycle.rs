@@ -856,12 +856,15 @@ pub(crate) fn classify_post_llm_response(
 }
 
 /// Ask the LLM for a final summary when the turn budget is exhausted.
-/// If the summary LLM call itself fails (e.g. context too long, rate
-/// limit, provider error), we gracefully return `None` instead of
-/// propagating the error. This prevents the max-turns guard from
-/// turning into a hard error that the frontend misinterprets as
-/// "模型不可用". The agent already has a full conversation history;
-/// finalizing without a summary is better than showing an error.
+///
+/// If the summary LLM call itself fails (context too long, rate limit,
+/// provider error) we never propagate the error — the max-turns guard
+/// must not turn into a hard error the frontend shows as "模型不可用".
+/// It falls back to [`deterministic_progress_summary`]: a mechanical
+/// record of the tools already used plus a "stop exploring, report
+/// now" directive. Returning `None` here (the old behaviour) reset the
+/// counter with no new information, so the loop restarted the same
+/// tool cycle — the user saw minutes of spinner and no wrap-up.
 pub async fn handle_max_iterations(
     config: &AgentConfig,
     llm_provider: &Arc<dyn LlmProvider>,
@@ -907,19 +910,83 @@ pub async fn handle_max_iterations(
                     Err(e2) => {
                         tracing::warn!(
                             error = %e2,
-                            "handle_max_iterations: fallback summary call failed; finalizing without summary"
+                            "handle_max_iterations: fallback summary call failed; \
+                             injecting deterministic progress record instead"
                         );
-                        return Ok(None);
+                        return Ok(Some(deterministic_progress_summary(ctx, config.max_turns)));
                     }
                 }
             }
             tracing::warn!(
                 error = %e,
-                "handle_max_iterations: summary LLM call failed; finalizing without summary"
+                "handle_max_iterations: summary LLM call failed; \
+                 injecting deterministic progress record instead"
             );
-            Ok(None)
+            Ok(Some(deterministic_progress_summary(ctx, config.max_turns)))
         }
     }
+}
+
+/// Mechanical stand-in for the LLM progress summary.
+///
+/// When the turn budget is exhausted, the only thing that ends the run
+/// well is the model hearing "stop exploring, report". If the summary
+/// call itself fails — quota, rate limit, provider error — the loop
+/// previously injected **nothing** and reset the counter, so a session
+/// that had already burned five minutes silently started another 30
+/// turns of the same tool loop with zero user-visible output.
+///
+/// This builds the same message from data we already hold: tool-call
+/// counts and the last few steps. It is deliberately directive, not
+/// narrative — the model still writes the user-facing words.
+fn deterministic_progress_summary(ctx: &ContextManager, max_turns: u32) -> Message {
+    let msgs = ctx.get_messages();
+    let tool_msgs: Vec<&Message> = msgs
+        .iter()
+        .filter(|m| m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()))
+        .collect();
+    let total_calls: usize = tool_msgs
+        .iter()
+        .map(|m| m.tool_calls.as_ref().map_or(0, |tc| tc.len()))
+        .sum();
+
+    let mut names: Vec<(String, usize)> = Vec::new();
+    for msg in &tool_msgs {
+        for tc in msg.tool_calls.iter().flatten() {
+            match names.iter_mut().find(|(n, _)| *n == tc.function.name) {
+                Some((_, c)) => *c += 1,
+                None => names.push((tc.function.name.clone(), 1)),
+            }
+        }
+    }
+    names.sort_by(|a, b| b.1.cmp(&a.1));
+    let name_list = names
+        .iter()
+        .take(8)
+        .map(|(n, c)| format!("{n}×{c}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut recent = String::new();
+    for msg in tool_msgs.iter().rev().take(5) {
+        for tc in msg.tool_calls.iter().flatten() {
+            let args: String = tc.function.arguments.chars().take(120).collect();
+            recent.push_str(&format!("\n  - {}({})", tc.function.name, args.replace('\n', " ")));
+        }
+    }
+
+    let body = format!(
+        "[SYSTEM] Turn budget exhausted after {max_turns} turns, and the progress-summary \
+         call failed. Mechanical record of this segment:\n\
+         - tool-call turns: {turns}, tool calls: {total_calls}\n\
+         - tools used: {name_list}\n\
+         - last steps:{recent}\n\n\
+         Stop exploring. Reply to the user NOW in one short message: what is done, what was \
+         actually verified, and what remains. Start new tool work only if something is broken."
+    ,
+        turns = tool_msgs.len(),
+    );
+    Message::system(body)
 }
 
 #[cfg(test)]
@@ -1017,5 +1084,46 @@ mod backfill_tests {
         let mut msgs = vec![Message::user("hi"), Message::assistant("hello")];
         assert_eq!(backfill_unanswered_tool_results(&mut msgs), 0);
         assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn max_turns_fallback_summary_names_the_tools_it_saw() {
+        // The point of the deterministic fallback: when the summary LLM
+        // call dies, the run must still end with a directive the model
+        // can act on, not with silence + another 30 turns of looping.
+        let mut ctx = ContextManager::new(200_000);
+        ctx.add_message(Message::user("修一下构建"));
+        let mut m = Message::assistant("");
+        m.tool_calls = Some(vec![
+            ToolCall {
+                id: "c1".into(),
+                function: hermix_core::FunctionCall {
+                    name: "read_file".into(),
+                    arguments: r#"{"path":"crates/hermix-agent/src/run_loop.rs"}"#.into(),
+                },
+            },
+            ToolCall {
+                id: "c2".into(),
+                function: hermix_core::FunctionCall {
+                    name: "terminal".into(),
+                    arguments: r#"{"command":"cargo check"}"#.into(),
+                },
+            },
+        ]);
+        ctx.add_message(m);
+
+        let msg = deterministic_progress_summary(&ctx, 30);
+        let body = msg.content.unwrap_or_default();
+        assert!(body.contains("30 turns"), "must name the budget: {body}");
+        assert!(body.contains("read_file"), "must name the tools: {body}");
+        assert!(body.contains("terminal"), "must name the tools: {body}");
+        assert!(
+            body.contains("Reply to the user NOW"),
+            "must be directive, not descriptive: {body}"
+        );
+        assert!(
+            body.contains("cargo check"),
+            "must carry the last steps: {body}"
+        );
     }
 }
