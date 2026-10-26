@@ -345,6 +345,31 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 | P1-1 每轮历史深拷贝 | 三处：① `local_agent_service` 的 `send_message` / `send_message_stream` 由 `messages.clone()` 改 `std::mem::take`（循环拿到所有权，回程本来就用 `AgentResult.messages` 覆盖）；② `sanitize_messages_for_strict_api` 里 `drop_orphan_tool_results` 由「`&[Message]` → 新建 `Vec<Message>`（`.cloned()`）」改**就地 `retain`**，省掉每条消息（含工具结果正文）的一次深拷贝 | agent 1187、provider 56 全绿 |
 | P2-6 两份装配实现 | `assemble_tool_schemas(all)` 改为委托 `assemble_tool_schemas_with_meta(all, &ToolMetaRegistry::new())`（空表时它本来就回退到 `classify_tools`）。删掉 32 行重复的「拆 bridge → 判阈值 → 注入三元组」，那两份注释此前在互相镜像修同一个 bug | tools 808 全绿 |
 
+### P1-11 第二刀：差异盘点结论（2026-10-26，未落地代码）
+
+用行级 LCS 对 `run()`（400 非空非注释行）与 `run_stream()`（604 行）做了差异盘点：
+
+```
+完全相同 307 行 = 50.8%（按较长一侧计）
+差异块 38 个，但去掉注释/属性噪音后只有 3 个结构性差异
+```
+
+| # | 差异 | 性质 |
+|---|---|---|
+| 1 | **LLM 调用段**：`run()` 直接 `call_llm_with_retry`（非流式）；`run_stream()` 先 `collect_stream_llm_response`（流式），`inner_attempt > 0` 时降级为非流式 | **有意的设计**（断流后不再反复重试流式），不是 bug |
+| 2 | 持久化时点：`persist_session_terminal` 在两条路径的相对位置不同 | 疑似历史漂移，需单独确认 |
+| 3 | 流式专属输出：`emit_mute_transition` / `on_chunk` / `_run_started` 计时 | transport 差异，可参数化 |
+
+**关键结论**：两条循环的骨架已经同构（`interrupt 检查 → 调用 → usage 累积 + emit → classify_post_llm_response → Break/Retry`），前置（`do_pre_turn`）与工具段（`do_tool_turn` + `tool_prep`）都已共享。**唯一挡住合并的是 #1**。
+
+**合并方案**（下一轮）：抽 `call_turn_llm(ctx, schemas, route, model, stream: Option<&dyn Fn>) -> Result<(LlmResponse, Option<String>), AgentError>`：
+
+- 内部保留 `inner_attempt` 循环（流式优先、失败降级），`stream.is_none()` 时直接走非流式；
+- 内部分支原本直接 `return Ok(graceful_result)`，改为返回 `Err(AgentError::Interrupted)` / `Err(e)`，由调用方统一转 `graceful_interrupt_result` / `_errored` —— 这样函数只需 6 个参数，不与 `&mut LoopState` 抢借用。
+- 两条循环的调用段从 40 行压到 ~12 行，且"重试策略"只剩一个实现点。
+
+**为什么这一轮没做**：流式错误路径（`StreamCollectOutcome::Interrupted` / 半途断流 / `inner_attempt` 递增后的降级）在 1194 项测试里的覆盖情况我没有核实。按"最稳定"的要求，动它之前应先用 scripted provider 补 3 条测试（流式成功、流式中途断流降级成功、流式与非流式都失败→graceful_errored），再抽取。否则"合并成功但语义漂移"这类问题要等线上才暴露。
+
 ### 批次 12（P1-14 存储收口，前半）— 2026-10-26 交付
 
 先核实再动手：**这不是并发缺陷，是四份重复实现**。`hermix-task` 的三处 `open_with_wal` 已经设了 `WAL + busy_timeout 5000`，`routes::open_sessions_db_for_read` 已经设了 `500ms + WAL + PASSIVE checkpoint` —— 行为都是对的，只是各写一遍，任何一处漂移都会让「某个库突然开始 SQLITE_BUSY」只在一半代码里出现。
