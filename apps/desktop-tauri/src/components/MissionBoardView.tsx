@@ -9,7 +9,7 @@
 //
 // 设计纪律：颜色/字号只走令牌类；验收状态用语义色文字（--color-text-*）
 // 不做色条；无轮询假进度——运行中的卡片只展示已发生的状态字段。
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Bot,
   CheckCircle2,
@@ -23,6 +23,7 @@ import { fetchJSON } from "../api/rest";
 import type { IconTone } from "../lib/categoryTone";
 import { EmptyState, IconTile, Modal, PageHeader, SegmentedControl, SkeletonCard } from "./ui";
 import { toastError } from "../hooks/useToast";
+import { usePolling } from "../hooks/usePolling";
 
 type BoardTab = "tickets" | "team" | "resource";
 
@@ -264,18 +265,11 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
       .catch(() => setRoleStats(null));
   }, []);
 
-  useEffect(() => {
-    void refreshMembers();
-    refreshStatic();
-    // members 快轮询；静态面（巡检/角色/评分）慢轮询——资源页签的
-    // 水位要能自己恢复显示，不能只靠手动刷新（复查 P2-5）。
-    const t = window.setInterval(() => void refreshMembers(), 10_000);
-    const t2 = window.setInterval(refreshStatic, 60_000);
-    return () => {
-      window.clearInterval(t);
-      window.clearInterval(t2);
-    };
-  }, [refreshMembers, refreshStatic]);
+  // members 快轮询；静态面（巡检/角色/评分）慢轮询——资源页签的水位要能自己
+  // 恢复显示，不能只靠手动刷新（复查 P2-5）。两者都走 usePolling（P2-4：
+  // 值守页常开，隐藏页不该继续打后端）。
+  usePolling(refreshMembers, 10_000);
+  usePolling(refreshStatic, 60_000);
 
   const openDetail = useCallback(async (id: string) => {
     setDetailLoading(true);
