@@ -13,6 +13,7 @@
  * 3. 缩放值必须持久化并在启动时恢复，否则重启回到 100%，用户以为设置没保存。
  */
 import { storage } from "./storageCompat";
+import { reportError } from "../lib/reportError";
 
 const SCALE_KEY = "hermix.desktop.ui-scale";
 
@@ -42,7 +43,7 @@ export function readScale(): number {
 export function applyScale(v: number): number {
   const next = clamp(Math.round(v * 100) / 100);
   document.documentElement.style.zoom = String(next);
-  try { storage.setItem(SCALE_KEY, String(next)); } catch {}
+  try { storage.setItem(SCALE_KEY, String(next)); } catch (e) { reportError("ui-scale", e); }
   window.dispatchEvent(new CustomEvent(UI_SCALE_EVENT, { detail: next }));
   return next;
 }

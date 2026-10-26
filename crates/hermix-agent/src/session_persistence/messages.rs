@@ -1241,6 +1241,69 @@ impl SessionPersistence {
     /// `Message`s — they live only in the timeline. If you need them as
     /// LLM context, filter the `Message` variants out of the result
     /// yourself (this is what `load_session` already does).
+    /// 一列 `messages` 行 → `SessionEntry`。列序见 `SESSION_ENTRY_COLUMNS`。
+    ///
+    /// 抽成关联函数是为了让「全量读」与「尾部窗口读」共用同一套行解析 ——
+    /// 两处各写一遍时，任何一列的增减都会让其中一条悄悄读错位。
+    fn session_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionEntry> {
+        let role_str: String = row.get(0)?;
+        let content: Option<String> = row.get(1)?;
+        let tool_call_id: Option<String> = row.get(2)?;
+        let tool_calls_json: Option<String> = row.get(3)?;
+        let extra_json: Option<String> = row.get(4)?;
+        let db_name: Option<String> = row.get(5)?;
+        let timeline_json: Option<String> = row.get(6)?;
+        let reasoning_content: Option<String> = row.get(7)?;
+        let unified_steps_json: Option<String> = row.get(8)?;
+
+        let tool_calls = tool_calls_json.and_then(|json| serde_json::from_str(&json).ok());
+
+        if role_str == "approval" {
+            let record: ApprovalRecord = extra_json
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+            return Ok(if record.linked_assistant_id.is_some() {
+                SessionEntry::Approval(record)
+            } else {
+                SessionEntry::ApprovalOrphan(record)
+            });
+        }
+
+        let role = match role_str.as_str() {
+            "system" => MessageRole::System,
+            "user" => MessageRole::User,
+            "assistant" => MessageRole::Assistant,
+            "tool" => MessageRole::Tool,
+            "automation" => MessageRole::Automation,
+            // Unknown role — skip rather than crash. Future
+            // schema additions shouldn't take down old clients.
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        };
+        let execution_timeline = timeline_json.and_then(|json| serde_json::from_str(&json).ok());
+        let unified_steps = unified_steps_json.and_then(|json| serde_json::from_str(&json).ok());
+        // Automation provenance. A missing or corrupt blob yields `None`,
+        // and the UI then renders an unnamed task header — which is still
+        // honest, whereas failing the row would drop the result entirely.
+        let automation_meta = extra_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<AutomationMeta>(s).ok());
+        Ok(SessionEntry::Message(Message {
+            role,
+            content,
+            content_parts: None,
+            tool_calls,
+            tool_call_id,
+            name: db_name,
+            reasoning_content,
+            cache_control: None,
+            execution_timeline,
+            unified_steps,
+            ephemeral: false,
+            automation_meta,
+        }))
+    }
+
     pub fn load_session_with_approvals(
         &self,
         session_id: &str,
@@ -1264,68 +1327,10 @@ impl SessionPersistence {
             .map_err(|e| AgentError::Io(format!("Failed to prepare timeline query: {e}")))?;
 
         let entries = stmt
-            .query_map(rusqlite::params![session_id], |row| {
-                let role_str: String = row.get(0)?;
-                let content: Option<String> = row.get(1)?;
-                let tool_call_id: Option<String> = row.get(2)?;
-                let tool_calls_json: Option<String> = row.get(3)?;
-                let extra_json: Option<String> = row.get(4)?;
-                let db_name: Option<String> = row.get(5)?;
-                let timeline_json: Option<String> = row.get(6)?;
-                let reasoning_content: Option<String> = row.get(7)?;
-                let unified_steps_json: Option<String> = row.get(8)?;
-
-                let tool_calls = tool_calls_json.and_then(|json| serde_json::from_str(&json).ok());
-
-                if role_str == "approval" {
-                    let record: ApprovalRecord = extra_json
-                        .as_deref()
-                        .and_then(|s| serde_json::from_str(s).ok())
-                        .ok_or_else(|| {
-                            rusqlite::Error::InvalidQuery
-                        })?;
-                    if record.linked_assistant_id.is_some() {
-                        Ok(SessionEntry::Approval(record))
-                    } else {
-                        Ok(SessionEntry::ApprovalOrphan(record))
-                    }
-                } else {
-                    let role = match role_str.as_str() {
-                        "system" => MessageRole::System,
-                        "user" => MessageRole::User,
-                        "assistant" => MessageRole::Assistant,
-                        "tool" => MessageRole::Tool,
-                        "automation" => MessageRole::Automation,
-                        // Unknown role — skip rather than crash. Future
-                        // schema additions shouldn't take down old
-                        // clients.
-                        _ => return Err(rusqlite::Error::InvalidQuery),
-                    };
-                    let execution_timeline = timeline_json.and_then(|json| serde_json::from_str(&json).ok());
-                    let unified_steps = unified_steps_json.and_then(|json| serde_json::from_str(&json).ok());
-                    // Automation provenance. A missing or corrupt blob
-                    // yields `None`, and the UI then renders an unnamed
-                    // task header — which is still honest, whereas
-                    // failing the row would drop the result entirely.
-                    let automation_meta = extra_json
-                        .as_deref()
-                        .and_then(|s| serde_json::from_str::<AutomationMeta>(s).ok());
-                    Ok(SessionEntry::Message(Message {
-                        role,
-                        content,
-                        content_parts: None,
-                        tool_calls,
-                        tool_call_id,
-                        name: db_name,
-                        reasoning_content,
-                        cache_control: None,
-                        execution_timeline,
-                        unified_steps,
-                        ephemeral: false,
-                        automation_meta,
-                    }))
-                }
-            })
+            .query_map(
+                rusqlite::params![session_id],
+                Self::session_entry_from_row,
+            )
             .map_err(|e| AgentError::Io(format!("Failed to query timeline: {e}")))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AgentError::Io(format!("Failed to read timeline: {e}")))?;
@@ -1347,6 +1352,42 @@ impl SessionPersistence {
     /// in the same row order — we zip them positionally. No
     /// second source-of-truth field on `Message` is added; this
     /// stays scoped to the wire DTO path.
+    /// 尾部窗口版：只读最后 `limit` 条（过滤条件与全量版一致），返回仍按
+    /// `id` 升序 —— 调用方拿到的顺序不变，只是前面少了被截掉的旧消息。
+    ///
+    /// 为什么需要它：前端首屏只要尾部 60 条（`INITIAL_MESSAGE_WINDOW`），
+    /// 而全量版会把整段历史读进内存再丢掉 97%。长会话的打开延迟与峰值内存
+    /// 都由这条 SQL 决定。
+    pub fn load_session_tail_with_timestamps(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(SessionEntry, Option<String>)>, AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT role, content, tool_call_id, tool_calls, extra, name, \
+                        execution_timeline, reasoning_content, unified_steps, created_at
+                 FROM (SELECT * FROM messages
+                       WHERE session_id = ?1 AND active = 1 AND role != 'system'
+                       ORDER BY id DESC LIMIT ?2)
+                 ORDER BY id ASC",
+            )
+            .map_err(|e| AgentError::Io(format!("Failed to prepare tail query: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params![session_id, limit as i64], |row| {
+                Ok((
+                    Self::session_entry_from_row(row)?,
+                    row.get::<_, Option<String>>(9)?,
+                ))
+            })
+            .map_err(|e| AgentError::Io(format!("Failed to query tail: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AgentError::Io(format!("Failed to read tail: {e}")))?;
+        Ok(rows)
+    }
+
     pub fn load_session_with_approvals_and_timestamps(
         &self,
         session_id: &str,

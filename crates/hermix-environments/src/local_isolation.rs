@@ -96,14 +96,8 @@ impl LocalIsolationBackend {
     /// `max_output_size` bytes (same pattern as `DockerBackend`).
     fn make_output(&self, exit_code: i32, stdout: Vec<u8>, stderr: Vec<u8>) -> CommandOutput {
         let cap = self.max_output_size;
-        let mut out = stdout;
-        let mut err = stderr;
-        if out.len() > cap {
-            out.truncate(cap);
-        }
-        if err.len() > cap {
-            err.truncate(cap);
-        }
+        let out = crate::output::truncate_bytes_to_boundary(stdout, cap);
+        let err = crate::output::truncate_bytes_to_boundary(stderr, cap);
         CommandOutput {
             exit_code,
             stdout: decode_console_output(&out).to_string(),

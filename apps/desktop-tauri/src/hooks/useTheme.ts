@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useSyncExternalStore } from "react";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
+import { reportError } from "../lib/reportError";
 import { THEMES, isKnownTheme, isDarkTheme } from "../styles/themes/registry";
 import { onAccentFor } from "../styles/themes/accentPalette";
 
@@ -50,7 +51,7 @@ function readStored(): ThemeMode {
     const v = storage.getItem(STORAGE_KEYS.theme);
     if (v === SYSTEM_THEME) return SYSTEM_THEME;
     if (v && isKnownTheme(v)) return v;
-  } catch {}
+  } catch (e) { reportError("theme", e); }
   return "light";
 }
 
@@ -120,7 +121,7 @@ export function useTheme() {
       applyTheme(id);
     };
     apply();
-    try { storage.setItem(STORAGE_KEYS.theme, mode); } catch {}
+    try { storage.setItem(STORAGE_KEYS.theme, mode); } catch (e) { reportError("theme", e); }
     if (mode !== SYSTEM_THEME || typeof window === "undefined" || !window.matchMedia) {
       return;
     }
@@ -136,7 +137,7 @@ export function useTheme() {
     try {
       if (accent) storage.setItem(STORAGE_KEYS.accentColor, accent);
       else storage.removeItem(STORAGE_KEYS.accentColor);
-    } catch {}
+    } catch (e) { reportError("theme", e); }
   }, [accent]);
 
   const setMode = useCallback((next: ThemeMode) => setModeState(next), []);

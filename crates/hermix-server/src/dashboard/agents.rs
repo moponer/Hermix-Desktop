@@ -167,6 +167,25 @@ fn agent_file_path(state: &HttpServerState, id: &str) -> std::path::PathBuf {
     agents_dir(state).join(format!("{id}.json"))
 }
 
+/// `id` 会被直接拼进文件名（`{id}.json`），所以它必须是**文件名片段**而不是
+/// 路径片段。不校验时 `id = "../../foo"` 的写入/删除都会落到 `agents/` 之外 ——
+/// 一个越界文件写的原语。
+fn validate_agent_id(id: &str) -> Result<(), HttpError> {
+    let valid = !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if valid {
+        Ok(())
+    } else {
+        Err(HttpError {
+            status: axum::http::StatusCode::BAD_REQUEST,
+            message: format!("invalid agent id: {id}（只允许字母、数字、- 和 _）"),
+        })
+    }
+}
+
 fn read_all_agents(state: &HttpServerState) -> Vec<AgentPersonaJson> {
     let dir = agents_dir(state);
     if !dir.exists() {
@@ -214,6 +233,7 @@ pub async fn save_agent(
 
     // Determine id: use provided id or generate a new one
     let id = req.id.clone().unwrap_or_else(|| format!("agent-{now}"));
+    validate_agent_id(&id)?;
 
     // Check if updating an existing agent (preserve created_at + usage_count)
     let existing = {
@@ -301,6 +321,7 @@ pub async fn delete_agent(
     State(state): State<HttpServerState>,
     Path(id): Path<String>,
 ) -> Result<Json<HashMap<&'static str, bool>>, HttpError> {
+    validate_agent_id(&id)?;
     let path = agent_file_path(&state, &id);
     if !path.exists() {
         return Err(HttpError {
@@ -326,6 +347,26 @@ pub async fn delete_agent(
 mod tests {
     use super::*;
     use crate::test_state;
+
+    /// `id` 直接拼文件名，路径片段必须被拒 —— 否则可写到 `agents/` 之外。
+    #[test]
+    fn agent_id_rejects_path_fragments() {
+        for ok in ["agent-1", "custom_agent", "A1", "agent-1770000000000"] {
+            assert!(validate_agent_id(ok).is_ok(), "{ok} should be accepted");
+        }
+        for bad in [
+            "",
+            "../escape",
+            "..",
+            "a/b",
+            "a\\b",
+            "x.json",
+            "a b",
+            "ünicode",
+        ] {
+            assert!(validate_agent_id(bad).is_err(), "{bad} should be rejected");
+        }
+    }
 
     #[tokio::test]
     async fn save_and_list_and_delete() {

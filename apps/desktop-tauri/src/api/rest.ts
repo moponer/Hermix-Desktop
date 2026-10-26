@@ -1,5 +1,6 @@
 // Hermix Desktop API Client — REST 运行时（从 api.ts 拆分；类型见 ./types，WS 见 ./ws）
 import type { Session, AutomationTask } from "../types";
+import { reportError } from "../lib/reportError";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 // v5: reuse detectToolError from messageParser for errorReason extraction
 // on reloaded tool messages — same helper as the live-streaming path.
@@ -682,6 +683,37 @@ export const saveModelList = async (
   }
 };
 
+/** 社区免费模型总开关的状态。后端 config.yaml 是唯一权威，前端不自己记账。 */
+export interface FreeChannelState {
+  /** 总开关状态。 */
+  enabled: boolean;
+  /** 当前已登记的免费模型条数。 */
+  models: number;
+  /** 参与免费渠道的 provider id。 */
+  providers: string[];
+}
+
+export const getFreeChannel = async (): Promise<FreeChannelState | null> => {
+  try {
+    return await fetchJSON<FreeChannelState>("/api/free-channel");
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * 打开/关闭社区免费模型。
+ *
+ * 失败**要抛出去**（不像 `saveModelList` 那样吞掉）：开关的界面状态由后端
+ * 权威值决定，写失败时调用方据此回滚，不能让界面显示一个没落盘的开关。
+ */
+export const setFreeChannelEnabled = async (enabled: boolean): Promise<void> => {
+  await fetchJSON("/api/free-channel", {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  });
+};
+
 export const getSkills = async (): Promise<SkillInfo[]> =>
   fetchJSON("/api/skills");
 
@@ -952,7 +984,7 @@ function loadMcpServersCache(): McpServerEntry[] {
       const parsed = JSON.parse(raw) as McpServerEntry[];
       if (Array.isArray(parsed)) return parsed;
     }
-  } catch {}
+  } catch (e) { reportError("api", e); }
   return OFFICIAL_MCP_SEEDS.map((s) => ({ ...s, createdAt: Date.now() }));
 }
 function saveMcpServersCache(list: McpServerEntry[]) {

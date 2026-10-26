@@ -31,11 +31,11 @@ use std::path::Path;
 use hermix_core::ToolError;
 
 /// Names specific to Hermix — protected wherever they appear.
-const HERMIX_CONFIG_NAMES: &[&str] = &[
-    "approval_allowlist.json",
-    "session_approvals.json",
-    "enabled_toolsets.json",
-];
+///
+/// Single source of truth lives in `hermix_core::path_security` so the workbench
+/// gateway (which cannot depend on this crate — the dependency runs the other
+/// way) enforces the same list instead of drifting from it.
+use hermix_core::path_security::HERMIX_PERMISSION_CONFIG_NAMES as HERMIX_CONFIG_NAMES;
 
 /// Generic name: only protected inside the app's own home directory, because
 /// `config.yaml` is a normal file in thousands of unrelated projects.

@@ -4,6 +4,7 @@
 import { useEffect } from "react";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { storage, STORAGE_KEYS, KNOWN_KEYS } from "../utils/storageCompat";
+import { reportError } from "../lib/reportError";
 
 /**
  * 执行一次性启动引导：
@@ -51,8 +52,8 @@ export function useAppBootstrap(defaultWindowWidth: number): void {
 
     // 欢迎界面（无 session）用的 draft 槽位（hermix.desktop.draft.*）不持久化，
     // 否则上次的选择会跨重启残留。每次启动清除，让用户在新会话从头选择。
-    try { storage.removeItem(STORAGE_KEYS.draftExpertId); } catch {}
-    try { storage.removeItem(STORAGE_KEYS.draftWorkspace); } catch {}
+    try { storage.removeItem(STORAGE_KEYS.draftExpertId); } catch (e) { reportError("app-bootstrap", e); }
+    try { storage.removeItem(STORAGE_KEYS.draftWorkspace); } catch (e) { reportError("app-bootstrap", e); }
 
     // 启动诊断：把所有 hermix.* key 打到 console，便于在 devtools 直接看 localStorage
     // 实际状态 — 区分"数据没写"还是"数据写了没读"。**仅在 dev build 跑**
@@ -83,7 +84,7 @@ export function useAppBootstrap(defaultWindowWidth: number): void {
           console.info("[hermix-ls] dump:", out);
           return out;
         };
-      } catch {}
+      } catch (e) { reportError("app-bootstrap", e); }
     }
   }, []);
 }

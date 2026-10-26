@@ -314,24 +314,54 @@ fn format_event(event: &Event<'_>, json_mode: bool) -> String {
     }
 }
 
+/// 因写盘锁竞争而丢掉的日志条数。排障时「日志里没有这一条」必须能被区分成
+/// 「没发生」还是「被丢了」——此前 `try_lock` 失败是完全静默的。
+static DROPPED_RECORDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// 实际写盘/刷新失败次数（`let _ =` 吞掉的那部分）。
+static WRITE_FAILURES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl<S: Subscriber> Layer<S> for CategoryLayer {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        use std::sync::atomic::Ordering;
+
         let target = event.metadata().target();
         let category = LogCategory::from_target(target);
+        // writers[0..4] correspond to Server/Agent/Tools/Crash in order.
+        let idx = match category {
+            LogCategory::Server => 0,
+            LogCategory::Agent => 1,
+            LogCategory::Tools => 2,
+            LogCategory::Crash => 3,
+        };
 
         let line = format_event(event, self.json_mode);
 
-        if let Ok(mut writers) = self.writers.try_lock() {
-            // writers[0..4] correspond to Server/Agent/Tools/Crash in order.
-            let idx = match category {
-                LogCategory::Server => 0,
-                LogCategory::Agent => 1,
-                LogCategory::Tools => 2,
-                LogCategory::Crash => 3,
-            };
+        let mut writers = match self.writers.try_lock() {
+            Ok(w) => w,
+            Err(_) => {
+                DROPPED_RECORDS.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        };
+
+        // 先补记此前因抢锁失败丢掉的条数（ack 归零，只补一次）。
+        let dropped = DROPPED_RECORDS.swap(0, Ordering::Relaxed);
+        if dropped > 0 {
             if let Some(w) = writers.get_mut(idx) {
-                let _ = w.write(&line);
-                let _ = w.flush();
+                let note = format!(
+                    "[log] {dropped} record(s) dropped: writer lock busy at emit time\n"
+                );
+                let _ = w.write(&note);
+            }
+        }
+
+        if let Some(w) = writers.get_mut(idx) {
+            if w.write(&line).is_err() || w.flush().is_err() {
+                let n = WRITE_FAILURES.fetch_add(1, Ordering::Relaxed);
+                // 每 100 次报一次，避免写盘坏掉时自己刷爆 stderr。
+                if n % 100 == 0 {
+                    eprintln!("[hermix-telemetry] log write failed {n} time(s)");
+                }
             }
         }
     }

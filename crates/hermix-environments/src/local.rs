@@ -435,16 +435,14 @@ impl TerminalBackend for LocalBackend {
                         let stderr = decode_console_output(&output.stderr).into_owned();
                         Ok(CommandOutput {
                             exit_code: output.status.code().unwrap_or(-1),
-                            stdout: if stdout.len() > self.max_output_size {
-                                stdout[..self.max_output_size].to_string()
-                            } else {
-                                stdout
-                            },
-                            stderr: if stderr.len() > self.max_output_size {
-                                stderr[..self.max_output_size].to_string()
-                            } else {
-                                stderr
-                            },
+                            stdout: crate::output::truncate_to_boundary(
+                                stdout,
+                                self.max_output_size,
+                            ),
+                            stderr: crate::output::truncate_to_boundary(
+                                stderr,
+                                self.max_output_size,
+                            ),
                         })
                     })
                     .await;
@@ -627,26 +625,24 @@ impl TerminalBackend for LocalBackend {
             let stdout = decode_console_output(&output.stdout).into_owned();
             let stderr = decode_console_output(&output.stderr).into_owned();
 
-            // Truncate output if it exceeds max_output_size
-            let stdout = if stdout.len() > self.max_output_size {
+            // Truncate output if it exceeds max_output_size. Cut at a char
+            // boundary: `s[..n]` panics when n lands inside a multi-byte
+            // character (CJK / emoji), which is routine in terminal output.
+            if stdout.len() > self.max_output_size {
                 tracing::warn!(
                     "Command output exceeded max size ({} bytes), truncating",
                     stdout.len()
                 );
-                stdout[..self.max_output_size].to_string()
-            } else {
-                stdout
-            };
+            }
+            let stdout = crate::output::truncate_to_boundary(stdout, self.max_output_size);
 
-            let stderr = if stderr.len() > self.max_output_size {
+            if stderr.len() > self.max_output_size {
                 tracing::warn!(
                     "Command stderr exceeded max size ({} bytes), truncating",
                     stderr.len()
                 );
-                stderr[..self.max_output_size].to_string()
-            } else {
-                stderr
-            };
+            }
+            let stderr = crate::output::truncate_to_boundary(stderr, self.max_output_size);
 
             Ok(CommandOutput {
                 exit_code: output.status.code().unwrap_or(-1),

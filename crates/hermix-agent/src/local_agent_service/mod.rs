@@ -23,6 +23,12 @@ use hermix_intelligence::DomainMode;
 use crate::smart_model_routing::ApiMode;
 use serde_json::Value;
 
+// 纯函数变换（消息数组 → 消息数组）独立成模块：无 IO、无 `self`，可单独测试。
+// 拆分方向见 docs/notes/proposed/architecture/2026-10-25-fullstack-optimization-audit.md
+// 的 P1-13（这个文件原本 5600 行、混了 7 类职责）。
+mod messages;
+use messages::*;
+
 /// Wrapper that makes `Arc<ToolRegistry>` (hermix_tools) implement the
 /// prefetch `SafeToolRegistry` trait so the executor can dispatch Safe
 /// tools in parallel before the LLM call.
@@ -52,156 +58,6 @@ use crate::consciousness::{
 use crate::hardline;
 use crate::session_persistence::SessionPersistence;
 
-/// Collapse a run of consecutive assistant messages into one.
-/// Background: the agent loop's `run_stream` may push multiple
-/// assistant entries per user turn — one per LLM call within the
-/// turn.  If the first LLM response is judged "reasoning-only"
-/// (e.g. MiniMax M2.7 emits a body of pure `<think>...</think>` with
-/// no visible content) the loop breaks immediately and hands the turn to
-/// the outer `decide_empty_response` (aligned with session_lifecycle.rs);
-/// if the first call crashes
-/// mid-stream, an empty placeholder may be appended and the actual
-/// reply lands in a *second* assistant entry.  Persisting both rows
-/// makes the desktop client render N stacked bubbles for a single
-/// user message.
-/// This helper:
-/// * drops runs of empty placeholders (no content, no tool_calls);
-/// * concatenates content / tool_calls / reasoning_content across
-/// non-empty runs;
-/// * preserves the last message's id, timestamp, stop_reason, model,
-/// cache_control so the merged row carries the terminal metadata.
-/// It's the backend counterpart of the desktop's
-/// `mergeConsecutiveAssistantMessages` — both layers apply the same
-/// rule so a stale server view still renders cleanly on reload.
-/// Strip transient system nudges injected by `decide_empty_response`
-/// (autonomous pre-tool push / EmptyStop retry / post-tool summarize)
-/// before persisting. These are one-shot loop-steering instructions,
-/// not conversation content: persisted, they (a) cut
-/// `merge_consecutive_assistant_messages` mid-run so two LLM outputs
-/// of one turn reload as two separate assistant bubbles, and (b)
-/// pollute every later turn's LLM context with a stale "you have not
-/// yet started working" instruction. Recognition lives in
-/// `empty_response_handler::is_transient_nudge_text` — same file
-/// defines the texts, so prefix and message stay in sync. Must run
-/// BEFORE the merge so adjacent assistant entries can rejoin.
-fn strip_transient_nudges(messages: Vec<Message>) -> Vec<Message> {
-    use crate::empty_response_handler::is_transient_nudge_text;
-    messages
-        .into_iter()
-        .filter(|m| {
-            !(m.role == MessageRole::System
-                && m.content
-                    .as_deref()
-                    .map(is_transient_nudge_text)
-                    .unwrap_or(false))
-        })
-        .collect()
-}
-
-fn merge_consecutive_assistant_messages(messages: Vec<Message>) -> Vec<Message> {
-    use MessageRole::Assistant;
-
-    fn is_empty(m: &Message) -> bool {
-        let has_content = m
-            .content
-            .as_deref()
-            .map(|c| !c.trim().is_empty())
-            .unwrap_or(false);
-        let has_tools = m
-            .tool_calls
-            .as_deref()
-            .map(|tc| !tc.is_empty())
-            .unwrap_or(false);
-        let has_reasoning = m
-            .reasoning_content
-            .as_deref()
-            .map(|c| !c.trim().is_empty())
-            .unwrap_or(false);
-        !has_content && !has_tools && !has_reasoning
-    }
-
-    fn flush_run(run: Vec<Message>, out: &mut Vec<Message>) {
-        let non_empty: Vec<&Message> = run.iter().filter(|m| !is_empty(m)).collect();
-        if non_empty.is_empty() {
-            return;
-        }
-        if non_empty.len() == 1 {
-            out.push(non_empty[0].clone());
-            return;
-        }
-        let merged_content: String = non_empty
-            .iter()
-            .filter_map(|m| m.content.as_deref())
-            .filter(|c| !c.is_empty())
-            .map(|c| c.to_string())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let merged_tools: Vec<ToolCall> = non_empty
-            .iter()
-            .filter_map(|m| m.tool_calls.clone())
-            .flat_map(|tc| tc.into_iter())
-            .collect();
-        let merged_reasoning: String = non_empty
-            .iter()
-            .filter_map(|m| m.reasoning_content.as_deref())
-            .filter(|c| !c.is_empty())
-            .map(|c| c.to_string())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let last = non_empty.last().unwrap();
-        let merged = Message {
-            content: if merged_content.is_empty() {
-                last.content.clone()
-            } else {
-                Some(merged_content)
-            },
-            tool_calls: if merged_tools.is_empty() {
-                last.tool_calls.clone()
-            } else {
-                Some(merged_tools)
-            },
-            reasoning_content: if merged_reasoning.is_empty() {
-                last.reasoning_content.clone()
-            } else {
-                Some(merged_reasoning)
-            },
-            ..(*last).clone()
-        };
-        out.push(merged);
-    }
-
-    let mut out: Vec<Message> = Vec::with_capacity(messages.len());
-    let mut run: Vec<Message> = Vec::new();
-    for m in messages {
-        if m.role == Assistant {
-            run.push(m);
-        } else {
-            if !run.is_empty() {
-                let drained: Vec<Message> = std::mem::take(&mut run);
-                flush_run(drained, &mut out);
-            }
-            out.push(m);
-        }
-    }
-    if !run.is_empty() {
-        flush_run(run, &mut out);
-    }
-    out
-}
-
-/// `AgentOverrides.attached_file_paths` → user-message suffix. The note
-/// rides on the persisted user message, so history shows what was attached
-/// even after reload; the model reads the files with `read_file` / `read_pdf`
-/// (the system prompt's context-bloat rules govern big docs).
-fn with_attached_files_note<'a>(text: &'a str, paths: Option<&'a [String]>) -> std::borrow::Cow<'a, str> {
-    match paths {
-        Some(paths) if !paths.is_empty() => std::borrow::Cow::Owned(format!(
-            "{text}\n\n[Attached files: {} — read them with read_file / read_pdf]",
-            paths.join(", ")
-        )),
-        _ => std::borrow::Cow::Borrowed(text),
-    }
-}
 
 /// Local in-process agent service.
 /// This service runs the agent loop directly in the current process,
@@ -913,18 +769,15 @@ impl LocalAgentService {
         // without `_with`, unknown custom-provider models silently fall
         // back to DEFAULT_FALLBACK_CONTEXT (128K) even when the operator
         // configured a different window.
-        let (model_name, providers) = {
+        // 在锁内直接查表，不把整份 provider 表（含所有 api_key）深拷贝出来：
+        // 这个函数每轮入口都跑，clone 一份含密钥的 HashMap 纯属白付。
+        let context_window = {
             let cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
-            (
-                cfg.model.clone().unwrap_or_default(),
-                cfg.llm_providers.clone(),
-            )
-        };
-        let context_window =
             hermix_intelligence::model_metadata::get_model_context_length_with(
-                &model_name,
-                Some(&providers),
-            ) as u64;
+                cfg.model.as_deref().unwrap_or_default(),
+                Some(&cfg.llm_providers),
+            ) as u64
+        };
         let threshold_tokens: u64 = (context_window as f64 * 0.85) as u64;
         if est_tokens > threshold_tokens && messages.len() > 13 {
             tracing::warn!(
@@ -1809,11 +1662,22 @@ impl AgentService for LocalAgentService {
         text: &str,
         overrides: AgentOverrides,
     ) -> Result<AgentReply, AgentError> {
-        // Load existing session messages
-        let mut messages = self
-            .session_persistence
-            .load_session(session_id)
-            .unwrap_or_default();
+        // Load existing session messages.
+        //
+        // 读失败**不能**降级成空历史：这一轮结束时会把 messages 整段写回
+        // （`persist_session` / `save_session_atomic`），于是「DB 读错一次」
+        // 变成「用户的整段会话被空内容覆盖」—— 不可逆。宁可让这一轮报错。
+        let mut messages = match self.session_persistence.load_session(session_id) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!(
+                    session_id,
+                    error = %e,
+                    "load_session failed; refusing to run a turn on a degraded (empty) history"
+                );
+                return Err(e);
+            }
+        };
 
         // O3.2: Gateway pre-compression safety net. Detect sessions that
         // have grown beyond 85% of a typical context window (200K tokens)
@@ -2079,7 +1943,9 @@ impl AgentService for LocalAgentService {
         // Register the agent's InterruptController + steer buffer (same as
         // the stream path) so `/stop` and `/queue steer` can reach this turn.
         self.register_active(session_id, &agent);
-        let result = agent.run(messages.clone(), None).await;
+        // 转移所有权而不是 clone：历史里可能带着几十条工具结果正文，
+        // 每轮在进入 loop 前白拷一份完整会话。
+        let result = agent.run(std::mem::take(&mut messages), None).await;
         // Always remove the registered handles.
         self.unregister_active(session_id);
         self.end_turn_record(turn.as_deref(), TurnOutcome::of_result(&result));
@@ -2284,11 +2150,18 @@ impl AgentService for LocalAgentService {
             text_len = text.len(),
             "send_message_stream entry"
         );
-        // Load existing session messages
-        let mut messages = self
-            .session_persistence
-            .load_session(session_id)
-            .unwrap_or_default();
+        // Load existing session messages（读失败不降级成空历史，理由同 `send_message`）
+        let mut messages = match self.session_persistence.load_session(session_id) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!(
+                    session_id,
+                    error = %e,
+                    "load_session failed; refusing to run a stream turn on a degraded (empty) history"
+                );
+                return Err(e);
+            }
+        };
         tracing::debug!(
             session_id,
             loaded_messages_len = messages.len(),
@@ -3408,8 +3281,9 @@ impl AgentService for LocalAgentService {
         // via the `completed_keys` replay path. This is the
         // "autonomously continue" policy — a transient disconnect
         // must never abort an in-flight task.
+        // 同 `send_message`：转移所有权，避免每轮拷一份完整历史。
         let result = agent
-            .run_stream(messages.clone(), None, Some(boxed_on_chunk))
+            .run_stream(std::mem::take(&mut messages), None, Some(boxed_on_chunk))
             .await;
         // Always remove the registered handles — whether the run succeeded or
         // failed, the agent is no longer active.
@@ -3671,14 +3545,11 @@ impl AgentService for LocalAgentService {
     }
 
     async fn reset_session(&self, session_id: &str) -> Result<(), AgentError> {
-        // First check if session exists
-        let messages = self.session_persistence.load_session(session_id);
-        if messages.is_ok() {
-            // Delete session by persisting an empty session
-            let _ =
-                self.session_persistence
-                    .persist_session(session_id, &[], None, None, None, None, None, None, None);
-        }
+        // 两类失败都必须传播：读失败时旧代码直接 `Ok(())`，调用方以为
+        // 「已重置」而磁盘上历史一行未动；写失败被 `let _ =` 吞掉时同样如此。
+        self.session_persistence.load_session(session_id)?;
+        self.session_persistence
+            .persist_session(session_id, &[], None, None, None, None, None, None, None)?;
         Ok(())
     }
 

@@ -830,7 +830,7 @@ impl MemberRunner {
 
         // 成员工具面：剥成员禁项；read_only 角色按 Explore 同款白名单收窄；
         // 逗号名单则逐项收窄。
-        let mut registry = self
+        let registry = self
             .cfg
             .tool_registry
             .without_tools(MEMBER_BLOCKED_TOOLS.iter().copied());
@@ -1934,7 +1934,7 @@ mod tests {
             })
             .await
             .expect("dispatch");
-        let mut current = serde_json::from_str::<Value>(&out).expect("json")["member_id"]
+        let current = serde_json::from_str::<Value>(&out).expect("json")["member_id"]
             .as_str().expect("id").to_string();
         wait_terminal(&runner, &current).await;
 

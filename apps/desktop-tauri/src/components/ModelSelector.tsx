@@ -3,6 +3,7 @@ import { useCurrentModel, MODEL_CONFIG_CHANGED_EVENT } from "../hooks/useCurrent
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { getModelList, getProviderMeta, type ModelListEntryInfo } from "../api";
 import { PROVIDERS } from "./settings/settingsUtils";
+import { reportError } from "../lib/reportError";
 
 /** 分组标题用的供应商名：自定义 provider 用 display_name，内置厂商用品牌名
  *  （`minimax` → `MiniMax`），都没有才退回 id。 */
@@ -82,7 +83,7 @@ export function useModelSelector() {
           }
         }
       }
-    } catch {}
+    } catch (e) { reportError("model-selector", e); }
     // 语义（"三刀"）：enabled 为空就是空——不再用 modelCache 全量
     // 目录冒充可选列表。未启用模型不会出现在聊天选择器，空态提示去设置启用。
     return { enabled: [], defaultModel: "" };
@@ -109,7 +110,7 @@ export function useModelSelector() {
         }
         setConfig(cfg);
         setSelectedModel((prev) => prev || cfg.defaultModel || (cfg.enabled[0] ? `${cfg.enabled[0].providerId}:${cfg.enabled[0].modelId}` : ""));
-      } catch {}
+      } catch (e) { reportError("model-selector", e); }
     };
 
     // reconcile: 统一权威规则（与 ModelListTab 的 load 对齐 ——
@@ -146,7 +147,7 @@ export function useModelSelector() {
             const parsed = JSON.parse(raw) as ModelConfigData;
             if (parsed && Array.isArray(parsed.enabled)) local = parsed;
           }
-        } catch {}
+        } catch (e) { reportError("model-selector", e); }
 
         const rawBackend = backend?.models ?? [];
         // 能力元数据按 `provider:model` 索引；catalog 里的也算上，
@@ -178,7 +179,7 @@ export function useModelSelector() {
         setSelectedModel((prev) =>
           (prev && validIds.has(prev)) ? prev : (validIds.has(defaultModel) ? defaultModel : "")
         );
-      } catch {}
+      } catch (e) { reportError("model-selector", e); }
     };
 
     // 配置写入（设置页各写入点统一走 writeModelConfigAndNotify）会广播

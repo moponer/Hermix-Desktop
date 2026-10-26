@@ -4,6 +4,7 @@ pub mod commands;
 pub mod commands_custom_app;
 pub mod commands_workbench;
 pub mod file_search_controller;
+pub mod frontend_log;
 pub mod hotkey;
 pub mod keep_awake;
 pub mod markitdown;
@@ -1079,6 +1080,9 @@ pub fn run() {
             cdp_probe::cdp_n0_probe,
             commands::document_to_markdown,
             commands::get_runtime_info,
+            // 前端错误落盘（P2-3）：生产构建 drop_console 后，这是唯一的
+            // 持久化上报通道。详见 `frontend_log.rs`。
+            frontend_log::report_frontend_error,
             boot_stage,
             // stdio bridge chokepoints — every REST call and every
             // WS-style upstream frame the frontend needs now flows

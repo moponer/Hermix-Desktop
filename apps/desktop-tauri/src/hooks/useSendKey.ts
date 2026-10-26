@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
+import { reportError } from "../lib/reportError";
 
 /** Enter 发送（Shift+Enter 换行）/ Ctrl+Enter 发送（Enter 换行）。 */
 export type SendKey = "enter" | "ctrl_enter";
@@ -10,7 +11,7 @@ const CHANGED_EVT = "hermix:send-key-changed";
 function read(): SendKey {
   try {
     if (storage.getItem(STORAGE_KEYS.sendKey) === "ctrl_enter") return "ctrl_enter";
-  } catch {}
+  } catch (e) { reportError("send-key", e); }
   return "enter";
 }
 
@@ -35,7 +36,7 @@ export function useSendKey(): [SendKey, (v: SendKey) => void] {
   }, []);
 
   const set = useCallback((next: SendKey) => {
-    try { storage.setItem(STORAGE_KEYS.sendKey, next); } catch {}
+    try { storage.setItem(STORAGE_KEYS.sendKey, next); } catch (e) { reportError("send-key", e); }
     setValue(next);
     window.dispatchEvent(new CustomEvent(CHANGED_EVT));
   }, []);

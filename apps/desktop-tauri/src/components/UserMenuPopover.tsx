@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { reportError } from "../lib/reportError";
 import { clsx } from "clsx";
 import {
   Globe, Palette, ZoomIn, BarChart3, Unplug, ChevronRight,
@@ -31,7 +32,7 @@ function readLang(): string {
   try { return storage.getItem(LANG_KEY) || "zh-CN"; } catch { return "zh-CN"; }
 }
 function writeLang(v: string) {
-  try { storage.setItem(LANG_KEY, v); } catch {}
+  try { storage.setItem(LANG_KEY, v); } catch (e) { reportError("user-menu", e); }
 }
 
 interface UserMenuPopoverProps {

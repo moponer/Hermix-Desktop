@@ -100,7 +100,10 @@ enum ToolTurnOutcome {
 
 // --- split-out impl blocks (pure relocation, see module docs) ---
 mod pre_turn;
+mod tool_prep;
 mod tool_turn;
+
+use tool_prep::ToolPrep;
 mod verification;
 
 impl AgentLoop {
@@ -654,133 +657,31 @@ let outcome = crate::empty_response_handler::decide_empty_response(
 
             codex_ack_continuations = 0;
 
-            // Deduplicate tool calls
-            tracing::debug!(phase = %LoopPhase::ToolValidation, turn = total_turns, "run: tool validation");
-self.notify_phase(&LoopPhase::ToolValidation, total_turns);
-            let mut tool_calls = Self::deduplicate_tool_calls(&tool_calls);
-            for tc in &mut tool_calls {
-                self.repair_tool_call(tc);
-                self.hydrate_session_search_args(tc);
-            }
-
-            //AL-7 : Unified tool-call validation.
-            let available = self.tool_registry.names().join(", ");
-            let outcome = crate::tool_call_validator::validate(
-                &mut tool_calls,
-                |name| self.tool_registry.get(name).is_some(),
-                |tc| Self::normalize_tool_call_arguments(tc),
-                &mut state.retry_counters,
-                &crate::tool_call_validator::ValidatorConfig {
-                    max_invalid_tool_retries: self.config.invalid_tool_call_max_retries,
-                    max_invalid_json_retries: self.config.invalid_tool_json_max_retries,
-                    available_tools: &available,
-                },
-            );
-            match &outcome {
-                crate::tool_call_validator::ValidationOutcome::RetryInvalidTool { .. } => {
-                    self.emit_status("lifecycle", "Invalid tool call detected — retrying");
-                }
-                crate::tool_call_validator::ValidationOutcome::FatalInvalidTool { invalid_names } => {
-                    self.emit_status("lifecycle", &format!(
-                        "Max invalid tool retries reached ({})", self.config.invalid_tool_call_max_retries
-                    ));
-                    let _ = invalid_names; // already in system message via apply_outcome
-                }
-                crate::tool_call_validator::ValidationOutcome::RetryInvalidJson => {
-                    self.emit_status("lifecycle", "Invalid tool JSON arguments — retrying");
-                }
-                crate::tool_call_validator::ValidationOutcome::FatalInvalidJson { .. } => {
-                    self.emit_status("lifecycle", &format!(
-                        "Max invalid JSON retries reached ({}); returning tool errors",
-                        self.config.invalid_tool_json_max_retries
-                    ));
-                }
-                crate::tool_call_validator::ValidationOutcome::Valid => {}
-            }
-            let apply_result = crate::tool_call_validator::apply_outcome(
-                &mut ctx, &tool_calls, outcome,
-            );
-            match apply_result {
-                crate::tool_call_validator::ApplyResult::Proceed => {}
-                crate::tool_call_validator::ApplyResult::Continue => continue,
-                crate::tool_call_validator::ApplyResult::ReturnFatal => {
-                    // #A (global fix): an invalid-tool exhaustion is a
-                    // recoverable backend failure, NOT a clean completion.
-                    // `interrupted=true` so the server sets the `Done`
-                    // outcome to "interrupted" and the front-end keeps the
-                    // session alive (no WS teardown, pending approvals
-                    // preserved) instead of silently killing the turn.
-                    return Ok(self.finalize_agent_result(
-                        &ctx,
-                        total_turns,
-                        &tool_errors,
-                        state.cost_guard.accumulated_usage.clone(),
-                        state.cost_guard.session_cost_usd,
-                        session_started_hooks_fired,
-                        persist_user_idx,
-                        false,
-                        true,
-                        None,
-                    ));
-                }
-            }
-
-            for tc in &tool_calls {
-                if let Ok(mut c) = self.evolution_counters.lock() {
-                    match tc.function.name.as_str() {
-                        "memory" => c.turns_since_memory = 0,
-                        "skill_manage" => c.iters_since_skill = 0,
-                        _ => {}
-                    }
-                }
-            }
-
-            // Cap concurrent delegate_task calls
-            self.cap_delegates(&mut tool_calls);
-
-            // Removed cross-turn tool-call deduplication.
-            // It was caching tool results and skipping re-execution, which
-            // prevented legitimate re-checks (e.g. re-reading a file after
-            // modifying it). The LLM has full context and can decide for
-            // itself whether to re-call a tool. Trust the LLM.
-
-            // --- Pre-tool hooks + callbacks ---
-            let mut tool_call_ids: HashMap<String, String> = HashMap::new();
-            for tc in &tool_calls {
-                let tc_ctx = serde_json::json!({
-                    "tool": &tc.function.name,
-                    "turn": total_turns,
-                });
-                self.invoke_hook(HookType::PreToolCall, &tc_ctx);
-
-                if let Some(ref cb) = self.callbacks.on_tool_start {
-                    let args: Value =
-                        serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
-                    let tool_call_id = format!("{}-{}", tc.function.name, tc.id);
-                    tool_call_ids.insert(tc.id.clone(), tool_call_id.clone());
-                    cb(&tool_call_id, &tc.function.name, &args);
-                }
-                // O7.2: fire clarify callback when the agent asks the user a question
-                if tc.function.name == "clarify" {
-                    if let Some(ref cb) = self.callbacks.on_clarify {
-                        let question = tc.function.arguments.clone();
-                        cb(&question);
-                    }
-                }
-            }
+            // tool-call 前置处理（去重 → 修补 → 校验 → 计数器 → delegate 上限
+            // → PreToolCall 钩子 → 中断检查）与 `run_stream` 共用同一实现，
+            // 见 `run_loop/tool_prep.rs`。此前两份逐字重复且已分叉。
+            self.notify_phase(&LoopPhase::ToolValidation, total_turns);
+            let (tool_calls, tool_call_ids) = match self.prepare_tool_calls(
+                &mut ctx,
+                &mut state,
+                tool_calls,
+                total_turns,
+                &tool_errors,
+                session_started_hooks_fired,
+                persist_user_idx,
+                None,
+                "run",
+                None,
+            )? {
+                ToolPrep::Proceed {
+                    tool_calls,
+                    tool_call_ids,
+                } => (tool_calls, tool_call_ids),
+                ToolPrep::SkipTurn => continue,
+                ToolPrep::Abort(result) => return Ok(*result),
+            };
 
             // --- Execute tool calls in parallel ---
-            if self.interrupt.take_interrupt_graceful().is_some() {
-                return Ok(self.graceful_interrupt_result(
-                    &ctx,
-                    total_turns,
-                    &tool_errors,
-                    state.cost_guard.accumulated_usage.clone(),
-                    state.cost_guard.session_cost_usd,
-                    session_started_hooks_fired,
-                    persist_user_idx,
-                ));
-            }
             // arm the turn-transition watchdog HERE — before tool
             // execution — so the top-of-loop check on the next iteration
             // covers the whole real stall window: tool execution incl.
@@ -1582,127 +1483,39 @@ let outcome = crate::empty_response_handler::decide_empty_response(
             codex_ack_continuations = 0;
 
             tracing::debug!(phase = %LoopPhase::ToolValidation, turn = total_turns, "run_stream: tool validation");
-self.notify_phase(&LoopPhase::ToolValidation, total_turns);
-            let mut tool_calls = Self::deduplicate_tool_calls(&tool_calls);
-            for tc in &mut tool_calls {
-                self.repair_tool_call(tc);
-                self.hydrate_session_search_args(tc);
-            }
-            let all_housekeeping = tool_calls.iter().all(|tc| {
-                matches!(
-                    tc.function.name.as_str(),
-                    "memory" | "todo" | "skill_manage" | "session_search"
-                )
-            });
-            let should_mute_post =
-                all_housekeeping && Self::assistant_visible_text_after_think_blocks(&assistant_msg);
-            Self::emit_mute_transition(&on_chunk, &stream_mute, should_mute_post);
-
-            //AL-7 : Unified tool-call validation.
-            let available = self.tool_registry.names().join(", ");
-            let outcome = crate::tool_call_validator::validate(
-                &mut tool_calls,
-                |name| self.tool_registry.get(name).is_some(),
-                |tc| Self::normalize_tool_call_arguments(tc),
-                &mut state.retry_counters,
-                &crate::tool_call_validator::ValidatorConfig {
-                    max_invalid_tool_retries: self.config.invalid_tool_call_max_retries,
-                    max_invalid_json_retries: self.config.invalid_tool_json_max_retries,
-                    available_tools: &available,
-                },
-            );
-            match &outcome {
-                crate::tool_call_validator::ValidationOutcome::RetryInvalidTool { .. } => {
-                    self.emit_status("lifecycle", "Invalid tool call detected — retrying");
-                }
-                crate::tool_call_validator::ValidationOutcome::FatalInvalidTool { invalid_names } => {
-                    self.emit_status("lifecycle", &format!(
-                        "Max invalid tool retries reached ({})", self.config.invalid_tool_call_max_retries
-                    ));
-                    let _ = invalid_names;
-                }
-                crate::tool_call_validator::ValidationOutcome::RetryInvalidJson => {
-                    self.emit_status("lifecycle", "Invalid tool JSON arguments — retrying");
-                }
-                crate::tool_call_validator::ValidationOutcome::FatalInvalidJson { .. } => {
-                    self.emit_status("lifecycle", &format!(
-                        "Max invalid JSON retries reached ({}); returning tool errors",
-                        self.config.invalid_tool_json_max_retries
-                    ));
-                }
-                crate::tool_call_validator::ValidationOutcome::Valid => {}
-            }
-            let apply_result = crate::tool_call_validator::apply_outcome(
-                &mut ctx, &tool_calls, outcome,
-            );
-            match apply_result {
-                crate::tool_call_validator::ApplyResult::Proceed => {}
-                crate::tool_call_validator::ApplyResult::Continue => continue,
-                crate::tool_call_validator::ApplyResult::ReturnFatal => {
-                    // #A (global fix): invalid-tool exhaustion is a
-                    // recoverable backend failure → mark `interrupted` so
-                    // the front-end keeps the session alive (see run_loop
-                    // ~1418 for the matching change in the other call site).
-                    return Ok(self.finalize_agent_result(
-                        &ctx,
-                        total_turns,
-                        &tool_errors,
-                        state.cost_guard.accumulated_usage.clone(),
-                        state.cost_guard.session_cost_usd,
-                        session_started_hooks_fired,
-                        persist_user_idx,
-                        false,
-                        true,
-                        last_finish_reason.clone(),
-                    ));
-                }
-            }
-            for tc in &tool_calls {
-                if let Ok(mut c) = self.evolution_counters.lock() {
-                    match tc.function.name.as_str() {
-                        "memory" => c.turns_since_memory = 0,
-                        "skill_manage" => c.iters_since_skill = 0,
-                        _ => {}
-                    }
-                }
-            }
-            self.cap_delegates(&mut tool_calls);
-
-            // Removed cross-turn tool-call deduplication.
-            // The LLM has full context and can decide for itself whether
-            // to re-call a tool. Caching prevented legitimate re-checks.
-
-            // Pre-tool hooks + callbacks
-            let mut tool_call_ids: HashMap<String, String> = HashMap::new();
-            for tc in &tool_calls {
-                let tc_ctx = serde_json::json!({"tool": &tc.function.name, "turn": total_turns});
-                self.invoke_hook(HookType::PreToolCall, &tc_ctx);
-                if let Some(ref cb) = self.callbacks.on_tool_start {
-                    let args: Value =
-                        serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
-                    let tool_call_id = format!("{}-{}", tc.function.name, tc.id);
-                    tool_call_ids.insert(tc.id.clone(), tool_call_id.clone());
-                    cb(&tool_call_id, &tc.function.name, &args);
-                }
-                if tc.function.name == "clarify" {
-                    if let Some(ref cb) = self.callbacks.on_clarify {
-                        let question = tc.function.arguments.clone();
-                        cb(&question);
-                    }
-                }
-            }
-
-            if self.interrupt.take_interrupt_graceful().is_some() {
-                return Ok(self.graceful_interrupt_result(
-                    &ctx,
-                    total_turns,
-                    &tool_errors,
-                    state.cost_guard.accumulated_usage.clone(),
-                    state.cost_guard.session_cost_usd,
-                    session_started_hooks_fired,
-                    persist_user_idx,
-                ));
-            }
+            self.notify_phase(&LoopPhase::ToolValidation, total_turns);
+            // 流式独有：家务型工具批次 + 已有可见文本时进入静音过渡。它必须发生在
+            // **去重之后、校验之前**（历史顺序），所以作为钩子传给共用实现。
+            let mute_hook = |calls: &[ToolCall]| {
+                let all_housekeeping = calls.iter().all(|tc| {
+                    matches!(
+                        tc.function.name.as_str(),
+                        "memory" | "todo" | "skill_manage" | "session_search"
+                    )
+                });
+                let should_mute_post = all_housekeeping
+                    && Self::assistant_visible_text_after_think_blocks(&assistant_msg);
+                Self::emit_mute_transition(&on_chunk, &stream_mute, should_mute_post);
+            };
+            let (tool_calls, tool_call_ids) = match self.prepare_tool_calls(
+                &mut ctx,
+                &mut state,
+                tool_calls,
+                total_turns,
+                &tool_errors,
+                session_started_hooks_fired,
+                persist_user_idx,
+                last_finish_reason.clone(),
+                "run_stream",
+                Some(&mute_hook),
+            )? {
+                ToolPrep::Proceed {
+                    tool_calls,
+                    tool_call_ids,
+                } => (tool_calls, tool_call_ids),
+                ToolPrep::SkipTurn => continue,
+                ToolPrep::Abort(result) => return Ok(*result),
+            };
 
             // arm the turn-transition watchdog HERE — before tool
             // execution — same rationale as the run() side: the old

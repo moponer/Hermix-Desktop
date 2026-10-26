@@ -190,33 +190,66 @@ pub(crate) async fn list_sessions(
     Query(q): Query<ListSessionsQuery>,
 ) -> Json<ListSessionsResponse> {
     let db_path = hermix_config::paths::data_dir_in(&state.hermix_home).join("sessions.db");
-    let conn = match open_sessions_db_for_read(&db_path) {
+    // 同步 SQLite 搬到阻塞池：连接 busy_timeout 只有 500ms，一次锁冲突就能把
+    // tokio worker 钉住半秒 —— 期间 WS 心跳与流式帧一起卡。列表是一次全表扫
+    // （无 LIMIT，见审计 P1-7），更该离开 async 线程。
+    let (sessions, total) = tokio::task::spawn_blocking(move || {
+        read_session_summaries(&db_path, q.workbench_id.as_deref())
+    })
+    .await
+    .unwrap_or_default();
+    Json(ListSessionsResponse { total, sessions })
+}
+
+/// 单次会话列表最多返回多少行。会话表只增不减，老用户能积累上千行；
+/// 超出部分由 `total`（真实 COUNT）告知前端，而不是把整张表拉进内存。
+const SESSION_LIST_LIMIT: i64 = 1000;
+
+/// 会话列表的同步读取（在阻塞池里跑）。返回 `(当前页, 真实总数)`。
+fn read_session_summaries(
+    db_path: &std::path::Path,
+    workbench_id: Option<&str>,
+) -> (Vec<SessionSummary>, usize) {
+    let conn = match open_sessions_db_for_read(db_path) {
         Ok(conn) => conn,
-        Err(_) => {
-            return Json(ListSessionsResponse {
-                sessions: vec![],
-                total: 0,
-            });
-        }
+        Err(_) => return (Vec::new(), 0),
     };
     // Bind the scope into the SQL rather than filtering in Rust: a stray
     // row leaking into the main list is exactly the bug being fixed, and
     // "load everything then drop" would keep the window open for it.
     let sql = "SELECT id, title, created_at, updated_at, message_count, model, workspace, \
                expert_id, workbench_id FROM sessions WHERE ";
-    let scoped = q.workbench_id.clone();
-    let stmt = match &scoped {
-        Some(_) => conn.prepare(&format!("{sql}{WORKBENCH_SESSION_SCOPE_SQL} ORDER BY updated_at DESC")),
-        None => conn.prepare(&format!("{sql}{DEFAULT_SESSION_SCOPE_SQL} ORDER BY updated_at DESC")),
+    // `total` 必须是真实行数：加了 LIMIT 之后再用 `sessions.len()` 顶替，
+    // 侧栏就会把"最多 1000"当成总数显示。
+    //
+    // 保留 `{…_SCOPE_SQL}` 的插值形态（而不是先绑成 `scope` 变量）：仓库里有
+    // 一条测试钉这个形状，防止有人把过滤条件硬编码进语句、绕过常量。
+    let total: usize = match workbench_id {
+        Some(id) => conn.query_row(
+            &format!("SELECT COUNT(*) FROM sessions WHERE {WORKBENCH_SESSION_SCOPE_SQL}"),
+            rusqlite::params![id],
+            |row| row.get::<_, i64>(0),
+        ),
+        None => conn.query_row(
+            &format!("SELECT COUNT(*) FROM sessions WHERE {DEFAULT_SESSION_SCOPE_SQL}"),
+            [],
+            |row| row.get::<_, i64>(0),
+        ),
+    }
+    .map(|n| n as usize)
+    .unwrap_or(0);
+
+    let stmt = match workbench_id {
+        Some(_) => conn.prepare(&format!(
+            "{sql}{WORKBENCH_SESSION_SCOPE_SQL} ORDER BY updated_at DESC LIMIT {SESSION_LIST_LIMIT}"
+        )),
+        None => conn.prepare(&format!(
+            "{sql}{DEFAULT_SESSION_SCOPE_SQL} ORDER BY updated_at DESC LIMIT {SESSION_LIST_LIMIT}"
+        )),
     };
     let mut stmt = match stmt {
         Ok(stmt) => stmt,
-        Err(_) => {
-            return Json(ListSessionsResponse {
-                sessions: vec![],
-                total: 0,
-            });
-        }
+        Err(_) => return (Vec::new(), total),
     };
     let bind = |row: &rusqlite::Row| {
         Ok(SessionSummary {
@@ -233,9 +266,9 @@ pub(crate) async fn list_sessions(
             workbench_id: row.get::<_, Option<String>>(8).ok().flatten(),
         })
     };
-    let sessions: Vec<SessionSummary> = match &scoped {
+    let sessions: Vec<SessionSummary> = match workbench_id {
         Some(id) => stmt
-            .query_map(rusqlite::params![id.clone()], bind)
+            .query_map(rusqlite::params![id], bind)
             .map(|rows| rows.filter_map(Result::ok).collect())
             .unwrap_or_default(),
         None => stmt
@@ -243,10 +276,7 @@ pub(crate) async fn list_sessions(
             .map(|rows| rows.filter_map(Result::ok).collect())
             .unwrap_or_default(),
     };
-    Json(ListSessionsResponse {
-        total: sessions.len(),
-        sessions,
-    })
+    (sessions, total)
 }
 
 pub(crate) async fn create_session(
@@ -1104,10 +1134,27 @@ pub(crate) async fn get_session_messages(
     // (e.g. "3 天前" instead of "刚刚"). The legacy
     // `load_session_with_approvals` was paired with `timestamp: now`
     // below, which masked every message's true age.
-    let entries_with_ts = state
-        .session_persistence
-        .load_session_with_approvals_and_timestamps(&session_id)
-        .map_err(HttpError::from)?;
+    // 前端首屏只要尾部 60 条（`INITIAL_MESSAGE_WINDOW`）。读 DB 时也只取
+    // 尾部：留 4 倍余量给窗口边界、args_map 与子会话去重，避免 `tail_skip`
+    // 翻页时读到不够的数据。无 `limit` 的调用方（全量导出等）保持旧行为。
+    const READ_MARGIN: usize = 4;
+    let requested_tail = q
+        .limit
+        .filter(|l| *l > 0)
+        .map(|limit| (limit + q.tail_skip.unwrap_or(0)) * READ_MARGIN + 40);
+    // 首屏（不翻页）不读压缩归档子会话：它们拼在窗口之前，窗口里一条都用
+    // 不上。翻页时（tail_skip > 0）才读。
+    let skip_archived = requested_tail.is_some() && q.tail_skip.unwrap_or(0) == 0;
+
+    let entries_with_ts = match requested_tail {
+        Some(n) => state
+            .session_persistence
+            .load_session_tail_with_timestamps(&session_id, n),
+        None => state
+            .session_persistence
+            .load_session_with_approvals_and_timestamps(&session_id),
+    }
+    .map_err(HttpError::from)?;
     let entries: Vec<hermix_agent::SessionEntry> =
         entries_with_ts.iter().map(|(e, _)| e.clone()).collect();
     // Pull the timestamps out in lockstep with the entries below.
@@ -1144,6 +1191,11 @@ pub(crate) async fn get_session_messages(
         .unwrap_or_default();
     let mut archived_entries_with_ts: Vec<(String, Vec<(hermix_agent::SessionEntry, Option<String>)>)> = Vec::new();
     for child_id in &child_ids {
+        if skip_archived {
+            // 归档段在窗口之前，首屏不需要其内容（但 child_ids 已查到，
+            // 下面据此保证 `has_more` 为真）。
+            continue;
+        }
         let child_ets = state
             .session_persistence
             .load_session_with_approvals_and_timestamps(child_id)
@@ -1433,6 +1485,9 @@ pub(crate) async fn get_session_messages(
     let context_usage = state.session_persistence.get_context_usage(&session_id);
     let total_messages = all_messages.len();
     let (page, has_more) = window_message_page(all_messages, q.limit, q.tail_skip.unwrap_or(0));
+    // 跳过归档读取时 `all_messages` 里没有归档段 → 窗口之前一定还有更早的
+    // 内容，必须让前端保留「加载更早」入口，否则那批消息永远看不到。
+    let has_more = has_more || (skip_archived && !child_ids.is_empty());
     Ok(Json(SessionMessagesResponse {
         session_id,
         messages: page,

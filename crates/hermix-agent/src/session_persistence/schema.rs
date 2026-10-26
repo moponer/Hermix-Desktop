@@ -31,7 +31,32 @@ impl SessionPersistence {
     }
 
     /// Ensure the SQLite database and tables exist.
+    ///
+    /// **进程内按 db 路径只跑一次**。整套迁移是 ~14 条 `ALTER TABLE`（失败即忽略）
+    /// + 建表/索引/触发器批次 + 9 次 `stamp_migration` 的幂等序列，此前挂在
+    /// 每条读写路径的开头 —— 每个请求都白付一次写事务 + 一次全表
+    /// `DELETE FROM messages WHERE role='system'`（`role` 无索引）。
+    ///
+    /// 代价（有意）：**进程内**新增的迁移不会自动生效，迁移只在首次访问时执行。
+    /// 新迁移随版本发布生效一次，这与"迁移是启动期动作"的直觉一致。
     pub fn ensure_db(&self) -> Result<(), AgentError> {
+        type Ensured = std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>;
+        static ENSURED: std::sync::OnceLock<Ensured> = std::sync::OnceLock::new();
+        let ensured = ENSURED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+        let db_path = self.db_path.clone();
+        match ensured.lock() {
+            Ok(set) if set.contains(&db_path) => return Ok(()),
+            // 锁中毒 → 当作没跑过，重跑一次（整套迁移幂等，不会重复建表）。
+            _ => {}
+        }
+        self.ensure_db_inner()?;
+        if let Ok(mut set) = ensured.lock() {
+            set.insert(db_path);
+        }
+        Ok(())
+    }
+
+    fn ensure_db_inner(&self) -> Result<(), AgentError> {
         // -----------------------------------------------------------------
         // Migration 0: legacy DB from `$hermix_home/sessions.db` (pre-
         // data_dir) to `$hermix_home/data/sessions.db`. If the new DB
@@ -399,6 +424,13 @@ impl SessionPersistence {
 
             CREATE INDEX IF NOT EXISTS idx_messages_session
                 ON messages(session_id);
+
+            -- 分析/列表查询按时间过滤或排序（usage.rs 的 COUNT/ORDER BY、
+            -- 会话列表的 ORDER BY updated_at），此前没有索引 → 全表扫 + 排序。
+            CREATE INDEX IF NOT EXISTS idx_messages_created_at
+                ON messages(created_at);
+            CREATE INDEX IF NOT EXISTS idx_sessions_updated_at
+                ON sessions(updated_at);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
                 content,

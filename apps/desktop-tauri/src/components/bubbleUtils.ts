@@ -6,6 +6,7 @@ import {
   FolderOpen, Globe, Database, Bot, Brain, HelpCircle, GitBranch, Hammer, FileText,
 } from "lucide-react";
 import { describeShellCommand } from "../lib/commandDescribe";
+import { reportError } from "../lib/reportError";
 /**
  * 毫秒 → `29s` / `4m 12s` / `3h 18m` / `2d 4h`。
  *
@@ -227,7 +228,7 @@ export function inferVerbFromArgs(argsJson?: string): string | null {
       if ("query" in parsed || "pattern" in parsed || "q" in parsed) return "搜索";
       if ("code" in parsed) return "执行代码";
     }
-  } catch {}
+  } catch (e) { reportError("bubble-parse", e); }
   return null;
 }
 
@@ -310,7 +311,7 @@ export function toolResultPeek(output?: string, argsJson?: string): string | nul
           }
         }
       }
-    } catch {}
+    } catch (e) { reportError("bubble-parse", e); }
   }
 
   const trimmed = text.trim();
@@ -374,7 +375,7 @@ export function toolPrimaryArg(tool: string, argsJson?: string, stdoutHint?: str
     try {
       const v = JSON.parse(argsJson);
       if (v && typeof v === "object" && !Array.isArray(v)) parsed = v as Record<string, unknown>;
-    } catch {}
+    } catch (e) { reportError("bubble-parse", e); }
   }
   const str = (k: string): string | null => {
     if (!parsed) return null;

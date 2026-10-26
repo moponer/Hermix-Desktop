@@ -3,6 +3,7 @@
    ════════════════════════════════════════════════════════════════ */
 
 import { useState, useEffect, useRef } from "react";
+import { reportError } from "../../lib/reportError";
 import { MessageSquare, ArrowRight } from "lucide-react";
 import { clsx } from "clsx";
 import { PALETTES, type AgentPersona } from "./types";
@@ -76,7 +77,7 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
               next[next.length - 1] = { role: "agent", text: acc };
               return next;
             });
-          } catch {}
+          } catch (e) { reportError("agent-test", e); }
         }
       }
     } catch (e) {

@@ -75,11 +75,8 @@ impl SshBackend {
     }
 
     fn truncate_output(&self, s: String) -> String {
-        if s.len() > self.max_output_size {
-            s[..self.max_output_size].to_string()
-        } else {
-            s
-        }
+        // 字符边界截断：远端输出同样可能是中文/emoji，按字节切会 panic。
+        crate::output::truncate_to_boundary(s, self.max_output_size)
     }
 }
 

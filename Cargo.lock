@@ -2982,6 +2982,7 @@ dependencies = [
  "hermix-agent",
  "hermix-config",
  "hermix-core",
+ "hermix-store",
  "hermix-tools",
  "rusqlite",
  "serde",

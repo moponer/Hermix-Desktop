@@ -129,45 +129,13 @@ pub struct AssemblyResult {
 
 /// If deferred tools exceed threshold, replace them with 3 bridge tools.
 /// Otherwise pass through all tools unchanged.
+///
+/// 无元数据版 = 用**空** `ToolMetaRegistry` 跑同一套装配（空表时它回退到
+/// `classify_tools` 的硬编码分类）。此前这两条路径各写了一份"拆 bridge →
+/// 判阈值 → 注入三元组"，注释在互相镜像修同一个 bug（bridge 在阈值下方
+/// 消失）；单一实现才是它不再复发的保证。
 pub fn assemble_tool_schemas(all: Vec<ToolSchema>) -> AssemblyResult {
-    // Split out any pre-existing bridge tools (idempotent re-entry) instead
-    // of dropping them. The old shape filtered them out of `incoming` and
-    // only re-added them on the activated branch, so a registry with fewer
-    // than `DEFERRED_THRESHOLD` deferred tools lost `tool_search` /
-    // `tool_describe` / `tool_call` from the schema list entirely — while
-    // `directions.rs` went on advertising them. The model was told the
-    // bridge existed, could not see it, and burned turns rediscovering it.
-    // ("同一会话内先成功后 does not exist" — the first turn crossed the
-    // threshold, the next did not.)
-    let mut existing_bridges: Vec<ToolSchema> = Vec::new();
-    let mut incoming: Vec<ToolSchema> = Vec::new();
-    for s in all {
-        if is_bridge(&s.name) {
-            existing_bridges.push(s);
-        } else {
-            incoming.push(s);
-        }
-    }
-    let (visible, deferred) = classify_tools(&incoming);
-    if schemas_char_size(deferred.iter().copied()) <= DEFERRED_SCHEMA_CHAR_BUDGET {
-        let mut tool_schemas = incoming;
-        tool_schemas.extend(existing_bridges);
-        return AssemblyResult {
-            tool_schemas,
-            activated: false,
-            deferred_count: 0,
-        };
-    }
-    let mut result: Vec<ToolSchema> = visible.into_iter().cloned().collect();
-    let count = deferred.len();
-    // Activated: emit the canonical bridge trio (carrying the real deferred
-    // count), not whatever happened to be in the incoming list.
-    result.extend(bridge_tool_schemas(count));
-    AssemblyResult {
-        tool_schemas: result,
-        activated: true,
-        deferred_count: count,
-    }
+    crate::deferred_loader::assemble_tool_schemas_with_meta(all, &ToolMetaRegistry::new())
 }
 
 pub(crate) fn bridge_tool_schemas(deferred_count: usize) -> Vec<ToolSchema> {

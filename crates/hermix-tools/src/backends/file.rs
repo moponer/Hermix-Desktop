@@ -799,13 +799,29 @@ impl LocalSearchBackend {
 
     fn matches_glob(name: &str, pattern: &str) -> bool {
         // Simple glob matching: * matches any sequence, ? matches single char
-        let re_pattern = pattern
-            .replace('.', "\\.")
-            .replace('*', ".*")
-            .replace('?', ".");
-        Regex::new(&format!("^{}$", re_pattern))
-            .map(|re| re.is_match(name))
-            .unwrap_or(false)
+        let re_pattern = format!(
+            "^{}$",
+            pattern.replace('.', "\\.").replace('*', ".*").replace('?', ".")
+        );
+        // 递归遍历里本函数按**每个文件条目**调用一次，每次 `Regex::new` 都要
+        // 重新编译 —— 10 万文件的搜索就是 10 万次编译（单次调用秒级）。
+        // 按 pattern 文本缓存：一次搜索通常只用一两个 pattern，命中在首位。
+        static CACHE: std::sync::OnceLock<std::sync::Mutex<Vec<(String, Regex)>>> =
+            std::sync::OnceLock::new();
+        let cache = CACHE.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+        if let Ok(cache) = cache.lock() {
+            if let Some((_, re)) = cache.iter().find(|(p, _)| p == &re_pattern) {
+                return re.is_match(name);
+            }
+        }
+        let Ok(re) = Regex::new(&re_pattern) else {
+            return false;
+        };
+        if let Ok(mut cache) = cache.lock() {
+            cache.insert(0, (re_pattern, re.clone()));
+            cache.truncate(8);
+        }
+        re.is_match(name)
     }
 }
 #[cfg(test)]

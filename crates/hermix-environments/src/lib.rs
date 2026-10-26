@@ -16,6 +16,7 @@
 
 pub mod file_sync;
 pub mod jobs;
+mod output;
 pub mod local;
 pub mod local_isolation;
 pub mod pty_filter;

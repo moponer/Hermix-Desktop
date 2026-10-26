@@ -174,8 +174,16 @@ pub async fn update_config(
     // `merge_config_patch` for the data loss this replaces.
     let mut merged = read_config_json(&config_path);
     merge_config_patch(&mut merged, &body.config);
+    // 磁盘上的 api_key 可能是 `vault:` 引用；内存（agent service）与
+    // `GET /api/config` 必须拿明文。
+    hermix_config::secrets::unseal_json_config(&mut merged);
 
-    let yaml = serde_yaml::to_string(&merged).map_err(|e| HttpError {
+    // 写盘用一份封存后的副本 —— 不能就地改 `merged`，它下面马上要推给
+    // agent service。
+    let mut on_disk = merged.clone();
+    hermix_config::secrets::seal_json_config(&mut on_disk);
+
+    let yaml = serde_yaml::to_string(&on_disk).map_err(|e| HttpError {
         status: axum::http::StatusCode::BAD_REQUEST,
         message: format!("invalid config: {}", e),
     })?;
@@ -457,6 +465,77 @@ pub async fn report_dead_model(
         crate::free_channel::remove_dead_model(&state.hermix_home, &state.agent_service, &model)
             .await;
     Json(DeadModelResponse { model, removed })
+}
+
+/// 免费渠道总开关的当前状态（前端开关的**权威值**）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FreeChannelState {
+    /// 总开关状态（`config.free_channel.enabled`）。
+    pub enabled: bool,
+    /// 当前已登记的免费模型条数（provider 目录里的模型总数）。
+    pub models: usize,
+    /// 参与免费渠道的 provider id。
+    pub providers: Vec<String>,
+}
+
+/// Request for `PUT /api/free-channel`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct FreeChannelToggleRequest {
+    /// true = 开启（拉取社区免费模型）；false = 关闭（不拉取并移除已拉取的）。
+    pub enabled: bool,
+}
+
+/// GET /api/free-channel —— 社区免费模型总开关的当前状态。
+///
+/// 开关显示的值必须来自后端（config.yaml 是唯一权威），不能是前端自己
+/// 记的 localStorage —— 那是「双权威漂移」的起点。
+pub async fn get_free_channel(State(state): State<HttpServerState>) -> Json<FreeChannelState> {
+    let cfg = current_gateway_config(&state);
+    Json(free_channel_state(&cfg))
+}
+
+/// 把配置折成开关状态（GET / PUT 共用）。
+fn free_channel_state(cfg: &hermix_config::GatewayConfig) -> FreeChannelState {
+    let mut providers: Vec<String> = cfg
+        .llm_providers
+        .keys()
+        .filter(|id| hermix_config::free_channel::is_free_provider(id))
+        .cloned()
+        .collect();
+    providers.sort();
+    let models = providers
+        .iter()
+        .filter_map(|id| cfg.llm_providers.get(id))
+        .map(|entry| {
+            entry
+                .model
+                .as_deref()
+                .map(|csv| csv.split(',').filter(|m| !m.trim().is_empty()).count())
+                .unwrap_or(0)
+        })
+        .sum();
+    FreeChannelState {
+        enabled: cfg.free_channel.enabled,
+        models,
+        providers,
+    }
+}
+
+/// PUT /api/free-channel —— 社区免费模型总开关。
+///
+/// 开：重建免费渠道条目 + 把 Top-N 免费模型写回启用清单 + 后台拉社区清单。
+/// 关：摘除已拉取的免费条目（目录 / 启用清单 / 默认模型），之后不再拉取。
+pub async fn put_free_channel(
+    State(state): State<HttpServerState>,
+    Json(body): Json<FreeChannelToggleRequest>,
+) -> Result<Json<FreeChannelState>, HttpError> {
+    crate::free_channel::set_enabled(&state.hermix_home, &state.agent_service, body.enabled)
+        .await
+        .map_err(|e| HttpError {
+            status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            message: e,
+        })?;
+    Ok(Json(free_channel_state(&current_gateway_config(&state))))
 }
 
 /// Request for `POST /api/free-channel/probe-model`.

@@ -9,6 +9,7 @@ description = "Cron scheduler for Hermix Agent"
 [dependencies]
 hermix-config = { workspace = true }
 hermix-core = { workspace = true }
+hermix-store = { workspace = true }
 hermix-agent = { workspace = true }
 hermix-tools = { workspace = true }
 tokio = { workspace = true }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Save, Check } from "lucide-react";
+import { reportError } from "../../lib/reportError";
 import * as api from "../../api";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import { useSafeTimeout } from "../../hooks/useSafeTimeout";
@@ -16,7 +17,7 @@ export function AdvancedTab() {
     try {
       const raw = storage.getItem(STORAGE_KEYS.advancedConfig);
       if (raw) return { ...DEFAULT_ADVANCED_CONFIG, ...JSON.parse(raw) };
-    } catch {}
+    } catch (e) { reportError("settings-advanced", e); }
     return DEFAULT_ADVANCED_CONFIG;
   });
   const [saved, setSaved] = useState(false);

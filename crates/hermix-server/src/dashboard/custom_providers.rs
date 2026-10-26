@@ -356,8 +356,17 @@ pub async fn fetch_models(
     })?;
 
     let url = format!("{}/models", base_url.trim_end_matches('/'));
+    if let Err(e) = crate::util::safe_outbound_url(&url) {
+        return Ok(Json(FetchModelsResponse {
+            models: vec![],
+            error: Some(e),
+        }));
+    }
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .redirect(crate::util::safe_redirect_policy())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let mut request = client.get(&url);
     // 无鉴权端点（免费渠道里 api_key: none）不发 Authorization 头。
     if let Some(value) = hermix_config::free_channel::auth_header(Some(api_key)) {
@@ -481,7 +490,18 @@ pub async fn test_connection(
     })?;
 
     let url = format!("{}/models", base_url.trim_end_matches('/'));
-    let client = reqwest::Client::new();
+    if let Err(e) = crate::util::safe_outbound_url(&url) {
+        return Ok(Json(TestConnectionResponse {
+            ok: false,
+            status: 0,
+            error: Some(e),
+            models: None,
+        }));
+    }
+    let client = reqwest::Client::builder()
+        .redirect(crate::util::safe_redirect_policy())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let mut request = client.get(&url);
     if let Some(value) = hermix_config::free_channel::auth_header(Some(api_key)) {
         request = request.header("Authorization", value);
@@ -617,11 +637,23 @@ pub async fn test_inline(
     }
 
     let url = format!("{}/models", base);
+    if let Err(e) = crate::util::safe_outbound_url(&url) {
+        return Ok(Json(InlineTestResponse {
+            ok: false,
+            kind: Some("bad_request".into()),
+            status: 0,
+            latency_ms: 0,
+            error: Some(e),
+            models: None,
+            model_found: None,
+        }));
+    }
     let started = std::time::Instant::now();
     // 10s 上限：连通性测试不是聊天请求，超时了就该立刻告诉用户，
     // 别让弹窗上的按钮转半分钟。
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        .redirect(crate::util::safe_redirect_policy())
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
     let mut request = client.get(&url);

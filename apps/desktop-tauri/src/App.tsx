@@ -70,6 +70,7 @@ import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
 import { sendNotification, setKeepAwake, KEEP_AWAKE_CHANGED_EVENT, setTrayTaskCount } from "./desktopBridge";
 import { applyScale, readScale, UI_SCALE_EVENT } from "./utils/uiScale";
 import { CLOSE, NEW_CHAT } from "./components/strings";
+import { reportError } from "./lib/reportError";
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
 
@@ -273,7 +274,7 @@ setPage("chat");
   });
   const setActiveSessionId = useCallback((id: string | null) => {
     setActiveSessionIdRaw(id);
-    try { id ? storage.setItem(ACTIVE_SESSION_KEY, id) : storage.removeItem(ACTIVE_SESSION_KEY); } catch {}
+    try { id ? storage.setItem(ACTIVE_SESSION_KEY, id) : storage.removeItem(ACTIVE_SESSION_KEY); } catch (e) { reportError("app", e); }
   }, []);
 
   // sessions 的最新值镜像到 ref，给异步回调（onDone 后的
@@ -339,7 +340,7 @@ setPage("chat");
     try { return storage.getItem(RIGHT_OPEN_KEY) !== "false"; } catch { return false; }
   });
   useEffect(() => {
-    try { storage.setItem(RIGHT_OPEN_KEY, String(rightOpen)); } catch {}
+    try { storage.setItem(RIGHT_OPEN_KEY, String(rightOpen)); } catch (e) { reportError("app", e); }
   }, [rightOpen]);
 
   // 打开右栏的唯一入口在下方（需要 left/right 当前宽度才知缺口），这里先放
@@ -2198,13 +2199,13 @@ setPage("chat");
         if (draftExpert) {
           storage.setItem(sessionKey(session.id, "expertId"), draftExpert);
         }
-      } catch {}
+      } catch (e) { reportError("app", e); }
       try {
         const draftWorkspace = storage.getItem(STORAGE_KEYS.draftWorkspace);
         if (draftWorkspace) {
           storage.setItem(sessionKey(session.id, "workspace"), draftWorkspace);
         }
-      } catch {}
+      } catch (e) { reportError("app", e); }
     }
 
 // Reset per-turn state.
@@ -4012,7 +4013,7 @@ return {
       // 全量重拉后本地就是完整列表，翻页入口随之关闭。
       setHistoryPaging((prev) => ({ ...prev, [activeSessionId]: { hasMore: false } }));
       setSessions((prev) => prev.map((s) => s.id === activeSessionId ? { ...s, messages } : s));
-    } catch {}
+    } catch (e) { reportError("app", e); }
   }, [activeSessionId]);
 
   // /restore: re-activate the most recently deactivated block. Same
@@ -4027,7 +4028,7 @@ return {
       // 全量重拉后本地就是完整列表，翻页入口随之关闭。
       setHistoryPaging((prev) => ({ ...prev, [activeSessionId]: { hasMore: false } }));
       setSessions((prev) => prev.map((s) => s.id === activeSessionId ? { ...s, messages } : s));
-    } catch {}
+    } catch (e) { reportError("app", e); }
   }, [activeSessionId]);
 
   // ── ChatView 的稳定回调 ──────────────────────────────────────────

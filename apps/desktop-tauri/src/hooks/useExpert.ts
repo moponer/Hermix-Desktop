@@ -18,6 +18,7 @@ import {
 } from "../data/builtinExperts";
 import { fetchExperts, type RemoteExpert } from "../api";
 import { storage, STORAGE_KEYS, sessionKey } from "../utils/storageCompat";
+import { reportError } from "../lib/reportError";
 
 const PERMISSION_LEVEL_KEY = STORAGE_KEYS.permissionLevel;
 const RECENT_EXPERTS_KEY = STORAGE_KEYS.recentExperts;
@@ -69,13 +70,13 @@ export function usePermissionLevel(): [PermissionLevel, (lvl: PermissionLevel) =
     try {
       const raw = storage.getItem(PERMISSION_LEVEL_KEY);
       if (raw === "full") return "full";
-    } catch {}
+    } catch (e) { reportError("expert-prefs", e); }
     return "default";
   });
   useEffect(() => {
     try {
       storage.setItem(PERMISSION_LEVEL_KEY, level);
-    } catch {}
+    } catch (e) { reportError("expert-prefs", e); }
   }, [level]);
   return [level, setLevel];
 }
@@ -93,13 +94,13 @@ export function useDomainMode(): [DomainModeChoice, (m: DomainModeChoice) => voi
     try {
       const raw = storage.getItem(DOMAIN_MODE_KEY);
       if (raw === "code") return "code";
-    } catch {}
+    } catch (e) { reportError("expert-prefs", e); }
     return "auto";
   });
   useEffect(() => {
     try {
       storage.setItem(DOMAIN_MODE_KEY, mode);
-    } catch {}
+    } catch (e) { reportError("expert-prefs", e); }
   }, [mode]);
   return [mode, setMode];
 }
@@ -120,12 +121,12 @@ export function useSessionExpert(sessionId: string | null | undefined): {
     try {
       const draft = storage.getItem(DRAFT_EXPERT_KEY);
       if (draft) return draft;
-    } catch {}
+    } catch (e) { reportError("expert-prefs", e); }
     // Fallback: legacy per-session key.
     if (sessionId) {
       try {
         return storage.getItem(SESSION_EXPERT_KEY(sessionId));
-      } catch {}
+      } catch (e) { reportError("expert-prefs", e); }
     }
     return null;
   });
@@ -142,7 +143,7 @@ export function useSessionExpert(sessionId: string | null | undefined): {
             setExpertId(session);
           }
         }
-      } catch {}
+      } catch (e) { reportError("expert-prefs", e); }
     }
   }, [sessionId]);
 
@@ -155,7 +156,7 @@ export function useSessionExpert(sessionId: string | null | undefined): {
           if (sessionId) storage.setItem(SESSION_EXPERT_KEY(sessionId), id);
           const raw = storage.getItem(RECENT_EXPERTS_KEY);
           let ids: string[] = [];
-          try { const p = JSON.parse(raw || '[]'); if (Array.isArray(p)) ids = p; } catch {}
+          try { const p = JSON.parse(raw || '[]'); if (Array.isArray(p)) ids = p; } catch (e) { reportError("expert-prefs", e); }
           const without = ids.filter((x) => x !== id);
           ids = [id, ...without].slice(0, RECENT_EXPERTS_MAX);
           storage.setItem(RECENT_EXPERTS_KEY, JSON.stringify(ids));
@@ -163,7 +164,7 @@ export function useSessionExpert(sessionId: string | null | undefined): {
           storage.removeLegacy(DRAFT_EXPERT_KEY);
           if (sessionId) storage.removeLegacy(SESSION_EXPERT_KEY(sessionId));
         }
-      } catch {}
+      } catch (e) { reportError("expert-prefs", e); }
       setExpertId(id);
     },
     [sessionId],
@@ -286,7 +287,7 @@ export function useRecentExperts(): {
   useEffect(() => {
     try {
       storage.setItem(RECENT_EXPERTS_KEY, JSON.stringify(ids));
-    } catch {}
+    } catch (e) { reportError("expert-prefs", e); }
   }, [ids]);
 
   const markUsed = useCallback((id: string) => {
@@ -361,7 +362,7 @@ export function useSessionWorkspace(sessionId: string | null | undefined): {
           } else {
             storage.removeLegacy(SESSION_WORKSPACE_KEY(sessionId));
           }
-        } catch {}
+        } catch (e) { reportError("expert-prefs", e); }
       } else {
         // No session yet: write to the draft slot so the chip text
         // updates immediately and the selection carries forward when
@@ -373,7 +374,7 @@ export function useSessionWorkspace(sessionId: string | null | undefined): {
           } else {
             storage.removeLegacy(DRAFT_WORKSPACE_KEY);
           }
-        } catch {}
+        } catch (e) { reportError("expert-prefs", e); }
       }
       setWorkspaceState(path);
     },
@@ -443,7 +444,7 @@ export function useSessionSkills(sessionId: string | null | undefined): {
         } else {
           storage.setItem(SESSION_SKILLS_KEY(sessionId), JSON.stringify(next));
         }
-      } catch {}
+      } catch (e) { reportError("expert-prefs", e); }
     },
     [sessionId],
   );
@@ -463,7 +464,7 @@ export function useSessionSkills(sessionId: string | null | undefined): {
       if (sessionId) {
         try {
           storage.setItem(SESSION_SKILLS_KEY(sessionId), JSON.stringify(next));
-        } catch {}
+        } catch (e) { reportError("expert-prefs", e); }
       }
       return next;
     });
@@ -479,7 +480,7 @@ export function useSessionSkills(sessionId: string | null | undefined): {
           } else {
             storage.setItem(SESSION_SKILLS_KEY(sessionId), JSON.stringify(next));
           }
-        } catch {}
+        } catch (e) { reportError("expert-prefs", e); }
       }
       return next;
     });

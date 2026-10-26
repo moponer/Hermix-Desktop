@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { sendNotification } from "../desktopBridge";
+import { reportError } from "../lib/reportError";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 
 const CHANGED_EVT = "hermix:notify-pref-changed";
@@ -46,7 +47,7 @@ export function useDesktopNotify(): {
     try {
       if (v) storage.setItem(STORAGE_KEYS.notifyOnComplete, "1");
       else storage.removeItem(STORAGE_KEYS.notifyOnComplete);
-    } catch {}
+    } catch (e) { reportError("notify", e); }
     setEnabledState(v);
     window.dispatchEvent(new CustomEvent(CHANGED_EVT));
   }, []);

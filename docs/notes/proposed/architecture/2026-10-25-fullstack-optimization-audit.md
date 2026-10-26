@@ -1,6 +1,6 @@
 # Decision Note: 前后端全量审查：优化清单（39 项，P0–P3）
 
-Status: proposed — 2026-10-25 完成静态审查（未改动任何代码）。清单逐项待认领，建议按文末「执行批次」推进。
+Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交付**（P0-8 按拍板 A 落地：写入侧降级、读取侧 fail closed），见文末执行记录。P1 起逐项待认领。
 
 ## Decision
 
@@ -303,3 +303,155 @@ Status: proposed — 2026-10-25 完成静态审查（未改动任何代码）。
   - P0-8 密钥迁入 vault 会让"手改 config.yaml 填 key"失效，需要同步更新设置页与文档，否则用户会认为配置不生效。
   - P2-10 的依赖统一（reqwest 0.13）会牵动 tauri 与 chromiumoxide 两条线，需要一次完整回归；不做的话，注释与事实不符会持续误导后来者。
 - **验证基线**：每批改动后仍须 `cargo check --workspace --all-targets` 零错误零警告 + `cargo test --workspace --lib --exclude hermix-environments --exclude hermix-viewer` 全绿 + `node_modules/.bin/tsc --noEmit` + `./scripts/ci-gate.sh`（含 `check-design*`/`check-notes`）。
+
+## 执行记录
+
+### 批次 1（P0）— 2026-10-25 交付
+
+| 项 | 落地 | 验证 |
+|---|---|---|
+| P0-1 白名单链式降级 | `approval/engine.rs` 新增 `has_command_chaining` + `strip_quoted`（引号内分隔符不算链式），user allowlist 降级只对单一命令生效；`approval/allowlist.rs::extract_trust_signature` 对链式命令返回 `None`（不生成前缀签名） | `prefix_allowlist_entry_cannot_launder_chained_commands`、`quoted_separators_do_not_disable_the_allowlist`、`chained_command_gets_no_allowlist_signature` |
+| P0-2 编码命令载荷 | 新增 `approval/encoded.rs`（`-EncodedCommand`/`-enc`/`-ec`/`-en`，支持 `:`/`=` 与下一 token 两种写法；base64→UTF-16LE，失败回退 UTF-8）。`check_approval` 与 `check_approval_for_origin_with_scopes` 都解码后重跑 DENIED（硬拒）/ confirm（强制确认），且只读分支不得把它洗白 | `encoded_powershell_denied_payload_is_denied_not_prompted`、`encoded_powershell_benign_payload_stays_approved` + `encoded.rs` 4 项 |
+| P0-3 工作台越权写 | `hermix_core::path_security` 新增 `HERMIX_PERMISSION_CONFIG_NAMES` + `is_permission_config_name`（单一真相源，解 `tools → plugin` 的反向依赖）；`plugin/workbench_gateway.rs::is_out_of_scope` 接入该名单 + app home 下的 `config.yaml`；`tools/permission_guard.rs` 改为引用同一常量 | `permission_governing_files_are_out_of_scope` |
+| P0-4 agents 路径穿越 | `dashboard/agents.rs` 新增 `validate_agent_id`（字母/数字/`-`/`_`，≤128），写与删两处都校验 | `agent_id_rejects_path_fragments` |
+| P0-5 空历史覆盖 | `local_agent_service.rs` 的 `send_message` / `send_message_stream` 读失败改为传播 Err（不再 `unwrap_or_default`）；`reset_session` 的读/写失败同样传播 | agent 1187 全绿 |
+| P0-6 UTF-8 截断 panic | 新增 `hermix-environments/src/output.rs`（`truncate_to_boundary` / `truncate_bytes_to_boundary`），local（PTY 与普通路径）、ssh、docker、local_isolation 五处统一接入 | `output::tests` 3 项 |
+| P0-7 出站 SSRF | `server/util.rs` 新增 `safe_outbound_url`（仅 http/https + 云元数据端点黑名单）与 `safe_redirect_policy`（逐跳复查）；`custom_providers.rs` 的 `test_inline` / `fetch_models` / `test_connection` 三处接入 | `云元数据端点被拒`、`出站地址只允许_http_https` |
+| P0-8 明文密钥 | **两层**。① ACL：`config/loader.rs::write_yaml_atomic` 写盘后 `icacls /inheritance:r` 只授当前用户 + `*S-1-5-32-544`（Administrators）+ `*S-1-5-18`（SYSTEM），失败仅 warn。② 托管：`hermix-config/src/secrets.rs` 新增 `SecretStore` 端口 + `seal`/`unseal`（YAML 与 JSON 两种形态，JSON 版给 `/api/config` 的 Value 合并路径用，保留未知字段）；`save_config_yaml` 保存前封存、`load_config`/`load_from_yaml` 加载后还原；`hermix-server/src/secret_store.rs` 把端口接到 vault（**惰性打开**，`run_server_with_tls` 注册，覆盖 sidecar/CLI 全部入口）。**依赖环用端口倒置绕开**：config 只定义 trait，vault 实现在 server（server 本来就同时依赖两者），vault crate 一行未改 | config 144、server 498 全绿 |
+
+批次 1 顺带修复的两处：
+
+- **只读词洗白链式命令**（`sudo apt install foo; ls` 曾因尾部 `ls` 整条 Approved）：`READONLY_PATTERNS` 是整串匹配，现在只对单一命令生效；全只读的链式组合仍因"无 confirm 命中"放行。回归见 `readonly_word_in_chained_command_does_not_whitelist_it`。
+- **workspace 零警告基线恢复**：`member/runner.rs` 两处多余 `mut`、`server/test_state.rs` 两处未使用 import（均为既有告警）。
+
+**验证**：`cargo check --workspace --all-targets` 零错误零警告；`hermix-tools` 808、`hermix-agent` 1187、`hermix-server` 498、`hermix-config` 144、`hermix-plugin` 4 全绿。
+
+### 批次 2（后端性能）— 2026-10-25 交付
+
+| 项 | 落地 | 验证 |
+|---|---|---|
+| P1-8.1 `ensure_db` 每条路径重跑迁移 | `session_persistence/schema.rs`：`ensure_db` 改为**进程内按 db 路径去重**的守卫（原实现改名 `ensure_db_inner`）。此前每个请求都白付 ~14 条 `ALTER TABLE` + 建表批次 + 9 次 `stamp_migration` + 一次 `DELETE FROM messages WHERE role='system'` 全表扫 | agent 1187 全绿 |
+| P1-8.2 时间列无索引 | 同文件建表批次补 `idx_messages_created_at`、`idx_sessions_updated_at`（旧库靠 `CREATE INDEX IF NOT EXISTS` 补齐） | 同上 |
+| P1-10 glob 每文件编译一次正则 | `backends/file.rs::matches_glob` 加按 pattern 文本的编译缓存（容量 8，命中在首位）。10 万文件搜索此前 = 10 万次 `Regex::new` | tools 808 全绿 |
+| P1-8.3 handler 里同步跑 SQLite | `routes.rs::list_sessions` 拆出 `read_session_summaries` 并 `spawn_blocking`；`dashboard/analytics.rs::get_usage` 的 `aggregate_usage`（9+ 查询，含整表 JSON 解析）同样搬进阻塞池 | server 498 全绿 |
+| P1-9 每轮复制含密钥的配置 | `gateway_token_warn` 不再 `cfg.llm_providers.clone()`：改为锁内直接调 `get_model_context_length_with(&cfg.llm_providers)`，只带出 `u64` 上下文长度 | agent 1187 全绿 |
+| P3-1 cron 裸 SQLite | `hermix-cron` 加 `hermix-store` 依赖，`open_connection` 改走 `hermix_store::open_connection(Write)`（WAL + busy_timeout 与其他库一致；裸 open 是 journal_mode 漂移与并发 tick `SQLITE_BUSY` 的来源） | cron 39 全绿 |
+| P2-10 无用 workspace 依赖 | `Cargo.toml` 删 `clap`/`ratatui`/`crossterm`（24 个 member 零引用，唯一使用者 `apps/hx-packager` 非 workspace 成员） | workspace check 零警告 |
+
+### 批次 4（深拷贝与重复实现）— 2026-10-26 交付
+
+| 项 | 落地 | 验证 |
+|---|---|---|
+| P1-1 每轮历史深拷贝 | 三处：① `local_agent_service` 的 `send_message` / `send_message_stream` 由 `messages.clone()` 改 `std::mem::take`（循环拿到所有权，回程本来就用 `AgentResult.messages` 覆盖）；② `sanitize_messages_for_strict_api` 里 `drop_orphan_tool_results` 由「`&[Message]` → 新建 `Vec<Message>`（`.cloned()`）」改**就地 `retain`**，省掉每条消息（含工具结果正文）的一次深拷贝 | agent 1187、provider 56 全绿 |
+| P2-6 两份装配实现 | `assemble_tool_schemas(all)` 改为委托 `assemble_tool_schemas_with_meta(all, &ToolMetaRegistry::new())`（空表时它本来就回退到 `classify_tools`）。删掉 32 行重复的「拆 bridge → 判阈值 → 注入三元组」，那两份注释此前在互相镜像修同一个 bug | tools 808 全绿 |
+
+### 批次 9（巨石拆分，P1-13 第一刀）— 2026-10-26 交付
+
+`crates/hermix-agent/src/local_agent_service.rs`（5653 行）改为模块目录，第一刀搬出**纯函数**：
+
+| 文件 | 内容 |
+|---|---|
+| `local_agent_service/mod.rs` | 组合根（**5504 行**，−149） |
+| `local_agent_service/messages.rs` | `strip_transient_nudges` / `merge_consecutive_assistant_messages` / `with_attached_files_note`（无 IO、无 `self`） |
+
+搬移零行为变化（函数体逐字照搬，只加 `pub(super)` 与模块 import），并给两个函数补了单测（空 assistant 丢弃与合并、附件后缀只在有文件时追加）。验证：agent **1190 全绿**（+2 新测试）。
+
+**后续拆分顺序**（按耦合度从低到高，不建议跳步）：
+
+1. `SafeRegistryWrapper` + prefetch 适配 → `prefetch.rs`（58 行，只依赖 `ToolRegistry`）
+2. `summarize_tool_results_for_empty_reply` → `reply_fallback.rs`（100 行，纯 `&[Message]`）
+3. `resolve_workspace` / `apply_overrides` / `inject_thinking_directive` / `looks_like_openrouter` / `default_permission` → `config_resolve.rs`（约 150 行，纯入参）
+4. `register_active` / `unregister_active` / `begin_turn_record` / `end_turn_record` / `interrupt_*` / `steer_*` + `TurnOutcome` → `turn_registry.rs`（约 150 行，含 `Arc<Mutex<…>>` 状态，需先确认与 `state.rs` 的共享边界）
+5. `spawn_agent_loop`（290 行）+ `build_agent_config` 装配 → `assembler.rs`（依赖最多，最后做）
+
+**为什么不在这一轮全做完**：3/4/5 各自要动共享状态（`Arc<Mutex<...>>` 注册表、`AgentLoop` 装配参数），一旦搬错就是运行期行为差异，而不是编译错误。1/2 是纯函数，可以继续按同样方式推进；3 之后再往下必须先补"装配结果快照"测试。
+
+### 批次 8（双循环合并，P1-11 第一刀）— 2026-10-26 交付
+
+新增 `crates/hermix-agent/src/run_loop/tool_prep.rs`（190 行），把两条主循环里逐字重复的 **tool-call 前置处理**抽成单一实现：
+
+```
+去重 → 未知工具名修补 → session_search 参数水合 → before_validate 钩子
+→ 统一校验（AL-7）→ 状态提示 → apply_outcome
+→ 进化计数器 → delegate 上限 → PreToolCall 钩子 + clarify 回调 → 中断检查
+```
+
+返回三态 `ToolPrep::{Proceed, SkipTurn, Abort}`：`SkipTurn` 对应原来的 `continue`，`Abort` 携带已经构造好的 `AgentResult`（校验耗尽 / 用户中断）。
+
+| 指标 | 前 | 后 |
+|---|---|---|
+| `run_loop.rs` | 1918 行 | **1730 行** |
+| 同一逻辑的实现份数 | 2（125 + 121 行，已分叉） | **1** |
+| 流式独有逻辑 | 内联在重复段中间 | 通过 `before_validate` 钩子注入（历史顺序不变：去重之后、校验之前） |
+
+**一处差异被保留而不是"修掉"**：`finalize_agent_result` 的 `finish_reason`，`run()` 传 `None`、`run_stream()` 传 `last_finish_reason`。抽取后它变成一个显式参数——两条路径仍各自传各自的值。统一它会改变 `run()` 的既有输出，属于独立的行为决策，不在这次重构里夹带。
+
+验证：`cargo test -p hermix-agent --lib` **1188 全绿**（`agent_loop/tests.rs` 里覆盖校验耗尽、中断、invalid tool 的用例都走这两条路径）；`cargo check --workspace --all-targets` 零错误零警告。
+
+**剩下的双循环债务**（未做）：watchdog 装配、`LoopState` 初始化、inner retry loop、fatal 分支仍是两份。它们与 transport 强耦合（流式的 `on_chunk` / `stream_mute` / `last_finish_reason` 贯穿），下一刀应先抽 `TurnBudget`（deadline + JoinHandle 登记），再合并外层。
+
+### 批次 7（前端错误可见性）— 2026-10-26 交付
+
+| 项 | 落地 | 验证 |
+|---|---|---|
+| P2-3 基础设施 | 新增 `apps/desktop-tauri/src-tauri/src/frontend_log.rs`：`report_frontend_error(scope, message)` 命令，写 `<hermix_home>/logs/frontend.log`（epoch 秒 + scope + message），单文件 4 MB 轮转一次。**走 IPC 而不是后端 HTTP**：一半要上报的场景是"后端离线"，走 HTTP 会二次失败 | `cargo check -p hermix-desktop` 通过 |
+| P2-3 前端封装 | 新增 `src/lib/reportError.ts`：`console.warn`（dev 可见）+ `invoke`（release 唯一载体，`drop_console` 会删掉 console）。非 Tauri 环境（单测/预览）静默跳过 | tsc 通过 |
+| P2-3 收敛空 catch | **55 处 → 0**。手工收敛 36 处（`useExpert` 15、`App.tsx` 6、`ModelSelector` 4、`useAppBootstrap` 3、`bubbleUtils` 3、`agents/storage` 2、`settingsUtils` 2、`reportError.ts` 自身 1），一次性脚本收敛 19 处（`useTheme` 3、`useStreamParser` 2、`useSendKey` 2、`BackendSettingsTab` 2、`rest.ts`/`useDesktopNotify`/`useExpertCutoff`/`uiScale`/`Sidebar`/`ToolEventCard`/`UserMenuPopover`/`AutomationView`/`TestDialog`/`AdvancedSettingsTab` 各 1） | tsc 通过 |
+| P2-3 日志入口 | 不需要额外改动：`commands::list_backend_log_files` 扫描的是整个 `logs/` 目录，`frontend.log` 自动出现在设置 → 诊断的日志列表里 | — |
+
+**踩到的坑（已修）**：前端日志最初写到 `hermix_config::paths::hermix_home()/logs`，而桌面端日志查看器读的是 `commands::resolve_data_dir()/logs`。两者在便携模式（`HERMIX_PORTABLE_DATA_DIR`）与 `hermix-data` 开发模式下**不是同一个目录** —— 日志会写到用户永远看不到的地方。现在统一用 `resolve_data_dir()`。
+
+**脚本化的教训**：批量替换 `catch {}` 时，import 注入点若取「第一个 `import` 行之后」，遇到多行 import（`import {\n  A,\n  B\n} from …`）会把新 import 插进花括号中间，直接把两个文件写坏（tsc 立刻报 TS1003）。批量脚本必须按「import 语句整体」定位，不能按行。
+
+### 批次 6（长会话加载）— 2026-10-26 交付
+
+| 项 | 落地 | 验证 |
+|---|---|---|
+| P1-7 会话列表无界 | `routes.rs::read_session_summaries` 加 `LIMIT 1000`，`total` 改真实 `COUNT(*)`（此前用 `sessions.len()` 顶替，加 LIMIT 后会变成"最多 1000"这个假数字）。保留 `{…_SCOPE_SQL}` 插值形态 —— 仓库有一条测试钉这个形状，防止过滤条件被硬编码绕过常量 | server 498 全绿 |
+| P1-7 消息读取 O(N) | 新增 `SessionPersistence::load_session_tail_with_timestamps(session_id, limit)`：子查询 `ORDER BY id DESC LIMIT ?` 外层再 `ORDER BY id ASC`，返回顺序与全量版一致。行解析抽成 `session_entry_from_row` 供两版共用（列序漂移会让时间戳错行，正是"每条消息都显示刚刚"那个 bug）。`get_session_messages` 按 `(limit + tail_skip) * 4 + 40` 只读尾部；首屏（`tail_skip == 0`）跳过压缩归档子会话的内容读取（它们拼在窗口之前，窗口里一条都用不上），并用 `has_more \|\|= !child_ids.is_empty()` 保证「加载更早」入口仍在 | server 498、agent 1188（含新测试） |
+
+**P1-7 的原描述要修正**：前端**早已**窗口化（`INITIAL_MESSAGE_WINDOW = 60` + `tail_skip` 翻页 + `has_more`，`App.tsx:1329` 首屏就传了 limit）。真正的浪费在服务端 —— 窗口切在内存里，DB 仍全量读。上面的改动把读取量也降到窗口量级。
+
+### 批次 5（可观测性）— 2026-10-26 交付
+
+| 项 | 落地 | 验证 |
+|---|---|---|
+| P2-7 的一半：日志静默丢失 | `hermix-telemetry/src/log_manager.rs`：`try_lock` 失败不再静默丢弃 —— 计入 `DROPPED_RECORDS`，下次抢到锁时补写一行 `[log] N record(s) dropped`；`w.write/flush` 失败计入 `WRITE_FAILURES` 并每 100 次报一次 stderr | telemetry 12 全绿 |
+
+排障语义因此变成：日志里没有某条 = 没发生；日志里有 `dropped` 行 = 发生过但写盘被丢了。此前两种情况无法区分。
+
+**P1-1 的剩余部分没有做，且核实后发现原估偏高**：`sanitize_messages_for_strict_api` 的入参是 `&[Message]`（trait 方法签名决定），一次 `to_vec()` 不可避免；三 pass 中后两个（`enforce_strict_tool_pairing`、`merge_adjacent_assistant_messages`）本来就是消费式（move 进出，不 clone）。所以真实成本是 **2 次**全量拷贝（`to_vec` + `local_agent_service` 的 `clone`）而不是 3~5 次，上面两处已各消除一次的一半。再往下要动 `ToolRegistry::get_definitions()` 的返回类型（`Vec<ToolSchema>` → `Vec<Arc<ToolSchema>>`），跨 trait 边界，单独评估。
+
+### 批次 3（前端产物体积 / 渲染优先级）— 2026-10-25 交付
+
+| 项 | 落地 | 实测 |
+|---|---|---|
+| P1-6 vendor 拆分 | `vite.config.ts` 加 `manualChunks`：react / echarts / katex / refractor 各自成 chunk | **App chunk 1.71 MB → 1.01 MB（−41%）**；routes 567 KB → 310 KB |
+| P1-6 echarts 移出首屏 | `SettingsShell` 里 `MemoryTab` 改 `lazy()` + `Suspense`（它是唯一把 echarts 拖进依赖图的设置页） | `vendor-echarts` 466 KB 只在切到「记忆管理」时加载 |
+| P1-4 流式解析优先级 | `MarkdownBody` 的解析管线改读 `deferredContent`（`useDeferredValue` 叠在既有 120ms 节流之上），解析不再抢占输入/滚动 | tsc 通过 |
+
+### 本轮**未做**的项与理由（留给后续批次）
+
+| 项 | 为什么不做 |
+|---|---|
+| P1-11 `run`/`run_stream` 合并双循环 | 高风险：两条循环 + 20 处调用点，改错会让 finish_reason / 中断语义静默漂移。要单独一批 + 完整 WS 回归 |
+| P1-13 拆分三个巨石文件 | 先抽 `apply_approval_response` / `prepare_turn` 再谈拆；只拆文件不减少耦合（`ws.rs` 已经拆过一次仍重复） |
+| P1-1 剩余的 `to_vec` | 入参 `&[Message]` 由 trait 签名决定；再往下要改 `get_definitions()` 的返回类型（见批次 4 说明） |
+| P1-2 工具 schema 缓存 | 缓存失效条件（工具集版本 / 配置 / 可用性）判断错会让模型看到过期工具列表 —— 静默错，代价高于收益 |
+| P1-3 前端流式 store 化 | 需要把 `App.tsx` 的 41 处 `setSessions` 收敛到独立 store，属 P1-13 同级别改动 |
+| P1-5 虚拟列表 | `virtua` 已在依赖里，但接入需要先解决"流式气泡高度变化 + 滚动锚定"，单独一批 |
+| P2-7 日志非阻塞写盘 | 改动会波及"日志丢不丢"这一排障基础设施，需要先有端到端日志完整性验证 |
+| P1-10 剩余（`read_file` 全量读、web 正则） | `read_file` 的流式读取要扩 `Fs` trait，影响所有 fs 实现；web 正则收益是微秒级 |
+
+### 审查结论的两处事实修正（2026-10-25）
+
+- **P1-5「依赖里没有虚拟列表库」是错的**：`virtua@0.52.10` 已在依赖树里（`MessageList` 未使用）。做 P1-5 不需要新增依赖。
+- **P1-4 的「每个 chunk 全量重解析」不准确**：`MarkdownBody` 早有 120ms trailing-edge 节流（`MARKDOWN_REPARSE_THROTTLE_MS`），真实成本是「每 120ms 一次 O(n) 解析」而非每 chunk。基线里该条已按此措辞记录。
+
+### P0-8 密钥托管的落地形状（拍板 A，2026-10-25）
+
+- **写入**：`save_config_yaml` 里 `seal()` 把明文 `api_key` 交给托管实现，字段替换成 `vault:llm_providers.<id>`。托管不可用（vault 打不开 / CredMan 拒绝）→ **保持明文 + 一条 warn**，保存照常成功。
+- **读取**：`load_config` 与 `load_from_yaml` 里 `unseal()` 把引用换回明文。取不到明文时（槽位缺失 / 托管未启用 / 打开失败）把该 provider 的 `api_key` 置 `None` 并记 error —— **fail closed**，绝不把 `vault:...` 当密钥发给上游。
+- **为什么是端口而不是直接依赖**：`hermix-vault` 依赖 `hermix-config`（`hermix_home`）。让 config 反向依赖 vault 会成环；端口放 config、实现放 server 两条依赖都是单向的。
+- **迁移是惰性的**：已有明文 `config.yaml` 在**下一次保存**时自动迁移成引用，启动时不做写操作（避免启动即写盘）。因此「从不改配置」的用户，明文 key 会一直留到第一次保存为止 —— ACL 收紧同样只在写盘时生效。这条是已知边界，若要"启动即迁移"需另加一次显式迁移步骤。
+- **降级语义的两面**：写入侧降级（A 的拍板），读取侧不放行（避免把引用串当密钥）。二者不矛盾：前者保证用户能改配置，后者保证配置里出现的引用不会被误用。

@@ -1,4 +1,5 @@
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
+import { reportError } from "../../lib/reportError";
 
 // ── Provider definitions ───────────────────────────
 
@@ -54,7 +55,7 @@ export function loadModelConfig(): ModelConfigData {
   try {
     const r = storage.getItem(MODEL_CONFIG_KEY);
     if (r) return { modelContexts: {}, ...JSON.parse(r) };
-  } catch {}
+  } catch (e) { reportError("settings-cache", e); }
   return { enabled: [], defaultModel: "", modelContexts: {} };
 }
 
@@ -62,7 +63,7 @@ export function loadModelCache(): Record<string, string[]> {
   try {
     const r = storage.getItem(MODEL_CACHE_KEY);
     if (r) return JSON.parse(r);
-  } catch {}
+  } catch (e) { reportError("settings-cache", e); }
   return {};
 }
 

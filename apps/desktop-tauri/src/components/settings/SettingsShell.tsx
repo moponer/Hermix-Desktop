@@ -1,4 +1,5 @@
 import {
+  lazy, Suspense,
   useCallback, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from "react";
@@ -19,7 +20,6 @@ import {
   PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab,
 } from "../config/ToolTabs";
 import { ModelListTab } from "./ModelListTab";
-import { MemoryTab } from "./MemoryTab";
 import { SecurityTab } from "./SecurityTab";
 import { BackendTab } from "./BackendSettingsTab";
 import { AdvancedTab } from "./AdvancedSettingsTab";
@@ -30,6 +30,14 @@ import { VoiceTab } from "./VoiceTab";
 import { GeneralTab } from "./GeneralTab";
 import { AppearanceTab } from "./AppearanceTab";
 import { ArchiveTab } from "./ArchiveTab";
+
+/**
+ * 记忆页是唯一把 echarts 拖进依赖图的设置页（力导图 ~1MB）。改成懒加载：
+ * 打开设置弹窗不该为首屏付这笔解析成本 —— 只有真正切到「记忆管理」才取。
+ */
+const MemoryTab = lazy(() =>
+  import("./MemoryTab").then((m) => ({ default: m.MemoryTab })),
+);
 
 /**
  * 设置：左导航（分组 + 搜索）+ 右内容区。
@@ -368,7 +376,16 @@ function PageBody({
     case "security": return <Section wide><PageHeading def={def} /><SecurityTab /></Section>;
     case "fileassoc": return <Section><PageHeading def={def} /><FileAssocTab /></Section>;
     case "archive": return <Section><PageHeading def={def} /><ArchiveTab /></Section>;
-    case "memory": return <Section wide><PageHeading def={def} /><MemoryTab /></Section>;
+    // 空占位而非文案：本地 chunk 加载通常 <50ms，闪一下「加载中」比不闪更差
+    // （DesignGuard 也禁止视图里写字面量加载文案）。
+    case "memory": return (
+      <Section wide>
+        <PageHeading def={def} />
+        <Suspense fallback={<div className="h-40" aria-hidden />}>
+          <MemoryTab />
+        </Suspense>
+      </Section>
+    );
     case "diagnostics": return <Section wide><PageHeading def={def} /><DiagnosticsTab /></Section>;
     case "advanced": return <Section><PageHeading def={def} /><AdvancedTab /></Section>;
   }
@@ -521,7 +538,20 @@ function ScreenshotSettingsCard() {
 
 interface FileAssocEntry {
   ext: string;
+  /** 真正生效：系统会用 Hermix 查看器打开该扩展名。 */
   owned: boolean;
+  /** 登记了，但系统「打开方式」记录（UserChoice）压着 → 勾了也不生效。 */
+  blocked: boolean;
+  /** 登记了，但查看器路径已失效 → 双击打不开。 */
+  stale: boolean;
+}
+
+/** 一行关联的真实状态说明（不复述「勾了没有」，只说清「现在到底是谁在打开」）。 */
+function fileAssocStatus(e: FileAssocEntry): string {
+  if (e.owned) return "已由查看器接管";
+  if (e.blocked) return "被系统「打开方式」记录压住，重新勾选可接管";
+  if (e.stale) return "查看器路径已失效，重新勾选可修复";
+  return "当前由其他程序处理";
 }
 
 function FileAssocTab() {
@@ -529,18 +559,30 @@ function FileAssocTab() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
+  /** 回读真实状态：开关显示的是「真正生效」，不是「我们写进去了」。 */
+  const refresh = useCallback(
+    () =>
+      invoke<FileAssocEntry[]>("file_assoc_list")
+        .then(setEntries)
+        .catch((e) => setError(String(e instanceof Error ? e.message : e))),
+    [],
+  );
+
   useEffect(() => {
-    void invoke<FileAssocEntry[]>("file_assoc_list")
-      .then(setEntries)
-      .catch((e) => setError(String(e instanceof Error ? e.message : e)));
-  }, []);
+    void refresh();
+  }, [refresh]);
 
   const toggle = (ext: string, enable: boolean) => {
     setBusy(ext);
     setError(null);
     void invoke("file_assoc_set", { ext, enable })
-      .then(() => invoke<FileAssocEntry[]>("file_assoc_list").then(setEntries))
-      .catch((e) => setError(String(e instanceof Error ? e.message : e)))
+      .then(() => refresh())
+      .catch((e) => {
+        setError(String(e instanceof Error ? e.message : e));
+        // 失败也回读：注册表可能已改了一半（写了默认值但没清掉系统记录），
+        // 界面必须显示真实状态而不是乐观值。
+        void refresh();
+      })
       .finally(() => setBusy(null));
   };
 
@@ -553,22 +595,22 @@ function FileAssocTab() {
         title="由 Hermix 文件查看器打开"
         description="勾选即明确授权查看器接管该扩展名的默认打开方式；取消勾选自动恢复勾选前的原程序关联。登记只写当前用户的注册表（HKCU），不需要管理员权限。"
       >
-        {entries.map(({ ext, owned }) => (
+        {entries.map((e) => (
           <SettingsRow
-            key={ext}
+            key={e.ext}
             title={
               <span className="flex items-center gap-2">
-                <FileTypeIcon name={`sample.${ext}`} size={16} />
-                {`.${ext}`}
+                <FileTypeIcon name={`sample.${e.ext}`} size={16} />
+                {`.${e.ext}`}
               </span>
             }
-            description={owned ? "已由查看器接管" : "当前由其他程序处理"}
+            description={fileAssocStatus(e)}
             control={
               <Switch
-                checked={owned}
-                disabled={busy === ext}
-                onChange={(v) => toggle(ext, v)}
-                label={`由 Hermix 文件查看器打开 .${ext} 文件`}
+                checked={e.owned}
+                disabled={busy === e.ext}
+                onChange={(v) => toggle(e.ext, v)}
+                label={`由 Hermix 文件查看器打开 .${e.ext} 文件`}
               />
             }
           />

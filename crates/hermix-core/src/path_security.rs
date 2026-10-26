@@ -130,6 +130,36 @@ pub fn detect_shell_metacharacters(command: &str) -> Option<&'static str> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// 权限治理文件名（跨 crate 单一真相源）
+// ---------------------------------------------------------------------------
+
+/// 决定「下一次工具调用能不能不弹卡就执行」的文件名。
+///
+/// 出现在任意路径都必须硬拒写：一个 `write_file`、一次
+/// `echo ... > <home>\approval_allowlist.json`，就把「用户批准过 cargo build
+/// 一次」变成「以后所有命令都免审批」。工具侧
+/// （`hermix_tools::permission_guard`）与工作台网关
+/// （`hermix_plugin::workbench_gateway`）必须共用这一份名单 —— 两侧各写一份时，
+/// 能力弱的那一侧就是提权入口。
+pub const HERMIX_PERMISSION_CONFIG_NAMES: [&str; 3] = [
+    "approval_allowlist.json",
+    "session_approvals.json",
+    "enabled_toolsets.json",
+];
+
+/// 文件名（不含目录）是否为权限治理文件。
+///
+/// 只判名字、不判位置：这些名字是 Hermix 专属的，出现在任何目录都不是用户的
+/// 普通项目文件（与 `config.yaml` 不同 —— 它只在 app home 下才是治理文件，
+/// 判定留在 `hermix_tools::permission_guard`，那里能拿到 home 路径）。
+pub fn is_permission_config_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    HERMIX_PERMISSION_CONFIG_NAMES
+        .iter()
+        .any(|n| *n == lower.as_str())
+}
+
 /// Cheap `..` component check. Returns true if any path component
 /// is exactly `..` (i.e. the path tries to escape its parent).
 ///

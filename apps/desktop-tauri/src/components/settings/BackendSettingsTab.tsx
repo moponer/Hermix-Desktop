@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { RefreshCw, Save, Server, Activity } from "lucide-react";
+import { reportError } from "../../lib/reportError";
 import * as api from "../../api";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import { useCurrentModel } from "../../hooks/useCurrentModel";
@@ -107,7 +108,7 @@ export function PythonRuntimePanel() {
     try {
       const stored = storage.getItem(STORAGE_KEYS.pythonOverride) ?? "";
       setOverrideInput(stored);
-    } catch {}
+    } catch (e) { reportError("settings-backend", e); }
   }, []);
 
   const runProbe = useCallback(async () => {
@@ -147,7 +148,7 @@ export function PythonRuntimePanel() {
         } else {
           storage.removeItem(STORAGE_KEYS.pythonOverride);
         }
-      } catch {}
+      } catch (e) { reportError("settings-backend", e); }
       setOverrideStatus(value ? "已保存覆盖路径，下次 `execute_code` 调用立即生效" : "已清除覆盖路径，恢复默认探测顺序");
       await runProbe();
     } catch (e) {

@@ -9,6 +9,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
+import { reportError } from "../lib/reportError";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { getVersion } from "@tauri-apps/api/app";
@@ -169,7 +170,7 @@ export function Sidebar({
       }
       let wsPath: string | null = s.workspace ?? null;
       if (!wsPath) {
-        try { wsPath = storage.getItem(sessionKey(s.id, "workspace")); } catch {}
+        try { wsPath = storage.getItem(sessionKey(s.id, "workspace")); } catch (e) { reportError("sidebar", e); }
       }
       if (wsPath && workspaces.some((w) => w.path === wsPath)) {
         (byWs[wsPath] ||= []).push(s);

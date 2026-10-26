@@ -4,6 +4,7 @@ import {
   ChevronDown, ChevronRight,
   AlertTriangle, AlertCircle, SearchX, Copy, Check,
 } from "lucide-react";
+import { reportError } from "../lib/reportError";
 import { formatDuration } from "../utils/time";
 import type { ExecutionTimelineEvent } from "../types";
 import {
@@ -361,7 +362,7 @@ function primaryArg(tool: string, argsJson?: string, stdoutHint?: string): strin
     try {
       const v = JSON.parse(argsJson);
       if (v && typeof v === "object" && !Array.isArray(v)) parsed = v as Record<string, unknown>;
-    } catch {}
+    } catch (e) { reportError("tool-card", e); }
   }
   const str = (k: string): string | null => {
     if (!parsed) return null;

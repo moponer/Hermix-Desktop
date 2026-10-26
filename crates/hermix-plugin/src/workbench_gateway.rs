@@ -20,9 +20,15 @@ use serde_json::Value as Json;
 
 use crate::workbench::{workbench_dir, workbenches_dir};
 
-/// 越权路径：密钥与凭据。
+/// 越权路径：密钥、凭据，以及**决定 agent 能做什么**的配置文件。
 /// 判据不是「危不危险」，而是「这些根本不是工作台的数据」——
 /// 摸到别人的凭据是越权，与用户授权与否无关。
+///
+/// 权限治理文件（审批白名单 / 会话放行 / 已启用工具集 / app home 下的
+/// config.yaml）同样在这里拒：工作台代码是可被 `write_code_file` 写入的，
+/// 若它能改写白名单，下一步 `rm -rf` 就不再经过人 —— 这条越权链与
+/// `hermix_tools::permission_guard` 判的是同一组文件，名单在
+/// `hermix_core::path_security` 共享，避免两侧漂移。
 fn is_out_of_scope(path: &Path) -> bool {
     let lower = path.to_string_lossy().to_lowercase().replace('\\', "/");
     const SENSITIVE: [&str; 6] = [
@@ -35,6 +41,20 @@ fn is_out_of_scope(path: &Path) -> bool {
     ];
     if SENSITIVE.iter().any(|s| lower.contains(s)) {
         return true;
+    }
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if hermix_core::path_security::is_permission_config_name(name) {
+            return true;
+        }
+        // config.yaml 是成千上万个项目的普通文件，只在本 app home 下才是
+        // 治理文件（provider 端点、审批开关、工具集）。
+        if name.eq_ignore_ascii_case("config.yaml") {
+            let home = hermix_config::paths::hermix_home();
+            let home = home.to_string_lossy().to_lowercase().replace('\\', "/");
+            if lower.starts_with(&format!("{}/", home.trim_end_matches('/'))) {
+                return true;
+            }
+        }
     }
     // 工作台的 data/ 归宿主网关独占：代码层拿到路径直读会把
     // 「代码回滚不丢数据」的隔离打穿。
@@ -214,6 +234,27 @@ mod tests {
         ] {
             assert!(!is_out_of_scope(Path::new(p)), "不应拒绝 {p}");
         }
+    }
+
+    /// 权限治理文件：工作台代码改写了它们就等于给自己扩权
+    /// （下一轮 `rm -rf` 不再经过人）。
+    #[test]
+    fn permission_governing_files_are_out_of_scope() {
+        for p in [
+            "C:/Users/x/.hermix/approval_allowlist.json",
+            "C:/Users/x/.hermix/session_approvals.json",
+            "C:/Users/x/proj/APPROVAL_ALLOWLIST.JSON",
+            "D:/work/enabled_toolsets.json",
+        ] {
+            assert!(is_out_of_scope(Path::new(p)), "应拒绝 {p}");
+        }
+        // config.yaml 只在本 app home 下才是治理文件。
+        let home = hermix_config::paths::hermix_home().join("config.yaml");
+        assert!(is_out_of_scope(&home), "app home 下的 config.yaml 必须拒写");
+        assert!(
+            !is_out_of_scope(Path::new("D:/work/proj/config.yaml")),
+            "项目自己的 config.yaml 是普通文件"
+        );
     }
 
     #[test]

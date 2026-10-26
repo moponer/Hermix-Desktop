@@ -33,14 +33,28 @@ pub async fn get_usage(
     State(state): State<HttpServerState>,
     Query(params): Query<AnalyticsParams>,
 ) -> Result<Json<AnalyticsResponse>, (StatusCode, Json<AnalyticsErrorResponse>)> {
-    let agg = match state.session_persistence.aggregate_usage(params.days) {
-        Ok(a) => a,
-        Err(e) => {
+    // aggregate_usage 是同步 SQLite（9+ 条查询，其中两条把整表内容拉到 Rust
+    // 侧逐行解析 JSON）。直接在 handler 里跑会占住 tokio worker —— 与分析页
+    // 并发的 WS 心跳/流式推送都跟着抖。搬到阻塞池。
+    let persistence = state.session_persistence.clone();
+    let days = params.days;
+    let agg = match tokio::task::spawn_blocking(move || persistence.aggregate_usage(days)).await {
+        Ok(Ok(a)) => a,
+        Ok(Err(e)) => {
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(AnalyticsErrorResponse {
                     error: "aggregate_usage_failed".to_string(),
                     cause: e.to_string(),
+                }),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AnalyticsErrorResponse {
+                    error: "aggregate_usage_failed".to_string(),
+                    cause: format!("blocking task failed: {e}"),
                 }),
             ));
         }

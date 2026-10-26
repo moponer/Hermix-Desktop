@@ -4,6 +4,7 @@
 // messages before the cutoff with their original expert.
 
 import { useEffect, useState, useCallback } from "react";
+import { reportError } from "../lib/reportError";
 import { storage, sessionKey } from "../utils/storageCompat";
 
 const EXPERT_CUTOFF_KEY = (sessionId: string) => sessionKey(sessionId, "expertCutoffAt");
@@ -46,7 +47,7 @@ export function useExpertCutoff(sessionId: string | null | undefined): {
       try {
         storage.setItem(EXPERT_CUTOFF_KEY(sessionId), String(now));
         setCutoffAt(now);
-      } catch {}
+      } catch (e) { reportError("expert-cutoff", e); }
     },
     [sessionId],
   );

@@ -189,7 +189,10 @@ impl SqliteJobPersistence {
             std::fs::create_dir_all(parent).map_err(|e| CronPersistenceError::Io(e))?;
         }
 
-        let conn = rusqlite::Connection::open(&self.db_path)
+        // 走 `hermix_store`：WAL + busy_timeout 与其余库一致。裸
+        // `Connection::open` 是 journal_mode 漂移的来源（并发 tick 直接
+        // `SQLITE_BUSY` 失败），也是源码注释里点名的历史 bug。
+        let conn = hermix_store::open_connection(&self.db_path, hermix_store::OpenMode::Write)
             .map_err(|e| CronPersistenceError::Sqlite(e.to_string()))?;
 
         conn.execute_batch(

@@ -2300,3 +2300,57 @@
         assert_eq!(sp.last_seq_for(other).expect("other fresh"), 0);
         assert_eq!(sp.next_seq_for(other).expect("other first"), 1);
     }
+
+    fn entry_text(e: &SessionEntry) -> Option<&str> {
+        match e {
+            SessionEntry::Message(m) => m.content.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// 尾部窗口读取必须与全量读取的**尾部**逐条一致（内容 + 时间戳）。
+    ///
+    /// 这条 SQL 决定长会话打开时的延迟与峰值内存（前端首屏只要 60 条），
+    /// 但它与全量版是两份独立的 SQL —— 列序或过滤条件漂移会让时间戳错行
+    /// （表现为每条消息都显示"刚刚"）或内容整体偏移一位，两种都是静默的。
+    #[test]
+    fn tail_loader_matches_full_loader_tail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        let mut messages = Vec::new();
+        for i in 0..10 {
+            messages.push(Message::user(format!("u{i}")));
+            messages.push(Message::assistant(format!("a{i}")));
+        }
+        sp.persist_session(
+            "tail-1",
+            &messages,
+            Some("gpt-4o"),
+            None,
+            Some("T"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let full = sp
+            .load_session_with_approvals_and_timestamps("tail-1")
+            .unwrap();
+        assert_eq!(full.len(), 20, "10 轮 user+assistant");
+
+        let tail = sp.load_session_tail_with_timestamps("tail-1", 5).unwrap();
+        assert_eq!(tail.len(), 5, "只取尾部 5 条");
+
+        let full_tail = &full[full.len() - 5..];
+        for (i, ((t_entry, t_ts), (f_entry, f_ts))) in
+            tail.iter().zip(full_tail.iter()).enumerate()
+        {
+            assert_eq!(t_ts, f_ts, "第 {i} 条时间戳错行");
+            assert_eq!(entry_text(t_entry), entry_text(f_entry), "第 {i} 条内容不一致");
+        }
+        // 顺序仍是升序：最后一条必须是全量结果的最后一条。
+        assert_eq!(entry_text(&tail[4].0), Some("a9"), "尾部顺序必须升序");
+    }

@@ -57,6 +57,24 @@ export default defineConfig({
     // 主 JS bundle ~2.4MB (桌面本地加载, WebView2 读本地文件无感)。
     // 默认 500KB 警告线对桌面应用不适用, 放宽到 2600KB 消掉 advisory warning。
     chunkSizeWarningLimit: 2600,
+    rollupOptions: {
+      output: {
+        // 按「谁在用」分组，而不是把一切塞进 App chunk：
+        // - echarts / katex / refractor 体积大但只有少数页面用到，单独成 chunk
+        //   后只在真正 import 时取（MemoryTab / 公式 / 代码块）。
+        // - react 系独立：改业务代码不会让这份 chunk 失效，热更与增量加载都受益。
+        // 不要把懒加载页面自己的代码并进来 —— 那会让首次进入该页时多拉一份。
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return undefined;
+          const p = id.replace(/\\/g, "/");
+          if (/\/node_modules\/(echarts|zrender)\//.test(p)) return "vendor-echarts";
+          if (/\/node_modules\/katex\//.test(p)) return "vendor-katex";
+          if (/\/node_modules\/(refractor|prismjs)\//.test(p)) return "vendor-highlight";
+          if (/\/node_modules\/(react|react-dom|scheduler)\//.test(p)) return "vendor-react";
+          return undefined;
+        },
+      },
+    },
     // Remove console.* in production builds to reduce bundle size and
     // prevent debug info leakage. Warnings/errors are kept for
     // troubleshooting via the DevTools console in dev mode.

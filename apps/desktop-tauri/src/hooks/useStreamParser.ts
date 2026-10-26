@@ -1,5 +1,6 @@
 import type { MutableRefObject, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { reportError } from "../lib/reportError";
 import { streamChannelName } from "../api";
 import type { AcuiDirective } from "../acui/types";
 import type { CompactionStatus } from "../components/CompactionStatusBanner";
@@ -787,7 +788,7 @@ export function createMessageHandler(
                     decision: "denied",
                   }),
                 });
-              } catch {}
+              } catch (e) { reportError("stream-parser", e); }
             });
         }
         return;
@@ -875,7 +876,7 @@ export function createMessageHandler(
                     decision: "denied",
                   }),
                 });
-              } catch {}
+              } catch (e) { reportError("stream-parser", e); }
             });
         }
         return;

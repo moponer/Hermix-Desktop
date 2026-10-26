@@ -14,7 +14,7 @@
  *   - 全部 components 配置（p / li / code / input）原样保留
  */
 
-import { Children, cloneElement, isValidElement, memo, useCallback, useMemo, useRef, useState, useEffect, type ReactElement } from "react";
+import { Children, cloneElement, isValidElement, memo, useCallback, useDeferredValue, useMemo, useRef, useState, useEffect, type ReactElement } from "react";
 import { markdownToHast } from "satteri";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
@@ -141,7 +141,20 @@ export function linkifyChildren(
   children: ReactNode,
   onPathClick: (path: string, e: React.MouseEvent) => void,
   icons = false,
+  /** 同一条消息内已带过图标的路径集合：同一文件名反复出现时只有首个
+   *  带文件类型图标（见 MarkdownBody 渲染器里 iconSeen 的注记）。
+   *  不传时作用域 = 本次调用，调用方要跨段落去重就自己建一个传进来。 */
+  iconSeen: Set<string> = new Set<string>(),
 ): ReactNode {
+  // 图标是行内最大的重音件（16px vs 正文 14px），LLM 爱在一段里反复提
+  // 同一文件 —— 每次都顶一个图标就是把句子切成拼贴画。重复出现退化为
+  // 纯链接，信息不丢（可点、有 title），重量只付一次。
+  const claimIcon = (path: string): boolean => {
+    if (!icons) return false;
+    const first = !iconSeen.has(path);
+    iconSeen.add(path);
+    return first;
+  };
   return Children.map(children, (child) => {
     if (typeof child === "string") {
       const parts: ReactNode[] = [];
@@ -152,7 +165,7 @@ export function linkifyChildren(
       while ((m = PATH_RE.exec(child)) !== null) {
         if (m.index > last) parts.push(child.slice(last, m.index));
         parts.push(
-          <PathLink key={`pl-${k++}-${m.index}`} path={m[0]} icons={icons} onClick={onPathClick} />,
+          <PathLink key={`pl-${k++}-${m.index}`} path={m[0]} icons={claimIcon(m[0])} onClick={onPathClick} />,
         );
         last = m.index + m[0].length;
       }
@@ -170,14 +183,25 @@ export function linkifyChildren(
         const cls = (child.props as { className?: string } | null)?.className ?? "";
         if (cls.includes("language-")) return child;
         const props = child.props as { children?: ReactNode };
+        // 整枚行内代码恰是一个路径 → 不套芯片，直接渲染成 PathLink。此前
+        // 是「药丸底里再嵌下划线链接」的叠加态：同一个文件名，LLM 写不写
+        // 反引号会长成两种样子 —— 正文文件名形态混乱的直接来源之一。
+        const whole = nodeText(props?.children);
+        if (whole) {
+          PATH_RE.lastIndex = 0;
+          const m0 = PATH_RE.exec(whole);
+          if (m0 && m0.index === 0 && m0[0] === whole) {
+            return <PathLink path={whole} icons={claimIcon(whole)} onClick={onPathClick} />;
+          }
+        }
         if (props?.children) {
-          return { ...child, props: { ...props, children: linkifyChildren(props.children, onPathClick, icons) } };
+          return { ...child, props: { ...props, children: linkifyChildren(props.children, onPathClick, icons, iconSeen) } };
         }
         return child;
       }
       const props = child.props as { children?: ReactNode };
       if (props?.children) {
-        return { ...child, props: { ...props, children: linkifyChildren(props.children, onPathClick, icons) } };
+        return { ...child, props: { ...props, children: linkifyChildren(props.children, onPathClick, icons, iconSeen) } };
       }
     }
     return child;
@@ -790,23 +814,31 @@ export const MarkdownBody = memo(function MarkdownBody({
   // 聊天代码块恒用亮色语法配色（punctuation 在 #1a1a1a 上仅 1.53:1）。
   const isDark = useIsDarkTheme();
   const displayContent = useThrottledValue(content, MARKDOWN_REPARSE_THROTTLE_MS);
+  // 再套一层 deferred：解析（含 satteri → hast → JSX）发生在非紧急渲染里，
+  // 流式期间不抢占输入框打字与滚动。120ms 节流决定"多久解析一次"，
+  // deferred 决定"在哪个优先级解析"——两者互补。
+  const deferredContent = useDeferredValue(displayContent);
   // 1. 不平衡 fence 关闭（与 react-markdown 时一致）
   // 2. 软换行 → 硬换行（satleri 不开 remarkBreaks，等价物在 strings 层）
   // 3. satteri 解析 → hast tree
   // 4. hast-util-to-jsx-runtime → React element
   const rendered = useMemo(() => {
-    const normalized = normalizeWindowsImagePaths(content);
+    const normalized = normalizeWindowsImagePaths(deferredContent);
     const balanced = autoCloseUnbalancedFences(normalized);
     const hardened = hardenSoftLineBreaks(balanced);
     const withMath = transformMath(hardened);
     const hast = markdownToHast(withMath, SATTERI_FEATURES);
+    // 图标去重作用域 = 本次解析（同一条消息）：同一文件名只有首个出现带
+    // 文件类型图标，后续保持纯链接。流式期间每次 content 变更重建，
+    // 语义稳定（当前版本的"首个"始终带图标）。
+    const iconSeen = new Set<string>();
     return toJsxRuntime(hast, {
       Fragment,
       jsx,
       jsxs,
       components: {
         p({ children, ...props }: { children?: ReactNode }) {
-          return <p {...props}>{linkifyChildren(children, handlePathClick, pathIcons)}</p>;
+          return <p {...props}>{linkifyChildren(children, handlePathClick, pathIcons, iconSeen)}</p>;
         },
         li({ children, className, ...props }: { children?: ReactNode; className?: string }) {
           // GFM task list：勾选框此前被 input 渲染器整个丢掉，列表退化成圆点。
@@ -828,7 +860,7 @@ export const MarkdownBody = memo(function MarkdownBody({
                   {checked ? "✓" : ""}
                 </span>
               )}
-              {linkifyChildren(rest, handlePathClick, pathIcons)}
+              {linkifyChildren(rest, handlePathClick, pathIcons, iconSeen)}
             </li>
           );
         },
@@ -842,12 +874,12 @@ export const MarkdownBody = memo(function MarkdownBody({
                 </span>
                 <div className="md-callout-body">
                   <span className="md-callout-title">{CALLOUT_LABEL[kind] ?? kind}</span>
-                  {linkifyChildren(cleaned, handlePathClick, pathIcons)}
+                  {linkifyChildren(cleaned, handlePathClick, pathIcons, iconSeen)}
                 </div>
               </div>
             );
           }
-          return <blockquote {...props}>{linkifyChildren(children, handlePathClick, pathIcons)}</blockquote>;
+          return <blockquote {...props}>{linkifyChildren(children, handlePathClick, pathIcons, iconSeen)}</blockquote>;
         },
         // 表格外层加横向滚动容器：宽表不再把列挤成一条线。
         table({ children, ...props }: { children?: ReactNode }) {
@@ -931,7 +963,7 @@ export const MarkdownBody = memo(function MarkdownBody({
         },
       },
     });
-  }, [displayContent, handlePathClick, pathIcons, isDark]);
+  }, [deferredContent, handlePathClick, pathIcons, isDark]);
 
   // 正文定型后才切小节（复制/折叠）。流式阶段保持扁平，避免每 chunk 重建小节树。
   const body = useMemo(() => {

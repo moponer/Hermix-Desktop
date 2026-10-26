@@ -61,7 +61,6 @@ pub fn test_state_with_home(home: impl AsRef<Path>) -> HttpServerState {
 /// suite doesn't litter `%TEMP%` when the test only inspects in-
 /// memory registries.
 pub fn empty_state() -> HttpServerState {
-    use hermix_tools::ClarifyDispatcher;
     use hermix_tools::ToolRegistry;
 
     let config = Arc::new(GatewayConfig::default());
@@ -130,8 +129,6 @@ pub fn empty_state() -> HttpServerState {
 }
 
 fn build_state_with_home(home: PathBuf) -> HttpServerState {
-    use hermix_tools::ClarifyDispatcher;
-
     let config = Arc::new(GatewayConfig::default());
     let tool_registry = Arc::new(ToolRegistry::new());
     let session_persistence = Arc::new(SessionPersistence::new(&home));

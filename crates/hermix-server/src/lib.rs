@@ -29,6 +29,7 @@ mod relay_identity;
 mod relay_proto;
 mod relay_settings;
 mod relay_transport;
+mod secret_store;
 mod session_journal;
 mod ws_transport;
 mod metrics;
@@ -627,6 +628,11 @@ pub async fn run_server_with_tls(
     tls_addr: Option<SocketAddr>,
     state: HttpServerState,
 ) -> Result<(), AgentError> {
+    // 密钥托管：config.yaml 的 api_key 交给 vault（惰性打开，打不开则保存时
+    // 降级明文并 warn）。放在这里而不是 main.rs，是为了覆盖 Tauri sidecar /
+    // `run_server_with_state` 等所有入口。幂等。
+    secret_store::install_default(state.hermix_home.join("vault.db"));
+
     //clone TickLoop manager before moving state into the router.
     let tickloop_mgr = state.tickloop_manager.clone();
     let tracker = Arc::new(state.consciousness_tracker.clone());

@@ -16,6 +16,7 @@ import {
   Repeat2,
   type LucideIcon,
 } from "lucide-react";
+import { reportError } from "../lib/reportError";
 import * as api from "../api";
 import type { AutomationTask } from "../types";
 import type { IconTone } from "../lib/categoryTone";
@@ -147,7 +148,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
     setKeepAwakeState(on);
     try {
       storage.setItem(STORAGE_KEYS.keepAwake, String(on));
-    } catch {}
+    } catch (e) { reportError("automation", e); }
     setKeepAwake(on);
     window.dispatchEvent(new Event(KEEP_AWAKE_CHANGED_EVENT));
   };

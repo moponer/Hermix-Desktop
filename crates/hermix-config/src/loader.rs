@@ -144,6 +144,10 @@ pub fn load_config(home_dir: Option<&str>) -> Result<GatewayConfig, ConfigError>
     // Record the effective home dir
     config.home_dir = Some(effective_home);
 
+    // 密钥引用 → 明文。放在 validate 之前：托管不可用时 key 会变成 None，
+    // 校验看到的必须是「真实可用性」而不是一个 `vault:...` 引用串。
+    crate::secrets::unseal(&mut config);
+
     // Validate
     validate_config(&config)?;
 
@@ -162,7 +166,10 @@ pub fn load_from_yaml(path: &Path) -> Result<GatewayConfig, ConfigError> {
     if let serde_yaml::Value::Mapping(ref mut m) = root {
         crate::python_yaml_compat::normalize_config_yaml_root(m);
     }
-    let config: GatewayConfig = serde_yaml::from_value(root).map_err(yaml_to_config_error)?;
+    let mut config: GatewayConfig = serde_yaml::from_value(root).map_err(yaml_to_config_error)?;
+    // 直接读 yaml 的调用方（`load_user_config_file`、dashboard）也要拿到明文，
+    // 否则 `vault:` 引用会被当成真 key 发出去。幂等：第二次处理时已是明文。
+    crate::secrets::unseal(&mut config);
     Ok(config)
 }
 
@@ -509,12 +516,56 @@ pub fn write_yaml_atomic(path: &Path, yaml: &str) -> Result<(), ConfigError> {
     ));
     std::fs::write(&tmp, yaml).map_err(io_to_config_error)?;
     std::fs::rename(&tmp, path).map_err(io_to_config_error)?;
+    restrict_owner_only(path);
     Ok(())
 }
+
+/// 把配置文件 ACL 收紧到「当前用户 + Administrators + SYSTEM」。
+///
+/// `config.yaml` 里有各 provider 的 `api_key` 明文，而默认继承的 ACL 往往把
+/// 文件开放给 `Users`（共享机 / 多用户 RDP 上任何账户可读）。这不是加密 ——
+/// 同用户的其它进程仍读得到；真正的机密性要求把 key 搬进 vault（那需要先解开
+/// `config → vault → config` 的依赖环，见审计清单 P0-8）。
+///
+/// 失败只 warn：ACL 收紧是纵深防御，不能因为它在某些账户/文件系统上不可用
+/// 就让「保存设置」直接失败。用 SID（`*S-1-5-32-544`）而不是本地化组名，
+/// 中文系统上 `Administrators` 这个名字并不成立。
+#[cfg(windows)]
+fn restrict_owner_only(path: &Path) {
+    use std::os::windows::process::CommandExt;
+    // 不弹控制台窗口（GUI 进程里 spawn 会闪一下黑框）。
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    if user.trim().is_empty() {
+        return;
+    }
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{user}:F"))
+        .arg("*S-1-5-32-544:F")
+        .arg("*S-1-5-18:F")
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+    if let Err(e) = status {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "config.yaml ACL 收紧失败（文件内容仍已写入）"
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn restrict_owner_only(_path: &Path) {}
 
 pub fn save_config_yaml(path: &Path, config: &GatewayConfig) -> Result<(), ConfigError> {
     let mut to_save = config.clone();
     to_save.home_dir = None;
+    // 明文 api_key → 托管引用。托管不可用时保持明文并 warn（拍板 A：
+    // 不能因为密钥库坏了就让用户「保存设置」失败）。
+    crate::secrets::seal(&mut to_save);
     let yaml = serde_yaml::to_string(&to_save).map_err(yaml_to_config_error)?;
     write_yaml_atomic(path, &yaml)
 }

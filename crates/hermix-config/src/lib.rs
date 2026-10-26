@@ -17,6 +17,7 @@ pub mod platform;
 mod python_platform_env;
 mod python_yaml_compat;
 pub mod roundtrip_tests;
+pub mod secrets;
 pub mod session;
 pub mod streaming;
 
@@ -51,5 +52,6 @@ pub use paths::{
     trajectories_dir_in, user_path,
 };
 pub use platform::{extra_string, platform_token_or_extra, PlatformConfig, UnauthorizedDmBehavior};
+pub use secrets::{install_secret_store, SecretStore};
 pub use session::{DailyReset, IdleReset, SessionConfig, SessionResetPolicy, SessionType};
 pub use streaming::StreamingConfig;

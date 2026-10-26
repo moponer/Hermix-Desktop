@@ -5,6 +5,7 @@
 
 import { fetchJSON } from "../../api";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
+import { reportError } from "../../lib/reportError";
 import type { AgentPersona } from "./types";
 import { pickColor } from "./types";
 
@@ -155,7 +156,7 @@ export async function deleteAgentAsync(id: string, remaining: AgentPersona[]): P
 
 /** Batch-save to localStorage (fallback path). */
 export function saveAgentsLocal(agents: AgentPersona[]) {
-  try { storage.setItem(STORAGE_KEY, JSON.stringify(agents)); } catch {}
+  try { storage.setItem(STORAGE_KEY, JSON.stringify(agents)); } catch (e) { reportError("agents-storage", e); }
 }
 
 /** Upsert a single agent into the localStorage fallback cache without
@@ -168,7 +169,7 @@ export function upsertAgentLocal(agent: AgentPersona) {
     if (idx >= 0) existing[idx] = agent;
     else existing.push(agent);
     storage.setItem(STORAGE_KEY, JSON.stringify(existing));
-  } catch {}
+  } catch (e) { reportError("agents-storage", e); }
 }
 
 export function buildSystemPrompt(agent: Partial<AgentPersona>): string {

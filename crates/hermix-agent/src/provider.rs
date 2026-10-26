@@ -651,10 +651,10 @@ impl GenericProvider {
     /// strict providers like MiniMax-M3 400 with `(2013) tool call result
     /// does not follow tool call` when an orphan tool_result slips into
     /// the request body).
-    fn drop_orphan_tool_results(messages: &[Message]) -> Vec<Message> {
+    fn drop_orphan_tool_results(messages: &mut Vec<Message>) {
         let mut surviving_call_ids: std::collections::HashSet<String> =
             std::collections::HashSet::new();
-        for msg in messages {
+        for msg in messages.iter() {
             if msg.role == MessageRole::Assistant {
                 if let Some(tcs) = msg.tool_calls.as_ref() {
                     for tc in tcs {
@@ -667,18 +667,17 @@ impl GenericProvider {
         }
 
         let before = messages.len();
-        let kept: Vec<Message> = messages
-            .iter()
-            .filter(|m| {
-                !(m.role == MessageRole::Tool
-                    && m.tool_call_id
-                        .as_ref()
-                        .map(|cid| !surviving_call_ids.contains(cid))
-                        .unwrap_or(false))
-            })
-            .cloned()
-            .collect();
-        let dropped = before - kept.len();
+        // 就地 retain：调用方传进来的已经是 `to_vec()` 的副本，再建一个
+        // `Vec<Message>` 只为了过滤，会让每条消息（含工具结果正文，动辄几十 KB）
+        // 多一次深拷贝。
+        messages.retain(|m| {
+            !(m.role == MessageRole::Tool
+                && m.tool_call_id
+                    .as_ref()
+                    .map(|cid| !surviving_call_ids.contains(cid))
+                    .unwrap_or(false))
+        });
+        let dropped = before - messages.len();
         if dropped > 0 {
             tracing::warn!(
                 dropped = dropped,
@@ -687,7 +686,6 @@ impl GenericProvider {
                  on strict providers)"
             );
         }
-        kept
     }
 
     fn sanitize_messages_for_strict_api(messages: &[Message], enabled: bool) -> Value {
@@ -704,7 +702,8 @@ impl GenericProvider {
         // `compression::sanitize_tool_pairs` but runs on every request
         // so the orphan is fixed before going out, not only on the next
         // compression cycle.
-        let messages = Self::drop_orphan_tool_results(messages);
+        let mut messages = messages.to_vec();
+        Self::drop_orphan_tool_results(&mut messages);
 
         // Pass 1: enforce strict tool_use ↔ tool_result *adjacency*. Strict
         // providers (MiniMax-M3) reject bodies whose `tool` role messages

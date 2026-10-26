@@ -510,6 +510,54 @@ pub(crate) fn was_interrupted(reply: &hermix_core::traits::AgentReply) -> bool {
     reply.was_user_interrupted()
 }
 
+/// 出站请求前的地址检查：只允许 http/https，并拒绝云元数据端点。
+///
+/// **不拒环回/私网是有意的**：自定义 provider 的首要用例就是本机模型
+/// （Ollama `http://127.0.0.1:11434`、LM Studio `:1234`），把这些拒掉等于让
+/// 「测试连接」对最常见的配置永久失败。真正没有合法用途的是云元数据端点 ——
+/// 那是「借 hermix 的身份读云主机凭据」。
+pub(crate) fn safe_outbound_url(raw: &str) -> Result<reqwest::Url, String> {
+    let url = reqwest::Url::parse(raw.trim()).map_err(|e| format!("地址不合法：{e}"))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        other => return Err(format!("只支持 http/https，收到 `{other}`")),
+    }
+    let host_raw = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    // IPv6 字面量在 `host_str()` 里带方括号（`[fd00:ec2::254]`），比较时去掉。
+    let host = host_raw.trim_start_matches('[').trim_end_matches(']');
+    if host.is_empty() {
+        return Err("地址缺少主机名".to_string());
+    }
+    const BLOCKED: [&str; 6] = [
+        "169.254.169.254", // AWS / Azure / GCP IMDS
+        "169.254.170.2",   // AWS ECS task metadata
+        "100.100.100.200", // 阿里云 metadata
+        "fd00:ec2::254",   // AWS IPv6 IMDS
+        "metadata.google.internal",
+        "metadata.goog",
+    ];
+    if BLOCKED.contains(&host) {
+        return Err("该地址是云元数据端点，不允许作为 provider 地址".to_string());
+    }
+    Ok(url)
+}
+
+/// 重定向逐跳复查 [`safe_outbound_url`]。
+///
+/// 不能直接关掉重定向：正常 provider 常用 302 落到 API 域名。但「第一跳合法、
+/// 第二跳指向元数据端点」是标准的 SSRF 绕过，所以每一跳都要过同一个检查。
+pub(crate) fn safe_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error(std::io::Error::other("too many redirects"));
+        }
+        if let Err(e) = safe_outbound_url(attempt.url().as_str()) {
+            return attempt.error(std::io::Error::other(e));
+        }
+        attempt.follow()
+    })
+}
+
 /// 按**字符**截到 `max_chars`，超长补省略号。
 ///
 /// 不按字节：中文一字 3 字节，`&s[..n]` 会切在多字节中间 panic 或切出乱码。
@@ -578,6 +626,28 @@ mod tests {
             ..reply()
         };
         assert!(!was_interrupted(&r), "被 token 上限砍断不算用户中断");
+    }
+
+    #[test]
+    fn 出站地址只允许_http_https() {
+        assert!(safe_outbound_url("https://api.deepseek.com/v1").is_ok());
+        assert!(safe_outbound_url("http://127.0.0.1:11434/v1").is_ok(), "本地模型必须可测");
+        assert!(safe_outbound_url("file:///C:/Windows").is_err());
+        assert!(safe_outbound_url("gopher://x/").is_err());
+        assert!(safe_outbound_url("not a url").is_err());
+    }
+
+    #[test]
+    fn 云元数据端点被拒() {
+        for raw in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://169.254.170.2/v2/credentials",
+            "http://100.100.100.200/latest/meta-data/",
+            "http://metadata.google.internal/computeMetadata/v1/",
+            "http://[fd00:ec2::254]/latest/meta-data/",
+        ] {
+            assert!(safe_outbound_url(raw).is_err(), "{raw} 必须被拒");
+        }
     }
 
     #[test]
