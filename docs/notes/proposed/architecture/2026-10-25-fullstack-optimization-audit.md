@@ -345,6 +345,30 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 | P1-1 每轮历史深拷贝 | 三处：① `local_agent_service` 的 `send_message` / `send_message_stream` 由 `messages.clone()` 改 `std::mem::take`（循环拿到所有权，回程本来就用 `AgentResult.messages` 覆盖）；② `sanitize_messages_for_strict_api` 里 `drop_orphan_tool_results` 由「`&[Message]` → 新建 `Vec<Message>`（`.cloned()`）」改**就地 `retain`**，省掉每条消息（含工具结果正文）的一次深拷贝 | agent 1187、provider 56 全绿 |
 | P2-6 两份装配实现 | `assemble_tool_schemas(all)` 改为委托 `assemble_tool_schemas_with_meta(all, &ToolMetaRegistry::new())`（空表时它本来就回退到 `classify_tools`）。删掉 32 行重复的「拆 bridge → 判阈值 → 注入三元组」，那两份注释此前在互相镜像修同一个 bug | tools 808 全绿 |
 
+### 批次 11（P1-9 技能扫描缓存）— 2026-10-26 交付
+
+**先量后改**：新增探针 `skill_loader::tests::probe_scan_cost`（`#[ignore]`），实测 `with_dir + scan()`：
+
+```
+30 个技能、50 次取均值、debug 构建：单次 25.56 ms
+```
+
+`pre_turn` 每轮都跑一次，且是同步阻塞在 async 路径上。这个量级足以支撑一次缓存设计。
+
+落地 `skill_loader::cached_loader(dir) -> Arc<SkillLoader>`，缓存键 = **目录 mtime + 条目数**指纹 + **60s TTL**。三条失效路径分别是：
+
+| 用户动作 | 生效时机 |
+|---|---|
+| 增 / 删技能目录 | 立即（指纹变） |
+| 改 `SKILL.md` 正文 | **立即**（`load_body` 每次匹配后重新读盘，正文从不过缓存） |
+| 改 frontmatter（描述/标签/allowed-tools） | 最多 60s |
+
+只有第三条是代价。用户改技能绝大多数是改正文，用"每轮 25ms"换"元数据最多延迟一分钟"是划算的。
+
+`run_loop::build_active_skills_block_with_tools` 改用缓存版本。回归：`cached_loader_reuses_and_invalidates_on_new_skill`（同目录 `Arc::ptr_eq` 命中；新增技能目录必须重扫且新技能可匹配）。
+
+验证：agent **1194 全绿**（+1 缓存测试，+1 ignored 探针）。
+
 ### 批次 10（P2-9 限流键）— 2026-10-26 交付
 
 `server/security.rs::client_key` 由 `SocketAddr::to_string()`（`IP:源端口`）改为**纯 IP**。原实现的两个后果：

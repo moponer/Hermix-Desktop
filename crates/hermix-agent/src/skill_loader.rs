@@ -23,6 +23,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::skill_orchestrator::{SkillCommandInfo, SkillOrchestrator};
 
@@ -52,6 +53,76 @@ pub struct SkillMatch {
 // ---------------------------------------------------------------------------
 // SkillLoader
 // ---------------------------------------------------------------------------
+
+/// 进程级扫描缓存条目（键是技能目录）。
+struct CachedLoader {
+    /// 「目录 mtime + 条目数」混合指纹：增删技能目录会变，改文件内容不会。
+    stamp: u64,
+    loaded_at: std::time::Instant,
+    loader: Arc<SkillLoader>,
+}
+
+/// 取一个已 `scan()` 过的 [`SkillLoader`]，按目录缓存。
+///
+/// `with_dir + scan()` 实测 **25.6 ms/次**（30 个技能，debug 构建；见
+/// `probe_scan_cost`），而 `pre_turn` 每轮都要调一次，且它是在 async 路径上
+/// 同步跑（阻塞 tokio worker）。
+///
+/// 缓存键 = 目录 mtime + 条目数 + 60s TTL，三种失效路径分别是：
+/// - **增删技能**（目录 mtime 变）→ 立即重扫；
+/// - **改 frontmatter**（描述/标签/允许工具）→ 最多 60s 后生效；
+/// - **改正文** → **立即生效**：`load_body` 每次匹配后都重新读盘，正文从不过缓存。
+///
+/// 只有第二条是这套缓存的代价。用户改技能绝大多数是改正文，而每轮 25ms ×
+/// 每次都付，换这条 60s 的元数据延迟是划算的。
+pub fn cached_loader(dir: &Path) -> Arc<SkillLoader> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    /// 元数据刷新的上限延迟。
+    const TTL: Duration = Duration::from_secs(60);
+
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedLoader>>> = OnceLock::new();
+
+    fn stamp(dir: &Path) -> u64 {
+        use std::time::UNIX_EPOCH;
+        let mtime = std::fs::metadata(dir)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let entries = std::fs::read_dir(dir).map(|d| d.count() as u64).unwrap_or(0);
+        // 两个小数字混成一位指纹：只要任一变就重扫。
+        mtime ^ entries.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    }
+
+    let stamp = stamp(dir);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(entry) = guard.get(dir) {
+            if entry.stamp == stamp && entry.loaded_at.elapsed() < TTL {
+                return entry.loader.clone();
+            }
+        }
+    }
+
+    let mut loader = SkillLoader::with_dir(dir);
+    loader.scan();
+    let loader = Arc::new(loader);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(
+            dir.to_path_buf(),
+            CachedLoader {
+                stamp,
+                loaded_at: Instant::now(),
+                loader: loader.clone(),
+            },
+        );
+    }
+    loader
+}
 
 /// Auto-matches user messages to skills and produces injection text.
 /// Wraps a [`SkillOrchestrator`] and adds keyword-based matching on top of
@@ -1518,6 +1589,67 @@ mod tests {
             .build_injection_and_tools("write a commit message")
             .expect("skill should match");
         assert!(tools.is_none(), "no declaration → no restriction");
+    }
+
+    /// 缓存命中与失效：同目录复用同一个 loader；新增技能目录必须触发重扫。
+    #[test]
+    fn cached_loader_reuses_and_invalidates_on_new_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = cached_loader(tmp.path());
+        let again = cached_loader(tmp.path());
+        assert!(std::sync::Arc::ptr_eq(&first, &again), "同目录应命中缓存");
+
+        let dir = tmp.path().join("new-skill");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: new-skill\ndescription: freshly added probe\ntags: [probe]\n---\n# New\n\nbody\n",
+        )
+        .unwrap();
+
+        let after = cached_loader(tmp.path());
+        assert!(
+            !std::sync::Arc::ptr_eq(&first, &after),
+            "新增技能后必须重扫（否则新技能永远进不来）"
+        );
+        assert!(
+            after
+                .match_message("freshly added probe")
+                .iter()
+                .any(|m| m.name == "new-skill"),
+            "重扫后新技能应可匹配"
+        );
+    }
+
+    /// 探针（默认 ignore）：量 `with_dir + scan()` 的真实成本。
+    ///
+    /// 用来决定 P1-9「每轮扫描」值不值得加缓存。缓存方案会让"改技能描述后
+    /// 立即生效"退化成"要等 TTL/重启"，是否划算取决于这个数字 —— 先量再改，
+    /// 不靠猜。
+    #[test]
+    #[ignore = "手动探针，不是回归断言"]
+    fn probe_scan_cost() {
+        let tmp = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            let dir = tmp.path().join(format!("skill-{i:02}"));
+            fs::create_dir_all(&dir).unwrap();
+            let content = format!(
+                "---\nname: skill-{i}\ndescription: 第 {i} 个探针技能，用来量测扫描成本\ntags: [probe, perf]\n---\n# Skill {i}\n\n正文若干行。\n{}",
+                "细节行\n".repeat(40)
+            );
+            fs::write(dir.join("SKILL.md"), content).unwrap();
+        }
+        // 预热一次：首扫含目录项缓存冷启动，不代表稳态。
+        let mut warm = SkillLoader::with_dir(tmp.path());
+        warm.scan();
+
+        let start = std::time::Instant::now();
+        for _ in 0..50 {
+            let mut loader = SkillLoader::with_dir(tmp.path());
+            loader.scan();
+        }
+        let per_call = start.elapsed() / 50;
+        println!("with_dir+scan（30 个技能）× 50 次：单次 {per_call:?}");
     }
 }
 

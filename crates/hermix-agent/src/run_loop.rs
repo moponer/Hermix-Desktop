@@ -59,8 +59,10 @@ pub fn build_active_skills_block_with_tools(
     if user_text.is_empty() {
         return None;
     }
-    let mut loader = crate::skill_loader::SkillLoader::with_dir(skills_dir);
-    loader.scan();
+    // 复用进程级缓存：`with_dir + scan()` 实测 25.6ms/次且同步阻塞在 async
+    // 路径上。失效规则见 `skill_loader::cached_loader` 的文档（正文改动仍然
+    // 立即生效，只有 frontmatter 元数据最多延迟 60s）。
+    let loader = crate::skill_loader::cached_loader(skills_dir);
     let (injection, tools) = loader.build_injection_and_tools(user_text)?;
 
     if injection.len() <= char_budget {
