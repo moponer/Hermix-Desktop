@@ -798,7 +798,23 @@ impl AgentLoop {
             stage: LoopPhase::PostToolExec.as_orchestration_stage(),
             api_ms: state.timings.total_api_time_ms,
             tool_ms: state.timings.total_tool_time_ms,
-            tool_calls: vec![],
+            // 此前硬编码 `vec![]`，于是 turn report 的 `tool_count` 恒为 0
+            // —— 实际执行了工具也看不出来，排障时会被误导成「空转」。
+            // `results` 由 `execute_tool_calls` 按 `scoped_calls` 顺序生成
+            // （后面追加的 scope_denials 同样带 `is_error`），按索引取即可。
+            //
+            // `duration_ms` 仍为 0：timings 只记整轮工具耗时，没有单调用的
+            // 计时，这里不编造数字——先看数量与错误态是否够用。
+            tool_calls: tool_calls
+                .iter()
+                .enumerate()
+                .map(|(i, tc)| crate::turn_report::TurnToolCall {
+                    name: tc.function.name.clone(),
+                    is_error: results.get(i).map(|r| r.is_error).unwrap_or(false),
+                    is_replay: false,
+                    duration_ms: 0,
+                })
+                .collect(),
             replay_count: 0,
             has_visible_text: has_visible,
             has_thinking: response
