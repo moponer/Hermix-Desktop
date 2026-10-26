@@ -1427,9 +1427,22 @@ pub fn set_python_override(path: Option<String>) -> Result<String, String> {
 // ── 文件关联（hermix-viewer 接管；HKCU only，用户显式授权）─────────
 // 决策笔记 2026-10-09-standalone-file-viewer：按扩展名勾选，不静默抢关联。
 // ProgID = Hermix.Viewer；取消勾选时恢复勾选前的旧默认值（Backup 子键）。
+//
+// 2026-10-26 修「勾了不生效」（bug-fix/2026-10-26-file-association-toggle.md）：
+// Windows 查关联的优先级是三层，之前只处理了第 2 层：
+//   ① HKCU\...\Explorer\FileExts\.ext\UserChoice —— 用户在资源管理器里点过
+//      「打开方式」后由 Explorer 写入（带哈希），**存在时压过下面两层**。
+//      本机 17 个可勾选扩展名里有 11 个带着这条记录 → 写 Classes 默认值
+//      写进去了，双击打开的还是老程序 = 「开关无效」。
+//   ② HKCU\Software\Classes\.ext 默认值 ← 本程序写的就是这里。
+//   ③ HKLM\Software\Classes\.ext 默认值。
+// 另补两处：写完广播 SHChangeNotify(SHCNE_ASSOCCHANGED) 让 Explorer 立刻
+// 重读；ProgID 的 open command 若随安装目录搬走会失效，列表要能看出
+// 「登记了但打不开」，否则用户看到的是「开关是开的、双击没反应」。
 
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
 use winreg::RegKey;
+use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
 
 const VIEWER_PROGID: &str = "Hermix.Viewer";
 /// 可勾选的扩展名白名单（信任边界：写注册表的入口必须过这扇门）。
@@ -1474,25 +1487,94 @@ fn read_default(classes: &RegKey, path: &str) -> Option<String> {
     classes.get_value::<String, _>(path).ok()
 }
 
-/// 各扩展名当前勾选状态（owned = 默认值已指向 Hermix.Viewer）。
+/// UserChoice 键路径（Explorer 记的「这个扩展名上次用谁打开的」）。
+fn user_choice_path(ext: &str) -> String {
+    format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.{ext}\UserChoice")
+}
+
+/// 读 UserChoice 里的 ProgId；没有这条记录 → None。
+fn read_user_choice(hkcu: &RegKey, ext: &str) -> Option<String> {
+    let key = hkcu.open_subkey(user_choice_path(ext)).ok()?;
+    key.get_value::<String, _>("ProgId")
+        .ok()
+        .filter(|p| !p.is_empty())
+}
+
+/// 删掉 UserChoice —— 它压过 Classes 默认值，不删就等于没勾。
+/// 返回 true = 确实删掉了一条；false = 本来就没有。
+fn clear_user_choice(hkcu: &RegKey, ext: &str) -> Result<bool, String> {
+    let path = user_choice_path(ext);
+    if hkcu.open_subkey(&path).is_err() {
+        return Ok(false);
+    }
+    hkcu.delete_subkey_all(&path).map_err(|e| {
+        format!(
+            "系统「打开方式」记录无法清除（{e}）：该扩展名仍被其它程序占用。\
+             请在资源管理器里右键该文件 →「打开方式」→「始终使用 Hermix 文件查看器」确认一次。"
+        )
+    })?;
+    Ok(true)
+}
+
+/// ProgID 的 open command 是否还指向真实存在的 viewer exe。
+/// 应用搬目录 / 换版本后命令会指向旧路径 → 双击报「找不到应用程序」。
+fn viewer_progid_ok(hkcu: &RegKey) -> bool {
+    let Ok(key) = hkcu.open_subkey(format!(
+        r"Software\Classes\{VIEWER_PROGID}\shell\open\command"
+    )) else {
+        return false;
+    };
+    let Ok(cmd) = key.get_value::<String, _>("") else {
+        return false;
+    };
+    // 形如 "D:\…\hermix-viewer.exe" "%1" → 取第一对引号里的路径
+    let exe = cmd.split('"').nth(1).unwrap_or("");
+    !exe.is_empty() && std::path::Path::new(exe).exists()
+}
+
+/// 广播关联变更：Explorer 不收到通知就继续用旧关联缓存
+/// （表现：勾了开关，双击还是老程序打开）。
+fn notify_assoc_changed() {
+    unsafe {
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+    }
+}
+
+/// 各扩展名的关联状态。
+///
+/// - `owned`：真正生效（默认值指向 Hermix.Viewer，且没有被 UserChoice 压住，
+///   且 viewer 路径还在）。
+/// - `blocked`：登记了，但系统的 UserChoice 压着 → 勾了也不生效。
+/// - `stale`：登记了，但 ProgID 指向的 viewer exe 已不存在 → 双击打不开。
 #[tauri::command]
 pub fn file_assoc_list() -> Result<Vec<serde_json::Value>, String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let classes = hkcu
         .open_subkey("Software\\Classes")
         .map_err(|e| format!("打开注册表失败: {e}"))?;
+    let prog_ok = viewer_progid_ok(&hkcu);
     Ok(ASSOC_EXTS
         .iter()
         .map(|ext| {
+            let registered = read_default(&classes, &format!(".{ext}")).as_deref() == Some(VIEWER_PROGID);
+            // UserChoice 指向别的程序 → 压过 Classes 默认值，我们写了也不生效
+            let blocked = registered
+                && read_user_choice(&hkcu, ext).as_deref().is_some_and(|p| p != VIEWER_PROGID);
+            let stale = registered && !prog_ok;
             serde_json::json!({
                 "ext": ext,
-                "owned": read_default(&classes, &format!(".{ext}")).as_deref() == Some(VIEWER_PROGID),
+                "owned": registered && !blocked && !stale,
+                "blocked": blocked,
+                "stale": stale,
             })
         })
         .collect())
 }
 
 /// 勾选/取消某扩展名（用户显式操作；取消时恢复旧默认值或清除）。
+///
+/// 勾选 = 写默认值 + 清掉压着它的 UserChoice + 广播变更；
+/// 三步缺一不可，缺哪步都会表现为「开关无效」。
 #[tauri::command]
 pub fn file_assoc_set(ext: String, enable: bool) -> Result<(), String> {
     let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
@@ -1501,6 +1583,8 @@ pub fn file_assoc_set(ext: String, enable: bool) -> Result<(), String> {
     }
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     if enable {
+        // 顺带自愈：open command 重新指向当前安装目录下的 viewer exe
+        // （应用搬过家时，旧路径会让「勾上了但双击打不开」）。
         ensure_viewer_progid()?;
     }
     let classes = hkcu
@@ -1518,21 +1602,31 @@ pub fn file_assoc_set(ext: String, enable: bool) -> Result<(), String> {
         classes
             .set_value(&path, &VIEWER_PROGID.to_string())
             .map_err(|e| format!("写关联失败: {e}"))?;
-    } else if cur.as_deref() == Some(VIEWER_PROGID) {
-        let backup = hkcu
-            .open_subkey(format!("Software\\Classes\\{VIEWER_PROGID}\\Backup"))
-            .ok()
-            .and_then(|bk| bk.get_value::<String, _>(ext.as_str()).ok())
-            .filter(|s| !s.is_empty());
-        match backup {
-            Some(prev) => classes
-                .set_value(&path, &prev)
-                .map_err(|e| format!("恢复旧关联失败: {e}"))?,
-            None => {
-                let _ = classes.delete_value(path.as_str());
+        // 关键一步：UserChoice 还在的话，我们写的默认值形同虚设。
+        clear_user_choice(&hkcu, &ext)?;
+    } else {
+        if cur.as_deref() == Some(VIEWER_PROGID) {
+            let backup = hkcu
+                .open_subkey(format!("Software\\Classes\\{VIEWER_PROGID}\\Backup"))
+                .ok()
+                .and_then(|bk| bk.get_value::<String, _>(ext.as_str()).ok())
+                .filter(|s| !s.is_empty());
+            match backup {
+                Some(prev) => classes
+                    .set_value(&path, &prev)
+                    .map_err(|e| format!("恢复旧关联失败: {e}"))?,
+                None => {
+                    let _ = classes.delete_value(path.as_str());
+                }
             }
         }
+        // 老版本可能把关联写进过 UserChoice，取消时要一并清掉，
+        // 否则 Explorer 仍然记着我们 → 「取消了还是我们打开」。
+        if read_user_choice(&hkcu, &ext).as_deref() == Some(VIEWER_PROGID) {
+            let _ = clear_user_choice(&hkcu, &ext);
+        }
     }
+    notify_assoc_changed();
     Ok(())
 }
 
