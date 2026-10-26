@@ -3854,11 +3854,11 @@ return {
       // selectedModel 时不得用旧值(默认模型)覆盖已选择的模型。
       if (activeSessionId) {
         setSessions((prev) =>
-          prev.map((s) =>
-            s.id === activeSessionId
-              ? { ...s, model: newId, updated_at: new Date().toISOString() }
-              : s,
-          ),
+          updateSession(prev, activeSessionId, (s) => ({
+            ...s,
+            model: newId,
+            updated_at: new Date().toISOString(),
+          })),
         );
       }
       resetChatStateForModelSwitch({
