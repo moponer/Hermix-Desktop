@@ -217,6 +217,11 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/free-channel/dead-model", post(config::report_dead_model))
         // 免费模型行内测试：1-token 真实推理探测（GET /models 测不出单模型死活）
         .route("/api/free-channel/probe-model", post(config::probe_free_model))
+        // 社区免费模型总开关：开=拉取社区清单，关=不拉取并移除已拉取的条目
+        .route(
+            "/api/free-channel",
+            get(config::get_free_channel).put(config::put_free_channel),
+        )
         // Persona management: SOUL / system prompt / personalities / memory.
         // See `dashboard/persona.rs` for the file layout and the agent-loop
         // code that consumes these files.

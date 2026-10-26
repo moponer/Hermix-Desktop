@@ -19,7 +19,9 @@ import { ModelAddDialog, type EditingTarget } from "./ModelAddDialog";
 import { PROVIDERS, catalogMismatchNote } from "./settingsUtils";
 import type { CustomProviderSummary } from "../../api";
 import { DELETE, FAILED, LOADING, failure } from "../strings";
-import { Badge } from "../ui";
+import { Badge, ConfirmDialog, SettingsGroup, SettingsRow, Switch } from "../ui";
+import { toastError, toastSuccess } from "../../hooks/useToast";
+import { openExternalUrl } from "../../desktopBridge";
 
 interface ModelRow {
   id: string; // `${providerId}:${modelId}`
@@ -30,6 +32,14 @@ interface ModelRow {
   isDefault: boolean;
   /** 内置免费渠道：显示"免费源"标记（数据会流经第三方，见列表顶部说明）。 */
   isFree: boolean;
+  /**
+   * 上游对该模型的说明（**逐条免责 / 使用条款**）。
+   *
+   * 社区免费网关的每个模型条目都带（"Prompts may be logged by the upstream
+   * provider … not suitable for production or sensitive data"）——不显示
+   * 就等于用户不知道自己同意了谁的条款。
+   */
+  note?: string;
   /**
    * 是否已在后端的启用清单（`model_selector.enabled`）里。
    *
@@ -68,24 +78,37 @@ export function ModelListTab() {
    *  provider 的"密钥已配"判定用它，不再硬编码 true —— 硬编码会让
    *  编辑弹窗对未配 key 的厂商说"已配置"，用户留空保存后跑起来才报错。 */
   const [envVars, setEnvVars] = useState<Record<string, { is_set: boolean }>>({});
+  /** 社区免费模型总开关的状态（后端 config.yaml 是唯一权威）。
+   *  null = 后端没这个接口（老后端）——不是「关」，更不是「关着」。 */
+  const [freeChannel, setFreeChannel] = useState<api.FreeChannelState | null>(null);
+  /** 首次读取是否完成：区分「还在读」与「读不到」。 */
+  const [freeRead, setFreeRead] = useState(false);
+  /** 开关写入中：期间禁用开关，避免连点两次写出两种状态。 */
+  const [freeBusy, setFreeBusy] = useState(false);
+  /** 待确认的「关闭」动作：免费源是唯一可用模型时，关掉就没模型可用了。 */
+  const [confirmDisableFree, setConfirmDisableFree] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    // 静默刷新：后台拉取完成后回填列表，不让整页再闪一次加载态。
+    if (!opts?.silent) setLoading(true);
     try {
       // 后端是权威：/api/model/list 给出已启用模型与默认模型。
-      const [list, customs, meta, envs] = await Promise.all([
+      const [list, customs, meta, envs, free] = await Promise.all([
         api.getModelList().catch(() => null),
         api.getCustomProviders().catch(() => []),
         api.getProviderMeta().catch(() => []),
         api.getEnvVars().catch(() => ({})),
+        api.getFreeChannel().catch(() => null),
       ]);
       const customIds = new Set(customs.map((c) => c.id));
       const freeIds = new Set(customs.filter((c) => c.is_free_channel).map((c) => c.id));
       setCustoms(customs);
       setEnvVars(envs);
+      setFreeChannel(free);
+      setFreeRead(true);
       const metaNames = new Map(meta.map((m) => [m.id, m.id]));
       const def = list?.default_model ?? "";
-      const toRow = (p: { provider_id: string; model_id: string }, isEnabled: boolean): ModelRow => {
+      const toRow = (p: { provider_id: string; model_id: string; note?: string }, isEnabled: boolean): ModelRow => {
         const id = `${p.provider_id}:${p.model_id}`;
         const name =
           metaNames.get(p.provider_id) ??
@@ -99,6 +122,7 @@ export function ModelListTab() {
           isBuiltin: !customIds.has(p.provider_id),
           isDefault: id === def,
           isFree: freeIds.has(p.provider_id),
+          note: p.note,
           isEnabled,
         };
       };
@@ -144,7 +168,7 @@ export function ModelListTab() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }, []);
 
@@ -196,6 +220,80 @@ export function ModelListTab() {
     }
   }, [rows, load]);
 
+  /**
+   * 开启后社区清单是**后台**拉的（几秒后到），开关响应不可能等它 ——
+   * 这里轮询模型数，涨了就静默回填列表，让「开则拉取」在界面上看得见。
+   */
+  const pollFreeModels = useCallback(
+    async (baseline: number) => {
+      for (let i = 0; i < 10; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const st = await api.getFreeChannel().catch(() => null);
+        if (!st) return;
+        if (st.models > baseline) {
+          await load({ silent: true });
+          return;
+        }
+      }
+      // 预算用尽也刷一次：上游清单可能与 seed 完全重合（数量不涨但内容变了）。
+      await load({ silent: true });
+    },
+    [load],
+  );
+
+  /**
+   * 社区免费模型总开关 —— 真正落盘的那一步。
+   *
+   * 「开关 ↔ 数据」的联动口径：写入走**后端**（config.yaml 是唯一权威；
+   * 后端同步摘除/重建免费条目并热推送），写完**回读**再渲染 —— 不做
+   * 乐观更新：乐观值在写失败时会让界面显示「已关」而后台还在拉。
+   */
+  const applyFreeSwitch = useCallback(async (next: boolean) => {
+    setFreeBusy(true);
+    setError(null);
+    try {
+      const res = await api.setFreeChannelEnabled(next);
+      await load();
+      if (next) {
+        // 基线取「开完之后的条数」（seed 清单）：社区清单拉到后会涨，
+        // 涨了才静默回填列表。
+        const st = await api.getFreeChannel().catch(() => null);
+        void pollFreeModels(st?.models ?? 0);
+      }
+      toastSuccess(
+        next
+          ? `已开启社区免费模型（${res.seeded_models} 个已启用），正在拉取社区模型清单…`
+          : `已关闭社区免费模型，移除了 ${res.removed_models} 个免费条目。`,
+      );
+    } catch (e) {
+      // 回读真实状态：开关不能停在没落盘的值上。
+      await load();
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(`免费模型开关未生效：${msg}`);
+      toastError(`免费模型开关未生效：${msg}`);
+    } finally {
+      setFreeBusy(false);
+    }
+  }, [load, pollFreeModels]);
+
+  /**
+   * 开关的点击入口。关之前先看一件事：**免费源是不是当前唯一能用的模型** ——
+   * 是的话关闭等于让应用没有模型可用（条目会被摘掉），先确认再动手。
+   */
+  const toggleFreeChannel = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        const enabled = rows.filter((r) => r.isEnabled);
+        if (enabled.length > 0 && enabled.every((r) => r.isFree)) {
+          setConfirmDisableFree(true);
+          return;
+        }
+      }
+      void applyFreeSwitch(next);
+    },
+    [rows, applyFreeSwitch],
+  );
+
   const remove = useCallback(async (row: ModelRow) => {
     try {
       // 模型级删除后端没有端点，这里是"把这个模型从启用清单里摘掉"。
@@ -236,6 +334,18 @@ export function ModelListTab() {
           }));
           const dead = await api.reportDeadModel(row.modelId);
           if (dead.removed) await load();
+        } else if (r.status === 0) {
+          // status 0 = 传输层就失败了（DNS/连接/超时），**网关压根没连上**。
+          // 这多半是网络不可达（企业网/内网直连/严格防火墙），不是模型坏了 ——
+          // 文案必须说清楚，否则用户会去清模型、而真正的原因是网络。
+          setTestNote((n) => ({
+            ...n,
+            [row.id]: failure(
+              FAILED,
+              "连不上社区网关（网络不可达），不是模型失效——请检查网络/代理，或改用自有端点。",
+              r.error ?? "网络错误",
+            ),
+          }));
         } else {
           setTestNote((n) => ({
             ...n,
@@ -304,10 +414,74 @@ export function ModelListTab() {
         </div>
       )}
 
-      {sorted.some((r) => r.isFree) && (
-        <p className="mt-3 px-3 py-2 rounded-[var(--radius-md)] bg-bg-tertiary/50 text-[length:var(--text-meta)] text-text-muted">
-          免费模型来自社区公开端点，随时可能失效；对话内容会发往第三方服务，请勿用于敏感内容。
-        </p>
+      {/* 社区免费模型总开关：开 = 从社区公开端点拉取；关 = 不再拉取，
+          并把已拉取的免费条目（目录 / 启用清单 / 默认模型）一并移除。 */}
+      <SettingsGroup
+        className="mt-4"
+        title="社区免费模型"
+        description="免费模型来自社区公开端点，随上游上下架变动，随时可能失效。"
+      >
+        <SettingsRow
+          title="启用社区免费模型"
+          description={
+            !freeRead
+              ? "读取开关状态中…"
+              : freeChannel === null
+                ? "当前后端不支持这个开关（需更新后端）。"
+                : freeChannel.enabled
+                  ? `已开启 · 当前登记 ${freeChannel.models} 个免费模型。关闭后不再拉取，已拉取的条目会被移除。`
+                  : "已关闭 · 不再拉取社区免费模型，之前拉取的条目已移除。"
+          }
+          control={
+            <Switch
+              checked={freeChannel?.enabled === true}
+              disabled={freeBusy || freeChannel === null}
+              onChange={(v) => void toggleFreeChannel(v)}
+              label="启用社区免费模型"
+            />
+          }
+        />
+        {/* 网关地址：连的是谁必须写明 —— 用户要能自己判断可达性、自己换端点。 */}
+        {freeChannel?.endpoints && freeChannel.endpoints.length > 0 && (
+          <SettingsRow
+            title="网关地址"
+            description={
+              <span className="flex flex-col gap-2">
+                {freeChannel.endpoints.map((ep) => (
+                  <span key={ep.id} className="flex flex-col gap-0.5">
+                    <span>{ep.display_name}</span>
+                    <span>
+                      推理
+                      <UrlLink url={ep.base_url} />
+                    </span>
+                    <span>
+                      模型清单
+                      <UrlLink url={ep.models_url} />
+                    </span>
+                  </span>
+                ))}
+              </span>
+            }
+          />
+        )}
+      </SettingsGroup>
+
+      {/* 免责 + 可达性：第三方端点必写的两件事 ——
+          ① 数据流向谁、上游条款是什么；② 部分网络根本连不上（那是网络问题，
+          不是模型坏了）。 */}
+      {(freeChannel?.enabled || sorted.some((r) => r.isFree)) && (
+        <div className="mt-3 px-3 py-2 rounded-[var(--radius-md)] bg-bg-tertiary/50 text-[length:var(--text-meta)] text-text-muted space-y-1">
+          <p>
+            对话内容会发往上面的第三方端点；上游声明可能记录提示词并用于改进服务，
+            <span className="text-text-warning">请勿用于敏感内容</span>。
+            每个免费模型自己的免责/使用条款见列表该行下方。
+          </p>
+          <p>
+            部分网络环境（企业网、内网直连、严格防火墙）访问不到社区网关，
+            表现为「测试连接」超时或失败 —— 那是网络不可达，不是模型坏了；
+            需要时可改用自有端点（config.yaml 的 free_channel.base_url / models_url）。
+          </p>
+        </div>
       )}
 
       <div className="mt-4 overflow-hidden rounded-[var(--radius-lg)] bg-bg-card shadow-[var(--shadow-paper)]">
@@ -350,6 +524,15 @@ export function ModelListTab() {
                   {row.providerName} · {row.isBuiltin ? "内置" : "自定义"}
                   {testNote[row.id] && <span className="ml-1">· {testNote[row.id]}</span>}
                 </div>
+                {/* 上游对该模型的免责/使用条款（社区免费网关的每条都带）。 */}
+                {row.note && (
+                  <p
+                    className="mt-1 line-clamp-1 text-[length:var(--text-meta)] text-text-warning"
+                    title={row.note}
+                  >
+                    {row.note}
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center gap-0.5 shrink-0">
@@ -408,12 +591,46 @@ export function ModelListTab() {
           onSaved={() => void load()}
         />
       )}
+
+      {/* 免费源是唯一可用模型时，关掉它等于让应用没有模型可用 —— 先确认。 */}
+      <ConfirmDialog
+        open={confirmDisableFree}
+        title="关闭社区免费模型"
+        body="当前启用的模型全部来自社区免费源。关闭后这些条目会被移除，应用将没有可用模型，直到你添加并启用一个付费模型。"
+        confirmLabel="仍然关闭"
+        onCancel={() => setConfirmDisableFree(false)}
+        onConfirm={() => {
+          setConfirmDisableFree(false);
+          void applyFreeSwitch(false);
+        }}
+      />
     </div>
   );
 }
 
 const primaryBtn =
   "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent text-on-accent hover:opacity-90 shrink-0";
+
+/**
+ * 网关地址链接：显示完整 URL，点开交给系统浏览器。
+ *
+ * 不用 `<a href>`：Tauri 窗口里点外链会把整个应用导航走，必须走
+ * `openExternalUrl`（Tauri 的 open crate）。用户要能自己核对端点、判断
+ * 可达性、必要时照着改自己的 config.yaml。
+ */
+function UrlLink({ url }: { url: string }) {
+  if (!url) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => void openExternalUrl(url)}
+      title={`在浏览器打开 ${url}`}
+      className="ml-1 font-mono text-[length:var(--text-meta)] text-accent underline underline-offset-2 hover:opacity-80 break-all text-left"
+    >
+      {url}
+    </button>
+  );
+}
 
 function IconBtn({
   title,

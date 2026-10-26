@@ -467,6 +467,19 @@ pub async fn report_dead_model(
     Json(DeadModelResponse { model, removed })
 }
 
+/// 一个免费渠道的**实际**端点（连的是谁，摆给用户看）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FreeChannelEndpoint {
+    /// provider id（`custom-free-*`）。
+    pub id: String,
+    /// 展示名（"免费模型 · Kilo"）。
+    pub display_name: String,
+    /// 推理网关地址。
+    pub base_url: String,
+    /// 模型清单地址。
+    pub models_url: String,
+}
+
 /// 免费渠道总开关的当前状态（前端开关的**权威值**）。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FreeChannelState {
@@ -476,6 +489,9 @@ pub struct FreeChannelState {
     pub models: usize,
     /// 参与免费渠道的 provider id。
     pub providers: Vec<String>,
+    /// 各渠道的**实际**端点（连的是谁必须写明：用户要能自己判断可达性、
+    /// 照着改自己的端点）。
+    pub endpoints: Vec<FreeChannelEndpoint>,
 }
 
 /// Request for `PUT /api/free-channel`.
@@ -514,11 +530,55 @@ fn free_channel_state(cfg: &hermix_config::GatewayConfig) -> FreeChannelState {
                 .unwrap_or(0)
         })
         .sum();
+    // 实际端点：按 provider 逐个列出（连的是谁必须写明）。内置渠道用
+    // `resolved_*`（认 config 覆盖与环境变量），用户自建的 `custom-free-*`
+    // 用它自己 entry 里的 base_url。
+    let endpoints: Vec<FreeChannelEndpoint> = providers
+        .iter()
+        .filter_map(|id| {
+            let entry = cfg.llm_providers.get(id)?;
+            let base_url = entry.base_url.clone().unwrap_or_default();
+            let base_url = base_url.trim().to_string();
+            if base_url.is_empty() {
+                return None;
+            }
+            let models_url = hermix_config::free_channel::FREE_CHANNELS
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| hermix_config::free_channel::resolved_models_url(&cfg.free_channel, c))
+                .unwrap_or_else(|| {
+                    format!("{}/models", base_url.trim_end_matches('/'))
+                });
+            Some(FreeChannelEndpoint {
+                id: id.clone(),
+                display_name: entry
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| id.clone()),
+                base_url,
+                models_url,
+            })
+        })
+        .collect();
     FreeChannelState {
         enabled: cfg.free_channel.enabled,
         models,
         providers,
+        endpoints,
     }
+}
+
+/// `PUT /api/free-channel` 的响应：切换后的权威状态 + 本次动作的结果。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FreeChannelToggleResponse {
+    /// 切换后的状态（与 `GET /api/free-channel` 同形）。
+    pub state: FreeChannelState,
+    /// 关闭时摘掉的免费模型条数。
+    pub removed_models: usize,
+    /// 打开时写回启用清单的免费模型条数。
+    pub seeded_models: usize,
+    /// 切换后的默认模型（None = 没有可用默认）。
+    pub default_model: Option<String>,
 }
 
 /// PUT /api/free-channel —— 社区免费模型总开关。
@@ -528,14 +588,19 @@ fn free_channel_state(cfg: &hermix_config::GatewayConfig) -> FreeChannelState {
 pub async fn put_free_channel(
     State(state): State<HttpServerState>,
     Json(body): Json<FreeChannelToggleRequest>,
-) -> Result<Json<FreeChannelState>, HttpError> {
-    crate::free_channel::set_enabled(&state.hermix_home, &state.agent_service, body.enabled)
+) -> Result<Json<FreeChannelToggleResponse>, HttpError> {
+    let result = crate::free_channel::set_enabled(&state.hermix_home, &state.agent_service, body.enabled)
         .await
         .map_err(|e| HttpError {
             status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             message: e,
         })?;
-    Ok(Json(free_channel_state(&current_gateway_config(&state))))
+    Ok(Json(FreeChannelToggleResponse {
+        state: free_channel_state(&current_gateway_config(&state)),
+        removed_models: result.removed_models,
+        seeded_models: result.seeded_models,
+        default_model: result.default_model,
+    }))
 }
 
 /// Request for `POST /api/free-channel/probe-model`.
@@ -686,6 +751,9 @@ pub struct ModelInfoEntry {
     pub is_free: bool,
     /// 上游声明会拿提示词训练（免责文案据此升级）。
     pub trains_on_prompts: bool,
+    /// 上游对该模型的说明（**逐条免责 / 使用条款**，社区免费网关的每条都带）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Response for `GET /api/model/list`.
@@ -952,6 +1020,9 @@ fn resolve_model_info(
             .or_else(|| known.as_ref().map(|k| k.supports_vision)),
         is_free: hermix_config::free_channel::is_free_provider(pid),
         trains_on_prompts: meta.map(|m| m.trains_on_prompts).unwrap_or(false),
+        // 上游说明（逐条免责/使用条款）。社区免费网关的每个模型条目都带，
+        // 不下发就等于用户永远不知道自己同意了谁的条款。
+        note: provider.and_then(|p| p.model_notes.get(model).cloned()),
     }
 }
 
@@ -1076,6 +1147,17 @@ pub async fn update_model_list(
         default_model: body.default_model,
     });
 
+    // 免费渠道关着时，启用清单里不该再有免费条目：客户端可能拿着**开关
+    // 关之前**的旧列表回写（设置页的行操作用的是当次 load 到的快照）。
+    // 这里按后端权威状态兜一道，免得免费模型被"复活"成指向已摘除
+    // provider 的孤儿条目。
+    if !cfg.free_channel.enabled {
+        if let Some(sel) = cfg.model_selector.as_mut() {
+            sel.enabled
+                .retain(|e| !hermix_config::free_channel::is_free_provider(&e.provider_id));
+        }
+    }
+
     let config_path = state.hermix_home.join("config.yaml");
     if let Err(e) = hermix_config::save_config_yaml(&config_path, &cfg) {
         return Err(HttpError {
@@ -1116,6 +1198,64 @@ pub async fn get_provider_meta() -> Json<serde_json::Value> {
         })
         .collect();
     Json(serde_json::Value::Array(items))
+}
+
+#[cfg(test)]
+mod free_channel_tests {
+    use super::{get_free_channel, put_free_channel, FreeChannelToggleRequest};
+    use axum::extract::State;
+    use axum::Json;
+
+    /// 端点级：PUT 关 → 免费条目当场被摘除、GET 的权威值变成「关」。
+    ///
+    /// 这一层是「开关到底有没有接上」的守门：纯函数测试只保证
+    /// `apply_switch` 正确，端点测试保证**接口真的调到了它**。
+    #[tokio::test]
+    async fn toggle_endpoint_strips_free_models_immediately() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().to_path_buf();
+        let state = crate::HttpServerState::build_with_hermes_home(
+            hermix_config::GatewayConfig::default(),
+            home.clone(),
+        )
+        .await
+        .expect("build_with_hermes_home");
+
+        // 启动路径已经把免费渠道 seed 进去了（默认值 = 开）。
+        let before = get_free_channel(State(state.clone())).await.0;
+        assert!(before.enabled, "免费渠道默认是开的");
+        assert!(
+            before.providers.iter().any(|p| p == "custom-free-kilo"),
+            "启动后应有免费 provider：{:?}",
+            before.providers
+        );
+        assert!(before.models > 0);
+        // 网关地址必须下发：连的是谁不写明，用户没法判断可达性、也没法自己换端点。
+        let ep = before
+            .endpoints
+            .iter()
+            .find(|e| e.id == "custom-free-kilo")
+            .expect("kilo endpoint");
+        assert!(ep.base_url.starts_with("https://"), "实际端点：{}", ep.base_url);
+        assert!(ep.models_url.ends_with("/models"), "清单地址：{}", ep.models_url);
+
+        let res = put_free_channel(
+            State(state.clone()),
+            Json(FreeChannelToggleRequest { enabled: false }),
+        )
+        .await
+        .expect("put")
+        .0;
+        assert!(!res.state.enabled);
+        assert_eq!(res.state.models, 0, "关闭后免费模型应被摘除");
+        assert!(res.state.providers.is_empty());
+        assert!(res.removed_models > 0, "应报告摘除的条数");
+
+        // 权威值落盘（重启后仍是关）。
+        let cfg = hermix_config::load_config(home.to_str()).expect("reload");
+        assert!(!cfg.free_channel.enabled);
+        assert!(!cfg.llm_providers.contains_key("custom-free-kilo"));
+    }
 }
 
 #[cfg(test)]

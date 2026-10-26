@@ -127,6 +127,10 @@ export interface ModelListEntryInfo extends ModelListEntry {
   is_free?: boolean;
   /** 上游声明会拿提示词训练。 */
   trains_on_prompts?: boolean;
+  /** 上游对该模型的说明（**逐条免责 / 使用条款**）。社区免费网关的每个
+   *  模型条目都带（"Prompts may be logged … not suitable for sensitive
+   *  data"），不显示就等于用户不知道自己同意了谁的条款。 */
+  note?: string;
 }
 
 /** Response from `GET /api/model/list` — the durable, backend-persisted

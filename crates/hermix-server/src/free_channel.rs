@@ -42,6 +42,11 @@ struct ModelEntry {
     /// OpenRouter 风格的"支持的请求参数"清单（`tools` / `reasoning` …）。
     #[serde(default)]
     supported_parameters: Vec<String>,
+    /// 模型说明。社区免费网关的每条描述里都带着**逐条免责**
+    /// （"Prompts may be logged by the upstream provider … not suitable for
+    /// production or sensitive data"），落盘后 UI 才能把它摆给用户看。
+    #[serde(default)]
+    description: Option<String>,
     /// 输入模态（`text` / `image` / `video` / `pdf`）。
     #[serde(default)]
     architecture: Option<Architecture>,
@@ -93,6 +98,60 @@ fn capabilities_of(m: &ModelEntry) -> hermix_config::ModelCapabilities {
 /// 首版写 24 条把设置页刷成了目录墙，收到 8 条（seed 2 + 补 6）。
 const MAX_REFRESH_MODELS: usize = 8;
 
+/// 上游说明落盘时的长度上限（字符）。超了截断并加省略号。
+const MAX_NOTE_CHARS: usize = 400;
+
+/// 上游把免责/条款写在描述**末尾**（实测：`kilo-auto/free` 的描述是
+/// "Rotates through available free models. … **Warning** Prompts may be
+/// logged by the upstream provider …"）。UI 只显示一行，条款在末尾就等于
+/// 被截掉 —— 所以命中这些标记时，把条款段挪到最前面。
+///
+/// 标记按上游的**原样大小写**匹配（实测就是这两种写法），不做大小写
+/// 折叠：折叠后的字节偏移与原文对不上，切分位置会错。
+const NOTE_MARKERS: &[&str] = &[
+    "**Warning**",
+    "**Terms of Service**",
+    "**Terms of service**",
+    "**Disclaimer**",
+    "Warning:",
+];
+
+/// 拉下来的一条免费模型：id + 能力 + 上游说明（免责/条款）。
+struct FetchedModel {
+    id: String,
+    caps: hermix_config::ModelCapabilities,
+    /// 上游 `description`（压平空白、条款前置后截断）。
+    note: Option<String>,
+}
+
+/// 上游 description → 可展示的短文本：压掉换行、条款前置、截断到上限。
+fn note_of(raw: &str) -> Option<String> {
+    let flat = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        return None;
+    }
+    // 条款段挪到最前：命中最早的标记就以它切分，两段对调。
+    let cut = NOTE_MARKERS
+        .iter()
+        .filter_map(|m| flat.find(m).map(|i| (i, m.len())))
+        .min_by_key(|(i, _)| *i);
+    let ordered = match cut {
+        Some((idx, len)) => {
+            let (head, tail) = flat.split_at(idx);
+            let (marker, rest) = tail.split_at(len);
+            format!("{marker}{rest} {head}")
+        }
+        None => flat,
+    };
+    let mut out: String = ordered.chars().take(MAX_NOTE_CHARS).collect();
+    if ordered.chars().count() > MAX_NOTE_CHARS {
+        out.push('…');
+    }
+    // 去掉 Markdown 粗体标记：`**Warning**` → `Warning`。上游描述里的 `**`
+    // 只用于粗体，直接显示给用户是"原始转义"的样子。
+    Some(out.replace("**", ""))
+}
+
 /// 合并模型清单：只增不删，保序去重。返回合并后的 CSV 与新增数量。
 pub fn merge_models(existing: Option<&str>, fetched: &[String]) -> (String, usize) {
     let mut out: Vec<String> = existing
@@ -117,7 +176,7 @@ async fn fetch_models(
     client: &reqwest::Client,
     models_url: &str,
     api_key: &str,
-) -> Result<Vec<(String, hermix_config::ModelCapabilities)>, String> {
+) -> Result<Vec<FetchedModel>, String> {
     let mut request = client.get(models_url);
     if let Some(value) = hermix_config::free_channel::auth_header(Some(api_key)) {
         request = request.header("Authorization", value);
@@ -133,7 +192,11 @@ async fn fetch_models(
         .iter()
         .filter(|m| m.is_free != Some(false))
         .take(MAX_REFRESH_MODELS)
-        .map(|m| (m.id.clone(), capabilities_of(m)))
+        .map(|m| FetchedModel {
+            id: m.id.clone(),
+            caps: capabilities_of(m),
+            note: m.description.as_deref().and_then(note_of),
+        })
         .collect())
 }
 
@@ -159,8 +222,7 @@ pub async fn refresh_and_persist(home: &std::path::Path, service: &Arc<dyn Agent
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 
-    let mut fetched: Vec<(&'static str, Vec<(String, hermix_config::ModelCapabilities)>)> =
-        Vec::new();
+    let mut fetched: Vec<(&'static str, Vec<FetchedModel>)> = Vec::new();
     for channel in hermix_config::free_channel::FREE_CHANNELS {
         let models_url = hermix_config::free_channel::resolved_models_url(&cfg.free_channel, channel);
         match fetch_models(&client, &models_url, channel.api_key).await {
@@ -186,24 +248,32 @@ pub async fn refresh_and_persist(home: &std::path::Path, service: &Arc<dyn Agent
         let Some(entry) = fresh.llm_providers.get_mut(id) else {
             continue;
         };
-        let ids: Vec<String> = list.iter().map(|(m, _)| m.clone()).collect();
+        let ids: Vec<String> = list.iter().map(|m| m.id.clone()).collect();
         let (merged, added) = merge_models(entry.model.as_deref(), &ids);
         if added > 0 {
             entry.model = Some(merged);
             changed = true;
         }
-        for (model, caps) in list {
+        for model in list {
+            let caps = model.caps;
             // 上下文继续写进老字段 `model_contexts`：压缩阈值/上下文卡片读它。
             if let Some(ctx) = caps.context_window {
-                if entry.model_contexts.insert(model.clone(), ctx) != Some(ctx) {
+                if entry.model_contexts.insert(model.id.clone(), ctx) != Some(ctx) {
                     changed = true;
                 }
             }
             // 其余能力（模态 / reasoning / tools / 最大输出）进 `model_meta`，
             // 供 `/api/model/list` 与 `/api/model/info` 展示与兜底。
-            if entry.model_meta.get(&model) != Some(&caps) {
-                entry.model_meta.insert(model, caps);
+            if entry.model_meta.get(&model.id) != Some(&caps) {
+                entry.model_meta.insert(model.id.clone(), caps);
                 changed = true;
+            }
+            // 上游说明（逐条免责/使用条款）进 `model_notes`，设置页摆给用户看。
+            if let Some(note) = model.note {
+                if entry.model_notes.get(&model.id) != Some(&note) {
+                    entry.model_notes.insert(model.id.clone(), note);
+                    changed = true;
+                }
             }
         }
         added_total += added;
@@ -365,9 +435,266 @@ pub fn spawn_startup_refresh(state: &HttpServerState) {
     });
 }
 
+/// 免费渠道总开关的落地结果（设置页回显用）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FreeChannelToggle {
+    /// 落盘后的开关状态（权威值）。
+    pub enabled: bool,
+    /// 关掉时从配置里摘掉的免费模型条数（provider 目录里的模型总数）。
+    pub removed_models: usize,
+    /// 打开时写进启用清单的免费模型条数。
+    pub seeded_models: usize,
+    /// 摘除/重指之后的默认模型（None = 当前没有可用默认）。
+    pub default_model: Option<String>,
+}
+
+/// 免费渠道总开关：**立即**生效的开关动作。
+///
+/// 与启动路径（`state.rs` 里的 `strip` / `ensure_seeded`）用同一套函数，
+/// 区别只在**不用等重启**：
+/// - 关 → 摘除已拉取的免费条目（provider 目录 + 启用清单 + 默认模型），
+///   启动阶段就不该再有免费模型，也不该再拉；
+/// - 开 → 重建渠道条目并把「上下文最大的 N 个免费模型」写回启用清单，
+///   随后**后台**拉一次社区清单（网络 IO 不阻塞响应）。
+///
+/// 落盘后立刻热推送（`set_config`），让运行中的 agent 与前端下拉同步。
+pub async fn set_enabled(
+    home: &std::path::Path,
+    service: &Arc<dyn AgentService>,
+    enabled: bool,
+) -> Result<FreeChannelToggle, String> {
+    let mut cfg = hermix_config::load_config(home.to_str())
+        .map_err(|e| format!("读取配置失败: {e}"))?;
+    let (removed_models, seeded_models) = apply_switch(&mut cfg, enabled);
+
+    let path = home.join("config.yaml");
+    hermix_config::save_config_yaml(&path, &cfg).map_err(|e| format!("写配置失败: {e}"))?;
+    if let Ok(v) = serde_json::to_value(&cfg) {
+        service.set_config(v);
+    }
+
+    // 开：后台拉一次社区清单（失败静默，保留 seed 清单）。
+    if enabled {
+        let home = home.to_path_buf();
+        let service = service.clone();
+        tokio::spawn(async move {
+            refresh_and_persist(&home, &service).await;
+        });
+    }
+
+    tracing::info!(
+        enabled,
+        removed_models,
+        seeded_models,
+        "free channel: global switch toggled"
+    );
+    Ok(FreeChannelToggle {
+        enabled,
+        removed_models,
+        seeded_models,
+        default_model: cfg
+            .model_selector
+            .as_ref()
+            .and_then(|s| s.default_model.clone()),
+    })
+}
+
+/// 开关的**配置层**改动（纯函数，可测）：返回 (摘除条数, 写回启用清单条数)。
+///
+/// - 关 → 摘除已拉取的免费条目（provider 目录 + 启用清单 + 默认模型），
+///   之后启动阶段不再 seed，也不该再拉；
+/// - 开 → 重建渠道条目并把「上下文最大的 N 个免费模型」写回启用清单。
+pub fn apply_switch(
+    cfg: &mut hermix_config::GatewayConfig,
+    enabled: bool,
+) -> (usize, usize) {
+    cfg.free_channel.enabled = enabled;
+    if enabled {
+        // 重开：清掉「一次性」标记，让 Top-N 重新进启用清单 ——
+        // 否则重开后只剩目录条目、聊天下拉里一条都没有。
+        cfg.free_channel.defaults_seeded = false;
+        hermix_config::free_channel::ensure_seeded(cfg);
+        let seeded = cfg
+            .model_selector
+            .as_ref()
+            .map(|s| {
+                s.enabled
+                    .iter()
+                    .filter(|e| hermix_config::free_channel::is_free_provider(&e.provider_id))
+                    .count()
+            })
+            .unwrap_or(0);
+        (0, seeded)
+    } else {
+        let removed = count_free_models(cfg);
+        hermix_config::free_channel::strip(cfg);
+        // `strip` 把默认模型清空了：若还有别的已启用模型就指到第一条，
+        // 否则用户会被留在「无模型可用」的状态（他只是关了免费源）。
+        repoint_default(cfg);
+        (removed, 0)
+    }
+}
+
+/// 当前已登记的免费模型条数（provider 目录里的模型总数）。
+fn count_free_models(cfg: &hermix_config::GatewayConfig) -> usize {
+    cfg.llm_providers
+        .iter()
+        .filter(|(id, _)| hermix_config::free_channel::is_free_provider(id))
+        .map(|(_, entry)| {
+            entry
+                .model
+                .as_deref()
+                .map(|csv| csv.split(',').filter(|m| !m.trim().is_empty()).count())
+                .unwrap_or(0)
+        })
+        .sum()
+}
+
+/// 默认模型被摘空时，指到剩余启用清单的第一条。
+fn repoint_default(cfg: &mut hermix_config::GatewayConfig) {
+    let picked = cfg.model_selector.as_ref().and_then(|sel| {
+        if sel
+            .default_model
+            .as_deref()
+            .is_some_and(|d| !d.trim().is_empty())
+        {
+            return None; // 已有默认，不动
+        }
+        sel.enabled
+            .first()
+            .map(|e| format!("{}:{}", e.provider_id, e.model_id))
+    });
+    let Some(picked) = picked else { return };
+    if let Some(sel) = cfg.model_selector.as_mut() {
+        sel.default_model = Some(picked.clone());
+    }
+    if cfg.model.as_deref().is_none_or(|m| m.trim().is_empty()) {
+        cfg.model = Some(picked);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 造一份「已拉取免费模型」的配置：免费 provider + 启用清单 + 默认模型。
+    fn pulled_free_config() -> hermix_config::GatewayConfig {
+        let mut cfg = hermix_config::GatewayConfig::default();
+        hermix_config::free_channel::ensure_seeded(&mut cfg);
+        cfg.free_channel.defaults_seeded = true;
+        cfg.model = Some("custom-free-kilo:kilo-auto/free".to_string());
+        cfg.model_selector = Some(hermix_config::ModelSelectorConfig {
+            enabled: vec![hermix_config::ModelSelectorEntry {
+                provider_id: "custom-free-kilo".to_string(),
+                model_id: "kilo-auto/free".to_string(),
+            }],
+            default_model: Some("custom-free-kilo:kilo-auto/free".to_string()),
+        });
+        cfg
+    }
+
+    /// 关掉总开关必须**立即**摘除已拉取的免费条目（目录 / 启用清单 / 默认模型）——
+    /// 启动路径的 `strip` 只在进程起来时跑一次，等重启等于开关无效。
+    #[test]
+    fn switch_off_strips_pulled_free_models_immediately() {
+        let mut cfg = pulled_free_config();
+        let (removed, seeded) = apply_switch(&mut cfg, false);
+
+        assert!(!cfg.free_channel.enabled);
+        assert!(removed > 0, "应报告摘除的模型条数");
+        assert_eq!(seeded, 0);
+        assert!(
+            !cfg.llm_providers.contains_key("custom-free-kilo"),
+            "免费 provider 必须被摘除"
+        );
+        let sel = cfg.model_selector.as_ref().expect("selector");
+        assert!(
+            sel.enabled
+                .iter()
+                .all(|e| !hermix_config::free_channel::is_free_provider(&e.provider_id)),
+            "启用清单里不该剩免费条目"
+        );
+        assert!(
+            cfg.model
+                .as_deref()
+                .is_none_or(|m| !m.starts_with("custom-free-")),
+            "正在跑的模型不该再指向已摘除的免费 provider"
+        );
+    }
+
+    /// 关掉时若还有别的已启用模型，默认模型要顺延过去 —— 用户只是关了
+    /// 免费源，不该被留在「无模型可用」的状态。
+    #[test]
+    fn switch_off_repoints_default_to_remaining_enabled_model() {
+        let mut cfg = pulled_free_config();
+        let sel = cfg.model_selector.as_mut().expect("selector");
+        sel.enabled.push(hermix_config::ModelSelectorEntry {
+            provider_id: "deepseek".to_string(),
+            model_id: "deepseek-chat".to_string(),
+        });
+        cfg.model = Some("custom-free-kilo:kilo-auto/free".to_string());
+
+        apply_switch(&mut cfg, false);
+
+        let sel = cfg.model_selector.as_ref().expect("selector");
+        assert_eq!(
+            sel.default_model.as_deref(),
+            Some("deepseek:deepseek-chat"),
+            "默认模型必须顺延到剩余启用项"
+        );
+        assert_eq!(cfg.model.as_deref(), Some("deepseek:deepseek-chat"));
+    }
+
+    /// 打开总开关：渠道条目重建，且免费模型回到启用清单（否则重开后
+    /// 聊天下拉里一条都没有，只剩设置页的目录行）。
+    #[test]
+    fn switch_on_reseeds_free_models_into_enabled_list() {
+        let mut cfg = pulled_free_config();
+        apply_switch(&mut cfg, false);
+        assert!(!cfg.llm_providers.contains_key("custom-free-kilo"));
+
+        let (removed, seeded) = apply_switch(&mut cfg, true);
+
+        assert!(cfg.free_channel.enabled);
+        assert_eq!(removed, 0);
+        assert!(seeded > 0, "重开应把免费模型写回启用清单");
+        assert!(cfg.llm_providers.contains_key("custom-free-kilo"));
+        let sel = cfg.model_selector.as_ref().expect("selector");
+        assert!(
+            sel.enabled
+                .iter()
+                .any(|e| hermix_config::free_channel::is_free_provider(&e.provider_id)),
+            "启用清单里必须重新出现免费条目"
+        );
+    }
+
+    /// 上游说明落盘前的整形：压掉换行（上游描述是多行 Markdown）、截断到
+    /// 上限（有的条目几百字，不截会把 config.yaml 撑大）。
+    #[test]
+    fn upstream_note_is_flattened_and_truncated() {
+        assert_eq!(note_of("  hello \n world  ").as_deref(), Some("hello world"));
+        assert_eq!(note_of("   \n  ").as_deref(), None);
+        let long = "x".repeat(MAX_NOTE_CHARS + 50);
+        let out = note_of(&long).expect("note");
+        assert_eq!(out.chars().count(), MAX_NOTE_CHARS + 1, "截断后带省略号");
+        assert!(out.ends_with('…'));
+    }
+
+    /// 条款必须**排到最前**：上游把免责写在描述末尾，而 UI 只显示一行 ——
+    /// 不前置就正好被截断掉，等于没写。
+    #[test]
+    fn upstream_note_puts_terms_before_description() {
+        let raw = "Rotates through available free models. **Warning** Prompts may be logged \
+                   by the upstream provider and used to improve their services. Not suitable \
+                   for production or sensitive data workloads.";
+        let note = note_of(raw).expect("note");
+        assert!(note.starts_with("Warning"), "条款必须排到最前：{note}");
+        assert!(
+            note.contains("Not suitable for production"),
+            "条款正文必须完整保留：{note}"
+        );
+        assert!(!note.contains("**"), "粗体标记要清掉：{note}");
+    }
 
     /// 真实联网验证清单刷新：无鉴权头、只收免费模型、条数受上限约束。
     /// 手工跑：`cargo test -p hermix-server --lib live_refresh -- --ignored`
@@ -388,18 +715,23 @@ mod tests {
 
         assert!(list.len() <= MAX_REFRESH_MODELS);
         assert!(
-            list.iter()
-                .any(|(id, _)| id == "minimax/minimax-m3.1-flash:free"),
+            list.iter().any(|m| m.id == "minimax/minimax-m3.1-flash:free"),
             "seed model must be present in the free slice; got {:?}",
-            list.iter().map(|(id, _)| id).collect::<Vec<_>>()
+            list.iter().map(|m| &m.id).collect::<Vec<_>>()
         );
         assert!(
-            list.iter().all(|(_, caps)| caps.context_window.is_some()),
+            list.iter().all(|m| m.caps.context_window.is_some()),
             "上下文必须解析出来"
         );
         assert!(
-            !list.iter().any(|(id, _)| id.contains("claude-opus")),
+            !list.iter().any(|m| m.id.contains("claude-opus")),
             "paid models must be filtered out (isFree == false)"
+        );
+        // 上游说明（免责/条款）必须跟着拉下来 —— 不落盘就等于用户看不到
+        // 上游条款（实测每条免费模型都带 **Warning** 段）。
+        assert!(
+            list.iter().any(|m| m.note.is_some()),
+            "免费模型条目应带上游说明（免责/条款）"
         );
     }
 

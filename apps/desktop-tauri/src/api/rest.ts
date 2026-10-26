@@ -683,6 +683,18 @@ export const saveModelList = async (
   }
 };
 
+/** 一个免费渠道的**实际**端点（连的是谁，摆给用户看）。 */
+export interface FreeChannelEndpoint {
+  /** provider id（`custom-free-*`）。 */
+  id: string;
+  /** 展示名（"免费模型 · Kilo"）。 */
+  display_name: string;
+  /** 推理网关地址。 */
+  base_url: string;
+  /** 模型清单地址。 */
+  models_url: string;
+}
+
 /** 社区免费模型总开关的状态。后端 config.yaml 是唯一权威，前端不自己记账。 */
 export interface FreeChannelState {
   /** 总开关状态。 */
@@ -691,6 +703,8 @@ export interface FreeChannelState {
   models: number;
   /** 参与免费渠道的 provider id。 */
   providers: string[];
+  /** 各渠道的实际端点。 */
+  endpoints: FreeChannelEndpoint[];
 }
 
 export const getFreeChannel = async (): Promise<FreeChannelState | null> => {
@@ -701,18 +715,30 @@ export const getFreeChannel = async (): Promise<FreeChannelState | null> => {
   }
 };
 
+/** `PUT /api/free-channel` 的响应：切换后的状态 + 本次动作的结果。 */
+export interface FreeChannelToggleResponse {
+  state: FreeChannelState;
+  /** 关闭时摘掉的免费模型条数。 */
+  removed_models: number;
+  /** 打开时写回启用清单的免费模型条数。 */
+  seeded_models: number;
+  /** 切换后的默认模型（null = 没有可用默认）。 */
+  default_model: string | null;
+}
+
 /**
  * 打开/关闭社区免费模型。
  *
  * 失败**要抛出去**（不像 `saveModelList` 那样吞掉）：开关的界面状态由后端
  * 权威值决定，写失败时调用方据此回滚，不能让界面显示一个没落盘的开关。
  */
-export const setFreeChannelEnabled = async (enabled: boolean): Promise<void> => {
-  await fetchJSON("/api/free-channel", {
+export const setFreeChannelEnabled = async (
+  enabled: boolean,
+): Promise<FreeChannelToggleResponse> =>
+  fetchJSON<FreeChannelToggleResponse>("/api/free-channel", {
     method: "PUT",
     body: JSON.stringify({ enabled }),
   });
-};
 
 export const getSkills = async (): Promise<SkillInfo[]> =>
   fetchJSON("/api/skills");
