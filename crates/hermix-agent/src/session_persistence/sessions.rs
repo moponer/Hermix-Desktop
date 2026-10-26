@@ -24,6 +24,18 @@ impl SessionPersistence {
         self.ensure_db()?;
         let conn = open_with_wal(&self.db_path)?;
         let now = Utc::now().to_rfc3339();
+        // `token_usage.session_id` 有 FOREIGN KEY → `sessions(id)`，而子代理
+        // 会话（`parent::subagent-<uuid>`）从不走 `persist_session`，直接 INSERT
+        // 必然违反外键 → 整段用量静默丢失、/insights 缺一块（实测 2026-10-27）。
+        //
+        // 先补一行最小占位（已存在则 IGNORE 不动），保证用量落盘。只填 NOT NULL
+        // 的两个时间戳：这条记录的用途是承载用量，不是出现在会话列表里，
+        // 标题/模型留空比伪造一个更像占位。
+        conn.execute(
+            "INSERT OR IGNORE INTO sessions (id, created_at, updated_at) VALUES (?1, ?2, ?2)",
+            rusqlite::params![session_id, now],
+        )
+        .map_err(|e| AgentError::Io(format!("Failed to ensure session row for usage: {e}")))?;
         conn.execute(
             "INSERT INTO token_usage
                 (session_id, model, prompt_tokens, completion_tokens,

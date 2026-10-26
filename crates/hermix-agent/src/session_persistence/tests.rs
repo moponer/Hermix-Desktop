@@ -812,6 +812,39 @@
         assert!((agg.total_estimated_cost - 0.003).abs() < 1e-9);
     }
 
+    /// 子代理会话（`parent::subagent-<uuid>`）从不走 `persist_session`。
+    /// 此前后者缺行 → INSERT 撞 `token_usage.session_id` 外键 → 整段用量
+    /// 静默丢失、/insights 缺一块。现在 `persist_token_usage` 自己补占位行。
+    #[test]
+    fn p1_3_persist_token_usage_works_for_never_saved_subagent_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        // 注意：这里**没有** persist_session —— 正是子代理的真实情形。
+        sp.persist_token_usage(
+            "0af0a30b::subagent-6a3998a9",
+            "minimax",
+            &usage(1_000, 200, Some(0.01)),
+        )
+        .expect("subagent token usage must persist without a saved session");
+
+        // 占位会话行应当被补上，否则后续 messages 插入仍会撞外键。
+        let rows: i64 = {
+            let conn = super::open_with_wal(&sp.db_path).unwrap();
+            conn.query_row(
+                "SELECT COUNT(*) FROM sessions WHERE id = '0af0a30b::subagent-6a3998a9'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(rows, 1, "占位会话行必须存在，否则 FK 仍会失败");
+
+        // 重复调用必须幂等（INSERT OR IGNORE），不能报唯一约束冲突。
+        sp.persist_token_usage("0af0a30b::subagent-6a3998a9", "minimax", &usage(10, 5, None))
+            .expect("second insert must be idempotent");
+    }
+
     #[test]
     fn p1_3_aggregate_usage_daily_fills_missing_days_with_zero() {
         let tmp = tempfile::tempdir().unwrap();
