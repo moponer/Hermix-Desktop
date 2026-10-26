@@ -455,6 +455,17 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 **未做（其余 7 处）**：`App.tsx` mobile-active(15s) / presence heartbeat(30s)、`useBackendConnection`(30s，已有 visibility 判断)、`useChannelsStatus`(30s)、`useCustomApps`(退避轮询)、`ImChannelsCard` 配对轮询、`useSafeTimeout`。它们要么请求体量大（需请求去重/缓存键），要么已被现有 `visibilityState` 判断覆盖，收益低于改动风险。另有 3 处非轮询用途（`main.tsx` 启动进度爬条、`chatStateReset` 的 approval retry 计时器 Map、测试）不改。
 
+### 批次 19（P3-4 配置热重载）— 2026-10-26 交付
+
+两处改动，都针对「handler 每请求重读」这一实际开销：
+
+1. **`.env` 只解析一次**（`loader.rs`）：`load_dotenv` 用 `OnceLock` 包裹。此前 `load_config` 每次调用都重新读 `.env` 并 `unsafe { std::env::set_var }` —— 在多线程 handler 里是 UB（Rust 2024 已把 `set_var` 标 unsafe），且重复写入毫无收益。
+2. **只读 handler 走指纹缓存**：新增 `load_config_cached(home)`，按 `config.yaml` / `cli-config.yaml` / `gateway.json` 的 `(mtime 纳秒, 长度)` 三元组做键，命中即返回 `Arc<GatewayConfig>`。改配置文件后的**下一次请求**指纹就变了会重载——对用户仍是「改了就生效」，只是省掉每请求的磁盘 IO 与 YAML 解析。用在 `dashboard/config.rs`、`dashboard/env.rs`、`dashboard/custom_providers.rs` 三个只读接口；`free_channel.rs` 的读-改-写路径**继续用 `load_config`**（需要 owned 新鲜数据再写回）。
+
+**没上 `notify` 文件监视**：mtime 懒重载与它等价（配置只在被读时才需要新值），且不引入新依赖、不需要管理 watcher 生命周期。
+
+验证：`hermix-config` 144 passed（+1 缓存失效测试：未改文件命中同一 `Arc`、新建文件后必须重载）、`hermix-server` 506 passed；`cargo check` 零警告。
+
 ### 其余剩余项的处置结论（2026-10-26 复核）
 
 | 项 | 结论 |

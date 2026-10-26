@@ -249,7 +249,7 @@ pub async fn get_env_vars(
     // the rest of the app uses (important when running as Tauri sidecar
     // with HERMIX_PORTABLE_DATA_DIR set).
     let hermix_home_str = state.hermix_home.to_string_lossy().to_string();
-    if let Ok(cfg) = hermix_config::loader::load_config(Some(hermix_home_str.as_str())) {
+    if let Ok(cfg) = hermix_config::loader::load_config_cached(Some(hermix_home_str.as_str())) {
         for (id, prov) in &cfg.llm_providers {
             if !id.starts_with("custom-") {
                 continue;

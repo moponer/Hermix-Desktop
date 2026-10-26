@@ -110,12 +110,15 @@ pub struct TestConnectionResponse {
 fn read_gateway_config(
     state: &HttpServerState,
 ) -> Result<hermix_config::GatewayConfig, HttpError> {
-    hermix_config::load_config(Some(state.hermix_home.to_str().unwrap_or_default())).map_err(|_| {
-        HttpError {
+    // 只读路径先走指纹缓存（P3-4）：解析只发生一次，之后克隆一份 owned 给
+    // 调用方（有的调用点要 `&`、有的要 `mut`）。克隆远比每请求重读 YAML +
+    // 重新解析便宜。
+    hermix_config::load_config_cached(Some(state.hermix_home.to_str().unwrap_or_default()))
+        .map(|c| (*c).clone())
+        .map_err(|_| HttpError {
             status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             message: "failed to load gateway config".to_string(),
-        }
-    })
+        })
 }
 
 // ---------------------------------------------------------------------------

@@ -108,8 +108,9 @@ pub async fn auto_correct_config(
 
 /// GET /api/config — return current config as JSON.
 pub async fn get_config(State(state): State<HttpServerState>) -> Json<serde_json::Value> {
-    let config = hermix_config::load_config(Some(state.hermix_home.to_str().unwrap_or_default()))
-        .map(|c| serde_json::to_value(c).unwrap_or_default())
+    // 只读路径走指纹缓存（P3-4）：改配置文件后的下一次请求仍会重新加载。
+    let config = hermix_config::load_config_cached(Some(state.hermix_home.to_str().unwrap_or_default()))
+        .map(|c| serde_json::to_value(&*c).unwrap_or_default())
         .unwrap_or_default();
     Json(config)
 }

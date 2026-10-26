@@ -1,6 +1,8 @@
 //! Configuration loading from YAML, JSON, and environment variables.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
 use crate::env_compat;
 
 // Re-export ConfigError for convenience
@@ -37,31 +39,41 @@ fn io_to_config_error(e: std::io::Error) -> ConfigError {
 /// Only sets a variable if it is not already present in the environment,
 /// so real env vars always win. Supports `#` comments, blank lines, and
 /// optional single/double quoting of values.
-pub fn load_dotenv() {
-    let env_file = paths::env_path();
-    let contents = match std::fs::read_to_string(&env_file) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
+/// `.env` 只解析一次。
+///
+/// `load_config` 会被 axum handler 反复调用，而 `std::env::set_var` 在多线程
+/// 下是 UB（Rust 2024 已把它标成 `unsafe`）。进程启动后 `.env` 不再变化，
+/// 重复读取与写入都没有收益（P3-4）。
+static DOTENV_LOADED: OnceLock<()> = OnceLock::new();
 
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if let Some((key, value)) = trimmed.split_once('=') {
-            let key = key.trim();
-            if key.is_empty() {
+pub fn load_dotenv() {
+    DOTENV_LOADED.get_or_init(|| {
+        let env_file = paths::env_path();
+        let contents = match std::fs::read_to_string(&env_file) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            let value = value.trim();
-            let value = strip_quotes(value);
-            if std::env::var(key).is_err() {
-                // SAFETY: called once at startup before multi-threading.
-                unsafe { std::env::set_var(key, value) };
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim();
+                if key.is_empty() {
+                    continue;
+                }
+                let value = value.trim();
+                let value = strip_quotes(value);
+                if std::env::var(key).is_err() {
+                    // SAFETY: `OnceLock` 保证这段只在首次调用时执行；调用方
+                    // 约定在启动早期（`main`）先触碰一次，此时尚未起 worker。
+                    unsafe { std::env::set_var(key, value) };
+                }
             }
         }
-    }
+    });
 }
 
 fn strip_quotes(s: &str) -> &str {
@@ -152,6 +164,71 @@ pub fn load_config(home_dir: Option<&str>) -> Result<GatewayConfig, ConfigError>
     validate_config(&config)?;
 
     Ok(config)
+}
+
+// ---------------------------------------------------------------------------
+// load_config_cached —— 只读 handler 的配置入口（P3-4）
+// ---------------------------------------------------------------------------
+
+/// 配置缓存：`home 路径 → (文件指纹, 已解析配置)`。
+///
+/// 键里带 home 是因为测试与多实例场景会指向不同目录，混用会读到别人的配置。
+static CONFIG_CACHE: OnceLock<Mutex<HashMap<String, (u128, Arc<GatewayConfig>)>>> =
+    OnceLock::new();
+
+/// 三个配置文件的指纹（mtime 纳秒 + 长度）。任一文件被改/被建/被删都会变。
+fn config_fingerprint(home: &str) -> u128 {
+    use std::time::UNIX_EPOCH;
+    const FILES: [&str; 3] = ["config.yaml", "cli-config.yaml", "gateway.json"];
+    let mut acc: u128 = 0;
+    for name in FILES {
+        let p = Path::new(home).join(name);
+        let (mtime, len) = match std::fs::metadata(&p) {
+            Ok(meta) => (
+                meta.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0),
+                meta.len() as u128,
+            ),
+            Err(_) => (0, 0),
+        };
+        acc = acc
+            .wrapping_mul(1_000_003)
+            .wrapping_add(mtime)
+            .wrapping_add(len);
+    }
+    acc
+}
+
+/// 只读场景的配置入口：按配置文件指纹**懒重载**。
+///
+/// 与 [`load_config`] 的区别：命中缓存时既不重读 YAML、也不碰 `.env`。
+/// 改完配置后的第一次请求指纹就变了，会重新加载——对用户仍是「改了就
+/// 生效」，只是省掉每个请求的磁盘 IO 与解析（P3-4：dashboard 的读接口
+/// 原先每请求 `load_config` 一次）。
+///
+/// **不要**用在「读-改-写」路径上（如 `free_channel` 的开关切换）：那里
+/// 需要最新的 owned config 再写回，应继续用 [`load_config`]。
+pub fn load_config_cached(home_dir: Option<&str>) -> Result<Arc<GatewayConfig>, ConfigError> {
+    let home = home_dir
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| paths::hermix_home().to_string_lossy().to_string());
+    let fp = config_fingerprint(&home);
+    let cache = CONFIG_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some((cached_fp, cfg)) = guard.get(&home) {
+            if *cached_fp == fp {
+                return Ok(cfg.clone());
+            }
+        }
+    }
+    let cfg = Arc::new(load_config(Some(&home))?);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(home, (fp, cfg.clone()));
+    }
+    Ok(cfg)
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,6 +1156,34 @@ pub fn validate_config(config: &GatewayConfig) -> Result<(), ConfigError> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// P3-4：指纹缓存——文件未变时命中同一份配置，文件出现/改动后必须重载。
+    /// 用 `Arc::ptr_eq` 判断是否真的走了缓存，不依赖具体字段值。
+    #[test]
+    fn config_cache_reloads_when_file_fingerprint_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let home_str = home.to_str().unwrap();
+
+        // 首次：目录里没有配置文件，走默认值。
+        let a = load_config_cached(Some(home_str)).expect("first load");
+        let b = load_config_cached(Some(home_str)).expect("cached load");
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "unchanged config files must hit the cache (no re-parse)"
+        );
+
+        // 新建 config.yaml → 指纹变化 → 下一次调用必须重载。
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let cfg = GatewayConfig::default();
+        let yaml = serde_yaml::to_string(&cfg).expect("serialize");
+        write_yaml_atomic(&home.join("config.yaml"), &yaml).expect("write config");
+        let c = load_config_cached(Some(home_str)).expect("reload after create");
+        assert!(
+            !Arc::ptr_eq(&a, &c),
+            "a newly created config file must invalidate the cache"
+        );
+    }
 
     #[test]
     fn validate_valid_config() {
