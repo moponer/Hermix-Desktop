@@ -20,6 +20,7 @@
 
 import { useEffect, useState } from "react";
 import { Sparkles, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
+import { useNow } from "../../hooks/useNow";
 import type { AcuiComponent } from "../AcuiRegistry";
 
 type Props = {
@@ -59,12 +60,7 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
   // going to 1Hz made this card re-render 5x more often than the
   // user could perceive, and on the main chat surface that adds up
   // to a noticeable amount of background React work.
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (completed) return;
-    const id = setInterval(() => setNow(Date.now()), 5000);
-    return () => clearInterval(id);
-  }, [completed]);
+  const now = useNow(!completed, 5000);
 
   const startedAtMs = p.startedAt ? new Date(p.startedAt).getTime() : null;
   const elapsedMs =

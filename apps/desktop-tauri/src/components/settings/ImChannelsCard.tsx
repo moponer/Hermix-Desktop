@@ -16,6 +16,7 @@ import {
 import QRCode from "qrcode";
 import { fetchJSON } from "../../api/rest";
 import { toastError, toastSuccess } from "../../hooks/useToast";
+import { useNow } from "../../hooks/useNow";
 import { Input } from "../ui";
 import { COPY_FAILED, LOADING, SAVE, SAVE_FAILED, SAVING, failure } from "../strings";
 
@@ -237,7 +238,6 @@ export function ImChannelsCard({
   const [pairCode, setPairCode] = useState<PairingCodeResult | null>(null);
   /** 配对码生成时刻 —— 倒计时进度条的锚点（同 ZCode 的 bind-code 面板）。 */
   const [pairCodeAt, setPairCodeAt] = useState(0);
-  const [nowTs, setNowTs] = useState(() => Date.now());
   const [busy, setBusy] = useState(false);
   /** 两个破坏性动作（重置加密身份 / 解绑机器人）的确认态。用应用内
       ConfirmDialog 取代 window.confirm——原生确认框不跟随主题、样式
@@ -607,11 +607,8 @@ export function ImChannelsCard({
   }, []);
 
   // 配对码在屏上时每 500ms 走一次时钟 —— 倒计时条 + 「已过期」态都靠它。
-  useEffect(() => {
-    if (!pairCode) return;
-    const t = window.setInterval(() => setNowTs(Date.now()), 500);
-    return () => window.clearInterval(t);
-  }, [pairCode]);
+  // 共享时钟（P2-4）：与其它 1s/500ms 订阅者共用一个 timer，页面隐藏时暂停。
+  const nowTs = useNow(Boolean(pairCode), 500);
 
   const copyCode = useCallback(async () => {
     if (!pairCode) return;

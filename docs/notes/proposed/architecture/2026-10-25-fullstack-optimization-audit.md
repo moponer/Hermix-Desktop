@@ -441,13 +441,15 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 新增 `apps/desktop-tauri/src/hooks/useNow.ts`：**按 interval 分桶共享一个 timer**，同一 tick 内所有订阅者读到同一个 `now`（各自 `Date.now()` 会在同一帧给出不同毫秒值，进度条与耗时 chip 抖动）；`document.hidden` 时整桶跳过 tick（后台不产生 render、不耗电）；`active=false` 不订阅（等同原来的条件 setInterval）。
 
-已替换两处最热的 1s 轮询：
+已替换 **4 处纯本地时钟**（这 4 处不需要后端取数，换 hook 即可）：
 - `ToolEventCard`：原来 `const [, setNow]` + 每个工具卡一个 interval（同时 3 个运行中 = 3 个 timer），改 `useNow(isRunning)`；`progressFraction` 改收 `now`，耗时 chip 与进度条同 tick 一致。
-- `CompactionStatusBanner`：同上，`now` 直接驱动 `elapsedSecs`。
+- `CompactionStatusBanner`：`now` 直接驱动 `elapsedSecs`。
+- `AwakeningCard`（5s 心跳）：`useNow(!completed, 5000)`。
+- `ImChannelsCard` 配对码倒计时（500ms）：`useNow(Boolean(pairCode), 500)`。
 
 验证：`tsc --noEmit` 通过；`check-design-guard` clean。
 
-**未做（其余 15 处）**：`App.tsx`(3)、`MissionBoardView`(2)、`FileSearchWindow`、`useBackendConnection`、`useChannelsStatus` 等各有不同的取数语义（有的查后端、有的算本地时间），收敛前要先分清「本地时钟」与「定期拉取」，后者应走统一 query 缓存（含失效键与 `visibilitychange` 暂停），属独立批次。
+**未做（其余 13 处，全是「定期拉取后端」）**：`App.tsx`(3：keep-awake / mobile-active / presence heartbeat)、`MissionBoardView`(2：members 10s / static 60s)、`TwinView`(历史)、`FileSearchWindow`(helper 状态 2s)、`useBackendConnection`、`useChannelsStatus`、`useCustomApps`、`CustomAppsView`、`ImChannelsCard` 配对轮询。这些要统一 query 缓存（含失效键与 `visibilitychange` 暂停、请求去重）后才谈收敛，属独立批次。另有 3 处非轮询用途（`main.tsx` 启动进度爬条、`chatStateReset` 的 approval retry 计时器 Map、测试）不改。
 
 ### 其余剩余项的处置结论（2026-10-26 复核）
 
