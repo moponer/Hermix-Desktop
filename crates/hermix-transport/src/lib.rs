@@ -409,6 +409,11 @@ pub struct SendMessageResponse {
 /// directly usable as the data URL body for vision APIs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "../../../apps/desktop-tauri/src/api/bindings/")
+)]
 pub struct ImageAttachment {
     pub bytes: Vec<u8>,
     pub mime_type: String,
@@ -422,6 +427,11 @@ pub struct ImageAttachment {
 /// name, so a hostile client name can never traverse paths.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "../../../apps/desktop-tauri/src/api/bindings/")
+)]
 pub struct FileAttachment {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
