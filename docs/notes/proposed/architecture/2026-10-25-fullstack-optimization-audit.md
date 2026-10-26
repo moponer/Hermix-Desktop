@@ -420,6 +420,7 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 ### 批次 16（P1-10 web 正则 + P2-12 死代码）— 2026-10-26 交付
 
 - **P1-10 web 正则**：`backends/web.rs` 三处搜索结果解析函数体内的 7 条 `Regex::new`（百度 2 / DuckDuckGo 3 / Bing 2）提为 `static LazyLock<Regex>`，只编译一次。此前每个搜索结果页重编译一遍。
+- **P1-10 read_file 流式（同批补完）**：`Fs` trait 加默认方法 `read_lines(path, max_lines)`——默认实现「全读后 `truncate_bytes_at_line` 截断」（所有既有实现零改动即兼容），`LocalFs` 覆盖为 `BufReader::read_until` 逐行流式读、到目标行即停。`read_file` 的 Fs 分支按 `offset`/`limit` 算出「需要的最后一行」后只读那么多（`offset` 有而 `limit` 无时仍需读到文件尾，走全读）。**切片仍是原来的 `slice_lines`**，所以分页输出与原全读路径逐字一致（有 `read_lines_matches_full_read_truncation` 钉住，含「末行无换行符也要包含」）。此前读第一页 GB 级日志要把整个文件读进内存。
 - **P2-12 死代码**：删 `PostLlmAction::RetryReasoning`（自 thinking-only 响应改立即 `Break` 后从未构造，`#[allow(dead_code)]` 掩盖至今）；`tool_prep.rs` 的 `let _ = invalid_names;` 哑变量改为模式 `{ .. }`。
 
 **明确不做的两项**（理由记录，避免下次重复评估）：

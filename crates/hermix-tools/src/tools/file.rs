@@ -320,7 +320,21 @@ impl ToolHandler for ReadFileHandler {
         // chunks" — self-contradictory: follow the hint and the call
         // errors. Slicing here keeps the promise honest on both paths.
         let content = if let Some(fs) = &self.fs {
-            let bytes = match fs.read(Path::new(path)).await {
+            // 只读到「需要的最后一行」为止（P1-10）：`offset=1 / limit=100` 时
+            // 读 100 行即可，不再为读第一页把 GB 级文件整体读入；`offset` 有而
+            // `limit` 无时仍需读到文件尾，走全读。切片仍是下面同一个
+            // `slice_lines`，所以输出与全读路径逐字一致。
+            let want = match (offset, limit) {
+                (_, None) => 0,
+                (None, Some(n)) => n,
+                (Some(s), Some(n)) => s.saturating_sub(1).saturating_add(n),
+            };
+            let bytes = if want == 0 {
+                fs.read(Path::new(path)).await
+            } else {
+                fs.read_lines(Path::new(path), want).await
+            };
+            let bytes = match bytes {
                 Ok(bytes) => bytes,
                 Err(FsError::NotFound(p)) => {
                     return Err(ToolError::from_message(format!("file not found: {}", p.display())));

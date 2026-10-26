@@ -39,6 +39,38 @@ impl Fs for LocalFs {
         tokio::fs::read(path).await.map_err(|e| Self::map_io(path, e))
     }
 
+    /// 流式读前 N 行（P1-10）：`read_file` 带 `offset`/`limit` 时不再把整个
+    /// 文件读进内存。逐行 `read_until` 累加，到达目标行就停——输出字节与
+    /// 全读后 `truncate_bytes_at_line` 逐字一致（都是原始行 + 换行符）。
+    async fn read_lines(&self, path: &Path, max_lines: u64) -> Result<Vec<u8>, FsError> {
+        if max_lines == 0 {
+            return self.read(path).await;
+        }
+        use tokio::io::AsyncBufReadExt;
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| Self::map_io(path, e))?;
+        let mut reader = tokio::io::BufReader::new(file);
+        let mut out = Vec::new();
+        let mut seen = 0u64;
+        loop {
+            let n = reader
+                .read_until(b'\n', &mut out)
+                .await
+                .map_err(|e| Self::map_io(path, e))?;
+            if n == 0 {
+                break; // EOF
+            }
+            if out.last() == Some(&b'\n') {
+                seen += 1;
+                if seen >= max_lines {
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
+
     async fn write(&self, path: &Path, contents: &[u8]) -> Result<(), FsError> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -342,6 +374,36 @@ mod tests {
         assert_eq!(out.code, 0);
         assert!(out.stdout.contains("hi"));
         assert_eq!(shell.classify(&out), None);
+    }
+
+    /// P1-10：流式读前 N 行必须与「全读后 truncate」逐字一致——否则
+    /// `read_file` 的 offset/limit 分页会在某个边界静默错行。
+    #[tokio::test]
+    async fn read_lines_matches_full_read_truncation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.log");
+        let body: String = (1..=200).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&path, &body).unwrap();
+
+        let fs = LocalFs;
+        let full = fs.read(&path).await.unwrap();
+
+        let streamed = fs.read_lines(&path, 10).await.unwrap();
+        assert_eq!(streamed, crate::seams::truncate_bytes_at_line(&full, 10));
+        assert_eq!(
+            streamed,
+            b"line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\n"
+        );
+
+        // 超过总行数 → 全文；0 → 不限。
+        assert_eq!(fs.read_lines(&path, 999).await.unwrap(), full);
+        assert_eq!(fs.read_lines(&path, 0).await.unwrap(), full);
+
+        // 末行无换行符时仍被包含（不能因为「没等到 \n」就丢掉最后一行）。
+        let tail = dir.path().join("tail.txt");
+        std::fs::write(&tail, "a\nb").unwrap();
+        assert_eq!(fs.read_lines(&tail, 2).await.unwrap(), b"a\nb");
+        assert_eq!(fs.read_lines(&tail, 1).await.unwrap(), b"a\n");
     }
 
     #[tokio::test]

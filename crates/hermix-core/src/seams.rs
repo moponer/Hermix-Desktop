@@ -112,6 +112,38 @@ pub trait Fs: Send + Sync {
     async fn write(&self, path: &Path, contents: &[u8]) -> Result<(), FsError>;
     async fn list(&self, path: &Path) -> Result<Vec<DirEntry>, FsError>;
     async fn remove(&self, path: &Path) -> Result<(), FsError>;
+
+    /// 读文件**前 `max_lines` 行**（`0` = 不限，等价 [`Self::read`]）。
+    ///
+    /// 存在的理由（P1-10）：`read_file` 带 `offset`/`limit` 时原本也要把整个
+    /// 文件读进内存再切行——读第 1 页 GB 级日志会 OOM。默认实现全读后截断，
+    /// 保证所有既有实现零改动即满足契约；大文件实现（`LocalFs`）覆盖它做
+    /// 流式读，只读到所需行就停。
+    ///
+    /// 返回**原始字节**（不规范化行尾）：调用方仍按原样做 UTF-8 校验与
+    /// `slice_lines` 切片，所以输出与全读路径逐字一致。
+    async fn read_lines(&self, path: &Path, max_lines: u64) -> Result<Vec<u8>, FsError> {
+        let all = self.read(path).await?;
+        Ok(truncate_bytes_at_line(&all, max_lines))
+    }
+}
+
+/// 截到第 `max_lines` 行末（含该行换行符）；`max_lines == 0` 原样返回。
+/// 最后一行没有换行符时按「不足 N 行」处理，原样返回全部。
+pub fn truncate_bytes_at_line(all: &[u8], max_lines: u64) -> Vec<u8> {
+    if max_lines == 0 {
+        return all.to_vec();
+    }
+    let mut seen = 0u64;
+    for (i, b) in all.iter().enumerate() {
+        if *b == b'\n' {
+            seen += 1;
+            if seen >= max_lines {
+                return all[..=i].to_vec();
+            }
+        }
+    }
+    all.to_vec()
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +301,17 @@ mod tests {
     use crate::tool_schema::{JsonSchema, ToolSchema};
     use crate::traits::ToolHandler as _;
     use serde_json::Value;
+
+    #[test]
+    fn truncate_bytes_at_line_counts_newlines() {
+        assert_eq!(truncate_bytes_at_line(b"a\nb\nc\n", 2), b"a\nb\n");
+        assert_eq!(truncate_bytes_at_line(b"a\nb\nc\n", 0), b"a\nb\nc\n");
+        assert_eq!(truncate_bytes_at_line(b"a\nb\nc\n", 99), b"a\nb\nc\n");
+        // 末行无换行符：按「不足 N 行」返回全部；只有 1 行时切在换行符上。
+        assert_eq!(truncate_bytes_at_line(b"a\nb", 2), b"a\nb");
+        assert_eq!(truncate_bytes_at_line(b"a\nb", 1), b"a\n");
+        assert_eq!(truncate_bytes_at_line(b"", 3), b"");
+    }
 
     // --- S4：未迁移的工具自动获得结构化输出 ---
 
