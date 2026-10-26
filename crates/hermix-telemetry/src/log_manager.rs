@@ -341,6 +341,33 @@ static DROPPED_RECORDS: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 /// 实际写盘/刷新失败次数（`let _ =` 吞掉的那部分）。
 static WRITE_FAILURES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// flush 节流（P2-7）：累计多少条日志刷一次盘。
+///
+/// 此前**每条**日志都 `write + flush`，热路径（流式 chunk、工具 stdout、
+/// 每秒上百条的轮次日志）上等于每条一次系统调用。改成攒批刷盘后，最坏
+/// 情况是崩溃丢掉这一窗口内的尾部条目——而崩溃前几百毫秒的日志本来也
+/// 大多写不全，用这个换取热路径的固定开销是划算的。
+const FLUSH_EVERY_N: u64 = 64;
+/// 距上次 flush 超过这么多毫秒就强制刷一次（防止低频日志长期滞留在缓冲区）。
+const FLUSH_EVERY_MS: u64 = 200;
+static PENDING_SINCE_FLUSH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LAST_FLUSH_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 记录一次写盘失败；每 100 次才打一条 stderr，避免写盘坏掉时自己刷爆。
+fn record_write_failure() {
+    let n = WRITE_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n % 100 == 0 {
+        eprintln!("[hermix-telemetry] log write failed {n} time(s)");
+    }
+}
+
 impl<S: Subscriber> Layer<S> for CategoryLayer {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         use std::sync::atomic::Ordering;
@@ -377,11 +404,18 @@ impl<S: Subscriber> Layer<S> for CategoryLayer {
         }
 
         if let Some(w) = writers.get_mut(idx) {
-            if w.write(&line).is_err() || w.flush().is_err() {
-                let n = WRITE_FAILURES.fetch_add(1, Ordering::Relaxed);
-                // 每 100 次报一次，避免写盘坏掉时自己刷爆 stderr。
-                if n % 100 == 0 {
-                    eprintln!("[hermix-telemetry] log write failed {n} time(s)");
+            if w.write(&line).is_err() {
+                record_write_failure();
+            } else {
+                let pending = PENDING_SINCE_FLUSH.fetch_add(1, Ordering::Relaxed) + 1;
+                let now_ms = now_millis();
+                let last = LAST_FLUSH_MS.load(Ordering::Relaxed);
+                if pending >= FLUSH_EVERY_N || now_ms.saturating_sub(last) >= FLUSH_EVERY_MS {
+                    PENDING_SINCE_FLUSH.store(0, Ordering::Relaxed);
+                    LAST_FLUSH_MS.store(now_ms, Ordering::Relaxed);
+                    if w.flush().is_err() {
+                        record_write_failure();
+                    }
                 }
             }
         }

@@ -466,6 +466,14 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 验证：`hermix-config` 144 passed（+1 缓存失效测试：未改文件命中同一 `Arc`、新建文件后必须重载）、`hermix-server` 506 passed；`cargo check` 零警告。
 
+### 批次 20（P2-7 日志 flush 节流）— 2026-10-26 交付
+
+`CategoryLayer::on_event` 原来**每条**日志 `write + flush`：在热路径（流式 chunk、工具 stdout、每秒上百条的轮次日志）上等于每条一次系统调用。改为攒批：每 **64 条**或距上次 flush 超 **200ms** 才刷一次。写失败计数抽成 `record_write_failure()`（仍是每 100 次打一条 stderr）。
+
+代价是崩溃时最多丢这一窗口内的尾部条目——崩溃前几百毫秒的日志本来也多半写不全，用它换热路径的固定开销是划算的。批次的第 5 轮已把「`try_lock` 失败导致的丢日志」做成可见（`DROPPED_RECORDS` 补记），这次不再动那条路径。
+
+验证：telemetry 13 passed（含 `read_log_range_from_file` / `plain_lines_keep_structured_fields`，确认节流不影响日志可读性）。
+
 ### 其余剩余项的处置结论（2026-10-26 复核）
 
 | 项 | 结论 |
