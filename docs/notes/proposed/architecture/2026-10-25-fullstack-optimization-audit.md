@@ -457,6 +457,12 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 | **P3-3** dev 体验 | **已满足**。`dev:vite` 脚本已存在；`optimizeDeps.include` 只列 2 个是真动态链（`plugin-fs` 经 desktopBridge、`docx-preview`），echarts/katex/refractor 是静态 import 且已进 `manualChunks`，vite 默认扫描能覆盖。原建议的 `optimizeDeps.entries` 自动扫描对变量路径无效。 |
 | **P2-10** esbuild.exe 移出 resources | **误判，不移**。它是**运行期必需**：`hermix-plugin/src/validate.rs::run_esbuild_check` 用它做工作台 JS/TS 真语法校验，`hx_packager` 用它把 TSX 编到 `app.js`。移出会让 `validate` 退回手写括号匹配兜底、打包链断掉。 |
 
+**P1-3 / P1-5 / P2-11 状态复核（2026-10-26 二次核实，修正基线里的过时描述）**：
+
+- **P1-3 仍在，不可小步修**：`App.tsx` 里 `setSessions((prev) => …)` 实际 **50+ 处**（基线写 41 处，且我中途用 PowerShell 查过一次「0 处」是转义写错的假结论——`\(prev` 在 PowerShell 里不是正则转义）。流式 chunk 已有 rAF 合批（`pendingToolChunks`），但**每次提交仍是 O(会话数 × 消息数) 的全量拷贝**。修法是把流式增量挪进独立 store（`useSyncExternalStore` + ref 订阅），只更新当前消息字段——这是 `App.tsx` 状态模型改造，与 P1-13 的 `App.tsx` 拆分同一批做，不能拆开小改。
+- **P1-5 已缓解**：前端早已窗口化（`INITIAL_MESSAGE_WINDOW = 60` + `tail_skip` 翻页 + `has_more`，`App.tsx:1332` 首屏即传 limit），DOM 里只挂窗口内消息，不是 1000+ 条全量。`virtua` 虽在依赖但未接入；在 60 条窗口下接入收益有限，除非要把窗口放大。
+- **P2-11 已完成**：`check-theme-tokens.mjs` 已有 `[css-bare-color]` 检查（WARN 级 + `styles/themes/EXCEPTIONS.md` 登记独立入口例外），当前实测 **CSS 层无裸色 ✓**、`[bare-color]` 无裸色 ✓。唯一残留是 `[css-type-debt]` 的 4 处 px 字号（48px 错误页图标、24px 弹窗图标、22px 页面标题、9px 装饰三角）——都是装饰性尺寸，改 `--text-*`/`--icon-size-*` 会缩小视觉，且门禁本身是 WARN 不阻断，按视觉决策保留。
+
 ### 批次 11（P1-9 技能扫描缓存）— 2026-10-26 交付
 
 **先量后改**：新增探针 `skill_loader::tests::probe_scan_cost`（`#[ignore]`），实测 `with_dir + scan()`：
