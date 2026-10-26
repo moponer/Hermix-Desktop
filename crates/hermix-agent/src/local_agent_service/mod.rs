@@ -1,7 +1,6 @@
 //! Local in-process implementation of the `AgentService` trait.
 
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -19,36 +18,17 @@ use hermix_core::{AgentError, ApprovalOutcome, AutomationMeta, LlmProvider, Mess
 use hermix_tools::{TirithAction, TirithSecurity, ToolRegistry};
 use hermix_tools::backends::memory::FileMemoryBackend;
 use hermix_tools::tools::memory::MemoryHandler;
-use hermix_intelligence::DomainMode;
-use crate::smart_model_routing::ApiMode;
 use serde_json::Value;
 
 // 纯函数变换（消息数组 → 消息数组）独立成模块：无 IO、无 `self`，可单独测试。
 // 拆分方向见 docs/notes/proposed/architecture/2026-10-25-fullstack-optimization-audit.md
 // 的 P1-13（这个文件原本 5600 行、混了 7 类职责）。
+mod config_resolve;
 mod messages;
+mod prefetch_adapter;
 mod reply_fallback;
 use messages::*;
-
-/// Wrapper that makes `Arc<ToolRegistry>` (hermix_tools) implement the
-/// prefetch `SafeToolRegistry` trait so the executor can dispatch Safe
-/// tools in parallel before the LLM call.
-struct SafeRegistryWrapper(Arc<ToolRegistry>);
-
-#[async_trait::async_trait]
-impl hermix_intelligence::prefetch::SafeToolRegistry for SafeRegistryWrapper {
-    fn risk_level(&self, name: &str) -> Option<RiskLevel> {
-        self.0.risk_level(name)
-    }
-
-    fn exists(&self, name: &str) -> bool {
-        self.0.get_tool(name).is_some()
-    }
-
-    async fn dispatch(&self, name: &str, args: Value) -> String {
-        self.0.dispatch_async(name, args).await
-    }
-}
+use prefetch_adapter::SafeRegistryWrapper;
 
 use crate::agent_builder::{bridge_tool_registry, build_agent_config, build_provider};
 use crate::agent_loop::{AgentCallbacks, AgentConfig, AgentLoop, ToolDispatchDecision};
@@ -1001,170 +981,6 @@ impl LocalAgentService {
         agent
     }
 
-    /// Resolve a workspace path. Returns `None` for empty input, missing
-    /// directories, or any failure. Uses literal pass-through (no canonicalize)
-    /// to preserve the exact path the user selected — following file.rs's
-    /// philosophy that the user's configured path is the source of truth.
-    fn resolve_workspace(workspace: Option<&str>) -> Option<PathBuf> {
-        let raw = workspace?.trim();
-        if raw.is_empty() {
-            return None;
-        }
-        let p = Path::new(raw);
-        if p.is_dir() {
-            Some(p.to_path_buf())
-        } else {
-            tracing::warn!(
-                workspace = %raw,
-                "workspace path is not a directory; ignoring"
-            );
-            None
-        }
-    }
-
-    /// Apply [`AgentOverrides`] to a base [`AgentConfig`] and produce the
-    /// per-turn tool whitelist. Workspace canonicalization happens here so
-    /// downstream code can rely on a real absolute path or `None`.
-    fn apply_overrides(
-        base: AgentConfig,
-        overrides: &AgentOverrides,
-    ) -> (AgentConfig, Option<HashSet<String>>) {
-        let mut config = base;
-        if let Some(prompt) = overrides.system_prompt.as_ref() {
-            config.system_prompt = Some(prompt.clone());
-        }
-        config.workspace = Self::resolve_workspace(overrides.workspace.as_deref())
-            .map(|p| p.to_string_lossy().to_string());
-        // NOTE: TERMINAL_CWD is set via ToolRegistry::set_terminal_workspace
-        // in the caller (send_message / send_message_stream), NOT via
-        // std::env::set_var. The env::set_var path was removed because it is
-        // unsafe in multi-threaded async contexts (data race on concurrent
-        // sessions with different workspaces).
-        config.permission = overrides.permission;
-        // Propagate a group-chat room-scoped memory directory (if any) so
-        // the agent reads/writes under its own room instead of the shared
-        // global `<hermix_home>/memories`. Private chats resolve their own
-        // session-scoped directory in `send_message` / `send_message_stream`
-        // and ignore this field.
-        if let Some(md) = overrides.memory_dir.as_ref() {
-            config.memory_dir = Some(md.clone());
-        }
-        // Workbench binding: gates the `workbench.context` direction and
-        // pins the `workbench` skill every turn (MODULE_DESIGN §13 layer 3 —
-        // the session exists only to serve this workbench, so the skill is
-        // resident with zero intent detection). Ordinary chats: both None.
-        config.workbench_id = overrides.workbench_id.clone();
-        if overrides.workbench_id.is_some() && !config.ephemeral_skills.iter().any(|s| s == "workbench") {
-            config.ephemeral_skills.push("workbench".to_string());
-        }
-        // L1 domain-mode pin: `"auto"` / empty / `None` → auto-detect;
-        // otherwise parse the wire string into `DomainMode`. Unknown values
-        // fall back to auto — never panic on a malformed frontend payload.
-        config.domain_override = overrides
-            .domain_override
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"))
-            .and_then(DomainMode::from_str);
-        // Per-turn thinking on/off switch. Merge into `extra_body` so the
-        // provider's existing `extra_body` → top-level body expansion
-        // (provider.rs:952-958, streaming:1027-1034) carries it to the LLM
-        // request unchanged — same pattern `reasoning_effort` uses.
-        // `None` (old clients / field omitted) → no injection, behavior
-        // identical to before this field existed.
-        if let Some(enabled) = overrides.enable_thinking {
-            let mut eb = config.extra_body.unwrap_or(serde_json::json!({}));
-            if let serde_json::Value::Object(ref mut map) = eb {
-                // 统一开关 → 按 provider 翻译成正确的请求字段（见
-                // module 级 `inject_thinking_directive`）。写死
-                // `enable_thinking` 只对国内原生厂商有效，对 OpenRouter
-                // （reasoning 对象）/ Anthropic（thinking）/ OpenAI
-                // （reasoning_effort）无效——这正是实测"开关没用"的根因。
-                Self::inject_thinking_directive(
-                    map,
-                    &config.api_mode,
-                    &config.model,
-                    enabled,
-                );
-            }
-            config.extra_body = Some(eb);
-        }
-        let allowed = overrides
-            .tools
-            .as_ref()
-            .map(|names| names.iter().cloned().collect::<HashSet<_>>());
-        (config, allowed)
-    }
-
-/// 把统一的"深度思考 开/关"开关翻译成各 provider 认识的请求字段。
-///
-/// 控制思考的参数名因通道而异，写死 `enable_thinking` 只对国内原生厂商
-/// （火山/豆包/直连 DeepSeek 等）有效；OpenRouter 走 `reasoning` 对象、
-/// Anthropic 走 `thinking`、OpenAI o-series 走 `reasoning_effort`。不翻译的话
-/// 开关对绝大多数经 OpenRouter 中转的模型毫无作用（用户实测"没啥用"）。
-fn inject_thinking_directive(
-    body: &mut serde_json::Map<String, serde_json::Value>,
-    api_mode: &ApiMode,
-    model: &str,
-    enabled: bool,
-) {
-    // 先清掉上一次（含其它代码路径）可能残留的任一字段，保证开关状态干净切换、不串台。
-    body.remove("enable_thinking");
-    body.remove("reasoning");
-    body.remove("reasoning_effort");
-    body.remove("thinking");
-
-    if !enabled {
-        // 仅 OpenRouter 需要显式关闭才有意义；其它通道省略该字段即默认关闭。
-        if Self::looks_like_openrouter(model) {
-            body.insert("reasoning".to_string(), serde_json::json!({ "enabled": false }));
-        }
-        return;
-    }
-
-    match api_mode {
-        ApiMode::AnthropicMessages => {
-            // Anthropic extended thinking：必须带 budget_tokens，且小于 max_tokens。
-            body.insert(
-                "thinking".to_string(),
-                serde_json::json!({ "type": "enabled", "budget_tokens": 8000 }),
-            );
-        }
-        ApiMode::ChatCompletions | ApiMode::CodexResponses => {
-            if Self::looks_like_openrouter(model) {
-                body.insert(
-                    "reasoning".to_string(),
-                    serde_json::json!({ "enabled": true }),
-                );
-            } else if model.to_ascii_lowercase().starts_with("gpt")
-                || model.starts_with("o1")
-                || model.starts_with("o3")
-                || model.starts_with("o4")
-            {
-                // 直连 OpenAI o-series：reasoning_effort。
-                body.insert("reasoning_effort".to_string(), serde_json::json!("high"));
-            } else {
-                // 国内原生厂商（火山/豆包/直连 DeepSeek 等）仍用 enable_thinking。
-                body.insert("enable_thinking".to_string(), serde_json::json!(true));
-            }
-        }
-    }
-}
-
-/// 是否经 OpenRouter 或兼容中转。OpenRouter 的模型 id 形如 `provider/model-name`
-/// （带 `/`），直连 OpenAI 的 id 无 `/`；`anthropic/` 前缀排除——Anthropic
-/// 直连走 `thinking`，不走 reasoning 对象。
-fn looks_like_openrouter(model: &str) -> bool {
-    if model.to_ascii_lowercase().starts_with("anthropic/") {
-        return false;
-    }
-    model.contains('/')
-}
-
-    /// Default [`PermissionLevel`] used when the caller doesn't specify one.
-    fn default_permission() -> PermissionLevel {
-        PermissionLevel::Default
-    }
 
     /// P6 (, direction 1): returns `Some(<resource description>)`
     /// when `tc` is a resource-bearing tool whose target is outside
@@ -1676,10 +1492,10 @@ impl AgentService for LocalAgentService {
         // default to the safe option.
         let mut effective_overrides = overrides.clone();
         if effective_overrides.permission.is_none() {
-            effective_overrides.permission = Some(Self::default_permission());
+            effective_overrides.permission = Some(config_resolve::default_permission());
         }
         let (mut agent_config, mut allowed_tools) =
-            Self::apply_overrides(agent_config, &effective_overrides);
+            config_resolve::apply_overrides(agent_config, &effective_overrides);
 
         // 专家 toolset（P1，STABILITY_AND_REMOTE_PLAN §3.2-2）：把受聘专家
         // 声明的工具组成员并进本轮白名单。allowed 本就是过滤集——扩大它
@@ -2149,10 +1965,10 @@ impl AgentService for LocalAgentService {
         // default to the safe option.
         let mut effective_overrides = overrides.clone();
         if effective_overrides.permission.is_none() {
-            effective_overrides.permission = Some(Self::default_permission());
+            effective_overrides.permission = Some(config_resolve::default_permission());
         }
         let (mut agent_config, mut allowed_tools) =
-            Self::apply_overrides(agent_config, &effective_overrides);
+            config_resolve::apply_overrides(agent_config, &effective_overrides);
 
         // 专家 toolset（P1，STABILITY_AND_REMOTE_PLAN §3.2-2）：把受聘专家
         // 声明的工具组成员并进本轮白名单。allowed 本就是过滤集——扩大它
@@ -3905,21 +3721,21 @@ mod override_tests {
 
     #[test]
     fn resolve_workspace_rejects_missing_path() {
-        let result = LocalAgentService::resolve_workspace(Some("Z:/definitely/does/not/exist/123"));
+        let result = config_resolve::resolve_workspace(Some("Z:/definitely/does/not/exist/123"));
         assert!(result.is_none(), "missing path should produce None");
     }
 
     #[test]
     fn resolve_workspace_rejects_empty_input() {
-        assert!(LocalAgentService::resolve_workspace(None).is_none());
-        assert!(LocalAgentService::resolve_workspace(Some("")).is_none());
-        assert!(LocalAgentService::resolve_workspace(Some("   ")).is_none());
+        assert!(config_resolve::resolve_workspace(None).is_none());
+        assert!(config_resolve::resolve_workspace(Some("")).is_none());
+        assert!(config_resolve::resolve_workspace(Some("   ")).is_none());
     }
 
     #[test]
     fn resolve_workspace_canonicalizes_existing_dir() {
         let tmp = std::env::temp_dir();
-        let resolved = LocalAgentService::resolve_workspace(Some(tmp.to_str().unwrap()));
+        let resolved = config_resolve::resolve_workspace(Some(tmp.to_str().unwrap()));
         assert!(resolved.is_some(), "temp dir should resolve");
         let resolved = resolved.unwrap();
         // canonicalize should produce an absolute path
@@ -3947,7 +3763,7 @@ mod override_tests {
             enable_thinking: Some(true),
             ..AgentOverrides::default()
         };
-        let (cfg, _) = LocalAgentService::apply_overrides(base, &overrides);
+        let (cfg, _) = config_resolve::apply_overrides(base, &overrides);
         let eb = cfg.extra_body.expect("extra_body must survive");
         // 原有键不能被丢掉（这里恰好被翻译逻辑写回同一个值）
         assert_eq!(eb["reasoning_effort"], "high", "原有键不能被丢掉");
@@ -3976,7 +3792,7 @@ mod override_tests {
             enable_thinking: Some(true),
             ..AgentOverrides::default()
         };
-        let (cfg, _) = LocalAgentService::apply_overrides(base, &overrides);
+        let (cfg, _) = config_resolve::apply_overrides(base, &overrides);
         let eb = cfg.extra_body.expect("extra_body must survive");
         assert_eq!(
             eb["enable_thinking"], true,
@@ -4018,7 +3834,7 @@ mod override_tests {
             attached_file_paths: None,
             enable_thinking: None,
         };
-        let (cfg, allowed) = LocalAgentService::apply_overrides(base, &overrides);
+        let (cfg, allowed) = config_resolve::apply_overrides(base, &overrides);
         assert_eq!(
             cfg.system_prompt.as_deref(),
             Some("You are a senior Rust developer.")
@@ -4057,7 +3873,7 @@ mod override_tests {
             attached_file_paths: None,
             enable_thinking: None,
         };
-        let (_cfg, allowed) = LocalAgentService::apply_overrides(base, &overrides);
+        let (_cfg, allowed) = config_resolve::apply_overrides(base, &overrides);
         let allowed = allowed.expect("allowed set should be Some");
         assert!(allowed.contains("read_file"));
         assert!(allowed.contains("list_dir"));
@@ -4077,7 +3893,7 @@ mod override_tests {
                 domain_override: Some(raw.to_string()),
                 ..Default::default()
             };
-            let (cfg, _) = LocalAgentService::apply_overrides(AgentConfig::default(), &overrides);
+            let (cfg, _) = config_resolve::apply_overrides(AgentConfig::default(), &overrides);
             assert_eq!(cfg.domain_override, want, "raw={raw:?}");
         }
         // auto / 空 / 未知 / None → 全部落回自动检测（None）
@@ -4086,7 +3902,7 @@ mod override_tests {
                 domain_override: raw.clone(),
                 ..Default::default()
             };
-            let (cfg, _) = LocalAgentService::apply_overrides(AgentConfig::default(), &overrides);
+            let (cfg, _) = config_resolve::apply_overrides(AgentConfig::default(), &overrides);
             assert_eq!(cfg.domain_override, None, "raw={raw:?}");
         }
     }
@@ -5324,12 +5140,13 @@ mod override_tests {
 #[cfg(test)]
 mod thinking_directive_tests {
     use super::*;
+    use crate::smart_model_routing::ApiMode;
     use serde_json::{json, Map};
 
     #[test]
     fn openrouter_style_model_gets_reasoning_object() {
         let mut body = Map::new();
-        LocalAgentService::inject_thinking_directive(
+        config_resolve::inject_thinking_directive(
             &mut body,
             &ApiMode::ChatCompletions,
             "minimax/minimax-m3.1-flash:free",
@@ -5343,7 +5160,7 @@ mod thinking_directive_tests {
     #[test]
     fn anthropic_model_gets_thinking_block() {
         let mut body = Map::new();
-        LocalAgentService::inject_thinking_directive(
+        config_resolve::inject_thinking_directive(
             &mut body,
             &ApiMode::AnthropicMessages,
             "claude-3-7-sonnet",
@@ -5361,7 +5178,7 @@ mod thinking_directive_tests {
     #[test]
     fn openai_direct_model_gets_reasoning_effort() {
         let mut body = Map::new();
-        LocalAgentService::inject_thinking_directive(
+        config_resolve::inject_thinking_directive(
             &mut body,
             &ApiMode::ChatCompletions,
             "gpt-4o",
@@ -5375,7 +5192,7 @@ mod thinking_directive_tests {
         let mut body = Map::new();
         body.insert("enable_thinking".to_string(), json!(true));
         body.insert("reasoning_effort".to_string(), json!("high"));
-        LocalAgentService::inject_thinking_directive(
+        config_resolve::inject_thinking_directive(
             &mut body,
             &ApiMode::ChatCompletions,
             "openrouter/anthropic/claude-3.7",
@@ -5390,7 +5207,7 @@ mod thinking_directive_tests {
     fn disabled_plain_model_leaves_no_thinking_field() {
         let mut body = Map::new();
         body.insert("enable_thinking".to_string(), json!(true));
-        LocalAgentService::inject_thinking_directive(
+        config_resolve::inject_thinking_directive(
             &mut body,
             &ApiMode::ChatCompletions,
             "gpt-4o",
