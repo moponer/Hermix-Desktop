@@ -247,3 +247,68 @@ async fn replay_stream_matches_non_stream_final_text() {
         "stream and non-stream runs must reach the same final text"
     );
 }
+
+// ── 场景 6：流式空响应降级非流式成功 ──────────────────────────────
+#[tokio::test]
+async fn replay_stream_empty_then_degrade_to_non_stream_succeeds() {
+    // 第一次（流式）返回空响应 —— 等价于"流式断流、无有效内容"；
+    // classify_post_llm_response 判 RetryEmpty，inner_attempt 递增后
+    // 第二次降级为非流式（call_llm_with_retry），返回正常文本。
+    let provider = ScriptedProvider::shared(vec![
+        ScriptedTurn::text(""),
+        ScriptedTurn::text("降级后成功。"),
+    ]);
+    let agent = AgentLoop::new(
+        test_config(),
+        Arc::new(ToolRegistry::new()),
+        provider.clone() as Arc<dyn hermix_core::LlmProvider>,
+    );
+
+    let result = agent
+        .run_stream(vec![Message::user("回答我")], None, None)
+        .await
+        .expect("stream run");
+
+    assert!(
+        result.finished_naturally,
+        "degraded non-stream retry should finalize naturally; finish_reason={:?} interrupted={} err={:?}",
+        result.finish_reason, result.interrupted, result.last_error
+    );
+    assert_eq!(
+        provider.call_count(),
+        2,
+        "one empty stream attempt + one non-stream retry"
+    );
+    let last = result.messages.last().expect("final assistant");
+    assert_eq!(last.content.as_deref(), Some("降级后成功。"));
+}
+
+// ── 场景 7：流式空 + 非流式也失败 → graceful_errored ──────────────
+#[tokio::test]
+async fn replay_stream_empty_then_non_stream_underrun_is_errored() {
+    // 第一次（流式）空响应 → RetryEmpty 降级；第二次（非流式）脚本
+    // 耗尽 → Err → graceful_interrupt_result_errored。断言既不 panic
+    // 也不伪装成正常完成，且 last_error 透出真实原因。
+    let provider = ScriptedProvider::shared(vec![ScriptedTurn::text("")]);
+    let agent = AgentLoop::new(
+        test_config(),
+        Arc::new(ToolRegistry::new()),
+        provider.clone() as Arc<dyn hermix_core::LlmProvider>,
+    );
+
+    let result = agent
+        .run_stream(vec![Message::user("回答我")], None, None)
+        .await
+        .expect("stream run");
+
+    assert!(
+        !result.finished_naturally,
+        "non-stream retry failure must not look like a clean finish"
+    );
+    assert_eq!(provider.call_count(), 2, "stream empty + non-stream underrun");
+    assert!(
+        result.last_error.is_some(),
+        "backend failure must surface as last_error, got {:?}",
+        result.last_error
+    );
+}

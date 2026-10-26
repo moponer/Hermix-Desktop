@@ -368,7 +368,16 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 - 内部分支原本直接 `return Ok(graceful_result)`，改为返回 `Err(AgentError::Interrupted)` / `Err(e)`，由调用方统一转 `graceful_interrupt_result` / `_errored` —— 这样函数只需 6 个参数，不与 `&mut LoopState` 抢借用。
 - 两条循环的调用段从 40 行压到 ~12 行，且"重试策略"只剩一个实现点。
 
-**为什么这一轮没做**：流式错误路径（`StreamCollectOutcome::Interrupted` / 半途断流 / `inner_attempt` 递增后的降级）在 1194 项测试里的覆盖情况我没有核实。按"最稳定"的要求，动它之前应先用 scripted provider 补 3 条测试（流式成功、流式中途断流降级成功、流式与非流式都失败→graceful_errored），再抽取。否则"合并成功但语义漂移"这类问题要等线上才暴露。
+**前置测试已补（2026-10-26 夜）**：`replay_tests.rs` 新增 2 条 scripted-provider 测试锁定流式错误路径语义——`replay_stream_empty_then_degrade_to_non_stream_succeeds`（流式空响应 → `RetryEmpty` → 降级非流式成功）、`replay_stream_empty_then_non_stream_underrun_is_errored`（流式空 + 非流式 underrun → `graceful_interrupt_result_errored`，`last_error` 透出）。连同已有的 `replay_stream_matches_non_stream_final_text`（流式成功）共 3 条语义锁齐，agent 1197 全绿。
+
+**合并已交付（2026-10-26 夜）**：`call_turn_llm` 抽取落地——两条主循环的「interrupt 检查 → 调用 → usage 累积 → classify」骨架收成单一实现（`run()` 纯非流式 / `run_stream()` 流式优先、空响应降级非流式），重试策略只剩一个实现点。关键设计：
+- 返回枚举 `TurnLlmOutcome::{Response{turn_usage_acc}, Terminate(TurnLlmTermination)}`，`TurnLlmTermination::{UserInterrupted, Errored(String), StreamInterrupted{errored, captured_error}}`——补齐了原方案里 `captured_error`（区分 `stream_error` vs 用户中断）无法用 `AgentError` 表达的缺口；
+- 终止不构造 `AgentResult`：`finish_terminated_turn` 统一转 graceful 结果，避免与 `&mut LoopState` 抢借用；
+- 流式 `Interrupted` 的 partial 在 `call_turn_llm` 内消费（strip 未执行 tool_calls + `ctx.add_message` + `record_usage`）；
+- `last_finish_reason` 经 `Option<&mut Option<String>>` 独立参数传递，保持流式 `Complete` 即时更新语义；
+- `StreamCallCtx`（`active_model` + `on_chunk`）字段均 `Copy`，循环里反复 match 不移动借用。
+
+验证：`cargo check -p hermix-agent --all-targets` 零错误零警告；agent **1197 passed, 0 failed**（含 3 条流式语义锁 + 8 条 replay 端到端），与抽取前基线一致。
 
 ### 批次 12（P1-14 存储收口，前半）— 2026-10-26 交付
 

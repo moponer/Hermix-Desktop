@@ -10,7 +10,8 @@ use crate::agent_helpers::default_max_autonomous_nudges;
 use crate::agent_loop::{
     AgentLoop, LoopPhase, LoopState, PostLlmAction, PostResponseAction, PreparedRun, TurnRuntimeRoute,
 };
-use crate::cost_guard::merge_usage;
+use crate::context::ContextManager;
+use crate::cost_guard::{merge_usage, CostGuard};
 use crate::plugins::HookType;
 use crate::stream_collect::StreamCollectOutcome;
 
@@ -100,6 +101,35 @@ enum ToolTurnOutcome {
     Continue,
 }
 
+/// 流式调用上下文（`run_stream` 专属）。字段均 `Copy`，`call_turn_llm` 在
+/// 重试循环里反复 `match` 它而不移动借用。
+#[derive(Clone, Copy)]
+struct StreamCallCtx<'a> {
+    active_model: &'a str,
+    on_chunk: &'a (dyn Fn(StreamChunk) + Send + Sync),
+}
+
+/// `call_turn_llm` 的终止信号：调用方据此经 `finish_terminated_turn`
+/// 转成对应的 graceful 结果，避免在 `call_turn_llm` 内部与 `&mut LoopState`
+/// 抢借用。
+enum TurnLlmTermination {
+    /// 用户中断（stop 按钮 / WS 断开 / `call_llm_with_retry` 的 Interrupted）。
+    UserInterrupted,
+    /// 后端错误（非中断），携带错误文本。
+    Errored(String),
+    /// 流式中途断流（`StreamCollectOutcome::Interrupted`）。partial 已由
+    /// `call_turn_llm` 消费（strip 未执行的 tool_calls + `ctx.add_message` +
+    /// `record_usage`）；`errored` 区分 `stream_error` 与用户中断。
+    StreamInterrupted { errored: bool, captured_error: Option<String> },
+}
+
+/// `call_turn_llm` 的结果：要么拿到可继续处理的响应（附本轮累积 usage，
+/// 供调用方传给 `process_post_response`），要么需要终止。
+enum TurnLlmOutcome {
+    Response { response: hermix_core::LlmResponse, turn_usage_acc: Option<UsageStats> },
+    Terminate(TurnLlmTermination),
+}
+
 // --- split-out impl blocks (pure relocation, see module docs) ---
 mod pre_turn;
 mod tool_prep;
@@ -137,6 +167,229 @@ impl AgentLoop {
                 );
                 interrupt.interrupt(None);
             });
+        }
+    }
+
+    /// 把 [`Self::call_turn_llm`] 返回的终止信号转成对应的 graceful `AgentResult`。
+    /// 三种终止对应三种 graceful 构造，usage 与 cost 从 `cost_guard` 快照读取。
+    fn finish_terminated_turn(
+        &self,
+        ctx: &ContextManager,
+        t: TurnLlmTermination,
+        total_turns: u32,
+        tool_errors: &[hermix_core::ToolErrorRecord],
+        cost_guard: &CostGuard,
+        session_started_hooks_fired: bool,
+        persist_user_idx: Option<usize>,
+    ) -> AgentResult {
+        match t {
+            TurnLlmTermination::UserInterrupted => self.graceful_interrupt_result(
+                ctx,
+                total_turns,
+                tool_errors,
+                cost_guard.accumulated_usage.clone(),
+                cost_guard.session_cost_usd,
+                session_started_hooks_fired,
+                persist_user_idx,
+            ),
+            TurnLlmTermination::Errored(msg) => self.graceful_interrupt_result_errored(
+                ctx,
+                total_turns,
+                tool_errors,
+                cost_guard.accumulated_usage.clone(),
+                cost_guard.session_cost_usd,
+                session_started_hooks_fired,
+                persist_user_idx,
+                Some(msg),
+            ),
+            TurnLlmTermination::StreamInterrupted { errored, captured_error } => {
+                self.graceful_interrupt_result_with(
+                    ctx,
+                    total_turns,
+                    tool_errors,
+                    cost_guard.accumulated_usage.clone(),
+                    cost_guard.session_cost_usd,
+                    session_started_hooks_fired,
+                    persist_user_idx,
+                    errored,
+                    captured_error,
+                )
+            }
+        }
+    }
+
+    /// 单轮 LLM 调用循环（流式优先、空响应降级非流式、empty/thinking 重试）。
+    ///
+    /// 把 `run()`（纯非流式）与 `run_stream()`（流式优先）里逐字重复的
+    /// 「interrupt 检查 → 调用 → usage 累积 → classify」骨架收成单一实现，
+    /// 重试策略只剩这一个实现点。`stream` 为 `None` 时走纯非流式（`run()`），
+    /// `Some` 时流式优先、失败降级非流式（`run_stream()`）。
+    ///
+    /// 终止不在这里构造 `AgentResult`：返回 [`TurnLlmTermination`]，由调用方
+    /// 经 [`Self::finish_terminated_turn`] 统一转 graceful 结果，避免与
+    /// `&mut LoopState` 抢借用。流式 `Interrupted` 的 partial 已在此消费
+    /// （strip 未执行的 tool_calls + `ctx.add_message` + `record_usage`）。
+    /// 流式 `Complete` 的 `finish_reason` 经 `last_finish_reason`（`Some` 时）
+    /// 无条件写回，与旧 `run_stream` 的即时更新语义一致。
+    #[allow(clippy::too_many_arguments)]
+    async fn call_turn_llm(
+        &self,
+        ctx: &mut ContextManager,
+        tool_schemas: &[ToolSchema],
+        turn_runtime_route: Option<&TurnRuntimeRoute>,
+        cost_guard: &mut CostGuard,
+        stream: Option<StreamCallCtx<'_>>,
+        mut last_finish_reason: Option<&mut Option<String>>,
+    ) -> TurnLlmOutcome {
+        let mut inner_empty = 0u32;
+        let mut inner_thinking = 0u32;
+        let mut turn_usage_acc: Option<UsageStats> = None;
+        let mut inner_attempt: u32 = 0;
+        loop {
+            if self.interrupt.take_interrupt_graceful().is_some() {
+                return TurnLlmOutcome::Terminate(TurnLlmTermination::UserInterrupted);
+            }
+            let r: hermix_core::LlmResponse = match stream {
+                Some(sc) if inner_attempt == 0 => {
+                    // 流式首轮（run_stream 独有）：PreApiRequest hook → 流式收集 → PostApiRequest hook。
+                    let pre_api_ctx = serde_json::json!({
+                        "attempt": inner_attempt,
+                        "model": sc.active_model,
+                        "stream": true,
+                        "route_label": turn_runtime_route
+                            .as_ref()
+                            .and_then(|r| r.route_label.as_deref()),
+                    });
+                    let _ = self.invoke_hook(HookType::PreApiRequest, &pre_api_ctx);
+                    let stream_collect = self
+                        .collect_stream_llm_response(
+                            ctx,
+                            tool_schemas,
+                            turn_runtime_route,
+                            sc.active_model,
+                            sc.on_chunk,
+                        )
+                        .await;
+                    let post_api_ctx = match &stream_collect {
+                        Ok(StreamCollectOutcome::Complete(resp)) => {
+                            if let Some(lfr) = last_finish_reason.as_deref_mut() {
+                                *lfr = resp.finish_reason.clone();
+                            }
+                            serde_json::json!({
+                                "attempt": inner_attempt,
+                                "model": sc.active_model,
+                                "stream": true,
+                                "ok": true,
+                                "finish_reason": resp.finish_reason,
+                            })
+                        }
+                        Ok(StreamCollectOutcome::Interrupted(_, _)) => serde_json::json!({
+                            "attempt": inner_attempt,
+                            "model": sc.active_model,
+                            "stream": true,
+                            "ok": false,
+                            "interrupted": true,
+                        }),
+                        Err(err) => serde_json::json!({
+                            "attempt": inner_attempt,
+                            "model": sc.active_model,
+                            "stream": true,
+                            "ok": false,
+                            "error": err.to_string(),
+                        }),
+                    };
+                    let _ = self.invoke_hook(HookType::PostApiRequest, &post_api_ctx);
+                    // collect_stream_llm_response 自身 Err（provider 构建/凭据错误）
+                    // 转 graceful 中断，保证 ctx 消息被返回并持久化。
+                    let stream_outcome = match stream_collect {
+                        Ok(outcome) => outcome,
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "collect_stream_llm_response failed — treating as graceful interrupt for persistence"
+                            );
+                            return TurnLlmOutcome::Terminate(TurnLlmTermination::Errored(e.to_string()));
+                        }
+                    };
+                    match stream_outcome {
+                        StreamCollectOutcome::Complete(resp) => resp,
+                        StreamCollectOutcome::Interrupted(partial, captured_error) => {
+                            cost_guard.record_usage(
+                                partial.usage.as_ref(),
+                                partial.model.as_str(),
+                                &self.config,
+                            );
+                            // 中途断流（stream_error / 用户中断）：partial 里未执行的
+                            // tool_calls 永远不会有 tool result 配对，重放会触发
+                            // strict provider 400。strip 掉，正文保留，下一轮重调工具。
+                            let errored = partial.finish_reason.as_deref() == Some("stream_error");
+                            let mut partial_message = partial.message;
+                            if partial_message.tool_calls.is_some() {
+                                let stripped = partial_message
+                                    .tool_calls
+                                    .as_ref()
+                                    .map(|tcs| tcs.len())
+                                    .unwrap_or(0);
+                                partial_message.tool_calls = None;
+                                tracing::warn!(
+                                    stripped = stripped,
+                                    "interrupted stream: discarding unexecuted tool_calls \
+                                     before persisting partial assistant message"
+                                );
+                            }
+                            ctx.add_message(partial_message);
+                            return TurnLlmOutcome::Terminate(
+                                TurnLlmTermination::StreamInterrupted {
+                                    errored,
+                                    captured_error,
+                                },
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    // 非流式（run 全程 / run_stream 的降级轮）。
+                    match self
+                        .call_llm_with_retry(ctx, tool_schemas, turn_runtime_route)
+                        .await
+                    {
+                        Ok(resp) => resp,
+                        Err(AgentError::Interrupted { .. }) => {
+                            return TurnLlmOutcome::Terminate(TurnLlmTermination::UserInterrupted);
+                        }
+                        Err(e) => {
+                            if stream.is_some() {
+                                tracing::warn!(
+                                    error = %e,
+                                    "LLM call failed (stream retry path) — treating as graceful interrupt for persistence"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    error = %e,
+                                    "LLM call failed (non-stream path) — treating as graceful interrupt for persistence"
+                                );
+                            }
+                            return TurnLlmOutcome::Terminate(TurnLlmTermination::Errored(e.to_string()));
+                        }
+                    }
+                }
+            };
+            // 只有流式路径需要 inner_attempt 递增（纯非流式 run() 无需计数）。
+            if stream.is_some() {
+                inner_attempt = inner_attempt.saturating_add(1);
+            }
+            if let Some(ref u) = r.usage {
+                turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
+            }
+            if let Some(ref u) = turn_usage_acc {
+                self.emit_usage_update(u);
+            }
+            match self.classify_post_llm_response(r, &mut inner_thinking, &mut inner_empty, ctx) {
+                PostLlmAction::Break(resp) => {
+                    return TurnLlmOutcome::Response { response: resp, turn_usage_acc };
+                }
+                PostLlmAction::RetryReasoning | PostLlmAction::RetryEmpty => continue,
+            }
         }
     }
 
@@ -308,95 +561,31 @@ self.notify_phase(&LoopPhase::Prefetch, total_turns);
             tracing::debug!(phase = %LoopPhase::LlmCall, turn = total_turns, "run: LLM API call");
 self.notify_phase(&LoopPhase::LlmCall, total_turns);
             let api_start = Instant::now();
-            let mut inner_empty = 0u32;
-            let mut inner_thinking = 0u32;
-            let mut turn_usage_acc: Option<UsageStats> = None;
-            let response = loop {
-                if self.interrupt.take_interrupt_graceful().is_some() {
-                    return Ok(self.graceful_interrupt_result(
+            let (response, turn_usage_acc) = match self
+                .call_turn_llm(
+                    &mut ctx,
+                    &tool_schemas,
+                    turn_runtime_route.as_ref(),
+                    &mut state.cost_guard,
+                    None,
+                    None,
+                )
+                .await
+            {
+                TurnLlmOutcome::Response { response, turn_usage_acc } => (response, turn_usage_acc),
+                TurnLlmOutcome::Terminate(t) => {
+                    return Ok(self.finish_terminated_turn(
                         &ctx,
+                        t,
                         total_turns,
                         &tool_errors,
-                        state.cost_guard.accumulated_usage.clone(),
-                        state.cost_guard.session_cost_usd,
+                        &state.cost_guard,
                         session_started_hooks_fired,
                         persist_user_idx,
                     ));
                 }
-                let r = match self
-                    .call_llm_with_retry(&ctx, &tool_schemas, turn_runtime_route.as_ref())
-                    .await
-                {
-                    Ok(r) => r,
-                    Err(AgentError::Interrupted { .. }) => {
-                        return Ok(self.graceful_interrupt_result(
-                            &ctx,
-                            total_turns,
-                            &tool_errors,
-                            state.cost_guard.accumulated_usage.clone(),
-                            state.cost_guard.session_cost_usd,
-                            session_started_hooks_fired,
-                            persist_user_idx,
-                        ));
-                    }
-                    // Non-interrupt errors (API error, network timeout,
-                    // credential failure) — convert to graceful interrupt
-                    // so the ctx messages are returned and persisted.
-                    // Without this, returning Err(e) causes
-                    // local_agent_service's `?` to skip the post-run
-                    // persist, and the session reloads empty.
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "LLM call failed (non-stream path) — treating as graceful interrupt for persistence"
-                        );
-                        return Ok(self.graceful_interrupt_result_errored(
-                            &ctx,
-                            total_turns,
-                            &tool_errors,
-                            state.cost_guard.accumulated_usage.clone(),
-                            state.cost_guard.session_cost_usd,
-                            session_started_hooks_fired,
-                            persist_user_idx,
-                            Some(e.to_string()),
-                        ));
-                    }
-                };
-                if let Some(ref u) = r.usage {
-                    turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
-                }
-
-                // push the per-turn usage snapshot so
-                // the front-end cache-hit chip updates in real time.
-                // Emitted *after* merge so the chip reflects the
-                // running total across the current turn, not just
-                // the latest chunk. Quiet-mode short-circuits inside
-                // `emit_usage_update`.
-                if let Some(ref u) = turn_usage_acc {
-                    self.emit_usage_update(u);
-                }
-
-                //: ~40 lines of has_tools /
-                // visible_text / reasoning-retry / empty-retry /
-                // exhausted classification now lives in
-                //`classify_post_llm_response` . The
-                // per-attempt state (`inner_thinking` / `inner_empty`)
-                // is owned by the loop and threaded through.
-                match self.classify_post_llm_response(
-                    r,
-                    &mut inner_thinking,
-                    &mut inner_empty,
-                    &mut ctx,
-                ) {
-                    PostLlmAction::Break(resp) => break resp,
-                    PostLlmAction::RetryReasoning | PostLlmAction::RetryEmpty => continue,
-                }
             };
             let api_elapsed = api_start.elapsed().as_millis() as u64;
-            //: record timings on `state.timings`
-            // directly (saturating-add inside) instead of accumulating
-            // to a local and bridging back via the now-removed
-            // `publish_from` helper.
             state.timings.record_api(api_elapsed);
 
             //.3b : post-LLM hook + usage accumulate +
@@ -944,226 +1133,34 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
             // "正在思考…（第 N 轮）" so the user knows the agent is working.
             self.emit_status("thinking", &format!("正在思考…（第 {} 轮）", total_turns));
             let api_start = Instant::now();
-            let mut inner_empty = 0u32;
-            let mut inner_thinking = 0u32;
-            let mut turn_usage_acc: Option<UsageStats> = None;
-            let mut inner_attempt: u32 = 0;
-            let response = loop {
-                if self.interrupt.take_interrupt_graceful().is_some() {
-                    return Ok(self.graceful_interrupt_result(
+            let (response, turn_usage_acc) = match self
+                .call_turn_llm(
+                    &mut ctx,
+                    &tool_schemas,
+                    turn_runtime_route.as_ref(),
+                    &mut state.cost_guard,
+                    Some(StreamCallCtx {
+                        active_model: &active_model,
+                        on_chunk: &*on_chunk,
+                    }),
+                    Some(&mut last_finish_reason),
+                )
+                .await
+            {
+                TurnLlmOutcome::Response { response, turn_usage_acc } => (response, turn_usage_acc),
+                TurnLlmOutcome::Terminate(t) => {
+                    return Ok(self.finish_terminated_turn(
                         &ctx,
+                        t,
                         total_turns,
                         &tool_errors,
-                        state.cost_guard.accumulated_usage.clone(),
-                        state.cost_guard.session_cost_usd,
+                        &state.cost_guard,
                         session_started_hooks_fired,
                         persist_user_idx,
                     ));
                 }
-                let r = if inner_attempt == 0 {
-                    let pre_api_ctx = serde_json::json!({
-                        "attempt": inner_attempt,
-                        "model": active_model,
-                        "stream": true,
-                        "route_label": turn_runtime_route
-                            .as_ref()
-                            .and_then(|r| r.route_label.as_deref()),
-                    });
-                    let _ = self.invoke_hook(HookType::PreApiRequest, &pre_api_ctx);
-                    let stream_collect = self
-                        .collect_stream_llm_response(
-                            &ctx,
-                            &tool_schemas,
-                            turn_runtime_route.as_ref(),
-                            &active_model,
-                            &*on_chunk,
-                        )
-                        .await;
-                    let post_api_ctx = match &stream_collect {
-                        Ok(StreamCollectOutcome::Complete(resp)) => {
-                            // Remember the most recent finish_reason so the
-                            // final AgentResult can surface it to the WS client.
-                            last_finish_reason = resp.finish_reason.clone();
-                            serde_json::json!({
-                                "attempt": inner_attempt,
-                                "model": active_model,
-                                "stream": true,
-                                "ok": true,
-                                "finish_reason": resp.finish_reason,
-                            })
-                        },
-                        Ok(StreamCollectOutcome::Interrupted(_, _)) => serde_json::json!({
-                            "attempt": inner_attempt,
-                            "model": active_model,
-                            "stream": true,
-                            "ok": false,
-                            "interrupted": true,
-                        }),
-                        Err(err) => serde_json::json!({
-                            "attempt": inner_attempt,
-                            "model": active_model,
-                            "stream": true,
-                            "ok": false,
-                            "error": err.to_string(),
-                        }),
-                    };
-                    let _ = self.invoke_hook(HookType::PostApiRequest, &post_api_ctx);
-                    // If collect_stream_llm_response itself returns Err
-                    // (e.g. provider build failure, credential error),
-                    // convert to graceful interrupt so the ctx messages
-                    // are returned and persisted by the caller. Without
-                    // this, the `?` would propagate the error,
-                    // local_agent_service's `?` would skip the post-run
-                    // persist, and the session would reload empty.
-                    let stream_outcome = match stream_collect {
-                        Ok(outcome) => outcome,
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "collect_stream_llm_response failed — treating as graceful interrupt for persistence"
-                            );
-                            return Ok(self.graceful_interrupt_result_errored(
-                                &ctx,
-                                total_turns,
-                                &tool_errors,
-                                state.cost_guard.accumulated_usage.clone(),
-                                state.cost_guard.session_cost_usd,
-                                session_started_hooks_fired,
-                                persist_user_idx,
-                                Some(e.to_string()),
-                            ));
-                        }
-                    };
-                    match stream_outcome {
-                        StreamCollectOutcome::Complete(resp) => resp,
-                        StreamCollectOutcome::Interrupted(partial, captured_error) => {
-                            state
-                                .cost_guard
-                                .record_usage(partial.usage.as_ref(), partial.model.as_str(), &self.config);
-                            // A mid-stream chunk failure (silence_watch /
-                            // network blip) carries `finish_reason =
-                            // "stream_error"` on the partial response; a
-                            // user stop carries "interrupted". Only the
-                            // former is a backend failure that must be
-                            // surfaced to the frontend as an error.
-                            // `captured_error` is the raw transport/provider
-                            // error text (e.g. an LLM 400), threaded into
-                            // `AgentResult::last_error` so the frontend can
-                            // show the real cause instead of a generic banner.
-                            let errored = partial.finish_reason.as_deref() == Some("stream_error");
-                            // A stream that died mid-tool-call persists a half
-                            // assistant whose tool_calls never ran, so no tool
-                            // result will ever pair with them. Replaying that
-                            // history trips strict providers (MiniMax-M3) with
-                            // 400 "(2013) tool call result does not follow tool
-                            // call". Strip the unexecuted calls here — the
-                            // prose is kept, the tools simply get re-invoked on
-                            // the next turn.
-                            let mut partial_message = partial.message;
-                            if partial_message.tool_calls.is_some() {
-                                let stripped = partial_message
-                                    .tool_calls
-                                    .as_ref()
-                                    .map(|tcs| tcs.len())
-                                    .unwrap_or(0);
-                                partial_message.tool_calls = None;
-                                tracing::warn!(
-                                    stripped = stripped,
-                                    "interrupted stream: discarding unexecuted tool_calls \
-                                     before persisting partial assistant message"
-                                );
-                            }
-                            ctx.add_message(partial_message);
-                            return Ok(self.graceful_interrupt_result_with(
-                                &ctx,
-                                total_turns,
-                                &tool_errors,
-                                state.cost_guard.accumulated_usage.clone(),
-                                state.cost_guard.session_cost_usd,
-                                session_started_hooks_fired,
-                                persist_user_idx,
-                                errored,
-                                captured_error,
-                            ));
-                        }
-                    }
-                } else {
-                    match self
-                        .call_llm_with_retry(&ctx, &tool_schemas, turn_runtime_route.as_ref())
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(AgentError::Interrupted { .. }) => {
-                            return Ok(self.graceful_interrupt_result(
-                                &ctx,
-                                total_turns,
-                                &tool_errors,
-                                state.cost_guard.accumulated_usage.clone(),
-                                state.cost_guard.session_cost_usd,
-                                session_started_hooks_fired,
-                                persist_user_idx,
-                            ));
-                        }
-                        // Non-interrupt errors (API error, network timeout,
-                        // credential failure) — convert to graceful interrupt
-                        // so the ctx messages are returned and persisted.
-                        // Without this, returning Err(e) causes
-                        // local_agent_service's `?` to skip the post-run
-                        // persist, and the session reloads empty.
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "LLM call failed (stream retry path) — treating as graceful interrupt for persistence"
-                            );
-                            return Ok(self.graceful_interrupt_result_errored(
-                                &ctx,
-                                total_turns,
-                                &tool_errors,
-                                state.cost_guard.accumulated_usage.clone(),
-                                state.cost_guard.session_cost_usd,
-                                session_started_hooks_fired,
-                                persist_user_idx,
-                                Some(e.to_string()),
-                            ));
-                        }
-                    }
-                };
-                inner_attempt = inner_attempt.saturating_add(1);
-
-                if let Some(ref u) = r.usage {
-                    turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
-                }
-
-                // per-turn usage push for the cache-hit
-                // chip. Mirrors the run() side above; emitted on
-                // every streaming chunk so the chip updates
-                // continuously while the response streams in.
-                if let Some(ref u) = turn_usage_acc {
-                    self.emit_usage_update(u);
-                }
-
-                //: mirrors the run side —
-                // ~40 lines of has_tools / visible_text /
-                // reasoning-retry / empty-retry / exhausted
-                // classification collapse into a single `match` on
-                //`classify_post_llm_response` . The
-                // `inner_attempt` counter (stream-only) is bumped
-                // outside this match; per-attempt state is owned by
-                // the loop.
-                match self.classify_post_llm_response(
-                    r,
-                    &mut inner_thinking,
-                    &mut inner_empty,
-                    &mut ctx,
-                ) {
-                    PostLlmAction::Break(resp) => break resp,
-                    PostLlmAction::RetryReasoning | PostLlmAction::RetryEmpty => continue,
-                }
             };
             let api_elapsed_ms = api_start.elapsed().as_millis() as u64;
-            // O1.1 fix: run_stream() was missing the API timing record
-            // that run() has at line 327. Without it, dashboard cost
-            // reports under-count stream-path API time.
             state.timings.record_api(api_elapsed_ms);
 
             //.3c : mirrors 1.3b on the run_stream
