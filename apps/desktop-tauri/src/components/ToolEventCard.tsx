@@ -5,6 +5,7 @@ import {
   AlertTriangle, AlertCircle, SearchX, Copy, Check,
 } from "lucide-react";
 import { reportError } from "../lib/reportError";
+import { useNow } from "../hooks/useNow";
 import { formatDuration } from "../utils/time";
 import type { ExecutionTimelineEvent } from "../types";
 import {
@@ -266,11 +267,11 @@ function durationOf(group: ToolGroup): string {
 /// 100% for genuinely long-running tools. Once the tool ends,
 /// `progressFraction` returns `None` and the caller hides the
 /// bar entirely.
-function progressFraction(group: ToolGroup): number | null {
+function progressFraction(group: ToolGroup, nowMs: number): number | null {
   if (!group.startedAt || group.endedAt) return null;
   const t0 = new Date(group.startedAt).getTime();
   if (Number.isNaN(t0)) return null;
-  const elapsedMs = Math.max(0, Date.now() - t0);
+  const elapsedMs = Math.max(0, nowMs - t0);
   const SOFT_TARGET_MS = 30_000;
   return Math.min(1, elapsedMs / SOFT_TARGET_MS);
 }
@@ -555,15 +556,9 @@ function ToolRow({ group }: { group: ToolGroup }) {
   // (, Hermes 对标): when a tool is still
   // running, the duration chip previously stayed frozen at
   // "0ms" until the `complete` event arrived. We now tick a
-  // `now` state once per second so the user sees the elapsed
-  // grow live — a poor man's progress bar that works for
-  // any tool whose total runtime is unknown up front.
-  const [, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!isRunning) return;
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [isRunning]);
+  // 共享 1s 时钟（P2-4）：多个工具卡共用一个 interval，页面隐藏时暂停。
+  // `now` 同时驱动耗时 chip 与进度条，同一 tick 内两者读数一致。
+  const now = useNow(isRunning);
 
   // Concatenate all stdout/stderr chunks into one terminal block.
   // Declared BEFORE `primary` so the stdout-aware fallback in
@@ -592,7 +587,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
   // (): live progress fraction for currently
   // running tools. `None` once the tool ends, so the bar
   // disappears instead of staying at 100%.
-  const progress = progressFraction(group);
+  const progress = progressFraction(group, now);
   // The `complete` event sometimes carries a final summary in
   // `content` even when no stdout was streamed — surface it inside
   // the expanded body so the user can see what the tool reported.

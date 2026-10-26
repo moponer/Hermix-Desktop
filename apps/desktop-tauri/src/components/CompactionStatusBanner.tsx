@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, Loader2, ShieldAlert, ShieldCheck, TimerReset, Wrench } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
+import { useNow } from "../hooks/useNow";
 import { CLOSE } from "./strings";
 
 /**
@@ -193,7 +194,8 @@ export function CompactionStatusBanner({ status, onDismiss }: CompactionStatusBa
   const phase = status?.phase;
   const isCompacting =
     phase === "starting" || phase === "in_progress_fast" || phase === "in_progress_llm";
-  const [now, setNow] = useState(() => Date.now());
+  // 共享 1s 时钟（P2-4）：多个组件共用一个 interval，页面隐藏时暂停。
+  const now = useNow(isCompacting);
   const startRef = useRef<number | null>(null);
   useEffect(() => {
     if (!isCompacting) {
@@ -203,9 +205,6 @@ export function CompactionStatusBanner({ status, onDismiss }: CompactionStatusBa
       return;
     }
     if (startRef.current === null) startRef.current = status?.lastChangedAt ?? Date.now();
-    setNow(Date.now());
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
   }, [isCompacting, status?.lastChangedAt]);
   const elapsedSecs = isCompacting
     ? Math.max(0, Math.round((now - (startRef.current ?? now)) / 1000))

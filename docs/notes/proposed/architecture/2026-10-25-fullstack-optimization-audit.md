@@ -437,6 +437,26 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 验证：telemetry **13 passed** 全绿。
 
+### 批次 18（P2-4 轮询收敛，前半）— 2026-10-26 交付
+
+新增 `apps/desktop-tauri/src/hooks/useNow.ts`：**按 interval 分桶共享一个 timer**，同一 tick 内所有订阅者读到同一个 `now`（各自 `Date.now()` 会在同一帧给出不同毫秒值，进度条与耗时 chip 抖动）；`document.hidden` 时整桶跳过 tick（后台不产生 render、不耗电）；`active=false` 不订阅（等同原来的条件 setInterval）。
+
+已替换两处最热的 1s 轮询：
+- `ToolEventCard`：原来 `const [, setNow]` + 每个工具卡一个 interval（同时 3 个运行中 = 3 个 timer），改 `useNow(isRunning)`；`progressFraction` 改收 `now`，耗时 chip 与进度条同 tick 一致。
+- `CompactionStatusBanner`：同上，`now` 直接驱动 `elapsedSecs`。
+
+验证：`tsc --noEmit` 通过；`check-design-guard` clean。
+
+**未做（其余 15 处）**：`App.tsx`(3)、`MissionBoardView`(2)、`FileSearchWindow`、`useBackendConnection`、`useChannelsStatus` 等各有不同的取数语义（有的查后端、有的算本地时间），收敛前要先分清「本地时钟」与「定期拉取」，后者应走统一 query 缓存（含失效键与 `visibilitychange` 暂停），属独立批次。
+
+### 其余剩余项的处置结论（2026-10-26 复核）
+
+| 项 | 结论 |
+|---|---|
+| **P3-2** focus embedded 单 Mutex | **不做**。正确修法是把 `conn` 改 `Arc<Mutex<Connection>>` 才能进 `spawn_blocking`（触及所有读写方法）；改用 `block_in_place` 反而制造「worker 变阻塞线程」的反模式（`registry.rs` 已有 12 处前车之鉴）。且 pre-turn 的 memory_prefetch 已有 3s/5s 超时兜底，收益被限制。 |
+| **P3-3** dev 体验 | **已满足**。`dev:vite` 脚本已存在；`optimizeDeps.include` 只列 2 个是真动态链（`plugin-fs` 经 desktopBridge、`docx-preview`），echarts/katex/refractor 是静态 import 且已进 `manualChunks`，vite 默认扫描能覆盖。原建议的 `optimizeDeps.entries` 自动扫描对变量路径无效。 |
+| **P2-10** esbuild.exe 移出 resources | **误判，不移**。它是**运行期必需**：`hermix-plugin/src/validate.rs::run_esbuild_check` 用它做工作台 JS/TS 真语法校验，`hx_packager` 用它把 TSX 编到 `app.js`。移出会让 `validate` 退回手写括号匹配兜底、打包链断掉。 |
+
 ### 批次 11（P1-9 技能扫描缓存）— 2026-10-26 交付
 
 **先量后改**：新增探针 `skill_loader::tests::probe_scan_cost`（`#[ignore]`），实测 `with_dir + scan()`：
