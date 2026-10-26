@@ -491,7 +491,9 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 **P1-3 / P1-5 / P2-11 状态复核（2026-10-26 二次核实，修正基线里的过时描述）**：
 
-- **P1-3 仍在，不可小步修**：`App.tsx` 里 `setSessions((prev) => …)` 实际 **50+ 处**（基线写 41 处，且我中途用 PowerShell 查过一次「0 处」是转义写错的假结论——`\(prev` 在 PowerShell 里不是正则转义）。流式 chunk 已有 rAF 合批（`pendingToolChunks`），但**每次提交仍是 O(会话数 × 消息数) 的全量拷贝**。修法是把流式增量挪进独立 store（`useSyncExternalStore` + ref 订阅），只更新当前消息字段——这是 `App.tsx` 状态模型改造，与 P1-13 的 `App.tsx` 拆分同一批做，不能拆开小改。
+- **P1-3 第一步已交付（2026-10-26）**：新增 `lib/sessionUpdates.ts` 的 `updateSession(sessions, id, patch)`——未命中返回**原数组**（保引用让 React 跳过提交），命中项才换新对象、其余保持同一引用。`App.tsx` 里 **27 处**重复样板（`prev.map((s) => { if (s.id !== X) return s; ... })`）收进它，净减约 30 行；纯提取、行为不变（tsc + 前端 368 测试全绿），单测钉住「未命中返原数组」「未命中项引用不变」。
+  剩余 7 处 `setSessions` 都是**全量语义**（`map(evict)` 逐出、`stampDecision` 跨会话打标、clarify 跨会话扫 requestId、新增会话、`filter` 删除、`snapshot` 回滚），不适用单会话更新，保持原样。
+  **第二步（未做）**：把流式增量挪进独立 store（`useSyncExternalStore` + ref 订阅），只更新当前消息字段，进一步消掉每次提交的 O(会话数 × 消息数) 拷贝。这一步才是状态模型改造，与 P1-13 的 `App.tsx` 拆分同一批做。
 - **P1-5 已缓解**：前端早已窗口化（`INITIAL_MESSAGE_WINDOW = 60` + `tail_skip` 翻页 + `has_more`，`App.tsx:1332` 首屏即传 limit），DOM 里只挂窗口内消息，不是 1000+ 条全量。`virtua` 虽在依赖但未接入；在 60 条窗口下接入收益有限，除非要把窗口放大。
 - **P2-11 已完成**：`check-theme-tokens.mjs` 已有 `[css-bare-color]` 检查（WARN 级 + `styles/themes/EXCEPTIONS.md` 登记独立入口例外），当前实测 **CSS 层无裸色 ✓**、`[bare-color]` 无裸色 ✓。唯一残留是 `[css-type-debt]` 的 4 处 px 字号（48px 错误页图标、24px 弹窗图标、22px 页面标题、9px 装饰三角）——都是装饰性尺寸，改 `--text-*`/`--icon-size-*` 会缩小视觉，且门禁本身是 WARN 不阻断，按视觉决策保留。
 
