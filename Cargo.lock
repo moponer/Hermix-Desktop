@@ -3141,6 +3141,7 @@ dependencies = [
  "chrono",
  "hermix-config",
  "hermix-core",
+ "hermix-store",
  "image",
  "regex-lite",
  "resvg",
