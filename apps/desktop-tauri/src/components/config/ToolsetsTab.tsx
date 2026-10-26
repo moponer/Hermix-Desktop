@@ -198,7 +198,7 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
         </Grid>
       )}
 
-      <p className="text-[length:var(--text-meta)] text-text-muted pb-6">工具集由后端 ToolRegistry 自动注册；关闭后该组的所有工具会从 LLM 的工具列表里消失，下次 agent 调用就不会看到。</p>
+      <p className="text-[length:var(--text-meta)] text-text-muted pb-6">关闭后该组工具不再提供给模型。</p>
     </>
   );
 }

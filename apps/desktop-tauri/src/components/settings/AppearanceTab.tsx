@@ -29,7 +29,6 @@ export function AppearanceTab() {
         <div className="grid grid-cols-3 gap-3" role="radiogroup" aria-label="明暗模式">
           <ChoiceCard
             label="浅色"
-            description="白底深字。白天与明亮环境下对比更舒适。"
             icon={<Sun className="icon-lg" />}
             tone="amber"
             selected={mode === "light"}
@@ -37,7 +36,6 @@ export function AppearanceTab() {
           />
           <ChoiceCard
             label="深色"
-            description="深底亮字。夜间与长时间阅读时更省眼。"
             icon={<Moon className="icon-lg" />}
             tone="violet"
             selected={mode === "dark"}
@@ -45,7 +43,6 @@ export function AppearanceTab() {
           />
           <ChoiceCard
             label="跟随系统"
-            description="自动跟随操作系统的深浅色设置，切换时实时跟随。"
             icon={<Monitor className="icon-lg" />}
             tone="slate"
             selected={mode === SYSTEM_THEME}
@@ -56,14 +53,10 @@ export function AppearanceTab() {
       </section>
 
       {/* 强调色 */}
-      <SettingsGroup
-        title="强调色"
-        description="影响选中态、主按钮与链接。派生色（悬停/浅底）自动跟随。"
-      >
+      <SettingsGroup title="强调色">
         <SettingsRow
           icon={<IconTile icon={<Palette className="icon-md" />} tone="violet" />}
           title="主题默认色"
-          description="回到当前主题自带的强调色（不注入任何覆盖）。"
           control={
             <Switch
               checked={accent === null}
@@ -122,10 +115,7 @@ export function AppearanceTab() {
       </SettingsGroup>
 
       {/* 自定义主题 */}
-      <SettingsGroup
-        title="主题"
-        description="内置浅色 / 深色两套；把 <id>.css + <id>.json 放进 themes/ 即自动出现在下拉里。"
-      >
+      <SettingsGroup title="主题">
         <SettingsRow
           title="当前主题"
           control={<ThemeToggle />}

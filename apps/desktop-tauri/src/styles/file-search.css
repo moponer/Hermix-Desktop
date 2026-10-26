@@ -291,11 +291,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.fsw-status-tip {
-  margin-left: auto;
-  color: #6f6f6a;
-}
-
 /* 滚动条 */
 .fsw-list::-webkit-scrollbar {
   width: 10px;

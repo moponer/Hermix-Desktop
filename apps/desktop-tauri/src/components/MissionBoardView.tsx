@@ -327,11 +327,7 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
             ) : members === null ? (
               <LoadError what="工单列表" text={error ?? ""} onRetry={() => void refreshMembers()} />
             ) : members.length === 0 ? (
-              <EmptyState
-                variant="plain"
-                title="还没有成员工单"
-                description="在对话里让阿黎派活（dispatch_member），工单会出现在这里"
-              />
+              <EmptyState variant="plain" title="还没有成员工单" />
             ) : embedded ? (
               /* 值守页「任务」页签的窄容器：四列看板塞进来每列只剩两指宽、
                  大半列还是「空」占位（2026-10-25 用户实测「排版差得要命」）。
@@ -393,17 +389,9 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
                 <SkeletonCard lines={2} />
               </div>
             ) : roles.length === 0 ? (
-              <EmptyState
-                variant="plain"
-                title="角色库是空的"
-                description="在对话里让阿黎用 agent_role_upsert 增改角色，此处热加载展示"
-              />
+              <EmptyState variant="plain" title="角色库是空的" />
             ) : (
               <>
-                <p className="mb-4 text-[length:var(--text-ui)] text-text-muted">
-                  角色库定义在 <code className="text-text-secondary">~/.hermix/agents/*.md</code>；
-                  在对话里让阿黎用 agent_role_upsert 增改，此处热加载展示。
-                </p>
                 {roleErrors.length > 0 && (
                   <div className="mb-4 rounded-[var(--radius-md)] bg-warning-soft p-3 text-[length:var(--text-ui)] text-text-warning">
                     {roleErrors.length} 个角色文件解析失败（已跳过）：
@@ -467,7 +455,7 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
                 ) : (
                   <div className="flex items-start gap-2 rounded-[var(--radius-md)] bg-success-soft p-3 text-[length:var(--text-ui)] text-text-success">
                     <CheckCircle2 className="icon-md mt-0.5 shrink-0" />
-                    <span>资源闸门正常，工单派发放行中。巡检每 60 秒一轮。</span>
+                    <span>资源正常，工单派发放行中。</span>
                   </div>
                 )}
                 <div className="rounded-[var(--radius-md)] border border-border-subtle bg-bg-secondary p-4">
@@ -496,7 +484,7 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
                   </div>
                   {caches === null ? (
                     <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">
-                      按需扫描 npm/pnpm/pip/cargo/Temp 的磁盘占用（只报不删，删除由你决策）。
+                      只扫描占用，不删除文件。
                     </p>
                   ) : (
                     caches.map((c) => (
@@ -622,7 +610,7 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
 
   return (
     <div className="flex h-full flex-col">
-      <PageHeader icon={<KanbanSquare className="icon-lg" />} title="任务台" count={members?.length ?? 0}>
+      <PageHeader icon={<KanbanSquare className="icon-lg" />} title="任务台">
         <SegmentedControl
           label="任务台视图"
           as="tablist"

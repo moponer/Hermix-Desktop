@@ -17,7 +17,7 @@
 // —— 与参考项目同构。**只列真的会开的**：终端（无 PTY）、审查（后端
 // file_change 不带 diff 正文）现在都做不出来，列出来就是点击无响应。
 
-import { X, FolderOpen, FileText, MessageSquare, ClipboardCheck, PanelRightClose, LayoutTemplate } from "lucide-react";
+import { X, FolderOpen, MessageSquare, ClipboardCheck, PanelRightClose, LayoutTemplate } from "lucide-react";
 import { clsx } from "clsx";
 import type { ReactNode } from "react";
 import type { Artifact } from "../utils/artifacts";
@@ -275,9 +275,6 @@ export function PreviewBar({
       ) : (
         <div className="preview-bar__empty">
           <p className="preview-bar__empty-title">打开标签页</p>
-          <p className="preview-bar__hint">
-            点对话里的文件路径就会在这里开一个预览标签，或从下面选一个入口。
-          </p>
           <div className="preview-bar__cards">
             <button
               type="button"
@@ -286,7 +283,6 @@ export function PreviewBar({
             >
               <FolderOpen className="icon-md" />
               <span>浏览工作区</span>
-              <span className="preview-bar__card-sub">找文件 · 预览 · 加入对话</span>
             </button>
             <button
               type="button"
@@ -305,16 +301,6 @@ export function PreviewBar({
               <MessageSquare className="icon-md" />
               <span>辅助对话</span>
               <span className="preview-bar__card-sub">子代理目标与执行过程</span>
-            </button>
-            <button
-              type="button"
-              className="preview-bar__card is-hint"
-              disabled
-              title="对话里点任意文件路径即可，无需入口"
-            >
-              <FileText className="icon-md" />
-              <span>对话中的文件</span>
-              <span className="preview-bar__card-sub">点正文里的路径直接开</span>
             </button>
           </div>
         </div>

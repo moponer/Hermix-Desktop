@@ -264,18 +264,12 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
         {/* ── Step 1: Template picker + 不知道写什么时的示例语句 ── */}
         {step === "template" && (
           <div className="rounded-xl bg-bg-card p-5 space-y-4">
-            <div>
-              <p className="text-[length:var(--text-body)] font-medium text-text-primary mb-1">
-                想要一个什么类型的专家？
-              </p>
-              <p className="text-[length:var(--text-meta)] text-text-muted">
-                点示例快速开始，或选模板改，或自己写
-              </p>
-            </div>
+            <p className="text-[length:var(--text-body)] font-medium text-text-primary">
+              想要一个什么类型的专家？
+            </p>
 
             {/* 示例语句 （灵感起点） */}
             <div>
-              <p className="text-[length:var(--text-meta)] text-text-muted mb-1.5">不知道怎么描述?从这些开始:</p>
               <div className="flex flex-wrap gap-1.5">
                 {EXAMPLE_DESCRIPTIONS.map((d) => (
                   <button
@@ -291,7 +285,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
 
             {/* 模板 */}
             <div>
-              <p className="text-[length:var(--text-meta)] text-text-muted mb-1.5">或者从模板开始改:</p>
+              <p className="text-[length:var(--text-meta)] text-text-muted mb-1.5">模板</p>
               <div className="grid grid-cols-2 gap-2">
                 {TEMPLATES.map((tpl) => (
                   <button
@@ -382,10 +376,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
         {/* ── Step 3: Clarify ── */}
         {step === "clarify" && (
           <div className="rounded-xl bg-bg-card p-5 space-y-4">
-            <div>
-              <p className="text-[length:var(--text-ui)] font-medium text-text-primary mb-0.5">再补几个关键问题</p>
-              <p className="text-[length:var(--text-meta)] text-text-muted">回答几个问题,AI 会设计得更准</p>
-            </div>
+            <p className="text-[length:var(--text-ui)] font-medium text-text-primary">再补几个关键问题</p>
 
             <div>
               <p className="text-[length:var(--text-meta)] font-medium text-text-secondary mb-2">
@@ -486,7 +477,6 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                     "样式只有一处出处" —— 环的粗细/尺寸/动画都在类里。 */}
                 <div className="h-10 w-10 animate-spin rounded-full border-2 border-bg-tertiary border-t-[color:var(--color-text-primary)]" />
                 <p className="text-[length:var(--text-ui)] text-text-secondary">AI 正在为你设计专家…</p>
-                <p className="text-[length:var(--text-meta)] text-text-faint mt-1">推理 + 生成人设 + 写 system prompt + 想样例对话</p>
               </div>
             ) : generated ? (
               <>

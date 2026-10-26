@@ -35,7 +35,6 @@ export function WorkbenchEmpty({ onCreate, error }: WorkbenchEmptyProps) {
   return (
     <div className="wb-empty">
       <h2 className="wb-empty-title">工作台</h2>
-      <p className="wb-empty-lead">给它起个名字，做什么用稍后跟它聊</p>
 
       <div className="wb-empty-create">
         <input
@@ -58,8 +57,6 @@ export function WorkbenchEmpty({ onCreate, error }: WorkbenchEmptyProps) {
         </button>
       </div>
       {error && <p className="wb-error-inline">{error}</p>}
-
-      <p className="wb-empty-hint">项目管理 · 联系人 · 记账</p>
     </div>
   );
 }

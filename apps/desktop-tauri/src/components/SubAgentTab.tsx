@@ -43,9 +43,6 @@ export function SubAgentTab({ subAgents }: { subAgents: Record<string, SubAgentS
       <div className="subagent-empty">
         <Sparkles className="icon-lg" />
         <p className="subagent-empty__title">本会话没有子代理</p>
-        <p className="subagent-empty__hint">
-          当助手把子任务派给子代理（delegate_task）时，它的目标、轮次和执行过程会出现在这里。
-        </p>
       </div>
     );
   }

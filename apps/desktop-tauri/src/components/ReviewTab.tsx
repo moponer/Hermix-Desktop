@@ -82,9 +82,6 @@ export function ReviewTab({
       <div className="review-empty">
         <FileClock className="icon-lg" />
         <p className="review-empty__title">本次会话还没有文件变更</p>
-        <p className="review-empty__hint">
-          当助手写入、修改或删除文件时，这里会按文件列出改动，点任意一行可在预览栏打开。
-        </p>
       </div>
     );
   }
@@ -93,8 +90,6 @@ export function ReviewTab({
     <div className="review-list">
       <div className="review-list__head">
         <span>{files.length} 个文件</span>
-        <span className="cs-spacer" />
-        <span className="text-text-faint">仅路径与类型，无 diff 正文</span>
       </div>
       {files.map((f) => {
         const { label, Icon } = CHANGE_META[f.changeType];

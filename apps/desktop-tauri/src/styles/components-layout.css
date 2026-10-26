@@ -1244,11 +1244,8 @@ height: 26px;
   font-size: var(--text-meta, 12px);
   text-align: center;
 }
-.preview-bar__hint { color: var(--color-text-faint); max-width: 220px; line-height: 1.5; }
 
-/* 空态 = 能力清单（卡片式入口），不是一句"暂无内容"。
-   可点的卡是真入口；.is-hint 是明确标注"尚未接线"的占位，
-   disabled + 降透明度，避免看起来能点却无响应。 */
+/* 空态 = 入口卡片，不是一句"暂无内容"。 */
 .preview-bar__empty-title {
   font-size: var(--text-title, 16px);
   font-weight: 600;
@@ -1286,8 +1283,6 @@ height: 26px;
   text-align: center;
   line-height: 1.4;
 }
-.preview-bar__card.is-hint { opacity: 0.5; cursor: not-allowed; }
-
 /* ── 审查 / 辅助对话 两个聚合视图 ────────────────────────────
    与文件预览共用右栏的纵向布局：头部一行摘要（.cs-spacer 推开右段），
    下面是可滚动列表。配色沿用项目状态 token，不引入蓝紫色。 */
@@ -1367,14 +1362,6 @@ height: 26px;
   font-weight: 600;
   color: var(--color-text-muted);
 }
-.review-empty__hint,
-.subagent-empty__hint {
-  max-width: 240px;
-  font-size: var(--text-tiny, 11px);
-  line-height: 1.6;
-  color: var(--color-text-faint);
-}
-
 /* 子代理卡片用 <details>：默认折叠（大多数子代理已结束，不需要占屏），
    失败项强制展开（fail-open 原则：出错时最该被看见）。
    分割线规则（2026-10-11）：逐卡片 border-bottom 取消——相位色点 +
@@ -1570,7 +1557,7 @@ height: 26px;
 
 /* ════════════════════════════════════════════════════════════════════
    § 搜索行（cc-haha 位置：功能导航之下、分组之上）
-   一条安静的胶囊：放大镜 + 占位文案 + ⌘K 提示。整行可点，作用是唤起
+   一条安静的胶囊：放大镜 + 占位文案 + Ctrl K 提示。整行可点，作用是唤起
    既有搜索弹窗（onOpenSearch），不在侧栏内做输入 —— 侧栏宽度只有
    240px，塞一个真输入框会把会话列表挤没。
    ════════════════════════════════════════════════════════════════════ */

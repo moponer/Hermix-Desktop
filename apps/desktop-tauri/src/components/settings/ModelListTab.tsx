@@ -395,13 +395,8 @@ export function ModelListTab() {
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-[length:var(--text-body)] font-medium text-text-primary">模型</h2>
-          <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">
-            统一管理内置与自定义模型；内置供应商只需填 API Key
-          </p>
-        </div>
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-[length:var(--text-title)] font-semibold text-text-primary">模型</h2>
         <button onClick={() => { setEditing(null); setAddOpen(true); }} className={primaryBtn}>
           <Plus className="icon-sm" />
           添加模型

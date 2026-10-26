@@ -62,7 +62,6 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
         <button
           className="custom-app-card__btn custom-app-card__btn--run"
           onClick={onRun}
-          title="运行（自动编译并启动，用于本地测试）"
         >
           <Play className="icon-md" />
           运行
@@ -73,7 +72,6 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
               className="custom-app-card__btn custom-app-card__btn--package"
               onClick={onPackage}
               disabled={packaging}
-              title="重新打包为可分发到其他电脑的独立 EXE"
             >
               <RefreshCw className="icon-md" />
               {packaging ? PACKAGING : "打包"}
@@ -81,7 +79,6 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
             <button
               className="custom-app-card__btn custom-app-card__btn--secondary"
               onClick={onOpenDist}
-              title="打开打包后的应用目录"
             >
               <FolderOpen className="icon-md" />
               打开目录
@@ -92,7 +89,6 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
             className="custom-app-card__btn custom-app-card__btn--package"
             onClick={onPackage}
             disabled={packaging}
-            title="打包为可分发到其他电脑的独立 EXE"
           >
             <Package className="icon-md" />
             {packaging ? PACKAGING : "打包"}

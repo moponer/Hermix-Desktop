@@ -1128,12 +1128,6 @@
   background: var(--color-bg-tertiary);
 }
 
-.custom-apps-view__subtitle {
-  font-size: var(--text-ui);
-  color: var(--color-text-muted);
-  margin: 4px 0 0 0;
-}
-
 .custom-apps-view__alert {
   padding: 10px 14px;
   border-radius: var(--radius-sm, 6px);

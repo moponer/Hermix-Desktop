@@ -31,16 +31,16 @@ import { Button, ConfirmDialog, EmptyState, Input, Modal, PageHeader, SelectFiel
 import { DELETE, SAVE, SAVED, SAVING } from "./strings";
 
 /** A small set of cron presets the editor offers as quick-pick chips.
- *  Each entry: [label, cronExpression, humanDescription]. */
-const CRON_PRESETS: Array<[string, string, string]> = [
-  ["每 15 分钟", "*/15 * * * *", "Quarter-hour cadence"],
-  ["每小时", "0 * * * *", "Top of every hour"],
-  ["每天 08:00", "0 8 * * *", "Morning brief"],
-  ["每天 21:00", "0 21 * * *", "End-of-day review"],
-  ["工作日 09:00", "0 9 * * 1-5", "Weekday standup"],
-  ["每周一 09:00", "0 9 * * 1", "Weekly plan"],
-  ["每周五 17:00", "0 17 * * 5", "Friday wrap-up"],
-  ["每月 1 日 10:00", "0 10 1 * *", "Monthly report"],
+ *  Each entry: [label, cronExpression] —— 标签已经是人话，不再配英文译名。 */
+const CRON_PRESETS: Array<[string, string]> = [
+  ["每 15 分钟", "*/15 * * * *"],
+  ["每小时", "0 * * * *"],
+  ["每天 08:00", "0 8 * * *"],
+  ["每天 21:00", "0 21 * * *"],
+  ["工作日 09:00", "0 9 * * 1-5"],
+  ["每周一 09:00", "0 9 * * 1"],
+  ["每周五 17:00", "0 17 * * 5"],
+  ["每月 1 日 10:00", "0 10 1 * *"],
 ];
 
 /** 定时任务模板（对齐 ZCode 工作流页）：一键预填编辑器，存档前可再改。
@@ -282,11 +282,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
       <div className="max-w-4xl mx-auto">
         {tab === "auto" ? (
           <>
-            <div className="flex items-start justify-between mb-6 gap-4">
-              <p className="text-sm text-text-muted mt-1">
-                通过设置定期聊天，实现工作自动化。后端每 30 秒检查一次，
-                到点自动用当前会话的 agent 跑 prompt。
-              </p>
+            <div className="flex items-center justify-end mb-6 gap-4">
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={() => setConfirmReset(true)}
@@ -317,11 +313,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
             <SkeletonCard lines={2} />
           </div>
         ) : tasks.length === 0 ? (
-          <EmptyState
-            variant="plain"
-            title="还没有自动化任务"
-            description="点击右上「新建自动化」开始"
-          />
+          <EmptyState variant="plain" title="还没有自动化任务" />
         ) : (
           categories.map((cat) => (
             <div key={cat} className="mb-6">
@@ -354,7 +346,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
         <div className="flex items-center justify-between rounded-xl bg-bg-card px-4 py-3 mb-5">
           <div className="flex items-center gap-2 text-[length:var(--text-ui)] text-text-secondary">
             <Info className="icon-md text-text-muted shrink-0" />
-            <span>Hermix 有任务在跑时保持电脑唤醒（对话进行中或定时任务执行中）。</span>
+            <span>有任务在跑时不进入睡眠（对话或定时任务执行中）。</span>
           </div>
           <input
             type="checkbox"
@@ -664,14 +656,12 @@ function TaskEditor({
         )}
         <Input
           label="名称"
-          hint="给任务起个名字（卡片标题）"
           value={draft.name}
           onChange={(e) => update("name", e.target.value)}
           placeholder="每日早报"
         />
         <Input
           label="描述"
-          hint="（可选）一句话讲清任务目的"
           value={draft.description ?? ""}
           onChange={(e) => update("description", e.target.value)}
           placeholder="每天早上整理昨天的工作进展"
@@ -694,10 +684,10 @@ function TaskEditor({
         />
         <div className="flex flex-col gap-1">
           <span className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
-            Schedule（cron 表达式）
+            定时（cron）
           </span>
           <div className="flex flex-wrap gap-1 mb-1">
-            {CRON_PRESETS.map(([label, expr, desc]) => (
+            {CRON_PRESETS.map(([label, expr]) => (
               <button
                 key={expr}
                 onClick={() => update("schedule", expr)}
@@ -706,7 +696,6 @@ function TaskEditor({
                     ? "bg-bg-selected text-text-primary font-medium"
                     : "bg-bg-secondary text-text-secondary hover:bg-bg-hover"
                 }`}
-                title={desc}
               >
                 {label}
               </button>
@@ -715,8 +704,8 @@ function TaskEditor({
           <Input
             size="lg"
             labelHidden
-            label="Schedule（cron 表达式）"
-            hint="5 字段：分 时 日 月 周。例：0 9 * * 1-5 = 工作日 9 点"
+            label="cron 表达式"
+            hint="5 字段：分 时 日 月 周"
             value={draft.schedule}
             onChange={(e) => update("schedule", e.target.value)}
             className="font-mono"
@@ -728,7 +717,7 @@ function TaskEditor({
             字形怪异的字符。字段本身保留在数据层，不影响后端契约。 */}
         <Input
           label="分类"
-          hint="（可选）决定卡片图标的色调"
+          hint="决定卡片色调"
           value={draft.category ?? ""}
           onChange={(e) => update("category", e.target.value)}
           placeholder="工作"
@@ -746,7 +735,6 @@ function TaskEditor({
               落库契约不变；用户看到的是「标准 / 完全」。 */}
           <SelectField
             label="权限"
-            hint="标准：危险工具需审批；完全：自动批准"
             value={draft.permission_level ?? "default"}
             onChange={(e) =>
               update(
@@ -763,7 +751,7 @@ function TaskEditor({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Input
             label="运行次数上限"
-            hint="（可选）累计跑满 N 次后自动停用；留空 = 无限循环"
+            hint="跑满 N 次后自动停用"
             type="number"
             min={1}
             value={draft.max_runs ?? ""}
@@ -779,7 +767,7 @@ function TaskEditor({
         </div>
         {/* skills multi-select for cron-job execution */}
         {availableSkills.length > 0 && (
-          <FieldGroup label="技能（可选）" hint="勾选的技能会在任务执行时自动加载">
+          <FieldGroup label="技能（可选）">
             <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
               {availableSkills.map((sk) => {
                 const selected = (draft.skills ?? []).includes(sk.name);

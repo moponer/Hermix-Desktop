@@ -184,10 +184,6 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
           </>
         }
       />
-      <p className="custom-apps-view__subtitle">
-        管理通过对话创建的桌面应用
-      </p>
-
       {error && (
         <div className="custom-apps-view__alert custom-apps-view__alert--error">
           {error}
@@ -221,11 +217,6 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
             variant="plain"
             icon={<Boxes className="icon-lg" />}
             title={query.trim() ? "没有匹配的应用" : "还没有自定义应用"}
-            description={
-              query.trim()
-                ? "尝试其他搜索关键词"
-                : "在对话中让 AI 为你创建一个桌面应用，它将出现在这里。"
-            }
           />
         ) : (
           <div className="custom-apps-view__grid">

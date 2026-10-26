@@ -454,13 +454,6 @@
   color: var(--color-text-primary);
 }
 
-.wb-empty-lead {
-  margin: 0;
-  font-size: var(--text-ui);
-  line-height: 1.7;
-  color: var(--color-text-secondary);
-}
-
 /* 容器要有「框感」：跟底色拉开一级明度 + 发丝边框（保守 token 路线，
    不改共享 token 值 —— 方案 C 定案 6）。 */
 .wb-empty-create {
@@ -483,12 +476,6 @@
   font-size: var(--text-meta);
   color: var(--color-error);
   word-break: break-all;
-}
-
-.wb-empty-hint {
-  margin: 4px 0 0;
-  font-size: var(--text-meta);
-  color: var(--color-text-tertiary);
 }
 
 .wb-input {

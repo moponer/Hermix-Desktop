@@ -96,7 +96,7 @@ export function TitleBar({ title }: { title?: string }) {
           onClick={handleFileManager}
           className="titlebar-btn no-drag"
           data-tauri-no-drag
-          title="文件管理器（独立查看器）"
+          title="文件管理器"
           aria-label="文件管理器"
         >
           <FolderTree className="icon-md" />

@@ -73,7 +73,7 @@ export function AgentForm({ initial, onSave, onCancel }: AgentFormProps) {
               {form.name || "未命名专家"}
             </p>
             <p className="text-[length:var(--text-meta)] text-text-muted truncate">
-              {form.identity || "添加身份标语让卡片更生动"}
+              {form.identity || "—"}
             </p>
           </div>
         </div>

@@ -246,7 +246,7 @@ setPage("chat");
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
-      // 2026-09-30：侧栏搜索行上的 ⌘K 提示原本是假的 —— 没有任何键绑定。
+      // 2026-09-30：侧栏搜索行上的快捷键提示原本是假的 —— 没有任何键绑定。
       // 补上 Ctrl/Cmd+K，提示才成立。
       if (e.key === "k" || e.key === "K") {
         // 设置浮层内 Ctrl/Cmd+K 归它自己的设置搜索框；这里抢走会把全局

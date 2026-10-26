@@ -239,7 +239,6 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
         <EmptyState
           icon={<Brain className="size-7" />}
           title="还没有可展示的记忆"
-          description="对话中提取的事实、会话总结与文本记忆会出现在这里。"
         />
       </div>
     );

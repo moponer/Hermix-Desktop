@@ -269,7 +269,7 @@ ${d.conclusions}`,
     : twin.streaming
       ? twin.turn?.activity
         ? `正在用 ${twin.turn.activity} 做事，回复会直接出现在中间`
-        : "正在电脑上跑你刚交代的这一轮，回复会直接出现在中间"
+        : "正在跑你刚交代的这一轮"
       : loading
         ? "正在核对任务状态"
         : activeRuns > 0
@@ -826,7 +826,7 @@ ${d.conclusions}`,
           <section className={`twin-box${pending.length > 0 ? " twin-box--attn" : ""}`}>
             <BoxHead title="等你决定" meta={`${pending.length} 件`} />
             {pending.length === 0 ? (
-              <p className="twin-muted">队列是空的。有事她会直接在这儿问她。</p>
+              <p className="twin-muted">队列是空的。</p>
             ) : (
               <div className="twin-att">
                 {pending.map((p) => (

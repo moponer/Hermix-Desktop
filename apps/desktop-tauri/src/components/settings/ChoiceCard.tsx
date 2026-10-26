@@ -50,7 +50,8 @@ export type CardTone = IconTone;
  */
 export interface ChoiceCardProps {
   label: string;
-  description: string;
+  /** 可省略：选项名本身已自明时不要补一句解释（见 AGENTS.md 界面审查先做减法）。 */
+  description?: string;
   icon: ReactNode;
   tone: CardTone;
   selected: boolean;
@@ -133,9 +134,11 @@ export function ChoiceCard({
         </span>
       </div>
 
-      <span className="text-[length:var(--text-ui)] leading-relaxed text-[var(--color-text-muted)]">
-        {description}
-      </span>
+      {description && (
+        <span className="text-[length:var(--text-ui)] leading-relaxed text-[var(--color-text-muted)]">
+          {description}
+        </span>
+      )}
     </button>
   );
 }

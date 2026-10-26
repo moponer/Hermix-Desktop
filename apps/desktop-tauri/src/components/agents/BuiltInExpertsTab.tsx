@@ -75,7 +75,6 @@ export function BuiltInExpertsTab() {
           <div className="flex flex-col items-center justify-center py-20 text-center text-text-muted">
             <Bot size={36} className="mb-3 opacity-40" />
             <p className="text-sm">没有匹配的内置专家</p>
-            <p className="text-[length:var(--text-meta)] text-text-faint mt-1">试试其他类别或搜索词</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">

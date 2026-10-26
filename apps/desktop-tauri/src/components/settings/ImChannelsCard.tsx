@@ -1305,7 +1305,7 @@ function ImPane(props: {
             ) : null}
           </>
         ) : (
-          <span className="text-[length:var(--text-ui)] text-text-muted">未绑定 —— 先扫码把机器人授权进来</span>
+          <span className="text-[length:var(--text-ui)] text-text-muted">未绑定</span>
         )}
 
         <div className="ml-auto flex items-center gap-2">

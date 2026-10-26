@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
 import { useStreamChatContext } from "../context/StreamChatContext";
 import { IM_SOURCE_LABEL, imSourceOf, type ImSource } from "../utils/time";
-import { PanelRight, PanelLeftOpen, Search, ArrowUp, ArrowUpRight, AlertTriangle, AppWindow, Workflow, Code2, FileText, PenLine, Image as ImageIcon, Briefcase } from "lucide-react";
+import { PanelRight, PanelLeftOpen, Search, ArrowUp, ArrowUpRight, AlertTriangle, AppWindow, Workflow, FileText, PenLine, Image as ImageIcon } from "lucide-react";
 import { SidebarRevealRow } from "./SidebarRevealRow";
 import { resolveSessionSelectedModel } from "../utils/sessionModel";
 import type {
@@ -161,83 +161,7 @@ function ModelStatusBar({
 const MAX_DOC_MB = 30;
 const MAX_DOC_BYTES = MAX_DOC_MB * 1024 * 1024;
 
-// ── 欢迎页欢迎语 ─────────────────────────────────────────────
-// 纯内置哲理短句，按时间段分桶随机展示；无网络请求、无副标题。
-// 每次进入欢迎页（sessionId 变化 / 新建对话）重抽一条。
-const WELCOME_BY_HOUR: Array<[number, string[]]> = [
-  [
-    5,
-    [
-      "夜是白昼的谜底。",
-      "安静，是思想的声音。",
-      "星星不问路，也各有方向。",
-      "黑暗里走的路，天亮后叫经历。",
-      "凌晨的灯，照着不肯将就的人。",
-      "夜深了，灵感才刚醒。",
-      "睡去的人做梦，醒来的人造梦。",
-      "夜色收走喧嚣，只留一句实话。",
-    ],
-  ],
-  [
-    11,
-    [
-      "清晨的好处，是一切还没定型。",
-      "太阳每天都是新的，你也是。",
-      "早起的路最空，先走的人最静。",
-      "醒来，是一天里最公平的时刻。",
-      "把今天当第一页，不是续集。",
-      "露水不等谁，却落进每片叶子。",
-      "一天的方向，早晨就知道了。",
-      "风从窗外来，答案在心里走。",
-    ],
-  ],
-  [
-    14,
-    [
-      "走得再快的人，也要停下来吃饭。",
-      "正午没有影子，正好看清自己。",
-      "忙是生命的密度，闲是它的留白。",
-      "歇一歇，路又不会跑。",
-      "阳光正好，把心摊开晒一晒。",
-      "短暂停下，是为了走得更直。",
-      "午间的安静，是一天的深呼吸。",
-      "一顿好饭，是给下午的敬意。",
-    ],
-  ],
-  [
-    18,
-    [
-      "坚持不是用力，是不停。",
-      "慢一点没关系，别停就好。",
-      "大事，都是小事做完的样子。",
-      "影子长了，说明你还在光里。",
-      "路是走出来的，答案是问出来的。",
-      "下午的光斜了，心就定了。",
-      "时间不催人，只是陪着走。",
-      "下午，适合解决上午想不通的事。",
-    ],
-  ],
-  [
-    23,
-    [
-      "夜色温柔，适合原谅与放下。",
-      "复盘，是白天的回声。",
-      "晚灯下的人，离自己最近。",
-      "结束，也是一种完成。",
-      "夜里适合读书，也适合读自己。",
-      "今天没做完的，明天接着走。",
-      "把今天交给回忆，明天交给梦。",
-      "一天所获，不在多，在真。",
-    ],
-  ],
-];
-
-function pickWelcomeGreeting(): string {
-  const h = new Date().getHours();
-  const pool = (WELCOME_BY_HOUR.find(([max]) => h < max) ?? WELCOME_BY_HOUR[0])[1];
-  return pool[Math.floor(Math.random() * pool.length)];
-}
-
+// ── 欢迎页快捷入口 ──────────────────────────────────────────
 /** 建议行（墨与纸 v4）：四条快捷入口，一键填入输入框。
  *  内容必须对应 Hermix 真实能力——差异审查 / 文档写作 / 定时自动化 /
  *  文件落盘，不放假能力。 */
@@ -254,31 +178,10 @@ const WELCOME_SUGGESTIONS: string[] = [
 const WELCOME_CAPABILITIES: Array<{ label: string; icon: typeof AppWindow; prompt: string }> = [
   { label: "独立应用", icon: AppWindow, prompt: "帮我做一个桌面小应用：" },
   { label: "工作流", icon: Workflow, prompt: "帮我搭一个自动化工作流，触发条件和步骤是：" },
-  { label: "代码开发", icon: Code2, prompt: "审查当前工作区的未提交改动，按风险从高到低给我一份清单" },
   { label: "PDF 转换", icon: FileText, prompt: "把这份 PDF 里的表格和数据提取出来，整理成结构化表格" },
   { label: "文档编写", icon: PenLine, prompt: "把以下内容整理成一页纸纪要：" },
   { label: "图片处理", icon: ImageIcon, prompt: "帮我处理这张图片，要求是：" },
 ];
-
-/** R3-8（2026-10-16）：欢迎语按会话 id 稳定取值——同一会话永远同一句，
- *  切走再切回不换句（此前每次进欢迎页都随机重抽，上下文记忆感全无）。 */
-function pickStableGreeting(sessionId: string): string {
-  let h = 0;
-  for (let i = 0; i < sessionId.length; i++) h = (h * 31 + sessionId.charCodeAt(i)) | 0;
-  const hour = new Date().getHours();
-  const pool = (WELCOME_BY_HOUR.find(([max]) => hour < max) ?? WELCOME_BY_HOUR[0])[1];
-  return pool[Math.abs(h) % pool.length];
-}
-
-function useWelcomeGreeting(sessionId: string | null): string {
-  const [title, setTitle] = useState(() =>
-    sessionId ? pickStableGreeting(sessionId) : pickWelcomeGreeting(),
-  );
-  useEffect(() => {
-    setTitle(sessionId ? pickStableGreeting(sessionId) : pickWelcomeGreeting());
-  }, [sessionId]);
-  return title;
-}
 
 interface ChatViewProps {
   session: Session | null;
@@ -419,10 +322,8 @@ export const ChatView = memo(function ChatView({
 }: ChatViewProps) {
   const stream = useStreamChatContext();
   const isStreaming = stream.streamingSessionId === session?.id;
-  // 工作台会话（workbench_id 已盖戳）→ 右栏差异化文案：欢迎页、placeholder
-  // 都说"这台工作台"的事，而不是复读主对话的通用问候（方案 A）。
+  // 工作台会话（workbench_id 已盖戳）→ 欢迎页不渲染通用能力入口。
   const isWorkbenchChat = !!session?.workbench_id;
-  const welcomeGreeting = useWelcomeGreeting(session?.id ?? null);
   // ── 输入草稿：按会话隔离 ──────────────────────────────────────
   // 原先是单个 useState，A 会话写一半切到 B，B 的输入框里是 A 的内容。
   // 现在 key 用 sessionId（欢迎态用 welcome），并防抖落 localStorage。
@@ -1204,39 +1105,11 @@ export const ChatView = memo(function ChatView({
         {/* 工具行必须贴顶 —— 居中只作用于下面的内容区，否则行被 justify-center 拉下去 */}
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center">
         <div className="w-full max-w-3xl flex flex-col items-center py-12">
-          {isWorkbenchChat ? (
+          {!isWorkbenchChat && (
             <>
-              <h1 className="text-xl font-semibold text-text-primary mb-2 tracking-tight">这台工作台由你说了算</h1>
-              <p className="text-sm text-text-secondary text-center mb-6 max-w-xs leading-relaxed">
-                要加什么功能、改哪里、录什么数据，直接说。改完自动应用到画布。
-              </p>
-            </>
-          ) : (
-            <>
-              {/* 墨与纸 v4：吉祥物移除、留空 —— hero 标题独当焦点，空白即大气 */}
-              <h1 className="text-hero font-semibold text-[var(--color-text-hero)] mb-5">{welcomeGreeting}</h1>
-              {/* 场景切换：独立药丸，接真实机制 domainMode（办公=自动识别 / 开发=钉代码域）
-                  走共享的 chip-flat 类族（AGENTS.md：按钮只用 btn-flat / chip-flat），
-                  不用手写一份底色+字色的组合。 */}
-              <div className="flex items-center gap-2.5 mb-5">
-                <button
-                  type="button"
-                  onClick={() => setDomainMode("auto")}
-                  aria-pressed={domainMode !== "code"}
-                  className="chip-flat chip-flat--md"
-                >
-                  <Briefcase className="icon-sm" /> 办公
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDomainMode("code")}
-                  aria-pressed={domainMode === "code"}
-                  className="chip-flat chip-flat--md"
-                >
-                  <Code2 className="icon-sm" /> 开发
-                </button>
-              </div>
-              {/* 能力 chip 行：点击加载能力专属 prompt 模板 */}
+              {/* 能力 chip 行：点击加载能力专属 prompt 模板。
+                  场景切换（办公 / 开发）不在这里重复一遍 —— 输入框工具条上
+                  已有同一个开关，两处两行同样式的药丸只会让人分不清哪行是模式。 */}
               <div className="flex flex-wrap justify-center gap-2 mb-5">
                 {WELCOME_CAPABILITIES.map((c) => (
                   <button
@@ -1247,7 +1120,6 @@ export const ChatView = memo(function ChatView({
                       textareaRef.current?.focus();
                     }}
                     className="chip-flat chip-flat--md"
-                    title={`填入「${c.label}」能力模板`}
                   >
                     <c.icon className="icon-sm" /> {c.label}
                   </button>
@@ -1298,7 +1170,7 @@ export const ChatView = memo(function ChatView({
               onFilesAttach={handleFilesAttach}
               keepOriginalImage={keepOriginalImage}
               setKeepOriginalImage={setKeepOriginalImage}
-              placeholder={isWorkbenchChat ? "告诉这台工作台要加什么、改什么、查什么…" : "Hermix帮你做事 — 写作、规划、分析、学习、开发…"}
+              placeholder="输入消息…"
               session={session}
             />
             {streamError && (
@@ -1337,10 +1209,6 @@ export const ChatView = memo(function ChatView({
               ))}
             </div>
           )}
-          {/* 免责微文案（信任感细节；字号取仓库下限 12px 而非参考的 10-11px） */}
-          <p className="text-center text-[length:var(--text-tiny)] text-[var(--color-text-faint)] mt-8">
-            内容由 AI 生成，请核实重要信息
-          </p>
         </div>
         </div>
       </div>
@@ -1527,7 +1395,7 @@ export const ChatView = memo(function ChatView({
             onFilesAttach={handleFilesAttach}
             keepOriginalImage={keepOriginalImage}
             setKeepOriginalImage={setKeepOriginalImage}
-            placeholder={isWorkbenchChat ? "告诉这台工作台要加什么、改什么…" : "输入消息…"}
+            placeholder="输入消息…"
             session={session}
             messageQueue={messageQueue}
             onAddToQueue={onAddToQueue}

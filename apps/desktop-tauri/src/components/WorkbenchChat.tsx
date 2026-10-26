@@ -34,16 +34,14 @@ export function WorkbenchChat({ manifest, chatNode }: WorkbenchChatProps) {
   return (
     <div className="wb-chat-frame">
       <div className="wb-chat-body">{chatNode}</div>
-      <div className="wb-chat-status">
-        {lastChange === null ? (
-          <span className="wb-chat-status-muted">代码改动会自动应用到画布</span>
-        ) : (
+      {lastChange !== null && (
+        <div className="wb-chat-status">
           <span className="wb-chat-status-live">
             <span className="wb-chat-status-dot" aria-hidden="true" />
             已应用 · {new Date(lastChange).toLocaleTimeString()}
           </span>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

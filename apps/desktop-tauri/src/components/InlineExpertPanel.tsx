@@ -173,7 +173,6 @@ export function InlineExpertPanel({
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center py-6 text-center text-text-muted">
             <p className="text-[length:var(--text-meta)]">没有匹配的专家</p>
-            <p className="text-[length:var(--text-meta)] text-text-faint mt-1">试试其他搜索词或分类</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">

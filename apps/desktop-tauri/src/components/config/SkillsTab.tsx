@@ -171,7 +171,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         ))
       )}
 
-      <p className="text-[length:var(--text-meta)] text-text-muted pb-6">技能数据来自 hermix-skills 仓库，禁用会从文件系统中删除该技能。</p>
+      <p className="text-[length:var(--text-meta)] text-text-muted pb-6">禁用会从文件系统中删除该技能。</p>
     </>
   );
 }

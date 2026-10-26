@@ -209,7 +209,6 @@ export function AgentsView({
                       variant="plain"
                       icon={<Bot className="icon-lg" />}
                       title="还没有专家"
-                      description="手动创建或让 AI 帮你生成一个专家"
                       action={
                         <div className="flex gap-2">
                           <button
@@ -233,7 +232,6 @@ export function AgentsView({
                     {/* Sort tabs */}
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-1 text-[length:var(--text-meta)]">
-                        <span className="text-text-faint">排序:</span>
                         {([["recent", "最近使用"], ["popular", "最常使用"], ["name", "按名称"]] as const).map(([k, l]) => (
                           <button
                             key={k}

@@ -413,7 +413,7 @@ export function Composer(p: ComposerProps) {
                 ? "text-text-primary font-medium hover:bg-bg-hover"
                 : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
             }`}
-            title="编码模式：固定代码开发域，工具优先级与领域指令随之切换；关闭则自动识别工作类型"
+            title="固定代码开发域"
           >
             <Code2 className={`icon-sm ${p.domainMode === "code" ? "text-text-primary" : "text-text-muted"}`} />
             <span className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}>
@@ -446,7 +446,6 @@ export function Composer(p: ComposerProps) {
                   {!p.byProvider || p.byProvider.length === 0 ? (
                     <div className="px-2.5 py-8 text-center">
                       <p className="text-[length:var(--text-ui)] text-text-secondary">暂无可用模型</p>
-                      <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">在下方「管理模型」里添加</p>
                     </div>
                   ) : (
                     p.byProvider.map((group) => (
@@ -673,7 +672,7 @@ export function Composer(p: ComposerProps) {
                   ? "对话进行中，工作区已锁定"
                   : p.activeWorkspace
                   ? `已限制到：${p.activeWorkspace.path}（点击可重新选择）`
-                  : "限制当前对话的读写范围（推荐）"
+                  : "限制当前对话的读写范围"
               }
             >
               {p.workspaceLocked ? (
@@ -698,9 +697,7 @@ export function Composer(p: ComposerProps) {
                 </button>
                 {p.workspaces.length > 0 && (
                   <>
-                    {/* 无描边：紧随其后的「工作目录」小节标题已经承担了分界
-                        作用，再画一条线是同一件事说两遍。 */}
-                    <div className="mt-1.5 px-2.5 py-1 text-meta text-text-secondary font-medium">工作目录</div>
+                    <div className="mt-1.5" />
                     <PopoverBody maxHeight="max-h-48">
                       {p.workspaces.map((ws) => (
                         <button
@@ -744,7 +741,6 @@ export function Composer(p: ComposerProps) {
                   ? "text-[color:var(--color-chip-permission-fg)] hover:bg-[color:var(--color-chip-permission-bg)] font-medium"
                   : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
               }`}
-              title="权限级别"
             >
               {p.permissionLevel === "full"
                 ? <AlertTriangle className="icon-sm text-[color:var(--color-chip-permission-fg)]" />
@@ -757,7 +753,6 @@ export function Composer(p: ComposerProps) {
             </button>
             {permOpen && (
               <PopoverShell containerRef={permContainerRef} triggerRef={permTriggerRef} width="md" side="top">
-                <div className="px-2.5 py-1 text-meta text-text-secondary font-medium">权限级别</div>
                 <PopoverBody maxHeight="max-h-48">
                   {PERMISSION_LEVELS.map((lvl) => (
                     <button

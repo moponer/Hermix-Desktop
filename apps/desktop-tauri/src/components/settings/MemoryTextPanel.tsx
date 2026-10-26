@@ -98,14 +98,14 @@ export function MemoryTextPanel() {
     <div className="space-y-3">
       <TextMemoryEditor
         title="MEMORY.md（全局长期记忆）"
-        description="agent 通过 memory 工具显式写入的记忆文件，会注入系统提示。桌面私聊默认按会话隔离写入，会话结束时自动晋升到记忆库；这里的全局文件对所有会话可见。保存后下一次对话生效。"
+        description="对所有会话可见，注入系统提示；保存后下一次对话生效。"
         icon={<IconTile icon={<FileText className="icon-md" />} tone="green" />}
         load={loadMemory}
         save={api.savePersonaMemory}
       />
       <TextMemoryEditor
         title="USER.md（用户画像）"
-        description="对用户偏好的结构化画像，随系统提示注入。保存后下一次对话生效。"
+        description="用户偏好画像，注入系统提示；保存后下一次对话生效。"
         icon={<IconTile icon={<Users className="icon-md" />} tone="rose" />}
         load={loadUser}
         save={api.savePersonaUser}

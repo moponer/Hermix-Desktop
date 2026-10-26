@@ -291,7 +291,7 @@ export function VaultPanel() {
         }
       >
         <span className="text-[length:var(--text-meta)] text-text-secondary">
-          AES-256-GCM 本地加密 · 主密钥在 Windows 凭据管理器 · 列表不含密码
+          AES-256-GCM 本地加密
         </span>
       </PageHeader>
 
@@ -366,7 +366,7 @@ export function VaultPanel() {
             </div>
           ) : visible.length === 0 ? (
             <div className="py-8 text-center text-sm text-text-secondary">
-              {entries.length === 0 ? "还没有凭据，点右上角「新增凭据」开始" : "没有匹配的条目"}
+              {entries.length === 0 ? "还没有凭据" : "没有匹配的条目"}
             </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-1">

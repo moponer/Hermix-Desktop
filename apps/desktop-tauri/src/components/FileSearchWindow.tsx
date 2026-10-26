@@ -375,7 +375,7 @@ export function FileSearchWindow() {
               checked={skipHiddenSystem}
               onChange={(e) => setSkipHiddenSystem(e.target.checked)}
             />
-            <span>跳过隐藏 + 系统文件（pagefile.sys、回收站元数据等）</span>
+            <span>跳过隐藏与系统文件</span>
           </label>
           <p className="fsw-setting-note">规则保存后立即下发；改目录/扩展名会让对应卷在下次启动时按新规则重建。</p>
           <button className="fsw-save-btn" onClick={() => void saveSettings()}>
@@ -432,7 +432,6 @@ export function FileSearchWindow() {
             跳过：{Object.keys(status.skipped).join("、")}
           </span>
         )}
-        <span className="fsw-status-tip">双击：用 hermix 查看器打开</span>
       </footer>
     </div>
   );

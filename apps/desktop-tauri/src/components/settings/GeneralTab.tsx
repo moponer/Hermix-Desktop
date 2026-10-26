@@ -51,7 +51,7 @@ function ModeCards() {
       <div className="grid grid-cols-2 gap-3" role="radiogroup" aria-label="工作模式">
         <ChoiceCard
           label="编程开发"
-          description="注入代码纪律，grep / 搜索类工具加权。"
+          description="代码任务优先。"
           icon={<Code2 className="icon-lg" />}
           tone="blue"
           selected={mode === "code"}
@@ -59,7 +59,7 @@ function ModeCards() {
         />
         <ChoiceCard
           label="日常办公"
-          description="由后端按每轮对话内容自动判断，不固定加权。"
+          description="按对话内容自动判断。"
           icon={<Briefcase className="icon-lg" />}
           tone="green"
           selected={mode === "auto"}
@@ -168,18 +168,11 @@ function SystemGroup() {
   };
 
   return (
-    <SettingsGroup
-      title="系统"
-      description="这些项会改动本机状态，改动立即生效，无需重启。"
-    >
+    <SettingsGroup title="系统">
       <SettingsRow
         icon={<IconTile icon={<Power className="icon-md" />} tone="slate" />}
         title="开机自启动"
-        description={
-          autostart === null
-            ? "读取系统状态中…"
-            : "登录 Windows 后自动启动 Hermix。"
-        }
+        description={autostart === null ? "读取系统状态中…" : undefined}
         control={
           <Switch
             checked={autostart === true}
@@ -192,7 +185,7 @@ function SystemGroup() {
       <SettingsRow
         icon={<IconTile icon={<PanelTop className="icon-md" />} tone="slate" />}
         title="显示在菜单栏"
-        description="在系统托盘常驻图标：左键单击唤起主窗口，右键菜单有任务、更新与退出。"
+        description="左键唤起主窗口，右键有任务、更新与退出。"
         control={
           <Switch
             checked={settings?.tray === true}

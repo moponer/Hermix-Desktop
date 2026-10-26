@@ -19,8 +19,6 @@ import {
   BookOpen,
   Tag,
   Download,
-  RefreshCcw,
-  Terminal,
   CheckCircle2,
   Box,
   HardDrive,
@@ -505,30 +503,6 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                 ) : (
                   <p className="app-detail-readme__text app-detail-readme__text--muted">此应用不需要特殊权限</p>
                 )}
-              </section>
-
-              {/* Usage */}
-              <section className="app-detail-readme__section">
-                <h4 className="app-detail-readme__heading">
-                  <Terminal className="icon-md" /> 使用方法
-                </h4>
-                <div className="app-detail-readme__text">
-                  <p>1. 点击右下角"运行"按钮在本地启动应用</p>
-                  <p>2. 或点击"打包"生成独立 EXE，双击即可运行</p>
-                  <p>3. 打包后的 EXE 无需安装，用户电脑需有 WebView2 运行时（Windows 10+ 自带）</p>
-                </div>
-              </section>
-
-              {/* Update */}
-              <section className="app-detail-readme__section">
-                <h4 className="app-detail-readme__heading">
-                  <RefreshCcw className="icon-md" /> 更新方法
-                </h4>
-                <div className="app-detail-readme__text">
-                  <p>1. 在"代码"标签页编辑源码后点击"保存"</p>
-                  <p>2. 重新"打包"生成最新 EXE</p>
-                  <p>3. 或在对话中让 LLM 修改应用，修改后重新打包</p>
-                </div>
               </section>
 
               {/* Distribution */}

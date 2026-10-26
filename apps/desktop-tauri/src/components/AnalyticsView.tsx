@@ -172,16 +172,6 @@ export function AnalyticsView() {
 
   const formatCost = (n: number) => `$${n.toFixed(4)}`;
 
-  // True when the analytics backend has been upgraded to write real
-  // back as zeros and the user got a useless "you used 0 tokens" panel.
-  // Detect by inspecting the totals vs session count — if there are
-  // sessions but no tokens, it's a legacy install (now back-filled by
-  // the message-content estimate, so this is rarely true anymore).
-  const hasRealTokens = totals.total_sessions === 0
-    || totals.total_input > 0
-    || totals.total_output > 0
-    || daily.some((d) => d.input_tokens > 0 || d.output_tokens > 0);
-
   const totalsHit = effectiveHitRate(
     totals.total_cache_read,
     totals.total_input,
@@ -219,13 +209,7 @@ export function AnalyticsView() {
             </select>
           </>
         }
-      >
-        {!hasRealTokens && totals.total_sessions > 0 && (
-          <span className="text-[length:var(--text-meta)] text-text-faint">
-            （token 数据从 起收集）
-          </span>
-        )}
-      </PageHeader>
+      />
       <div className="flex-1 overflow-y-auto min-h-0">
       <div className="max-w-wide-page mx-auto p-4 space-y-6">
 
@@ -375,14 +359,14 @@ export function AnalyticsView() {
           </div>
         </div>
         <p className="text-xs text-text-faint mt-3 leading-relaxed">
-          每次压缩都会创建一个子会话，完整保留被折叠的原始对话（可经 lineage 树回看），不会丢失记忆。
+          压缩不会丢失原始对话。
         </p>
       </div>
 
       {/* Empty state */}
       {by_model.length === 0 && by_tool.length === 0 && skills.top_skills.length === 0 && (
         <div className="text-center text-text-faint py-8">
-          暂无使用数据。开始对话后这里会显示统计信息。
+          暂无使用数据
         </div>
       )}
 

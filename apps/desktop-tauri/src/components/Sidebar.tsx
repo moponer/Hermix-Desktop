@@ -423,7 +423,7 @@ export function Sidebar({
           <button type="button" onClick={onOpenSearch} className="sidebar-search-btn">
             <Search className="icon-sm shrink-0" />
             <span className="sidebar-search-label">搜索对话</span>
-            <kbd className="sidebar-search-kbd">⌘K</kbd>
+            <kbd className="sidebar-search-kbd">Ctrl K</kbd>
           </button>
         </div>
       )}

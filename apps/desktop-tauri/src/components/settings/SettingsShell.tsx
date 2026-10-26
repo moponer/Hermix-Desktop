@@ -67,7 +67,7 @@ export type SettingsPage =
 interface PageDef {
   id: SettingsPage;
   label: string;
-  /** 侧栏搜索命中用；同时作为内容区页头的说明文案。 */
+  /** 侧栏搜索命中用（不渲染）。 */
   hint: string;
   icon: React.ElementType;
   /** 预留的类目色相（8 档 `--color-tone-*`）。**导航当前不上色**
@@ -336,19 +336,17 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
   );
 }
 
-/** 内容区页头：页名 + 一句说明。每个 tab 的自带页级标题已并入这里
- *  （原描述文案迁入 PageDef.hint，侧栏搜索与页头共用一份）。 */
+/** 内容区页头：页名。页名下方不再挂说明句 —— 与侧栏同一条 label 复述
+ *  两遍不产生信息（AGENTS.md「界面审查先做减法」）。`PageDef.hint` 只留作
+ *  侧栏搜索的命中词，不再渲染。 */
 function PageHeading({ def }: { def: PageDef }) {
   const { icon: Icon } = def;
   return (
-    <header className="mb-6 flex items-start gap-3">
+    <header className="mb-6 flex items-center gap-3">
       {/* 页头与侧栏同形同色（单色描边）：它们是同一件事的两个位置，
           位置标记不承担"类目"语义 —— 类目色只出现在内容区的卡片图标上。 */}
-      <Icon className="icon-lg mt-1 shrink-0 text-[var(--color-text-muted)]" aria-hidden />
-      <div className="min-w-0">
-        <h2 className="text-[length:var(--text-title)] font-semibold text-[var(--color-text-primary)]">{def.label}</h2>
-        <p className="mt-1 text-[length:var(--text-ui)] text-[var(--color-text-muted)]">{def.hint}</p>
-      </div>
+      <Icon className="icon-lg shrink-0 text-[var(--color-text-muted)]" aria-hidden />
+      <h2 className="text-[length:var(--text-title)] font-semibold text-[var(--color-text-primary)]">{def.label}</h2>
     </header>
   );
 }
@@ -502,7 +500,7 @@ function ScreenshotSettingsCard() {
         <SettingsRow
           icon={<IconTile icon={<Camera className="icon-md" />} tone="orange" />}
           title="启用系统截图"
-          description="全局热键或标题栏相机按钮截取屏幕，选区直接进剪贴板。"
+          description="选区直接进剪贴板。"
           control={
             <Switch
               checked={cfg.enabled}
@@ -513,7 +511,7 @@ function ScreenshotSettingsCard() {
         />
         <SettingsRow
           title="截图热键"
-          description="系统级全局热键，任何应用内可用。被其他程序占用时自动改用备选键并在此提示。"
+          description="任何应用内可用。"
         >
           <SegmentedControl
             label="截图热键"
@@ -593,7 +591,7 @@ function FileAssocTab() {
       )}
       <SettingsGroup
         title="由 Hermix 文件查看器打开"
-        description="勾选即明确授权查看器接管该扩展名的默认打开方式；取消勾选自动恢复勾选前的原程序关联。登记只写当前用户的注册表（HKCU），不需要管理员权限。"
+        description="取消勾选会恢复原来的打开方式；只写当前用户注册表，不需要管理员权限。"
       >
         {entries.map((e) => (
           <SettingsRow
