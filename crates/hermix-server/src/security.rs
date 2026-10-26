@@ -231,6 +231,10 @@ pub struct RateLimiter {
 /// `HERMIX_HTTP_RATE_LIMIT_PER_MINUTE=0`。
 pub const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 600;
 
+/// 限流表最多跟踪多少个来源。超过就先清窗口外条目、再整体清空 ——
+/// 限流是为了挡滥用，不是在内存里养一张无边界的表。
+const MAX_TRACKED_KEYS: usize = 4096;
+
 impl RateLimiter {
     pub fn new(per_minute: u32) -> Self {
         Self {
@@ -247,6 +251,17 @@ impl RateLimiter {
         let mut g = self.inner.lock().await;
         let now = Instant::now();
         let window = Duration::from_secs(60);
+        // 键空间保护：键是来源 IP，正常情况只有几个；被大量来源打满时先丢掉
+        // 窗口外的条目，仍超上限就整体清空（限流是尽力而为，内存不能无界）。
+        if g.len() >= MAX_TRACKED_KEYS && !g.contains_key(&key) {
+            g.retain(|_, v| {
+                v.retain(|t| now.duration_since(*t) < window);
+                !v.is_empty()
+            });
+            if g.len() >= MAX_TRACKED_KEYS {
+                g.clear();
+            }
+        }
         let v = g.entry(key).or_default();
         v.retain(|t| now.duration_since(*t) < window);
         if v.len() as u32 >= self.per_minute {
@@ -257,11 +272,27 @@ impl RateLimiter {
     }
 }
 
-fn client_key(req: &Request<Body>) -> String {
+/// 限流 / 锁定 / 审计的来源键 = **纯 IP**（不含源端口）。
+///
+/// 用 `SocketAddr::to_string()`（"127.0.0.1:54321"）时每个新 TCP 连接都拿到
+/// 一个全新键：限流额度按连接重置、暴力破解锁定永远不触发，且 `HashMap` 的
+/// 键集合随连接数单调增长（键只在同名命中时才被清理）。
+pub(crate) fn client_key(req: &Request<Body>) -> String {
     req.extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map(|c| c.0.to_string())
+        .map(|c| c.0.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// 暴力破解锁定是否适用于这个来源。
+///
+/// loopback 不锁：本机进程本来就能直接读 `~/.hermix/` 下的密钥与配对凭据，
+/// 锁定挡不住它，只会在用户自己输错几次 key 后把他锁在外面十几分钟。
+/// 远程来源（PairedDevice / 手机）仍然锁。
+fn lockout_applies(key: &str) -> bool {
+    key.parse::<std::net::IpAddr>()
+        .map(|ip| !ip.is_loopback())
+        .unwrap_or(true)
 }
 
 /// Compare two secrets without leaking their common prefix length.
@@ -523,7 +554,7 @@ pub async fn request_guard(
     // 锁定状态挂在 `security.auth_fail_lockout`（进程内，仿 RateLimiter）。
     let ck = client_key(&req);
     if let Some(lockout) = &security.auth_fail_lockout {
-        if lockout.is_locked(&ck).await {
+        if lockout_applies(&ck) && lockout.is_locked(&ck).await {
             hermix_telemetry::record_http_reject();
             return (
                 StatusCode::TOO_MANY_REQUESTS,
@@ -600,7 +631,9 @@ pub async fn request_guard(
             hermix_telemetry::record_http_reject();
             // §5.5 对策 T6：认证失败计数（锁定冷却期内该 IP 后续请求 429）。
             if let Some(lockout) = &security.auth_fail_lockout {
-                lockout.record_failure(&ck).await;
+                if lockout_applies(&ck) {
+                    lockout.record_failure(&ck).await;
+                }
             }
             return (
                 StatusCode::UNAUTHORIZED,
@@ -616,7 +649,9 @@ pub async fn request_guard(
             hermix_telemetry::record_http_reject();
             // §5.5 对策 T6：认证失败计数。
             if let Some(lockout) = &security.auth_fail_lockout {
-                lockout.record_failure(&ck).await;
+                if lockout_applies(&ck) {
+                    lockout.record_failure(&ck).await;
+                }
             }
             return (
                 StatusCode::UNAUTHORIZED,
@@ -679,7 +714,9 @@ pub async fn request_guard(
         // 未配对闸门是**认证失败**的一种：不计入失败预算的话，攻击者可以
         // 拿无限次 403 免费探测路径存在性，且这条分支永远不触发锁定。
         if let Some(lockout) = &security.auth_fail_lockout {
-            lockout.record_failure(&client_key(&req)).await;
+            if lockout_applies(&client_key(&req)) {
+                lockout.record_failure(&client_key(&req)).await;
+            }
         }
         return (
             StatusCode::FORBIDDEN,
@@ -1159,5 +1196,29 @@ mod tests {
         assert!(rl.allow("k".to_string()).await);
         assert!(rl.allow("k".to_string()).await);
         assert!(!rl.allow("k".to_string()).await, "第 3 次应被拒");
+    }
+
+    /// loopback 不参与暴力破解锁定（本机进程能直读密钥，锁定只误伤用户）；
+    /// 远程与非 IP 键仍然锁。
+    #[test]
+    fn lockout_skips_loopback_only() {
+        assert!(!lockout_applies("127.0.0.1"));
+        assert!(!lockout_applies("::1"));
+        assert!(lockout_applies("192.168.1.10"));
+        assert!(lockout_applies("8.8.8.8"));
+        // 取不到 ConnectInfo 时的占位键：保守地仍然参与锁定。
+        assert!(lockout_applies("unknown"));
+    }
+
+    /// 键空间必须保持有界：来源键被大量伪造/轮换时不能无限增长。
+    #[tokio::test]
+    async fn rate_limiter_table_is_bounded() {
+        let rl = RateLimiter::new(1);
+        for i in 0..(MAX_TRACKED_KEYS + 50) {
+            let key = format!("10.0.{}.{}", i / 250, i % 250);
+            let _ = rl.allow(key).await;
+        }
+        let len = rl.inner.lock().await.len();
+        assert!(len <= MAX_TRACKED_KEYS, "限流表必须有界，实际 {len}");
     }
 }

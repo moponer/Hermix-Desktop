@@ -345,21 +345,36 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 | P1-1 每轮历史深拷贝 | 三处：① `local_agent_service` 的 `send_message` / `send_message_stream` 由 `messages.clone()` 改 `std::mem::take`（循环拿到所有权，回程本来就用 `AgentResult.messages` 覆盖）；② `sanitize_messages_for_strict_api` 里 `drop_orphan_tool_results` 由「`&[Message]` → 新建 `Vec<Message>`（`.cloned()`）」改**就地 `retain`**，省掉每条消息（含工具结果正文）的一次深拷贝 | agent 1187、provider 56 全绿 |
 | P2-6 两份装配实现 | `assemble_tool_schemas(all)` 改为委托 `assemble_tool_schemas_with_meta(all, &ToolMetaRegistry::new())`（空表时它本来就回退到 `classify_tools`）。删掉 32 行重复的「拆 bridge → 判阈值 → 注入三元组」，那两份注释此前在互相镜像修同一个 bug | tools 808 全绿 |
 
+### 批次 10（P2-9 限流键）— 2026-10-26 交付
+
+`server/security.rs::client_key` 由 `SocketAddr::to_string()`（`IP:源端口`）改为**纯 IP**。原实现的两个后果：
+
+- 每个新 TCP 连接拿到全新限流额度 → 暴力破解锁定永不触发（`AuthFailLockout` 也吃同一个键）；
+- `RateLimiter` 的 `HashMap` 键集合随连接数单调增长，只在同名命中时才清时间戳 → 内存无界。
+
+配套两点：
+
+1. **锁定的 loopback 豁免**（`lockout_applies`）：本机进程本来就能直读 `~/.hermix/` 下的密钥与配对凭据，锁定挡不住它，只会在用户自己输错几次 key 后把他锁在外面 15 分钟。远程来源（PairedDevice / 手机）仍然锁。
+2. **限流表容量上限** `MAX_TRACKED_KEYS = 4096`：超限先清窗口外条目，仍超就整体清空（限流是尽力而为，内存不能无界）。
+
+验证：`cargo test -p hermix-server --lib` **504 全绿**（+2 新测试：`lockout_skips_loopback_only`、`rate_limiter_table_is_bounded`）。
+
 ### 批次 9（巨石拆分，P1-13 第一刀）— 2026-10-26 交付
 
 `crates/hermix-agent/src/local_agent_service.rs`（5653 行）改为模块目录，第一刀搬出**纯函数**：
 
 | 文件 | 内容 |
 |---|---|
-| `local_agent_service/mod.rs` | 组合根（**5504 行**，−149） |
+| `local_agent_service/mod.rs` | 组合根（**5401 行**，−252） |
 | `local_agent_service/messages.rs` | `strip_transient_nudges` / `merge_consecutive_assistant_messages` / `with_attached_files_note`（无 IO、无 `self`） |
+| `local_agent_service/reply_fallback.rs` | `summarize_tool_results_for_empty_reply`（103 行，输入只有 `&[Message]`） |
 
 搬移零行为变化（函数体逐字照搬，只加 `pub(super)` 与模块 import），并给两个函数补了单测（空 assistant 丢弃与合并、附件后缀只在有文件时追加）。验证：agent **1190 全绿**（+2 新测试）。
 
 **后续拆分顺序**（按耦合度从低到高，不建议跳步）：
 
 1. `SafeRegistryWrapper` + prefetch 适配 → `prefetch.rs`（58 行，只依赖 `ToolRegistry`）
-2. `summarize_tool_results_for_empty_reply` → `reply_fallback.rs`（100 行，纯 `&[Message]`）
+2. ~~`summarize_tool_results_for_empty_reply` → `reply_fallback.rs`~~ **已做**
 3. `resolve_workspace` / `apply_overrides` / `inject_thinking_directive` / `looks_like_openrouter` / `default_permission` → `config_resolve.rs`（约 150 行，纯入参）
 4. `register_active` / `unregister_active` / `begin_turn_record` / `end_turn_record` / `interrupt_*` / `steer_*` + `TurnOutcome` → `turn_registry.rs`（约 150 行，含 `Arc<Mutex<…>>` 状态，需先确认与 `state.rs` 的共享边界）
 5. `spawn_agent_loop`（290 行）+ `build_agent_config` 装配 → `assembler.rs`（依赖最多，最后做）
