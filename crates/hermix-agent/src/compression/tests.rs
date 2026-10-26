@@ -336,6 +336,22 @@ use hermix_core::types::ContentPart;
     // ---------- threshold + budget ----------
 
     #[test]
+    fn should_compress_respects_absolute_ceiling() {
+        // 1M 窗口 × 0.90 = 900K，但绝对上限 80K 必须主导——否则大窗口模型
+        // 在上下文成本已经很高时（实测 66K/28 轮）一次都不会压缩。
+        let cfg = CompressorConfig {
+            context_length: 1_000_000,
+            threshold_percent: 0.90,
+            threshold_tokens_ceiling: 80_000,
+            ..quiet_config()
+        };
+        let compressor =
+            ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
+        assert!(!compressor.should_compress(Some(60_000)));
+        assert!(compressor.should_compress(Some(80_000)));
+    }
+
+    #[test]
     fn should_compress_respects_threshold() {
         let cfg = CompressorConfig {
             context_length: 100_000,

@@ -720,6 +720,12 @@ pub struct CompressorConfig {
     /// Compression triggers when prompt tokens exceed this fraction of
     /// `context_length`.
     pub threshold_percent: f64,
+    /// 压缩阈值的**绝对上限**（tokens）。实际阈值 =
+    /// `min(context_length * threshold_percent, threshold_tokens_ceiling)`。
+    ///
+    /// 没有它时大窗口模型（1M）的阈值是 900K，会话在成本已经很高时仍不压缩。
+    /// 设为 `u64::MAX` 可退回纯百分比行为。
+    pub threshold_tokens_ceiling: u64,
     /// Pressure-warning ratio: emit `Context pressure N%` warnings when
     /// prompt tokens cross this fraction of `context_length`.
     /// Distinct from `threshold_percent`: that one drives the *compressor*
@@ -782,6 +788,7 @@ impl Default for CompressorConfig {
         Self {
             context_length: 200_000,
             threshold_percent: 0.90,
+            threshold_tokens_ceiling: 80_000,
             pressure_threshold_percent: 0.90,
             output_reserve_tokens: 4096,
             protect_first_n: 3,

@@ -14,7 +14,15 @@ impl ContextCompressor {
     /// instance.
     pub fn new(config: CompressorConfig, auxiliary: Arc<AuxiliaryClient>) -> Self {
         let summary_ratio = config.summary_target_ratio.clamp(0.10, 0.80);
-        let threshold_tokens = (config.context_length as f64 * config.threshold_percent) as u64;
+        // 阈值取「窗口百分比」与「绝对上限」的较小值。
+        //
+        // 只按百分比算时，大窗口模型永远压不到：实测 MiniMax-M3.1-Flash 窗口
+        // 1M，0.90 → 阈值 900K tokens，而真实会话在 66K 时就已经让每轮成本
+        // 很高了（28 轮累计约 180 万 prompt tokens），却一次都不会压缩。
+        // 加绝对上限后：小窗口模型仍由百分比主导（不受影响），大窗口模型在
+        // 绝对上限处开始压缩——这才是「上下文成本显著」的时刻。
+        let pct_threshold = (config.context_length as f64 * config.threshold_percent) as u64;
+        let threshold_tokens = pct_threshold.min(config.threshold_tokens_ceiling);
         let target_tokens = (threshold_tokens as f64 * summary_ratio) as u64;
         let max_summary_tokens =
             ((config.context_length as f64 * 0.05) as u64).min(config.summary_tokens_ceiling);

@@ -874,8 +874,17 @@ impl BudgetConfig {
 impl Default for BudgetConfig {
     fn default() -> Self {
         Self {
-            max_result_size_chars: 100_000,
-            max_aggregate_chars: 1_000_000,
+            // 单条结果的**内联**上限。超出部分不会丢：`enforce_budget_with_spill`
+            // 先把完整输出 spill 到磁盘，再把内容换成「头尾预览 + 取回路径」。
+            //
+            // 旧值 100_000 是实测 2026-10-27 的 prompt 膨胀主因之一：一条
+            // terminal 输出就能内联 10 万字符 ≈ 25K tokens，占上下文的三分之一，
+            // 而它此后每轮都要跟着重发。16_000（≈4K tokens）足够模型判断结果
+            // 成败（头尾保留：头部是命令开头、尾部是 exit code 与错误行），
+            // 细节按需 read_file 落盘文件即可。
+            max_result_size_chars: 16_000,
+            // 一轮全部结果的合计上限。旧值 1_000_000 同样远超任何真实需要。
+            max_aggregate_chars: 120_000,
         }
     }
 }
@@ -1269,8 +1278,8 @@ mod tests {
     #[test]
     fn test_budget_config_default() {
         let bc = BudgetConfig::default();
-        assert_eq!(bc.max_result_size_chars, 100_000);
-        assert_eq!(bc.max_aggregate_chars, 1_000_000);
+        assert_eq!(bc.max_result_size_chars, 16_000);
+        assert_eq!(bc.max_aggregate_chars, 120_000);
     }
 
     #[test]
