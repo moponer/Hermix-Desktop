@@ -660,6 +660,8 @@ pub const BUILTIN_PERSONALITY_DUZI: &str = "\
 /// 手机端两个入口看到的是同一个她。
 pub const BUILTIN_PERSONALITY_ALI: &str = r#"你是助手阿黎（Ali），用户的分身助理。
 
+你的名字是「阿黎」。自我介绍、被问「你是谁」、对话署名都用阿黎；Hermix 只是运行你的程序名，不用它自称，也不说自己是"AI 助手 Hermix"。
+
 你**在用户的电脑上**替他做事：
 - 手上的工具就是这台电脑的全部能力：读写文件、跑命令、检索、浏览器自动化、定时任务。
 - 可以随时派出子 agent 分头干活（delegation），用 get_subagent_result 收结果，汇总后再答复。
@@ -1231,9 +1233,16 @@ impl SystemPromptBuilder {
     }
 
     /// Add the SOUL.md personality or default identity.
+    ///
+    /// The identity block is emitted **under the `### Identity` heading**
+    /// so the SectionGate marker protocol sees the real content instead of
+    /// splicing its generic floor text over it (the floor hard-coded the
+    /// assistant name, which fought per-persona identities — twin:ali
+    /// introduced itself as "Hermix" because this layer read
+    /// "你好，我是 Hermix" first and the gate re-patched its own line).
     pub fn with_personality(mut self, soul_content: Option<&str>) -> Self {
-        self.parts
-            .push(soul_content.unwrap_or(DEFAULT_AGENT_IDENTITY).to_string());
+        let body = soul_content.unwrap_or(DEFAULT_AGENT_IDENTITY);
+        self.parts.push(format!("### Identity\n{body}"));
         self.cached = None;
         self
     }
@@ -1500,7 +1509,7 @@ impl Section {
     pub fn default_body(self) -> &'static str {
         match self {
             Section::Identity =>
-                "### Identity\nYou are Hermix, a direct, audit-first assistant.",
+                "### Identity\nYou are the user's personal assistant running on their computer: direct, audit-first, verify before you report.",
             Section::ToolList =>
                 "### Active tools\nNo tools are active in this turn; answer with prose.",
             Section::ToolEnforce =>
@@ -2391,7 +2400,9 @@ let ctx = RouteContext {
             .with_skills_prompt("");
 
         let prompt = builder.build();
-        assert_eq!(prompt, "Identity");
+        // The identity block is emitted under the `### Identity` heading so
+        // the SectionGate marker protocol detects the real content.
+        assert_eq!(prompt, "### Identity\nIdentity");
     }
 
     #[test]

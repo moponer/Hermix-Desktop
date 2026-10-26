@@ -169,6 +169,35 @@ pub struct RuntimeProviderConfig {
 // AgentConfig
 // ---------------------------------------------------------------------------
 
+/// Session-id prefix of persona-entity sessions (阿黎 = `twin:ali`).
+/// These are independent individuals, not style overlays on the main
+/// assistant: their memory scope starts blank and never falls back to
+/// the global `<hermix_home>/memories`. Defined here because the
+/// dependency direction is server → agent (the wire constant lives in
+/// `hermix-server::mobile`).
+pub const TWIN_SESSION_PREFIX: &str = "twin:";
+
+/// Session id → filesystem-safe directory component.
+///
+/// Session ids are wire values (`twin:ali`, device ids, UUIDs) and may
+/// contain `:` — **illegal in Windows path components** (reserved for
+/// drive letters). `create_dir_all` on such a path fails with
+/// ERROR_INVALID_NAME, and every best-effort caller swallows that error —
+/// so a twin session silently lost all memory persistence on Windows.
+/// Map anything outside `[A-Za-z0-9._-]` to `_`; ids that were already
+/// safe (UUIDs, timestamps) pass through unchanged.
+pub(crate) fn fs_safe_session_id(sid: &str) -> String {
+    sid.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 /// Configuration for the agent loop.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -1021,7 +1050,7 @@ impl AgentConfig {
             .unwrap_or_else(|| hermix_config::paths::hermix_home().to_string_lossy().to_string());
         PathBuf::from(home)
             .join("sessions")
-            .join(self.session_id.clone().unwrap_or_default())
+            .join(fs_safe_session_id(self.session_id.as_deref().unwrap_or_default()))
             .join("memories")
     }
 
@@ -1034,7 +1063,20 @@ impl AgentConfig {
     /// right after the migration (they live in the global directory). Group
     /// room scopes (`memory_dir` set) return `false` — they must never read
     /// global, which is the entire point of the isolation fix.
+    ///
+    /// Persona-entity sessions (`twin:*` — e.g. the twin:ali assistant)
+    /// also return `false`: she is an independent individual whose memory
+    /// grows from blank in her own scope. Reading the main assistant's
+    /// global memories would leak them into her context every turn —
+    /// pollution, not grounding (主人拍板 2026-10-26).
     pub fn memory_reads_global_fallback(&self) -> bool {
+        if self
+            .session_id
+            .as_deref()
+            .is_some_and(|sid| sid.starts_with(TWIN_SESSION_PREFIX))
+        {
+            return false;
+        }
         self.memory_dir.is_none()
     }
 }
@@ -1193,5 +1235,36 @@ mod tests {
             std::path::PathBuf::from("/home/hermix/sessions/sess-9/memories")
         );
         assert!(private.memory_reads_global_fallback());
+
+        // Persona-entity scope (twin:*): own blank memory, never reads
+        // global — the main assistant's memories must not leak into her
+        // context (2026-10-26 拍板). The dir component is sanitized: a raw
+        // `twin:ali` path is illegal on Windows (`:` reserved).
+        let twin = AgentConfig {
+            hermix_home: Some("/home/hermix".into()),
+            session_id: Some("twin:ali".into()),
+            ..AgentConfig::default()
+        };
+        assert_eq!(
+            twin.resolved_memory_dir(),
+            std::path::PathBuf::from("/home/hermix/sessions/twin_ali/memories")
+        );
+        assert!(!twin.memory_reads_global_fallback());
+    }
+
+    /// Session ids are wire values and may contain `:` / `/` — illegal in
+    /// Windows path components. The sanitizer must keep already-safe ids
+    /// byte-identical (UUIDs, timestamps) so existing directories stay valid.
+    #[test]
+    fn fs_safe_session_id_maps_only_unsafe_chars() {
+        assert_eq!(
+            super::fs_safe_session_id("twin:ali"),
+            "twin_ali"
+        );
+        assert_eq!(
+            super::fs_safe_session_id("3f2b1c9e-8a4d-4e2f-9b1a-7c6d5e4f3a2b"),
+            "3f2b1c9e-8a4d-4e2f-9b1a-7c6d5e4f3a2b"
+        );
+        assert_eq!(super::fs_safe_session_id("a/b\\c|d?e*f"), "a_b_c_d_e_f");
     }
 }
