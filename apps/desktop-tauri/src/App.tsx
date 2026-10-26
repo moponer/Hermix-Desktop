@@ -44,7 +44,7 @@ import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useArtifacts } from "./hooks/useArtifacts";
 import { resetChatStateForModelSwitch, type RefLike } from "./lib/chatStateReset";
-import { updateSession } from "./lib/sessionUpdates";
+import { patchMessageById, updateSession } from "./lib/sessionUpdates";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastContainer } from "./components/ToastContainer";
 import { toastError, toastInfo } from "./hooks/useToast";
@@ -2311,11 +2311,11 @@ streamPhaseRef.current = null;
       setSessions((prev) => updateSession(prev, sessionId, (s) => {
         return {
           ...s,
-          messages: s.messages.map((m) =>
-            m.id === target
-              ? { ...m, content: m.content + chunk, unified_steps: appendTextStep(m.unified_steps, chunk) }
-              : m
-          ),
+          messages: patchMessageById(s.messages, target, (m) => ({
+            ...m,
+            content: m.content + chunk,
+            unified_steps: appendTextStep(m.unified_steps, chunk),
+          })),
           updated_at: new Date().toISOString(),
         };
       }));

@@ -31,3 +31,34 @@ export function updateSession(
   // React 跳过这次 re-render（很多 setSessions 的目标会话并不在当前列表里）。
   return changed ? next : sessions;
 }
+
+/**
+ * 按 id 替换消息数组里的一条，其余元素引用不变；未命中返回原数组。
+ *
+ * 快路径专为流式文本设计：`onChunk` 命中的**几乎总是最后一条**（正在吐字的
+ * assistant 气泡）。先看末尾能省掉对整个数组的逐项 `id` 比较——长会话里
+ * 每次 chunk 都要扫一遍全部消息，是流式期间最稳定的固定开销之一。
+ *
+ * 慢路径（目标在中间：历史消息重放、多气泡交错）退化为线性查找，语义与
+ * `messages.map(...)` 完全一致。
+ */
+export function patchMessageById<T extends { id: string }>(
+  messages: T[],
+  id: string,
+  patch: (message: T) => T,
+): T[] {
+  const last = messages.length - 1;
+  if (last >= 0 && messages[last].id === id) {
+    const next = messages.slice();
+    next[last] = patch(messages[last]);
+    return next;
+  }
+  for (let i = 0; i < last; i++) {
+    if (messages[i].id === id) {
+      const next = messages.slice();
+      next[i] = patch(messages[i]);
+      return next;
+    }
+  }
+  return messages;
+}
