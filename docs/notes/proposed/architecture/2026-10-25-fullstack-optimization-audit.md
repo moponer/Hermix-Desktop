@@ -484,6 +484,11 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 | **P2-10** reqwest 双 HTTP 栈 | **已自然消解**：`cargo tree` 实测全树只有 `reqwest v0.12.28` 一个版本（tauri 传递的 0.13.5 已不在树里），无需统一。 |
 | **P2-10** 前端无用资源 | **已清理**：`public/` 删掉 9 个全仓零引用的文件（`圆角-mascot-avatar-bg*.png` 3 个、`mascot-{1024,512,256,128}.png`、`mascot-avatar-bg.png`、`mascot-avatar-bg-round.png`、`demo-render.html`），约 **2.7 MB**；`Avatar.tsx` 只引用 `mascot-avatar-bg-64.png`，已保留。顶层文件从 22 个/2.7MB 降到 12 个/78KB。 |
 
+| **P1-2** 工具 schema 缓存 | **已被 P1-9 的 pre-turn 重构稀释**：`route_tools` 现在在 `prepare_run_context` 里跑（每次 `run` 一次），不是基线写的「每次 LLM 往返」。剩下的是每次 run 三次 `Vec<ToolSchema>` 克隆（15K 字符级），缓存收益不抵「失效判断错 → 模型看到过期工具列表」的静默错风险。 |
+| **P2-2** IPC 统一封装 | **不做**。`api/invoke` 是 HTTP 风格（method+path）走 `apiInvoke`，与 Tauri command 面（19 文件 96 处 `invoke`）不是同一层。统一封装若加默认超时会**误杀交互类命令**（选目录、保存截图、OCR 可能远超 30s）；不加超时则只是把 import 语从 `@tauri-apps/api/core` 挪到本地文件，收益不抵 19 处改动风险。真正要做应先在 CI 里给每类命令登记预期耗时。 |
+| **P2-8** 附件 wire 形态 | **不做（breaking）**。`ImageAttachment.bytes` / `FileAttachment.bytes` 用 `Vec<u8>` 序列化成 JSON 数字数组（膨胀 ~4 倍）；改 base64 能降 3 倍体积 + 10 倍解析内存，但这是**前后端必须同时改**的 wire 变更，拿不到灰度窗口时会让手机端/桌面端互发附件直接失败。已在 8MB 帧上限（P2-8 前半）兜住单帧爆炸面。 |
+| **P2-1** 前后端类型生成 | **不做（缺 CI 闭环）**。引入 `ts-rs` 生成绑定本身是纯增量，但价值全在「生成后 diff 能拦住漂移」；没有 CI 集成就只有生成物躺在仓库里，与手写 `api/types.ts` 并存反而多一个真相源。要做应一次做完：derive + 生成脚本 + `ci-gate` 里的 diff 断言。 |
+
 **P1-3 / P1-5 / P2-11 状态复核（2026-10-26 二次核实，修正基线里的过时描述）**：
 
 - **P1-3 仍在，不可小步修**：`App.tsx` 里 `setSessions((prev) => …)` 实际 **50+ 处**（基线写 41 处，且我中途用 PowerShell 查过一次「0 处」是转义写错的假结论——`\(prev` 在 PowerShell 里不是正则转义）。流式 chunk 已有 rAF 合批（`pendingToolChunks`），但**每次提交仍是 O(会话数 × 消息数) 的全量拷贝**。修法是把流式增量挪进独立 store（`useSyncExternalStore` + ref 订阅），只更新当前消息字段——这是 `App.tsx` 状态模型改造，与 P1-13 的 `App.tsx` 拆分同一批做，不能拆开小改。
