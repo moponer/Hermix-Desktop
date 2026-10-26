@@ -1,5 +1,5 @@
 // Tauri IPC bridge — replaces Electron preload
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { toastError } from "./hooks/useToast";

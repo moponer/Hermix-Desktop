@@ -8,7 +8,7 @@ import {
 import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { clsx } from "clsx";
 import { openExternalUrl, listDirectory, type DirEntry } from "../desktopBridge";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import { toastWarning } from "../hooks/useToast";
 import { SkeletonCard } from "./ui";
 import { homeDir } from "@tauri-apps/api/path";

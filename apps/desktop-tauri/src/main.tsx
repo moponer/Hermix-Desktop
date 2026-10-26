@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ScreenshotOverlay } from "./components/ScreenshotOverlay";
 import { ErrorBoundary } from "./components/ErrorBoundary";

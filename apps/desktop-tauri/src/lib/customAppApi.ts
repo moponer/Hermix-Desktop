@@ -1,7 +1,7 @@
 // Custom Apps API client — communicates with the backend HTTP API
 // at /api/custom-apps/*.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import { fetchJSON } from "../api";
 
 export interface CustomAppManifest {

@@ -3,7 +3,7 @@ import {
   useCallback, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../ipc";
 import {
   ArrowLeft, Search, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
   Plug, Sparkles, Network, Image as ImageIcon, Activity, Shield,

@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface UpdateStatus {

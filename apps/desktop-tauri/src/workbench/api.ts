@@ -10,7 +10,7 @@
 // moduleIndex 等封装对应的 Rust command 已注册但**尚无 UI 入口**——
 // 画布 iframe 经 workbenchGateway 的 fs.* 走另一条通路。这些封装是
 // 画布功能（撤销/依赖申请/lint 预检）的预留面，接 UI 前勿删。
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import { getSessions, updateSessionMetadata } from "../api/rest";
 
 export interface WorkbenchManifest {

@@ -23,7 +23,7 @@ import {
   LIST_PREVIEW_COUNT,
   type ListReveal,
 } from "./sidebarListReveal";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import { listen } from "@tauri-apps/api/event";
 import type { Session, NavPage } from "../types";
 import { useWorkspaces } from "../hooks/useWorkspaces";

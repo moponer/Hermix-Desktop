@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo, type SetStateAction } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import type { AcuiDirective } from "../acui/types";
 import type { ApprovalRequestItem, SubAgentEventPayload, MemberEventPayload } from "../types";
 

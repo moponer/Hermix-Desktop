@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import { Minus, Square, X, MessageSquare, Camera, FolderTree } from "lucide-react";
 import { useCallback } from "react";
 import { toastWarning } from "../hooks/useToast";

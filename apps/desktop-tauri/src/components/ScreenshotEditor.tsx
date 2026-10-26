@@ -6,7 +6,7 @@
 // 基底画布(base)存"已提交"像素，可见画布 = base + 进行中预览；
 // 撤销栈存 pre-op 快照（PNG dataURL，限 12 步）。
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import { Square, MoveUpRight, Pencil, Type, Grid2x2, Crop, Undo2, X, Check } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cx } from "../lib/cx";

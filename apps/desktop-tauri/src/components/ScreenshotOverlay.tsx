@@ -13,7 +13,7 @@
 // - 进编辑态、编辑器渲染完成后调 screenshot_backdrop_hide 收掉幕布——
 //   编辑器画布与幕布是同一块像素，切换无缝。
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import { listen } from "@tauri-apps/api/event";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import { CANCEL, CLOSE, CONFIRM } from "./strings";

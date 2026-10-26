@@ -7,7 +7,7 @@
 //   双击打开  → invoke("open_in_viewer")（hermix-viewer.exe，单实例投递）
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fetchJSON } from "../api";
 import { usePolling } from "../hooks/usePolling";

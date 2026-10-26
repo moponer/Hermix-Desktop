@@ -57,7 +57,7 @@ export type { WorkflowEntry };
 //      `{"status":N,"body":"…","enc":"utf8"|"base64"}` so the
 //      front-end only ever has one parser.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import { NEW_CHAT } from "../components/strings";
 
 /** Per-request timeout. The stdio bridge has its own 120s oneshot

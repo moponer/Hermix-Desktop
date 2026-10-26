@@ -1,5 +1,5 @@
 import type { MutableRefObject, Dispatch, SetStateAction } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../ipc";
 import { reportError } from "../lib/reportError";
 import { streamChannelName } from "../api";
 import type { AcuiDirective } from "../acui/types";

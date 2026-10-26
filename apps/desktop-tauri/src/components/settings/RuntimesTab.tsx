@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { FileCode2, GitBranch, RefreshCw } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../ipc";
 import { IconTile } from "../ui";
 import { LOADING } from "../strings";
 
