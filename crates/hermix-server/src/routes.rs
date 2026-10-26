@@ -611,25 +611,13 @@ pub(crate) fn rebuild_messages_fts(conn: &rusqlite::Connection) -> Result<(), St
 /// `busy_timeout` alone still resolves the silent-drop / lock-contention
 /// case.
 pub(crate) fn open_sessions_db_for_read(path: &std::path::Path) -> Result<rusqlite::Connection, String> {
-    let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
-    // 500ms (was 5000): a DELETE in flight holds the WAL writer lock for
-    // 1-3s on a multi-MB sessions.db; with the old 5s window, the very
-    // next SELECT (sidebar click, session switch) hit busy_timeout and
-    // stalled the front-end for seconds. 500ms lets the lock resolve
-    // fast in normal cases and bounds worst-case latency to half a
-    // second — the SELECT then retries on its own.
-    conn.busy_timeout(std::time::Duration::from_millis(500))
-        .map_err(|e| e.to_string())?;
-    if let Err(e) = conn.execute_batch("PRAGMA journal_mode = WAL;") {
-        tracing::warn!(
-            "open_sessions_db_for_read: WAL PRAGMA failed ({e}); \
-             continuing with default journaling"
-        );
-    }
-    // Passive checkpoint so we don't read the WAL header from a page
-    // the writer hasn't flushed yet. PASSIVE never blocks the writer.
-    let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
-    Ok(conn)
+    // 委托 `hermix_store`：这里的 500ms 短超时 + WAL + PASSIVE checkpoint
+    // 与 `OpenMode::Read` 定义的语义一字不差。此前仓库里有四份各自实现的
+    // "打开 SQLite"（本文件、hermix-task、hermix-cron、session_search），
+    // 任何一处漂移都会让"某个库突然开始 SQLITE_BUSY"这种问题只在一半代码
+    // 里出现。时序理由见 `hermix_store::READ_BUSY_TIMEOUT` 的注释。
+    hermix_store::open_connection(path, hermix_store::OpenMode::Read)
+        .map_err(|e| e.to_string())
 }
 
 pub(crate) async fn delete_session(

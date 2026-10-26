@@ -3307,6 +3307,7 @@ dependencies = [
  "chrono",
  "hermix-config",
  "hermix-core",
+ "hermix-store",
  "rusqlite",
  "serde",
  "serde_json",

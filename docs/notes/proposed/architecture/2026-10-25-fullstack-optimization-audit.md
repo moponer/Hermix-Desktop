@@ -345,6 +345,22 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 | P1-1 每轮历史深拷贝 | 三处：① `local_agent_service` 的 `send_message` / `send_message_stream` 由 `messages.clone()` 改 `std::mem::take`（循环拿到所有权，回程本来就用 `AgentResult.messages` 覆盖）；② `sanitize_messages_for_strict_api` 里 `drop_orphan_tool_results` 由「`&[Message]` → 新建 `Vec<Message>`（`.cloned()`）」改**就地 `retain`**，省掉每条消息（含工具结果正文）的一次深拷贝 | agent 1187、provider 56 全绿 |
 | P2-6 两份装配实现 | `assemble_tool_schemas(all)` 改为委托 `assemble_tool_schemas_with_meta(all, &ToolMetaRegistry::new())`（空表时它本来就回退到 `classify_tools`）。删掉 32 行重复的「拆 bridge → 判阈值 → 注入三元组」，那两份注释此前在互相镜像修同一个 bug | tools 808 全绿 |
 
+### 批次 12（P1-14 存储收口，前半）— 2026-10-26 交付
+
+先核实再动手：**这不是并发缺陷，是四份重复实现**。`hermix-task` 的三处 `open_with_wal` 已经设了 `WAL + busy_timeout 5000`，`routes::open_sessions_db_for_read` 已经设了 `500ms + WAL + PASSIVE checkpoint` —— 行为都是对的，只是各写一遍，任何一处漂移都会让「某个库突然开始 SQLITE_BUSY」只在一半代码里出现。
+
+`hermix_store::open_connection(path, OpenMode::{Read,Write})` 的语义与它们一字不差（`Read` = 500ms + checkpoint，`Write` = 5000ms），所以直接替换：
+
+| 位置 | 前 | 后 |
+|---|---|---|
+| `server/routes.rs::open_sessions_db_for_read` | 手写 500ms + WAL + checkpoint | `open_connection(path, Read)` |
+| `hermix-task/repository.rs` | 手写 5000ms + WAL | `open_connection(path, Write)` + 保留 `foreign_keys = ON`（automation 表要求，不属于通用 pragma） |
+| `hermix-task/record.rs` / `effect.rs` | 同上 | 同上（错误映射保持原样：两个 crate 的 error 都只有 `Sqlite(#[from] rusqlite::Error)`，所以转 `SQLITE_CANTOPEN` 并带上原描述） |
+
+验证：`hermix-task` 64 全绿、`hermix-server` 506 全绿、workspace check 零警告。**这是纯等价替换，没有行为变化** —— 值不值得做只取决于"以后还有没有人再写第五份"。
+
+剩余（未做）：`hermix-tools/tools/daily_memory.rs`、`hermix-agent/directions.rs`（`open_with_flags` 读旧库）、`hermix-plugin/workbench_gateway.rs`（`open_with_flags` 只读别名库）。后两处需要 `OpenMode` 之外的 flags（`SQLITE_OPEN_READ_ONLY`），扩 `open_connection` 才能收。
+
 ### 批次 11（P1-9 技能扫描缓存）— 2026-10-26 交付
 
 **先量后改**：新增探针 `skill_loader::tests::probe_scan_cost`（`#[ignore]`），实测 `with_dir + scan()`：

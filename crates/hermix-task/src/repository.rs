@@ -35,16 +35,12 @@ pub enum TaskRepositoryError {
 // ---------------------------------------------------------------------------
 
 fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, TaskRepositoryError> {
-    let conn = rusqlite::Connection::open(path)
+    // 写连接统一走 `hermix_store`（WAL + 5000ms busy_timeout）。此前仓库里
+    // 有四份各自实现的"打开 SQLite"，任何一处漂移都会让争用问题只在一半
+    // 代码里出现。
+    let conn = hermix_store::open_connection(path, hermix_store::OpenMode::Write)
         .map_err(|e| TaskRepositoryError::Io(format!("Failed to open tasks db: {e}")))?;
-    if let Err(e) =
-        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")
-    {
-        tracing::warn!(
-            "task_repository: WAL/busy_timeout PRAGMA failed ({e}); continuing"
-        );
-    }
-    // Enable foreign key cascade deletes for automation tables.
+    // 外键级联是 automation 表的要求，不属于通用 pragma。
     let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
     Ok(conn)
 }

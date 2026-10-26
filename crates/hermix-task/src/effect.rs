@@ -57,14 +57,12 @@ pub struct EffectLog {
 }
 
 fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, EffectLogError> {
-    let conn = rusqlite::Connection::open(path).map_err(|e| {
+    hermix_store::open_connection(path, hermix_store::OpenMode::Write).map_err(|e| {
         EffectLogError::Sqlite(rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
             Some(format!("open effects db: {e}").into()),
         ))
-    })?;
-    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")?;
-    Ok(conn)
+    })
 }
 
 impl EffectLog {
