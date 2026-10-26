@@ -7,6 +7,8 @@
 // 撤销栈存 pre-op 快照（PNG dataURL，限 12 步）。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Square, MoveUpRight, Pencil, Type, Grid2x2, Crop, Undo2, X, Check } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { cx } from "../lib/cx";
 
 export interface EditorSource {
@@ -378,13 +380,13 @@ export function ScreenshotEditor({
     });
   };
 
-  const tools: { id: Tool; label: string; title: string }[] = [
-    { id: "rect", label: "▭ 框选", title: "画矩形框" },
-    { id: "arrow", label: "➜ 箭头", title: "拖拽画指示箭头" },
-    { id: "pen", label: "✎ 画笔", title: "自由画笔" },
-    { id: "text", label: "T 文本", title: "点击画布输入文字" },
-    { id: "mosaic", label: "▓ 涂抹", title: "马赛克涂抹遮蔽隐私" },
-    { id: "crop", label: "✂ 裁剪", title: "拖拽框选后松开完成裁剪" },
+  const tools: { id: Tool; label: string; title: string; icon: LucideIcon }[] = [
+    { id: "rect", label: "框选", title: "画矩形框", icon: Square },
+    { id: "arrow", label: "箭头", title: "拖拽画指示箭头", icon: MoveUpRight },
+    { id: "pen", label: "画笔", title: "自由画笔", icon: Pencil },
+    { id: "text", label: "文本", title: "点击画布输入文字", icon: Type },
+    { id: "mosaic", label: "涂抹", title: "马赛克涂抹遮蔽隐私", icon: Grid2x2 },
+    { id: "crop", label: "裁剪", title: "拖拽框选后松开完成裁剪", icon: Crop },
   ];
 
   return (
@@ -422,58 +424,86 @@ export function ScreenshotEditor({
       {err && <div className="se-err">{err}</div>}
 
       <div className="se-toolbar" onMouseDown={(e) => e.stopPropagation()}>
-        {tools.map((t) => (
-          <button
-            key={t.id}
-            className={cx("se-tool", tool === t.id && "active")}
-            title={t.title}
-            onClick={() => {
-              commitTextBox();
-              setTool(t.id);
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
-        <div className="se-divider" />
-        {COLORS.map((c) => (
-          <button
-            key={c}
-            className={cx("se-color", color === c && "active")}
-            style={{ background: c }}
-            title={`颜色 ${c}`}
-            onClick={() => setColor(c)}
-          />
-        ))}
-        <div className="se-divider" />
-        <div className="se-widths" title="笔画粗细（框选/箭头/画笔/涂抹共用）">
+        {/* 分组靠底色差分隔（不画分隔线）：工具 / 色板 / 笔宽 / 动作。 */}
+        <div className="se-group">
+          {tools.map((t) => {
+            const Icon = t.icon;
+            return (
+              <button
+                key={t.id}
+                className={cx("se-tool", tool === t.id && "active")}
+                title={t.title}
+                aria-label={t.title}
+                aria-pressed={tool === t.id}
+                onClick={() => {
+                  commitTextBox();
+                  setTool(t.id);
+                }}
+              >
+                <Icon size={16} aria-hidden="true" />
+                <span className="se-label">{t.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="se-group">
+          {COLORS.map((c) => (
+            <button
+              key={c}
+              className={cx("se-color", color === c && "active")}
+              style={{ background: c }}
+              title={`颜色 ${c}`}
+              aria-label={`标注颜色 ${c}`}
+              aria-pressed={color === c}
+              onClick={() => setColor(c)}
+            />
+          ))}
+        </div>
+
+        <div className="se-group" title="笔画粗细（框选/箭头/画笔/涂抹共用）">
           {STROKE_WIDTHS.map((s) => (
             <button
               key={s.w}
               className={cx("se-width", strokeW === s.w && "active")}
               title={`粗细：${s.label}`}
+              aria-label={`笔画粗细 ${s.label}`}
+              aria-pressed={strokeW === s.w}
               onClick={() => setStrokeW(s.w)}
             >
               <span style={{ width: 4 + s.w * 2, height: 4 + s.w * 2 }} />
             </button>
           ))}
         </div>
-        <div className="se-divider" />
-        <button
-          className="se-tool"
-          title="撤销上一步"
-          disabled={!canUndo}
-          onClick={undo}
-        >
-          ↶ 撤销
-        </button>
-        <div className="se-divider" />
-        <button className="se-tool" title="放弃本次截图（ESC）" onClick={onCancel}>
-          ✕
-        </button>
-        <button className="se-commit" title="编辑完成，复制到剪贴板" onClick={commit} disabled={committing || dims.w === 0}>
-          {committing ? "复制中…" : "✓ 复制"}
-        </button>
+
+        <div className="se-group">
+          <button
+            className="se-icon-btn"
+            title="撤销上一步"
+            aria-label="撤销上一步"
+            disabled={!canUndo}
+            onClick={undo}
+          >
+            <Undo2 size={16} aria-hidden="true" />
+          </button>
+          <button
+            className="se-icon-btn"
+            title="放弃本次截图（ESC）"
+            aria-label="放弃本次截图"
+            onClick={onCancel}
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+          <button
+            className="se-commit"
+            title="编辑完成，复制到剪贴板"
+            onClick={commit}
+            disabled={committing || dims.w === 0}
+          >
+            <Check size={16} aria-hidden="true" />
+            <span className="se-label">{committing ? "复制中…" : "复制"}</span>
+          </button>
+        </div>
       </div>
     </div>
   );

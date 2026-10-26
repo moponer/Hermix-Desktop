@@ -6,6 +6,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ScreenshotOverlay } from "./components/ScreenshotOverlay";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { BackendConnectionProvider } from "./context/BackendConnectionContext";
+import { storage, STORAGE_KEYS } from "./utils/storageCompat";
+import { onAccentFor } from "./styles/themes/accentPalette";
 import "./styles/screenshot-overlay.css";
 
 // 截图覆盖窗（独立 window，hash 路由分流）：全屏幕布 + 选区交互，不渲染主应用。
@@ -27,6 +29,7 @@ if (isOverlayWindow) {
   // 幕布帧就绪前一直显示，就绪后窗口才亮。
   document.getElementById("splash")?.remove();
   document.getElementById("overlay-boot")?.remove();
+  applyOverlayAccent();
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <ErrorBoundary>
@@ -55,6 +58,26 @@ if (isOverlayWindow) {
   })();
 } else {
   void mainEntry();
+}
+
+/**
+ * 覆盖窗的强调色：主窗允许用户自选强调色（写在主窗 documentElement 的行内样式上），
+ * 覆盖窗是**另一个 document**，拿不到那份行内样式 → 从 localStorage 把用户选的值
+ * 读回来，连同 on-accent 文字色一起注入（口径与主窗 useTheme 一致）。
+ *
+ * 不注入的后果：覆盖窗用主题默认强调色，用户自选了别的颜色时工具条主按钮色不一致。
+ * 只接受 #rrggbb（主窗写入前已规范化），避免 localStorage 被写坏时注入非法值。
+ */
+function applyOverlayAccent() {
+  try {
+    const accent = storage.getItem(STORAGE_KEYS.accentColor);
+    if (!accent || !/^#[0-9a-fA-F]{6}$/.test(accent)) return;
+    const root = document.documentElement;
+    root.style.setProperty("--color-accent", accent);
+    root.style.setProperty("--color-on-accent", onAccentFor(accent));
+  } catch {
+    /* 读不到就用主题默认强调色 */
+  }
 }
 
 /** 主窗入口：动态 import 主应用依赖（覆盖窗不加载这份图），随后挂载 + splash 状态机。 */

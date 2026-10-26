@@ -9,6 +9,27 @@
    从不存在，实际渲染的是回退值 #4c8dff —— 一个饱和蓝（违反禁蓝紫）且不
    跟随主题，白字压在它上面只有约 2.6:1。 */
 
+/* ── 覆盖窗自带令牌层（2026-10-26）─────────────────────────────
+   覆盖窗是独立入口（index.html#/screenshot-overlay），只加载本文件，
+   **不加载 tokens.css** —— 那里的令牌由 Tailwind @theme 生成，不在
+   独立入口的 CSS 图里。实测（2026-10-26，dev server + Chrome 探测）：
+   本窗的 --color-accent / --color-on-accent / --color-accent-line 全为空
+   → 选中态工具、「复制」按钮、选区边框、文本框 outline 全部退化成
+   「无背景 / 无边框」（用户截图里「复制」就是个白字）。
+   这里补一份与主题同源的取值；用户自选强调色由 main.tsx 的覆盖窗分支
+   在首帧前从 localStorage 注入（口径与主窗 useTheme 一致）。 */
+:root {
+  --color-accent: #2f4a63;
+  --color-on-accent: #ffffff;
+  --color-accent-line: color-mix(in srgb, var(--color-accent) 18%, white);
+}
+
+html[data-theme="dark"] {
+  --color-accent: #9dbdd8;
+  --color-on-accent: #0b1230;
+}
+
+
 .so-root {
   position: fixed;
   inset: 0;
@@ -120,14 +141,17 @@
   left: 50%;
   bottom: 16px;
   transform: translateX(-50%);
+  /* 同 .se-toolbar：left:50% 会把可用宽度砍成一半，提示条只能挤成省略号。
+     显式 width:max-content 拿回整幅宽度，靠 max-width 封顶。 */
+  width: max-content;
   display: flex;
   align-items: center;
   gap: 10px;
   max-width: calc(100% - 24px);
   padding: 6px 10px;
-  border-radius: 8px;
-  background: rgba(24, 24, 28, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(24, 24, 28, 0.94);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
 }
 
 /* 操作提示（把「现在能做什么」写清楚，别让用户猜） */
@@ -137,9 +161,11 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .so-toolbar button {
+  flex: 0 0 auto;
   padding: 5px 12px;
   border: none;
   border-radius: 6px;
@@ -155,12 +181,12 @@
 
 .so-toolbar button.active {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .so-toolbar .so-confirm {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .so-toolbar .so-cancel:hover {
@@ -229,25 +255,61 @@
   word-break: break-all;
 }
 
-/* 编辑工具条：底部居中悬浮（窗口=选区大小，工具条可能很窄 → 可横向滚动） */
+/* 编辑工具条：底部居中悬浮。
+   窗口 = 选区大小，工具条可能比窗口宽 —— 此前按钮默认可压缩（flex-shrink:1），
+   窄窗下每个按钮被压成「一列一个字」，中文标签逐字竖排（见 2026-10-26 截图）。
+   修法三条同时成立才有效：
+     ① 按钮 flex:0 0 auto —— 不许被压缩；
+     ② 标签 white-space:nowrap —— 不许逐字换行；
+     ③ 工具条 flex-wrap:wrap —— 装不下就换行，而不是压扁。
+   分组靠底色差（.se-group）分隔，不画分隔线。 */
 .se-toolbar {
   position: fixed;
   bottom: 8px;
   left: 50%;
   transform: translateX(-50%);
+  /* `left:50%` 会把「可用宽度」砍成视口的一半（收缩盒的可用空间 = 100% − left），
+     工具条因此永远只有窗口的一半宽 → 内容被压扁成竖排字（2026-10-26 实测：
+     1200px 视口下工具条只有 600px）。显式 width:max-content 才能拿回整幅宽度，
+     max-width 再负责封顶。 */
+  width: max-content;
   display: flex;
   align-items: center;
-  gap: 4px;
-  max-width: calc(100% - 12px);
-  overflow-x: auto;
-  padding: 6px 8px;
-  border-radius: 10px;
-  background: rgba(24, 24, 28, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  row-gap: 6px;
+  max-width: calc(100% - 16px);
+  padding: 6px;
+  border-radius: 12px;
+  background: rgba(24, 24, 28, 0.94);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
   z-index: 10;
 }
 
+/* 工具条内的功能分组：淡底块分隔，不画线。
+   分组本身允许收缩并内部换行 —— 否则窄选区下整组（例如 6 个工具）作为
+   一个 flex 项超出容器宽度，右侧的工具直接被切掉（实测 360px 窗口）。 */
+.se-toolbar .se-group {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .se-toolbar button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
   border: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.82);
@@ -256,8 +318,8 @@
 }
 
 .se-toolbar .se-tool {
-  padding: 5px 10px;
-  border-radius: 6px;
+  padding: 5px 7px;
+  border-radius: 7px;
 }
 
 .se-toolbar .se-tool:hover:not(:disabled) {
@@ -266,19 +328,29 @@
 
 .se-toolbar .se-tool.active {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
-.se-toolbar .se-tool:disabled {
+/* 工具按钮里的文字标签：12px，与 16px 图标同一基线视觉 */
+.se-toolbar .se-label {
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* 纯图标按钮（撤销 / 放弃）：方形点击区 */
+.se-toolbar .se-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+
+.se-toolbar .se-icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.se-toolbar .se-icon-btn:disabled {
   opacity: 0.4;
   cursor: default;
-}
-
-.se-toolbar .se-divider {
-  width: 1px;
-  height: 20px;
-  background: rgba(255, 255, 255, 0.15);
-  margin: 0 6px;
 }
 
 /* 色板圆点：当前色白圈标识 */
@@ -297,19 +369,10 @@
 }
 
 /* 笔画粗细三档：圆点大小直观映射实际粗细 */
-.se-toolbar .se-widths {
-  display: flex;
-  gap: 2px;
-}
-
 .se-toolbar .se-width {
   width: 26px;
   height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  color: rgba(255, 255, 255, 0.82);
+  border-radius: 7px;
 }
 
 .se-toolbar .se-width:hover {
@@ -318,7 +381,7 @@
 
 .se-toolbar .se-width.active {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .se-toolbar .se-width span {
@@ -328,10 +391,10 @@
 }
 
 .se-toolbar .se-commit {
-  padding: 6px 14px;
-  border-radius: 6px;
+  padding: 6px 12px;
+  border-radius: 7px;
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-on-accent);
   font-weight: 600;
 }
 
