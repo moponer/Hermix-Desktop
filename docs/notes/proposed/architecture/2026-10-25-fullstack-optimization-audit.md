@@ -403,6 +403,20 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 剩余（未做）：`hermix-tools/tools/daily_memory.rs`、`hermix-agent/directions.rs`（`open_with_flags` 读旧库）、`hermix-plugin/workbench_gateway.rs`（`open_with_flags` 只读别名库）。后两处需要 `OpenMode` 之外的 flags（`SQLITE_OPEN_READ_ONLY`），扩 `open_connection` 才能收。
 
+### 批次 15（P1-14 存储收口，收尾）— 2026-10-26 交付
+
+`OpenMode` 增加 **`ReadOnly`** 变体：`SQLITE_OPEN_READ_ONLY` 打开、跳过 WAL/checkpoint（两者都要写权限）、busy timeout 同 `Read`（500ms）。
+
+| 位置 | 前 | 后 |
+|---|---|---|
+| `hermix-tools/tools/daily_memory.rs` | `Connection::open` + 手写 `journal_mode=WAL; busy_timeout=5000` | `open_connection(path, Write)`（逐字等价） |
+| `hermix-plugin/workbench_gateway.rs` | `open_with_flags(READ_WRITE \| CREATE)`，**无任何 pragma** | `open_connection(path, Write)`（等价 + 补上 WAL/5000ms；原实现是 journal_mode 漂移与并发 `SQLITE_BUSY` 的来源） |
+| `hermix-agent/directions.rs` | `open_with_flags(SQLITE_OPEN_READ_ONLY)` | `open_connection(path, ReadOnly)` |
+
+`hermix-plugin` 新增 `hermix-store` 依赖（store 是叶子 crate，无环）。只读模式的关键语义：**不存在的文件直接失败**，不像 `Connection::open` 那样悄悄建出空库——读别人的库时建空文件就是数据污染。
+
+验证：`hermix-store` 4（+1 只读语义测试）、`hermix-plugin` 3、`hermix-tools` 808、`hermix-agent` 1206 全绿；四 crate `cargo check --all-targets` 零警告。至此全仓 SQLite 打开只剩 `hermix_store::open_connection` 单一入口。
+
 ### 批次 11（P1-9 技能扫描缓存）— 2026-10-26 交付
 
 **先量后改**：新增探针 `skill_loader::tests::probe_scan_cost`（`#[ignore]`），实测 `with_dir + scan()`：

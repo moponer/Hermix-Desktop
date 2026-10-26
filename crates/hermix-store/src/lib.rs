@@ -53,6 +53,10 @@ pub enum OpenMode {
     /// Fails fast so a lock held by an in-flight `DELETE` cannot stall
     /// the UI; the caller retries on its own.
     Read,
+    /// 只读打开**别人的**库（`workbench.db` 一类插件自管文件）：用
+    /// `SQLITE_OPEN_READ_ONLY` 打开，拒绝一切写路径，跳过 WAL /
+    /// checkpoint（两者都需要写权限）。busy timeout 同 [`Self::Read`]。
+    ReadOnly,
 }
 
 /// Busy timeout for [`OpenMode::Write`]. Long enough to ride out a
@@ -91,23 +95,35 @@ pub fn open_connection(
 ) -> Result<Connection, StoreError> {
     let path = path.as_ref().to_path_buf();
     let path_str = path.display().to_string();
-    let conn = Connection::open(&path).map_err(|source| StoreError::Open {
+    // 只读模式必须用 open_with_flags：`Connection::open` 隐含
+    // READ_WRITE|CREATE，对「别人的库」（workbench.db 一类插件自管文件）
+    // 既可能建出空文件，也挡不住误写。
+    let conn = match mode {
+        OpenMode::ReadOnly => {
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        }
+        _ => Connection::open(&path),
+    }
+    .map_err(|source| StoreError::Open {
         path: path_str.clone(),
         source,
     })?;
 
     let timeout = match mode {
         OpenMode::Write => WRITE_BUSY_TIMEOUT,
-        OpenMode::Read => READ_BUSY_TIMEOUT,
+        OpenMode::Read | OpenMode::ReadOnly => READ_BUSY_TIMEOUT,
     };
     conn.busy_timeout(timeout).map_err(StoreError::Pragma)?;
 
-    if let Err(e) = conn.execute_batch("PRAGMA journal_mode = WAL;") {
-        tracing::warn!(
-            db_path = %path_str,
-            error = %e,
-            "hermix-store: WAL pragma rejected; continuing with default journaling"
-        );
+    // 只读连接不能改 journal_mode，也不该触发 checkpoint（都需要写权限）。
+    if mode != OpenMode::ReadOnly {
+        if let Err(e) = conn.execute_batch("PRAGMA journal_mode = WAL;") {
+            tracing::warn!(
+                db_path = %path_str,
+                error = %e,
+                "hermix-store: WAL pragma rejected; continuing with default journaling"
+            );
+        }
     }
 
     if mode == OpenMode::Read {
@@ -232,6 +248,35 @@ mod tests {
             .read(|c| c.query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0)).unwrap())
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn read_only_mode_rejects_writes_and_never_creates_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("plugin.db");
+
+        // 不存在的文件：只读打开必须失败，而不是像 `Connection::open`
+        // 那样悄悄建出一个空库（读别人的库时这是数据污染）。
+        assert!(
+            open_connection(&db, OpenMode::ReadOnly).is_err(),
+            "read-only open must not create a missing file"
+        );
+        assert!(!db.exists(), "no empty db may be created");
+
+        // 建好后只读打开成功，写入必须被拒、读仍然可用。
+        let w = open_connection(&db, OpenMode::Write).unwrap();
+        w.execute_batch("CREATE TABLE t (v INTEGER);").unwrap();
+        drop(w);
+
+        let ro = open_connection(&db, OpenMode::ReadOnly).unwrap();
+        assert!(
+            ro.execute_batch("INSERT INTO t VALUES (1);").is_err(),
+            "read-only connection must reject writes"
+        );
+        let count: i64 = ro
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "reads still work on a read-only connection");
     }
 
     #[test]

@@ -20,6 +20,8 @@ base64 = "0.22"
 regex-lite = "0.1"
 # 工作台数据层：每工作台一个 SQLite 库，与代码层物理分离
 rusqlite = { workspace = true }
+# SQLite 打开的单一入口（WAL / busy_timeout / 只读 flags 收口，P1-14）
+hermix-store = { workspace = true }
 sha2 = "0.10"
 # 内置图标库: 纯 Rust SVG 栅格化 (无系统字体依赖) + 轻量绘制
 resvg = "0.42"

@@ -46,11 +46,9 @@ impl DailyMemoryStore {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let conn = Connection::open(&path).map_err(|e| {
+        let conn = hermix_store::open_connection(&path, hermix_store::OpenMode::Write).map_err(|e| {
             ToolError::ExecutionFailed(format!("daily_memory: open {} failed: {e}", path.display()))
         })?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-            .map_err(|e| ToolError::ExecutionFailed(format!("daily_memory pragma: {e}")))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS daily_memory (
                 date TEXT PRIMARY KEY,

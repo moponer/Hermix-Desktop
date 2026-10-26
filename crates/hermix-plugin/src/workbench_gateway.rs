@@ -15,7 +15,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params_from_iter, Connection, OpenFlags};
+use rusqlite::{params_from_iter, Connection};
 use serde_json::Value as Json;
 
 use crate::workbench::{workbench_dir, workbenches_dir};
@@ -76,11 +76,8 @@ fn connect(id: &str) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create data dir: {e}"))?;
     }
-    Connection::open_with_flags(
-        &path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
-    )
-    .map_err(|e| format!("open db: {e}"))
+    hermix_store::open_connection(&path, hermix_store::OpenMode::Write)
+        .map_err(|e| format!("open db: {e}"))
 }
 
 /// 多语句注入靠 rusqlite 的 prepare 天然拦掉（一次 prepare 只吃一条语句），
