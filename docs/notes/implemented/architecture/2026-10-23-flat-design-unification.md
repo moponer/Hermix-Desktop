@@ -11,6 +11,9 @@ Status: implemented — 2026-10-23 落地；主程序 + 查看器 + 共享预览
    中性结构描边从 27 处清到 15 处（`check-design-primitives` 的 G10 基线
    同步下调），剩下的 15 处是物理上无法替换的：复选框方框、spinner
    圆环、图片边框、状态横幅的语义描边、少数浮层内部分隔。
+   （2026-10-26 补充：旁注轨道这类**标记内容性质**、不承担分区职责的竖条
+   不在此列 —— 判据边界与画法见
+   [CSS 层描边门禁与功能性标记的画法](../process/2026-10-26-css-border-gate-and-functional-rails.md)。）
 2. **焦点不用描边。** 全局 `:focus-visible` 从 `outline: 2px solid` 改为
    强调色淡晕 `--shadow-focus-flat`（color-mix 到透明，无硬边线）。
    鼠标点击不留任何焦点外观；键盘焦点仍可见（WCAG 2.4.7）。

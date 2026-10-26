@@ -322,17 +322,33 @@
    - 真正扛得住的是三个几何标记：**12px 缩进 + 标签行 + 可见轨道**。
      顺带实测：`--color-chat-tool-bg`(#1d1f22) 对聊天底(#161719) 只有
      1.09:1，所以「给思考块加淡背景」在深色下同样不可行 —— 这条
-     备选方案被实测否掉了，改用缩进 + 标签。 */
+     备选方案被实测否掉了，改用缩进 + 标签 + 可见轨道（轨道画法见
+     下方 `.tl-reasoning-row` 的 background 渐变，2026-10-26 恢复）。 */
 .tl-reasoning-row {
   position: relative;
   margin: 6px 0 4px 18px;      /* 旁注缩进 18px —— 展开后的思考正文比它的
                                    标签行往右一档，这是「这是旁注」的标记，
                                    不是为了给任何图标让位（行首图标已撤销） */
   padding: 2px 0 2px 12px;
-  /* 2026-10-01：2px `--color-text-faint`（2.98:1）→ 1px `--color-secondary`
-     级别的更淡值。竖线是**配角**：它只负责说「这是一段旁注」，而标签行
-     已经在说同一件事。两处都在喊同一句话，竖线一粗就变成主角，
-     把真正要读的思考正文压了下去。 */
+  /* 旁注轨道（2026-10-26 恢复）。
+     2026-10-23 的「CSS 层描边清零」把这里的 border-left 一起删了 ——
+     缩进（18px + 12px）还在，但没有任何标记标出「这是一段旁注」，正文
+     右边空出一截像是没排完的缩进（用户实机反馈：竖条没了）。
+     两点说明：
+     ① 用 background 渐变画，不写 border —— G11 门禁禁的是 CSS 层的
+        1px 中性结构描边（89 处粗框的来源）；2px 实心轨道是**功能性**标记
+        （引用块的旁注竖线同款），不在其列。
+     ② 背景画在 padding box 上，不随思考块内部滚动 —— 轨道始终贴着可见
+        区左缘；用 ::before 绝对定位会跟着内容滚走，下半截没线。
+     色值回到 2026-10-01 之前的 `--color-text-faint`（浅色 #6a6a6a /
+     深色 #8f8f8f）：当时把它调成 1px `--color-border-secondary` 是因为
+     那个值对聊天底只有 1.37:1，比它标记的思考正文（4.77:1）还弱 3.5
+     倍，视觉上等于没有。 */
+  background: linear-gradient(
+    to right,
+    var(--color-text-faint) 0 2px,
+    transparent 2px
+  );
   color: var(--color-text-thinking);
   font-size: var(--text-ui, 13px);
   line-height: var(--leading-reading, 1.75);
@@ -416,6 +432,26 @@
 .tl-text-inner--meta {
   margin-top: 6px;
   padding-top: 8px;
+}
+
+/* ── 5a-0a2. 工具轮正文占位 ──
+   一轮只调工具、没写正文时，正文区原本整段空白：过程折叠区里字一直在动，
+   正文却一个字没有，读起来像卡住。这一行把 execution_timeline 已记录的事实
+   （调了几次、调了什么）写在正文位置。它不是模型的正文，所以用次级色、
+   ui 字号，且不进复制内容。 */
+.tl-toolrun-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--text-ui);
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+.tl-toolrun-note-tools { color: var(--color-text-primary); }
+.tl-toolrun-note-tail {
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
 }
 
 /* ── 5a-0b. Process Timeline — the ONE foldable block ──
