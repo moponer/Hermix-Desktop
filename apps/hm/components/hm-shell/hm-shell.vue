@@ -21,12 +21,14 @@ import { deviceId, isPaired, listDevices, activeDevice, switchDevice, type Devic
 const props = withDefaults(
   defineProps<{
     title?: string
+    /** 角色信息副行（对话页传「你的分身 · 住在电脑上」；不传则只显示电脑名） */
+    subtitle?: string
     /** 显示返回箭头而不是标签栏（次级页） */
     back?: boolean
     /** 透传给内部 scroll-view 的定位锚点（对话页用来滚到底） */
     scrollIntoView?: string
   }>(),
-  { title: '', back: false, scrollIntoView: '' },
+  { title: '', subtitle: '', back: false, scrollIntoView: '' },
 )
 
 const paired = computed(() => isPaired())
@@ -98,13 +100,20 @@ const devName = computed(() => activeDevice()?.name ?? '')
   <view class="shell">
     <view class="bar">
       <view v-if="props.back" class="icon-btn" @tap="back"><text>‹</text></view>
-      <!-- 顶层页：标题位换成设备胶囊（多桌面切换入口） -->
-      <view v-if="!props.back && paired" class="devpill" @tap="openSheet">
-        <view class="dp-dot" />
-        <text class="dp-name">{{ devName }}</text>
-        <text class="dp-cv">▾</text>
+      <!-- 左上角：角色名（标题）+ 角色信息/当前电脑名两行常驻。
+           设备切换入口收进副行（点整块弹出切换面板）——设备名不再顶替
+           角色名，右侧按钮区不再被设备胶囊挤占。次级页（back）只显名字：
+           那是「某一台的详情」语境，切换没有意义。 -->
+      <view class="role" @tap="!props.back && paired ? openSheet() : undefined">
+        <text class="role-name">{{ props.title }}</text>
+        <view v-if="!props.back && paired" class="role-sub">
+          <view class="dp-dot" />
+          <text class="role-sub-t">{{
+            props.subtitle ? `${props.subtitle} · ${devName || '未命名电脑'}` : (devName || '未命名电脑')
+          }}</text>
+          <text class="dp-cv">▾</text>
+        </view>
       </view>
-      <text v-else class="title">{{ props.title }}</text>
       <view class="slot-end">
         <slot name="end" />
         <!-- 顶层页常驻设置入口（次级页不显示，那里「设置」不指向自己）。
@@ -205,17 +214,34 @@ const devName = computed(() => activeDevice()?.name ?? '')
   font-size: 40rpx;
 }
 
-/* ── 设备胶囊（顶栏） ────────────────────────────────────────── */
-.devpill {
+/* ── 角色块（顶栏左上角，两行常驻） ────────────────────────────
+   第一行=角色名，第二行=角色信息/当前电脑名。整块可点（设备切换面板）。
+   min-width:0 + 省略号保证右侧按钮区在任何屏宽下都完整可见。 */
+.role {
   flex: 1;
   min-width: 0;
   display: flex;
+  flex-direction: column;
+  gap: 2rpx;
+}
+.role-name {
+  font-size: $fs-title;
+  font-weight: 600;
+  color: $fg;
+  line-height: 1.25;
+}
+.role-sub {
+  display: flex;
   align-items: center;
-  gap: 12rpx;
-  padding: 14rpx 22rpx;
-  border-radius: $r-pill;
-  background: $raised;
-  align-self: center;
+  gap: 8rpx;
+  min-width: 0;
+}
+.role-sub-t {
+  font-size: $fs-mini;
+  color: $fg3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dp-dot {
   flex: none;
@@ -224,13 +250,12 @@ const devName = computed(() => activeDevice()?.name ?? '')
   border-radius: 50%;
   background: $ok;
 }
-.dp-name {
-  font-size: $fs-sub;
-  font-weight: 600;
-  color: $fg;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.dp-dot {
+  flex: none;
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
+  background: $ok;
 }
 .dp-cv {
   flex: none;

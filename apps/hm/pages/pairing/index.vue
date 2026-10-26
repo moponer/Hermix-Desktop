@@ -197,7 +197,7 @@ function reLaunchAfterKeyboardClose(url: string) {
         <!-- 多桌面：名字进设备清单，切换面板/设备管理都靠它辨认 -->
         <view class="namer">
           <text class="namer-l">给它起个名字</text>
-          <input v-model="devName" class="namer-i" placeholder="比如：家里的电脑" :maxlength="20" />
+          <input v-model="devName" class="namer-i" placeholder="比如：家里的电脑" :maxlength="20" :adjust-position="false" />
         </view>
       </view>
 

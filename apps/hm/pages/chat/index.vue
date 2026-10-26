@@ -36,7 +36,6 @@ import { getChatSource, setChatSource, SOURCE_META } from '../../core/chatSource
 import { loadModelConfig, saveModelConfig, clearModelConfig, setLocalDefaultModel } from '../../core/modelStore'
 import { streamLocalChat, type LocalTurn } from '../../core/localChat'
 import type { ModelConfig } from '../../core/model'
-import { useKeyboardHeight } from '../../composables/useKeyboardHeight'
 import { useVoiceInput, type VoiceSttWire } from '../../composables/useVoiceInput'
 
 interface Bubble {
@@ -262,9 +261,6 @@ const emptyHint = computed(() => {
  */
 const paired = ref(isPaired())
 const hasRelay = ref(!!relayBaseUrl())
-
-/** 键盘高度补偿（VisualViewport 检测），用于输入栏定位补偿。 */
-const { kbHeight } = useKeyboardHeight()
 
 // ── 会话持久化 ────────────────────────────────────────────────────
 /** 当前会话 id（未发过消息时为 null，发过即创建） */
@@ -569,6 +565,17 @@ function goHistory() {
   uni.navigateTo({ url: '/pages/history/index' })
 }
 
+/** 顶栏 ⋯：低频动作收纳（新对话/历史）。 */
+function openMore() {
+  uni.showActionSheet({
+    itemList: ['新对话', '历史会话'],
+    success: (res) => {
+      if (res.tapIndex === 0) confirmNew()
+      else if (res.tapIndex === 1) goHistory()
+    },
+  })
+}
+
 function goCall() {
   uni.navigateTo({ url: '/pages/call/index' })
 }
@@ -719,8 +726,8 @@ onUnmounted(() => {
 <template>
   <hm-shell
     :title="SOURCE_META[source].name"
+    :subtitle="SOURCE_META[source].desc"
     :scroll-into-view="anchor"
-    :class="{ 'kb-open': kbHeight > 120 }"
   >
     <template #end>
       <hm-model-picker
@@ -728,10 +735,11 @@ onUnmounted(() => {
         :default-model="pickerDefault"
         @select="onSelectModel"
       />
-      <view class="hist-btn" @tap="goHistory"><text>☰</text></view>
       <!-- 通话：当前对话的另一种交互模式，入口挂在这条对话上，不占底部频道位 -->
       <view class="call-btn" @tap="goCall"><text>☎</text></view>
-      <view class="new-btn" @tap="confirmNew"><text>✛</text></view>
+      <!-- ⋯ 收纳低频动作（新对话/历史）。顶栏右侧只留高频项：窄屏下
+           按钮曾横溢出屏幕被整排裁掉——「按钮消失」的根因就是这一排太宽。 -->
+      <view class="call-btn" @tap="openMore"><text>⋯</text></view>
     </template>
 
     <!-- 你在跟谁说话：三条通路顶部分段切换，发出去的话走完全不同的链路。
@@ -747,7 +755,7 @@ onUnmounted(() => {
         <text>{{ SOURCE_META[s].name }}</text>
       </view>
     </view>
-    <text class="src-desc">{{ SOURCE_META[source].desc }}</text>
+    <!-- 来源说明已上移到顶栏副行（角色信息常驻，不随滚动消失） -->
 
     <!-- 未连接：主界面里的一张卡片，不是拦截层（本机直聊不受影响） -->
     <view v-if="!paired && source !== 'local'" class="connect">
@@ -903,7 +911,7 @@ onUnmounted(() => {
             :placeholder="source === 'local' ? '直接问模型…' : paired ? '说点什么…' : '先连接电脑'"
             :disabled="source !== 'local' && !paired"
             confirm-type="send"
-            :adjust-position="true"
+            :adjust-position="false"
             @confirm="send"
           />
           <view
@@ -965,13 +973,6 @@ onUnmounted(() => {
 }
 .src:active {
   opacity: 0.75;
-}
-/* 当前来源的一句话说明：紧跟分段条，弱一档的字。 */
-.src-desc {
-  display: block;
-  margin: 10rpx $gutter 0;
-  font-size: $fs-mini;
-  color: $fg4;
 }
 
 /* 本机直聊的边界声明：区别于其他来源的显著但克制的提示。 */
@@ -1367,10 +1368,8 @@ onUnmounted(() => {
   opacity: 0.35;
 }
 
-/* 顶栏按钮：历史列表 + 通话 + 新建对话 */
-:deep(.hist-btn),
-:deep(.call-btn),
-:deep(.new-btn) {
+/* 顶栏按钮：通话 + ⋯（新对话/历史收纳） */
+:deep(.call-btn) {
   flex: none;
   width: 64rpx;
   height: 64rpx;
@@ -1382,9 +1381,7 @@ onUnmounted(() => {
   color: $fg2;
   font-size: 34rpx;
 }
-:deep(.hist-btn:active),
-:deep(.call-btn:active),
-:deep(.new-btn:active) {
+:deep(.call-btn:active) {
   opacity: 0.7;
 }
 </style>

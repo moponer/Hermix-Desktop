@@ -210,7 +210,7 @@ function resetPairing() {
     <view v-if="manualOpen" class="manual">
       <view class="frow">
         <text class="fl">relay 地址</text>
-        <input v-model="url" class="fv" placeholder="https://…" />
+        <input v-model="url" class="fv" placeholder="https://…" :adjust-position="false" />
       </view>
       <view class="frow">
         <text class="fl">relay 凭据</text>
@@ -219,6 +219,7 @@ function resetPairing() {
           class="fv"
           placeholder="hrel_…"
           :password="true"
+          :adjust-position="false"
         />
       </view>
       <view class="fbtns">
