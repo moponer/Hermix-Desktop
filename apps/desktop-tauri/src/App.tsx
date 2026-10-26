@@ -44,6 +44,7 @@ import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useArtifacts } from "./hooks/useArtifacts";
 import { resetChatStateForModelSwitch, type RefLike } from "./lib/chatStateReset";
+import { updateSession } from "./lib/sessionUpdates";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastContainer } from "./components/ToastContainer";
 import { toastError, toastInfo } from "./hooks/useToast";
@@ -1177,7 +1178,7 @@ setPage("chat");
       setWorkspaceRoot(null);
     }
     if (sessionId) {
-      setSessions((prev) => prev.map((s) => s.id === sessionId ? { ...s, workspace: path ?? undefined } : s));
+      setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, workspace: path ?? undefined })));
     }
   }, [setWorkspaceRoot]);
 
@@ -1326,9 +1327,7 @@ setPage("chat");
         clearLoadError(activeSessionId);
         if (restoredCtx) setContextUsage(restoredCtx);
         setHistoryPaging((prev) => ({ ...prev, [activeSessionId]: { hasMore } }));
-        setSessions((prev) => prev.map((s) =>
-          s.id === activeSessionId ? { ...s, messages } : s
-        ));
+        setSessions((prev) => updateSession(prev, activeSessionId, (s) => ({ ...s, messages })));
       } catch (e) {
         if (cancelled) return;
         const msg = e instanceof Error ? e.message : String(e);
@@ -1356,9 +1355,7 @@ setPage("chat");
       const knownIds = new Set(session.messages.map((m) => m.id));
       const older = res.messages.filter((m) => !knownIds.has(m.id));
       if (older.length > 0) {
-        setSessions((prev) => prev.map((s) =>
-          s.id === activeSessionId ? { ...s, messages: [...older, ...s.messages] } : s
-        ));
+        setSessions((prev) => updateSession(prev, activeSessionId, (s) => ({ ...s, messages: [...older, ...s.messages] })));
       }
       setHistoryPaging((prev) => ({ ...prev, [activeSessionId]: { hasMore: res.hasMore } }));
     } catch (e) {
@@ -2259,8 +2256,7 @@ streamPhaseRef.current = null;
     // 这是用户发消息瞬间的一次额外同步 commit，< 1ms 用户不可感知。
     // flushSync 不触发 strict mode 双调用（它的二次执行只针对 render）。
     flushSync(() => {
-      setSessions((prev) => prev.map((s) => {
-        if (s.id !== sessionId) return s;
+      setSessions((prev) => updateSession(prev, sessionId, (s) => {
         // Insert user message + empty assistant placeholder
         return {
           ...s,
@@ -2312,8 +2308,7 @@ streamPhaseRef.current = null;
       const target = currentAssistantIdRef.current;
       if (!target) return;
       streamPhaseRef.current = "text";
-      setSessions((prev) => prev.map((s) => {
-        if (s.id !== sessionId) return s;
+      setSessions((prev) => updateSession(prev, sessionId, (s) => {
         return {
           ...s,
           messages: s.messages.map((m) =>
@@ -2433,8 +2428,7 @@ streamPhaseRef.current = null;
       // message keep their rendering through
       // `MessageBubble`'s backward-compat branch; new approvals
       // never create that standalone message.
-      setSessions((prev) => prev.map((s) => {
-        if (s.id !== sessionId) return s;
+      setSessions((prev) => updateSession(prev, sessionId, (s) => {
         const messages = s.messages.map((m) => {
           if (m.id !== previousAssistantId) return m;
           const existing = m.unified_steps ?? [];
@@ -2544,8 +2538,7 @@ streamPhaseRef.current = null;
         toolCallId: req.items[0]?.requestId ?? req.batchId,
         createdAt: new Date().toISOString(),
       };
-      setSessions((prev) => prev.map((s) => {
-        if (s.id !== req.sessionId) return s;
+      setSessions((prev) => updateSession(prev, req.sessionId, (s) => {
         const messages = s.messages.map((m) => {
           if (m.id !== previousAssistantId) return m;
           const existing = m.unified_steps ?? [];
@@ -2625,8 +2618,7 @@ streamPhaseRef.current = null;
           },
         };
 
-        setSessions((prev) => prev.map((s) => {
-          if (s.id !== sessionId) return s;
+        setSessions((prev) => updateSession(prev, sessionId, (s) => {
           return {
             ...s,
             messages: [...s.messages, clarifyMsg],
@@ -2664,8 +2656,7 @@ streamPhaseRef.current = null;
             acknowledged: false,
           },
         };
-        setSessions((prev) => prev.map((s) => {
-          if (s.id !== sessionId) return s;
+        setSessions((prev) => updateSession(prev, sessionId, (s) => {
           return {
             ...s,
             messages: [...s.messages, planMsg],
@@ -2692,8 +2683,7 @@ streamPhaseRef.current = null;
       pendingToolChunks.clear();
       const target = currentAssistantIdRef.current;
       if (!target) return;
-      setSessions((prev) => prev.map((s) => {
-        if (s.id !== sessionId) return s;
+      setSessions((prev) => updateSession(prev, sessionId, (s) => {
         return {
           ...s,
           messages: s.messages.map((m) => {
@@ -2828,8 +2818,7 @@ streamPhaseRef.current = null;
               }
             }
             setStreamPhase(null);
-            setSessions((prev) => prev.map((s) => {
-              if (s.id !== sessionId) return s;
+            setSessions((prev) => updateSession(prev, sessionId, (s) => {
               return {
                 ...s,
                 messages: s.messages.map((m) =>
@@ -2886,8 +2875,7 @@ streamPhaseRef.current = null;
               created_at: new Date().toISOString(),
             };
 
-            setSessions((prev) => prev.map((s) => {
-              if (s.id !== sessionId) return s;
+            setSessions((prev) => updateSession(prev, sessionId, (s) => {
               return {
                 ...s,
                 messages: s.messages.map((m) =>
@@ -2945,8 +2933,7 @@ streamPhaseRef.current = null;
               is_error: isError,
             };
 
-            setSessions((prev) => prev.map((s) => {
-              if (s.id !== sessionId) return s;
+            setSessions((prev) => updateSession(prev, sessionId, (s) => {
               return {
                 ...s,
                 messages: s.messages.map((m) =>
@@ -2978,8 +2965,7 @@ streamPhaseRef.current = null;
               file_summary: fileSummary,
               created_at: new Date().toISOString(),
             };
-            setSessions((prev) => prev.map((s) => {
-              if (s.id !== sessionId) return s;
+            setSessions((prev) => updateSession(prev, sessionId, (s) => {
               return {
                 ...s,
                 messages: s.messages.map((m) => {
@@ -3016,8 +3002,7 @@ streamPhaseRef.current = null;
           // re-emitted event doesn't produce a duplicate row.
           onMemoryUpdate: ({ action, memoryType, key, summary, count }) => {
             if (!summary && !key) return;
-            setSessions((prev) => prev.map((s) => {
-              if (s.id !== sessionId) return s;
+            setSessions((prev) => updateSession(prev, sessionId, (s) => {
               // Prefer the currently-streaming assistant message; if
               // none (session-end summary), use the last assistant msg.
               const target =
@@ -3060,8 +3045,7 @@ return {
           // 按 (trigger, turn_number) 去重，因为漂移召回可能在相近时刻触发。
           onMemoryRecall: ({ trigger, count, totalChars, previewKeys, turnNumber }) => {
             if (count === 0) return;
-            setSessions((prev) => prev.map((s) => {
-              if (s.id !== sessionId) return s;
+            setSessions((prev) => updateSession(prev, sessionId, (s) => {
               const target =
                 currentAssistantIdRef.current ??
                 [...s.messages].reverse().find((m) => m.role === "assistant")?.id ??
@@ -3116,8 +3100,7 @@ return {
               created_at: new Date().toISOString(),
               section_gate_report: info,
             };
-            setSessions((prev) => prev.map((s) => {
-              if (s.id !== sessionId) return s;
+            setSessions((prev) => updateSession(prev, sessionId, (s) => {
               return {
                 ...s,
                 messages: s.messages.map((m) => {
@@ -3139,8 +3122,7 @@ return {
             const target = currentAssistantIdRef.current;
             if (!target) return;
             streamPhaseRef.current = "reasoning";
-            setSessions((prev) => prev.map((s) => {
-              if (s.id !== sessionId) return s;
+            setSessions((prev) => updateSession(prev, sessionId, (s) => {
               return {
                 ...s,
                 messages: s.messages.map((m) => {
@@ -3453,8 +3435,7 @@ return {
             const assistantIdAtDone = currentAssistantIdRef.current;
             const replaced = (() => {
               if (!assistantIdAtDone) return false;
-              setSessions((prev) => prev.map((s) => {
-                if (s.id !== sessionId) return s;
+              setSessions((prev) => updateSession(prev, sessionId, (s) => {
                 const target = s.messages.find((m) => m.id === assistantIdAtDone);
                 if (!target) return s;
                 // Only use `text` as fallback if the assistant has
@@ -3492,8 +3473,7 @@ return {
               // Fallback: stamp the trailing assistant row with
               // `stopReason` (preserves the old behavior when we
               // somehow don't have a target id).
-              setSessions((prev) => prev.map((s) => {
-                if (s.id !== sessionId) return s;
+              setSessions((prev) => updateSession(prev, sessionId, (s) => {
                 const msgs = [...s.messages];
                 for (let i = msgs.length - 1; i >= 0; i--) {
                   if (msgs[i].role === "assistant") {
@@ -3527,16 +3507,14 @@ return {
                 // 内存里也同步，否则本轮折叠头展开时「思考」行仍按「进行中」
                 // 渲染（active 靠 endedAt 判定），和落库后的表现不一致。
                 if (closed !== finalMsg.unified_steps) {
-                  setSessions((prev) => prev.map((s) =>
-                    s.id !== sessionId ? s : {
-                      ...s,
-                      messages: s.messages.map((m) =>
-                        m.id === assistantIdAtDone
-                          ? { ...m, unified_steps: closed }
-                          : m,
-                      ),
-                    },
-                  ));
+                  setSessions((prev) => updateSession(prev, sessionId, (s) => ({
+                    ...s,
+                    messages: s.messages.map((m) =>
+                      m.id === assistantIdAtDone
+                        ? { ...m, unified_steps: closed }
+                        : m,
+                    ),
+                  })));
                 }
               }
             }
@@ -3568,8 +3546,7 @@ return {
             // + "正在思考" with no explanation.
             if (assistantIdAtDone && runningToolRef.current.size > 0) {
               const strandedIds = new Set(runningToolRef.current.keys());
-              setSessions((prev) => prev.map((s) => {
-                if (s.id !== sessionId) return s;
+              setSessions((prev) => updateSession(prev, sessionId, (s) => {
                 return {
                   ...s,
                   messages: s.messages.map((m) => {
@@ -3733,8 +3710,7 @@ return {
                 snapshot.sessionId,
                 detectToolError,
               );
-              setSessions((prev) => prev.map((s) => {
-                if (s.id !== snapshot.sessionId) return s;
+              setSessions((prev) => updateSession(prev, snapshot.sessionId, (s) => {
                 return {
                   ...s,
                   messages: reloaded,
@@ -3758,8 +3734,7 @@ return {
       // first, use inside setSessions updater.
       const assistantIdAtCatch = currentAssistantIdRef.current;
       const errText = localizeStreamError(String(e));
-      setSessions((prev) => prev.map((s) => {
-        if (s.id !== sessionId) return s;
+      setSessions((prev) => updateSession(prev, sessionId, (s) => {
         return {
           ...s,
           messages: s.messages.map((m) =>
@@ -4003,7 +3978,7 @@ return {
       if (restoredCtx) setContextUsage(restoredCtx);
       // 全量重拉后本地就是完整列表，翻页入口随之关闭。
       setHistoryPaging((prev) => ({ ...prev, [activeSessionId]: { hasMore: false } }));
-      setSessions((prev) => prev.map((s) => s.id === activeSessionId ? { ...s, messages } : s));
+      setSessions((prev) => updateSession(prev, activeSessionId, (s) => ({ ...s, messages })));
     } catch (e) { reportError("app", e); }
   }, [activeSessionId]);
 
@@ -4018,7 +3993,7 @@ return {
       if (restoredCtx) setContextUsage(restoredCtx);
       // 全量重拉后本地就是完整列表，翻页入口随之关闭。
       setHistoryPaging((prev) => ({ ...prev, [activeSessionId]: { hasMore: false } }));
-      setSessions((prev) => prev.map((s) => s.id === activeSessionId ? { ...s, messages } : s));
+      setSessions((prev) => updateSession(prev, activeSessionId, (s) => ({ ...s, messages })));
     } catch (e) { reportError("app", e); }
   }, [activeSessionId]);
 
