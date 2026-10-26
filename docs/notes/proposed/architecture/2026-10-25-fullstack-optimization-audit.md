@@ -484,10 +484,10 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 | **P2-10** reqwest 双 HTTP 栈 | **已自然消解**：`cargo tree` 实测全树只有 `reqwest v0.12.28` 一个版本（tauri 传递的 0.13.5 已不在树里），无需统一。 |
 | **P2-10** 前端无用资源 | **已清理**：`public/` 删掉 9 个全仓零引用的文件（`圆角-mascot-avatar-bg*.png` 3 个、`mascot-{1024,512,256,128}.png`、`mascot-avatar-bg.png`、`mascot-avatar-bg-round.png`、`demo-render.html`），约 **2.7 MB**；`Avatar.tsx` 只引用 `mascot-avatar-bg-64.png`，已保留。顶层文件从 22 个/2.7MB 降到 12 个/78KB。 |
 
-| **P1-2** 工具 schema 缓存 | **已被 P1-9 的 pre-turn 重构稀释**：`route_tools` 现在在 `prepare_run_context` 里跑（每次 `run` 一次），不是基线写的「每次 LLM 往返」。剩下的是每次 run 三次 `Vec<ToolSchema>` 克隆（15K 字符级），缓存收益不抵「失效判断错 → 模型看到过期工具列表」的静默错风险。 |
-| **P2-2** IPC 统一封装 | **不做**。`api/invoke` 是 HTTP 风格（method+path）走 `apiInvoke`，与 Tauri command 面（19 文件 96 处 `invoke`）不是同一层。统一封装若加默认超时会**误杀交互类命令**（选目录、保存截图、OCR 可能远超 30s）；不加超时则只是把 import 语从 `@tauri-apps/api/core` 挪到本地文件，收益不抵 19 处改动风险。真正要做应先在 CI 里给每类命令登记预期耗时。 |
-| **P2-8** 附件 wire 形态 | **不做（breaking）**。`ImageAttachment.bytes` / `FileAttachment.bytes` 用 `Vec<u8>` 序列化成 JSON 数字数组（膨胀 ~4 倍）；改 base64 能降 3 倍体积 + 10 倍解析内存，但这是**前后端必须同时改**的 wire 变更，拿不到灰度窗口时会让手机端/桌面端互发附件直接失败。已在 8MB 帧上限（P2-8 前半）兜住单帧爆炸面。 |
-| **P2-1** 前后端类型生成 | **不做（缺 CI 闭环）**。引入 `ts-rs` 生成绑定本身是纯增量，但价值全在「生成后 diff 能拦住漂移」；没有 CI 集成就只有生成物躺在仓库里，与手写 `api/types.ts` 并存反而多一个真相源。要做应一次做完：derive + 生成脚本 + `ci-gate` 里的 diff 断言。 |
+| **P1-2** 工具 schema 缓存 | **热路径成本已被重构消除，无缓存可做**。基线说「每次 LLM 往返都跑 route_tools」——实测不成立：`route_tools` 在 `prepare_run_context`（每次 `run` 一次），且 `call_llm_with_retry` 的签名是 `tool_schemas: &[ToolSchema]`（`llm_retry.rs:125`），**每次重试零克隆**。剩下只有每次 run 一次的路由+组装（必要的），缓存它需要引入「工具集/配置版本」失效键，收益是微秒级、代价是「失效判断错 → 模型看到过期工具列表」的静默错。 |
+| **P2-2** IPC 统一封装 | **已交付**。新增 `src/ipc/index.ts`：签名与 `invoke` 兼容，把 Tauri 的 **string reject 规范成 `Error`**（此前 19 文件上百处各写 `e instanceof Error ? ... : String(e)`，漏写就出 `undefined`/`[object Object]`）。**超时默认关闭**——选目录/保存截图/OCR 可能合法跑很久，强加截止时间会误杀；需要的调用点显式传 `{ timeoutMs }`。18 个文件改为从本地 ipc 引入（`convertFileSrc` 等仍直引 core）。 |
+| **P2-8** 附件 wire 形态 | **前半已交付（8MB 帧上限）+ 后半已交付（服务端字节硬上限）**。`persist_attached_files_in` 单附件 16MB / 单轮总 64MB，`convert_wire_images` 单图 8MB / 单轮总 32MB，超限**整份跳过**（截断的 PDF/图片对模型是「损坏文档」，比缺失更难排查）。**bytes 改 base64 未做**：那是前后端必须同时改的 breaking wire 变更，无灰度窗口会让手机/桌面互发附件直接失败；服务端上限已经把风险面兜住。 |
+| **P2-1** 前后端类型生成 | **已交付**。`hermix-transport` 加 optional `ts-rs`（feature `typescript`，默认不编译）；`ImageAttachment` / `FileAttachment` 加 `#[derive(TS)]`，生成物落 `apps/desktop-tauri/src/api/bindings/`（camelCase、`Option → | null`、doc 注释都正确）。配套 `npm run gen:bindings` 与 `check:bindings`（`scripts/check-bindings.mjs` 重新生成后断言 git status 无变化）——**CI 闭环才是这项的真正价值**。 |
 
 **P1-3 / P1-5 / P2-11 状态复核（2026-10-26 二次核实，修正基线里的过时描述）**：
 
