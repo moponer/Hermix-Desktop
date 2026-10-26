@@ -389,11 +389,14 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 | 文件 | 内容 |
 |---|---|
-| `local_agent_service/mod.rs` | 组合根（**5219 行**，−434） |
+| `local_agent_service/mod.rs` | 组合根（**5036 行**，−617） |
 | `local_agent_service/messages.rs` | `strip_transient_nudges` / `merge_consecutive_assistant_messages` / `with_attached_files_note`（无 IO、无 `self`） |
 | `local_agent_service/reply_fallback.rs` | `summarize_tool_results_for_empty_reply`（110 行，输入只有 `&[Message]`） |
 | `local_agent_service/prefetch_adapter.rs` | `SafeRegistryWrapper`（33 行，`Arc<ToolRegistry>` → prefetch `SafeToolRegistry` 桥接） |
 | `local_agent_service/config_resolve.rs` | `resolve_workspace` / `apply_overrides` / `inject_thinking_directive` / `looks_like_openrouter` / `default_permission`（182 行，全是无 `self` 的关联函数） |
+| `local_agent_service/turn_registry.rs` | `TurnOutcome` + `signal_interrupt` / `take_steer_buffer` + `interrupt_session` / `steer_session` / `register_active` / `unregister_active` / `begin_turn_record` / `end_turn_record` / `interrupt_all`（206 行） |
+
+**第五刀的可见性要点**：这批是 `impl LocalAgentService` 的方法，但字段是父模块私有的 —— Rust 里子模块**可以**访问父模块私有字段，所以搬家不需要放宽任何字段可见性；只有方法本身要补 `pub(super)`（`interrupt_session` / `steer_session` 原本就是 `pub`，对外签名不变）。
 
 搬移零行为变化（函数体逐字照搬，只加 `pub(super)` 与模块 import），并给两个函数补了单测（空 assistant 丢弃与合并、附件后缀只在有文件时追加）。验证：agent **1190 全绿**（+2 新测试）。
 
@@ -402,7 +405,7 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 1. ~~`SafeRegistryWrapper` + prefetch 适配~~ **已做**（`prefetch_adapter.rs`）
 2. ~~`summarize_tool_results_for_empty_reply`~~ **已做**（`reply_fallback.rs`）
 3. ~~`resolve_workspace` / `apply_overrides` / `inject_thinking_directive` / `looks_like_openrouter` / `default_permission`~~ **已做**（`config_resolve.rs`）
-4. `register_active` / `unregister_active` / `begin_turn_record` / `end_turn_record` / `interrupt_*` / `steer_*` + `TurnOutcome` → `turn_registry.rs`（约 150 行，含 `Arc<Mutex<…>>` 状态，需先确认与 `state.rs` 的共享边界）
+4. ~~`register_active` / `unregister_active` / `begin_turn_record` / `end_turn_record` / `interrupt_*` / `steer_*` + `TurnOutcome`~~ **已做**（`turn_registry.rs`）
 5. `spawn_agent_loop`（290 行）+ `build_agent_config` 装配 → `assembler.rs`（依赖最多，最后做）
 
 **为什么不在这一轮全做完**：3/4/5 各自要动共享状态（`Arc<Mutex<...>>` 注册表、`AgentLoop` 装配参数），一旦搬错就是运行期行为差异，而不是编译错误。1/2 是纯函数，可以继续按同样方式推进；3 之后再往下必须先补"装配结果快照"测试。
