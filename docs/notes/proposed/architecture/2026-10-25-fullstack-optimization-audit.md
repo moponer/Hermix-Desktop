@@ -379,6 +379,14 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 验证：`cargo check -p hermix-agent --all-targets` 零错误零警告；agent **1197 passed, 0 failed**（含 3 条流式语义锁 + 8 条 replay 端到端），与抽取前基线一致。
 
+**外层合并已交付（2026-10-26 夜，第二刀收尾）**：批次 8 结尾列的剩余双循环债务里，inner retry loop 已随 `call_turn_llm` 消除；本刀再收掉 watchdog 装配与 `LoopState` 初始化两份——
+- `TurnBudget`（`arm` / `stalled` / `disarm`）：原 run/run_stream 各一份的 48 行 watchdog 块收成单一实现，`deadline_secs == 0` 关闭语义保留；超时终止走新方法 `finalize_transition_stall`（`persist_session_terminal` + `finalize_agent_result`），`finish_reason` 差异（run 固定 `turn_transition_stall`，run_stream 优先 `last_finish_reason`）保留在调用方。
+- `prepare_run_state`：`prepare_run_context` 解构 + `LoopState`/计数器/watchdog 初始化（~25 行 × 2）收成一份，返回 `RunSetup`，调用方解构回原变量名、后续代码零改动；init 日志经 `path` 参数保留 `(run)` / `(run_stream)` 区分。
+- 一处有意漂移消除：run 侧 watchdog warn 文本原本带 `(run)` 后缀、run_stream 侧没有（两份各写一遍的漂移证据），统一为无后缀（span name 已标识路径）。
+- `arm_stop_signal_forwarder` 随准备段进入 `prepare_run_state`，`run_stream(on_chunk=None)` 早退转 `run()` 的路径不再重复布防（原先 spawn 两个等待 task）。
+
+`run_loop.rs` 1730（批次 8 后）→ **1675 行**。验证：`cargo check -p hermix-agent --all-targets` 零警告；agent **1197 passed, 0 failed** 全绿。watchdog 装配与 LoopState 初始化至此在两条路径上只剩一份，P1-11 双循环债务仅剩流式 transport 专属段（on_chunk 包装 / stream_mute），属于合理的 transport 差异，不再追并。
+
 ### 批次 12（P1-14 存储收口，前半）— 2026-10-26 交付
 
 先核实再动手：**这不是并发缺陷，是四份重复实现**。`hermix-task` 的三处 `open_with_wal` 已经设了 `WAL + busy_timeout 5000`，`routes::open_sessions_db_for_read` 已经设了 `500ms + WAL + PASSIVE checkpoint` —— 行为都是对的，只是各写一遍，任何一处漂移都会让「某个库突然开始 SQLITE_BUSY」只在一半代码里出现。

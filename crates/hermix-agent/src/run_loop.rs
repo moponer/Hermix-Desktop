@@ -130,6 +130,60 @@ enum TurnLlmOutcome {
     Terminate(TurnLlmTermination),
 }
 
+/// Turn transition watchdog：工具轮结束（`do_post_tool_iteration` 返回）后
+/// [`Self::arm`]，下一轮 pre-turn 检查 [`Self::stalled`]；跨过检查点即
+/// [`Self::disarm`]。`turn_transition_deadline_secs == 0` 时关闭（legacy 行为）。
+/// 抽取自 `run()` / `run_stream()` 各一份的 48 行 watchdog 块。
+struct TurnBudget {
+    deadline_secs: u64,
+    armed_at: Option<Instant>,
+}
+
+impl TurnBudget {
+    fn new(deadline_secs: u64) -> Self {
+        Self { deadline_secs, armed_at: None }
+    }
+
+    /// 工具轮结束，开始计时到下一轮 pre-turn 检查点。
+    fn arm(&mut self) {
+        self.armed_at = Some(Instant::now());
+    }
+
+    /// 布防且超时 → 返回 `(elapsed_secs, deadline_secs)` 供日志使用。
+    fn stalled(&self) -> Option<(u64, u64)> {
+        let start = self.armed_at?;
+        if self.deadline_secs == 0 {
+            return None;
+        }
+        let elapsed = start.elapsed();
+        (elapsed > std::time::Duration::from_secs(self.deadline_secs))
+            .then(|| (elapsed.as_secs(), self.deadline_secs))
+    }
+
+    /// 本次迭代跨过了 pre-turn 检查点，先前的 stall 已清除。
+    fn disarm(&mut self) {
+        self.armed_at = None;
+    }
+}
+
+/// `run()` / `run_stream()` 共享的回合准备产物：`prepare_run_context` 的解构 +
+/// `LoopState` + 计数器 + watchdog，原先两条路径各写一遍（~25 行 × 2）。
+/// 调用方解构回原有的局部变量名，后续代码零改动。
+struct RunSetup {
+    ctx: ContextManager,
+    tool_schemas: Vec<ToolSchema>,
+    session_started_hooks_fired: bool,
+    persist_user_idx: Option<usize>,
+    codex_ack_continuations: u32,
+    autonomous_nudge_count: u32,
+    review_memory_at_end: bool,
+    task_hint: String,
+    state: LoopState,
+    empty_stop_retry_count: u32,
+    post_tool_summarize_count: u32,
+    turn_budget: TurnBudget,
+}
+
 // --- split-out impl blocks (pure relocation, see module docs) ---
 mod pre_turn;
 mod tool_prep;
@@ -168,6 +222,83 @@ impl AgentLoop {
                 interrupt.interrupt(None);
             });
         }
+    }
+
+    /// `run()` / `run_stream()` 共享的回合准备：`prepare_run_context` → 解构 →
+    /// `LoopState` / 计数器 / watchdog 初始化。原先两条路径各写一遍（~25 行），
+    /// 现在只剩这一份；`path` 只用于 init 日志文本，保留路径区分。
+    async fn prepare_run_state(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<&Vec<ToolSchema>>,
+        path: &str,
+    ) -> RunSetup {
+        crate::tool_result_processor::reset_terminal_hint_counter();
+        self.arm_stop_signal_forwarder();
+        let PreparedRun {
+            ctx,
+            tool_schemas,
+            session_started_hooks_fired,
+            persist_user_idx,
+            codex_ack_continuations,
+            autonomous_nudge_count,
+            review_memory_at_end,
+            task_hint,
+        } = self.prepare_run_context(messages, tools).await;
+        // Record the RESOLVED tool count (after routing) so the span
+        // shows how many tools the LLM actually sees, not the raw
+        // parameter count (which is 0 when caller passes None).
+        tracing::Span::current().record("tool_count", tool_schemas.len());
+        tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized ({path})");
+        self.notify_phase(&LoopPhase::Init, 0);
+        RunSetup {
+            ctx,
+            tool_schemas,
+            session_started_hooks_fired,
+            persist_user_idx,
+            codex_ack_continuations,
+            autonomous_nudge_count,
+            review_memory_at_end,
+            task_hint,
+            state: LoopState::with_convergence(
+                crate::convergence_detector::ConvergenceConfig::for_domain(
+                    self.config.domain_override,
+                ),
+            ),
+            empty_stop_retry_count: 0,
+            post_tool_summarize_count: 0,
+            turn_budget: TurnBudget::new(self.config.turn_transition_deadline_secs),
+        }
+    }
+
+    /// watchdog 超时的终止路径：持久化 + finalize（`finished_naturally=true`、
+    /// `interrupted=false`）。`finish_reason` 由调用方给——`run()` 传
+    /// `turn_transition_stall`，`run_stream()` 优先用 `last_finish_reason`。
+    fn finalize_transition_stall(
+        &self,
+        ctx: &ContextManager,
+        total_turns: u32,
+        tool_errors: &[hermix_core::ToolErrorRecord],
+        state: &LoopState,
+        session_id: &str,
+        review_memory_at_end: bool,
+        session_started_hooks_fired: bool,
+        persist_user_idx: Option<usize>,
+        finish_reason: Option<String>,
+    ) -> AgentResult {
+        self.persist_session_terminal(ctx, session_id, total_turns, review_memory_at_end);
+        self.finalize_agent_result(
+            ctx,
+            total_turns,
+            tool_errors,
+            state.cost_guard.accumulated_usage.clone(),
+            state.cost_guard.session_cost_usd,
+            session_started_hooks_fired,
+            persist_user_idx,
+            true,
+            false,
+            finish_reason,
+        )
     }
 
     /// 把 [`Self::call_turn_llm`] 返回的终止信号转成对应的 graceful `AgentResult`。
@@ -423,18 +554,8 @@ impl AgentLoop {
         messages: Vec<Message>,
         tools: Option<Vec<ToolSchema>>,
     ) -> Result<AgentResult, AgentError> {
-        // Reset per-run terminal hint counter so a new user message
-        // gets a fresh allowance of failure hints.
-        crate::tool_result_processor::reset_terminal_hint_counter();
-        self.arm_stop_signal_forwarder();
-
-        // ---- Step 1: Prepare the run context ----
-        // Sanitize messages, route tools, build the system prompt, hydrate the
-        // todo store, prefetch memory, and run the optional preflight compress.
-        // All of this is the "before any model call" work and is a pure
-        // function of the inputs (no streaming, no tool calls yet).
         #[allow(unused_mut)] // codex_ack_continuations is read-only in run() today but mut is fine for future edits
-        let PreparedRun {
+        let RunSetup {
             mut ctx,
             tool_schemas,
             session_started_hooks_fired,
@@ -443,91 +564,41 @@ impl AgentLoop {
             mut autonomous_nudge_count,
             review_memory_at_end,
             task_hint,
-        } = self.prepare_run_context(messages, tools.as_ref()).await;
-        // Record the RESOLVED tool count (after routing) so the span
-        // shows how many tools the LLM actually sees, not the raw
-        // parameter count (which is 0 when caller passes None).
-        tracing::Span::current().record("tool_count", tool_schemas.len());
-tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized (run)");
-self.notify_phase(&LoopPhase::Init, 0);
-let mut empty_stop_retry_count: u32 = 0;
-        let mut post_tool_summarize_count: u32 = 0;
-
+            mut state,
+            mut empty_stop_retry_count,
+            mut post_tool_summarize_count,
+            mut turn_budget,
+        } = self.prepare_run_state(messages, tools.as_ref(), "run").await;
+        // LoopState owns total_turns; aliased here for hot-path readability.
+        let mut total_turns: u32 = state.total_turns;
         let session_id = self.config.session_id.as_deref().unwrap_or("");
         let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
 
-        //introduced `state` as a bridge — every
-        // loop-local mutable would eventually live in `state` so a future
-        // `run_shared_loop(state, llm_caller)` helper could take only
-        // `&mut LoopState` instead of the original 11+ locals.
-        //(..) collapsed the bridge to its
-        // minimum: 4 manager structs (`cost_guard` / `retry_counters` /
-        // `context_pressure` / `timings` / `message_cache`) own the
-        // in-place-mutated fields, and `total_turns` is the only scalar
-        // still aliased to a local. The other 13 locals were either
-        // dropped or replaced with `record_*` / `bump_*` / `store_*`
-        // methods on the inner structs.
-        let mut state = LoopState::with_convergence(
-            crate::convergence_detector::ConvergenceConfig::for_domain(
-                self.config.domain_override,
-            ),
-        );
-        // LoopState owns total_turns; aliased here for hot-path readability.
-        let mut total_turns: u32 = state.total_turns;
-
-        // armed by `do_post_tool_iteration` once a turn
-        // finishes tool execution; checked at the top of the next
-        // iteration of this loop. Mirrors the run_stream() watchdog.
-        let mut transition_started_at: Option<Instant> = None;
-
         loop {
-            // turn transition watchdog (issue: tool approved
-            // → next turn never starts). Records the timestamp right
-            // after `do_post_tool_iteration` returns. If the next
-            // iteration of this loop has not crossed the next
-            // checkpoint within `turn_transition_deadline_secs` (the
-            // pre-turn setup tracing line below), the loop is
-            // considered stalled and we emit a terminal Done so the
-            // WS client recovers — instead of the user being stuck on
-            // the "正在思考…" indicator.
-            if let (Some(start), false) = (
-                transition_started_at,
-                self.config.turn_transition_deadline_secs == 0,
-            ) {
-                let elapsed = start.elapsed();
-                let deadline = std::time::Duration::from_secs(self.config.turn_transition_deadline_secs);
-                if elapsed > deadline {
-                    tracing::warn!(
-                        target: "hermix.agent",
-                        turn = total_turns,
-                        elapsed_secs = elapsed.as_secs(),
-                        deadline_secs = self.config.turn_transition_deadline_secs,
-                        "turn_transition_stall (run): no progress since post-tool-iteration; \
-                         emitting Done to recover WS client"
-                    );
-                    self.persist_session_terminal(
-                        &ctx,
-                        session_id,
-                        total_turns,
-                        review_memory_at_end,
-                    );
-                    return Ok(self.finalize_agent_result(
-                        &ctx,
-                        total_turns,
-                        &tool_errors,
-                        state.cost_guard.accumulated_usage.clone(),
-                        state.cost_guard.session_cost_usd,
-                        session_started_hooks_fired,
-                        persist_user_idx,
-                        true,
-                        false,
-                        Some("turn_transition_stall".to_string()),
-                    ));
-                }
+            // turn transition watchdog（原 run/run_stream 各一份的 48 行块，
+            // 现收进 TurnBudget；超时终止走 finalize_transition_stall）。
+            if let Some((elapsed_secs, deadline_secs)) = turn_budget.stalled() {
+                tracing::warn!(
+                    target: "hermix.agent",
+                    turn = total_turns,
+                    elapsed_secs,
+                    deadline_secs,
+                    "turn_transition_stall: no progress since post-tool-iteration; \
+                     emitting Done to recover WS client"
+                );
+                return Ok(self.finalize_transition_stall(
+                    &ctx,
+                    total_turns,
+                    &tool_errors,
+                    &state,
+                    session_id,
+                    review_memory_at_end,
+                    session_started_hooks_fired,
+                    persist_user_idx,
+                    Some("turn_transition_stall".to_string()),
+                ));
             }
-            // Reset the tracker: this iteration crossed the pre-turn
-            // checkpoint, so any prior stall has cleared.
-            transition_started_at = None;
+            turn_budget.disarm();
 
             tracing::debug!(phase = %LoopPhase::PreTurnSetup, turn = total_turns, "run: pre-turn setup");
 self.notify_phase(&LoopPhase::PreTurnSetup, total_turns);
@@ -880,7 +951,7 @@ let outcome = crate::empty_response_handler::decide_empty_response(
             // pre-turn setup. Arming AFTER do_tool_turn (the old spot)
             // left zero awaits between arm and check, making the
             // watchdog structurally unable to fire.
-            transition_started_at = Some(Instant::now());
+            turn_budget.arm();
             let outcome = self.do_tool_turn(
                 &mut ctx,
                 &mut state,
@@ -993,22 +1064,7 @@ let outcome = crate::empty_response_handler::decide_empty_response(
                 });
             });
 
-        let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
-        //: `run_stream` setup was an open-coded
-        // re-implementation of `prepare_run_context`. The two functions
-        // diverge only in their *non-prepare* concerns — `run()` is
-        // non-stream, `run_stream()` wraps the chunk callback and
-        // tracks `last_finish_reason`. The "before any model call"
-        // work (sanitize / strip / task_hint / route_tools /
-        // system_prompt / session_start hook / hydrate_todo /
-        // persist_user_idx / codex+autonomous counters /
-        // review_memory_at_end / memory_prefetch /
-        // auto_compress_if_over_threshold) is identical and now
-        // lives in one place. The tool-schemas tracing that used to
-        // live only in `run_stream` was promoted to
-        // `prepare_run_context` so both call sites emit the same
-        // diagnostic.
-        let PreparedRun {
+        let RunSetup {
             mut ctx,
             tool_schemas,
             session_started_hooks_fired,
@@ -1017,85 +1073,44 @@ let outcome = crate::empty_response_handler::decide_empty_response(
             mut autonomous_nudge_count,
             review_memory_at_end,
             task_hint,
-        } = self.prepare_run_context(messages, tools.as_ref()).await;
-        // Record the RESOLVED tool count (after routing) so the span
-        // shows how many tools the LLM actually sees.
-        tracing::Span::current().record("tool_count", tool_schemas.len());
-        tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized (run_stream)");
-self.notify_phase(&LoopPhase::Init, 0);
-        let mut empty_stop_retry_count: u32 = 0;
-        let mut post_tool_summarize_count: u32 = 0;
+            mut state,
+            mut empty_stop_retry_count,
+            mut post_tool_summarize_count,
+            mut turn_budget,
+        } = self.prepare_run_state(messages, tools.as_ref(), "run_stream").await;
+        let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
+        // LoopState owns total_turns; aliased here for hot-path readability.
+        let mut total_turns: u32 = state.total_turns;
         let session_id = self.config.session_id.as_deref().unwrap_or("");
 
-        let mut state = LoopState::with_convergence(
-            crate::convergence_detector::ConvergenceConfig::for_domain(
-                self.config.domain_override,
-            ),
-        );
-        //: same as in `run`. Only `total_turns`
-        // keeps the local-alias pattern. The two message caches live
-        // on `state.message_cache` (mutated in place) and the two
-        // timings live on `state.timings` (mutated in place).
-        let mut total_turns: u32 = state.total_turns;
-
-        // armed by `do_post_tool_iteration` once a turn
-        // finishes tool execution; checked at the top of the next
-        // iteration of this loop. See watchdog block below.
-        let mut transition_started_at: Option<Instant> = None;
-
         loop {
-            // turn transition watchdog (issue: tool approved
-            // → next turn never starts). Records the timestamp right
-            // after `do_post_tool_iteration` returns. If the next
-            // iteration of this loop has not crossed the next
-            // checkpoint within `turn_transition_deadline_secs` (the
-            // pre-turn setup tracing line below), the loop is
-            // considered stalled and we emit a terminal Done so the
-            // WS client recovers — instead of the user being stuck on
-            // the "正在思考…" indicator.
-            if let (Some(start), false) = (
-                transition_started_at,
-                self.config.turn_transition_deadline_secs == 0,
-            ) {
-                let elapsed = start.elapsed();
-                let deadline = std::time::Duration::from_secs(self.config.turn_transition_deadline_secs);
-                if elapsed > deadline {
-                    tracing::warn!(
-                        target: "hermix.agent",
-                        turn = total_turns,
-                        elapsed_secs = elapsed.as_secs(),
-                        deadline_secs = self.config.turn_transition_deadline_secs,
-                        "turn_transition_stall: no progress since post-tool-iteration; \
-                         emitting Done to recover WS client"
-                    );
-                    self.persist_session_terminal(
-                        &ctx,
-                        session_id,
-                        total_turns,
-                        review_memory_at_end,
-                    );
-                    let mut fr = last_finish_reason.clone();
-                    if fr.is_none() {
-                        fr = Some("turn_transition_stall".to_string());
-                    }
-                    return Ok(self.finalize_agent_result(
-                        &ctx,
-                        total_turns,
-                        &tool_errors,
-                        state.cost_guard.accumulated_usage.clone(),
-                        state.cost_guard.session_cost_usd,
-                        session_started_hooks_fired,
-                        persist_user_idx,
-                        true,
-                        false,
-                        fr,
-                    ));
-                }
+            // turn transition watchdog（同 run()：TurnBudget 单一实现）。
+            if let Some((elapsed_secs, deadline_secs)) = turn_budget.stalled() {
+                tracing::warn!(
+                    target: "hermix.agent",
+                    turn = total_turns,
+                    elapsed_secs,
+                    deadline_secs,
+                    "turn_transition_stall: no progress since post-tool-iteration; \
+                     emitting Done to recover WS client"
+                );
+                return Ok(self.finalize_transition_stall(
+                    &ctx,
+                    total_turns,
+                    &tool_errors,
+                    &state,
+                    session_id,
+                    review_memory_at_end,
+                    session_started_hooks_fired,
+                    persist_user_idx,
+                    Some(
+                        last_finish_reason
+                            .clone()
+                            .unwrap_or_else(|| "turn_transition_stall".to_string()),
+                    ),
+                ));
             }
-            // Reset the tracker: this iteration crossed the pre-turn
-            // checkpoint, so any prior stall has cleared. The next
-            // post-tool-iteration will set it again.
-            transition_started_at = None;
+            turn_budget.disarm();
 
             tracing::debug!(phase = %LoopPhase::PreTurnSetup, turn = total_turns, "run_stream: pre-turn setup");
 self.notify_phase(&LoopPhase::PreTurnSetup, total_turns);
@@ -1521,7 +1536,7 @@ let outcome = crate::empty_response_handler::decide_empty_response(
             // arm-after-execution spot had no awaits between arm and
             // check, so the watchdog could never fire. Arming before
             // do_tool_turn covers the approval wait + tool execution.
-            transition_started_at = Some(Instant::now());
+            turn_budget.arm();
             let outcome = self.do_tool_turn(
                 &mut ctx,
                 &mut state,
