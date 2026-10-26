@@ -578,3 +578,11 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 - 顺带收口 provider 里 **7 处逐字重复**的非 2xx 构造（`provider.rs` 3 非流式 + 2 流式、`api_bridge.rs` 1 + 1）到该辅助函数。
 
 验证：`cargo check -p hermix-agent --all-targets` 零警告；agent **1204 passed, 0 failed**（+7 新测试：5 状态码分类 + 2 Retry-After 端到端）。
+
+### 批次 14（P2-8 WS 入站帧上限）— 2026-10-26 交付
+
+`mobile_ws::ws_stream_upgrade` 给 `WebSocketUpgrade` 显式设 `max_frame_size` / `max_message_size` = **8 MB**（此前依赖 axum 默认 64MB 单帧；HTTP 侧 `RequestBodyLimitLayer` 2MB 不覆盖 WS）。取值依据：附件以 JSON 数字数组走帧（每字节 ~4 字符、解析放大 ~10 倍内存），8MB ≈ HTTP 侧 2MB 原始字节的膨胀后体积；frame 与 message 同值是因为客户端通常一条消息一个帧、不依赖分片，设小会让正常附件被直接断开。
+
+验证：`cargo check -p hermix-server --all-targets` 零警告；server **506 passed, 0 failed**（与基线一致）。
+
+**未做**：附件改二进制帧 / base64 + 服务端字节数硬上限（原方向的后半）——需要动 `hermix-transport::ImageAttachment` 的 wire 形态与前后端两侧，单独一批。

@@ -52,10 +52,19 @@ pub(crate) async fn ws_stream_upgrade(
         )
             .into_response();
     }
-    upgrade.on_upgrade(move |socket| async move {
-        let transport = crate::ws_transport::WsTransport::new(socket);
-        crate::ws::handle_ws_stream(transport, state, session_id).await;
-    })
+    // 显式帧/消息上限（P2-8）：此前依赖 axum 默认 64MB 单帧，而 WS 入站帧
+    // 不受 HTTP 侧 `RequestBodyLimitLayer`（2MB）约束。附件以 JSON 数字数组
+    // 走帧（每个字节编码成 ~4 字符，解析放大 ~10 倍内存），8MB 上限约等于
+    // HTTP 侧 2MB 原始字节的膨胀后体积。frame 与 message 取同值：客户端通常
+    // 把一条消息放在一个帧里，不依赖分片，设小会让正常附件被直接断开。
+    const WS_MAX_BYTES: usize = 8 * 1024 * 1024;
+    upgrade
+        .max_frame_size(WS_MAX_BYTES)
+        .max_message_size(WS_MAX_BYTES)
+        .on_upgrade(move |socket| async move {
+            let transport = crate::ws_transport::WsTransport::new(socket);
+            crate::ws::handle_ws_stream(transport, state, session_id).await;
+        })
 }
 
 /// 跑一遍与非 HTTP 面同源的设备鉴权，产出 `Origin`。
