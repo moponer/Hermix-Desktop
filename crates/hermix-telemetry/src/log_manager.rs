@@ -262,8 +262,29 @@ fn format_event(event: &Event<'_>, json_mode: bool) -> String {
             }
         }
 
+        /// Plain line: `ts LEVEL [target] msg key=value …`.
+        ///
+        /// Structured fields used to be dropped here, which silently
+        /// discarded every `tracing::info!(api_ms = …, tool_ms = …)`
+        /// the agent emits — `turn report`, the turn watchdog's
+        /// `elapsed_secs`/`deadline_secs`, `handle_max_iterations`'
+        /// `error=…`. Latency triage was impossible from the log for
+        /// that reason alone. Values are collapsed to one line so the
+        /// file stays line-delimited.
         fn finish_plain(&self, ts: &str, level: &str, target: &str) -> String {
-            format!("{} {} [{}] {}\n", ts, level, target, self.msg.trim_end())
+            let msg = self.msg.trim_end().replace('\n', " ");
+            if self.other_fields.is_empty() {
+                return format!("{ts} {level} [{target}] {msg}\n");
+            }
+            let mut line = format!("{ts} {level} [{target}] {msg}");
+            for (k, v) in &self.other_fields {
+                line.push(' ');
+                line.push_str(k);
+                line.push('=');
+                line.push_str(&v.replace('\n', " "));
+            }
+            line.push('\n');
+            line
         }
     }
 
@@ -673,20 +694,14 @@ pub fn init_unified_telemetry(config: &TelemetryConfig) -> TelemetryGuard {
             .try_init(),
     };
 
-    // OTLP layer (only if feature is enabled and endpoint is set).
-    #[cfg(feature = "otlp")]
-    if let Some(ref ep) = config.otlp_endpoint {
-        if !ep.is_empty() {
-            match otlp::build_otel_layer(&config.service_name, ep) {
-                Ok(layer) => {
-                    let _ = tracing_subscriber::registry().with(layer).try_init();
-                }
-                Err(e) => {
-                    eprintln!("hermes-telemetry: OTLP init failed: {}", e);
-                }
-            }
-        }
-    }
+    // OTLP（P3-5）：原实现在这里再建一个 registry 并 `try_init()`。全局
+    // subscriber 已由上面的主 registry 设置，第二次 `try_init` **必然** Err 且
+    // 被 `let _ =` 吞掉 —— 这条链路构造上不可能生效，却让人以为"配了 endpoint
+    // 就有 trace"。要真正接进来，OTLP layer 必须进**同一个** registry 的静态
+    // Layer 组合（`Option<L>` 没有 Layer impl，得在下面 8 个 match 分支里各带
+    // 一次，或统一改成 boxed layer），属独立批次。当前 `otlp` feature 也从未
+    // 在任何构建里启用，所以先删掉这条假链路；`otlp.rs` 与 feature 定义保留，
+    // 接线时复用。
 
     TelemetryGuard { _inner: Some(()) }
 }
@@ -742,5 +757,34 @@ mod tests {
         .unwrap();
         let lines = read_log_range(tmp.path(), "server.log", 1, 3).unwrap();
         assert_eq!(lines, vec!["line1", "line2"]);
+    }
+
+    #[test]
+    fn plain_lines_keep_structured_fields() {
+        // The agent loop stamps `api_ms` / `tool_ms` / `elapsed_secs` /
+        // `error` on its events. Dropping them made "why is this turn
+        // slow" unanswerable from the log — only the bare message
+        // survived. One line per event, fields appended.
+        let tmp = TempDir::new().unwrap();
+        let layer = CategoryLayer::new(tmp.path(), DEFAULT_MAX_BYTES, 5, 7, false).unwrap();
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(
+                target: "hermix_agent_loop",
+                api_ms = 9_100u64,
+                tool_ms = 40u64,
+                has_visible_text = false,
+                "turn report"
+            );
+        });
+        let body = fs::read_to_string(tmp.path().join("agent.log")).unwrap();
+        assert!(body.contains("turn report"), "message lost: {body}");
+        assert!(body.contains("api_ms=9100"), "api_ms lost: {body}");
+        assert!(body.contains("tool_ms=40"), "tool_ms lost: {body}");
+        assert!(
+            body.contains("has_visible_text=false"),
+            "bool field lost: {body}"
+        );
+        assert_eq!(body.lines().count(), 1, "must stay one line per event");
     }
 }

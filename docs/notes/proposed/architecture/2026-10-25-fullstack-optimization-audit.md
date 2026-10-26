@@ -429,6 +429,14 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 验证：agent **1207 passed**、tools **808 passed** 全绿。（注：`agent_loop/types.rs::RepeatGuard::streak` 的 dead_code 警告来自并行会话对该文件的未提交改动，非本批引入。）
 
+### 批次 17（P3-5 OTLP 假链路）— 2026-10-26 交付
+
+删掉 `log_manager::init_unified_telemetry` 末尾的 OTLP 块：它再建一个 registry 并 `try_init()`，而全局 subscriber 已由主 registry 设置，第二次必 Err 且被 `let _ =` 吞 → 构造上不可能生效，却让人以为"配了 `HERMIX_OTLP_ENDPOINT` 就有 trace"。
+
+接线的真实成本已写进代码注释：OTLP layer 必须进**同一个** registry 的静态 Layer 组合（`Option<L>` 没有 Layer impl，得在 8 个 match 分支里各带一次，或统一改 boxed layer），属独立批次。`otlp.rs` 与 `otlp` feature 定义保留，接线时复用。
+
+验证：telemetry **13 passed** 全绿。
+
 ### 批次 11（P1-9 技能扫描缓存）— 2026-10-26 交付
 
 **先量后改**：新增探针 `skill_loader::tests::probe_scan_cost`（`#[ignore]`），实测 `with_dir + scan()`：
