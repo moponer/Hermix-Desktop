@@ -39,6 +39,7 @@ import {
 } from "./app/streamEvents";
 import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
 import type { SubAgentState, SubAgentEventPayload, MemberEventPayload, MemberTicketState } from "./types";
+import { usePolling } from "./hooks/usePolling";
 import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useArtifacts } from "./hooks/useArtifacts";
@@ -798,22 +799,12 @@ setPage("chat");
   // 条件是逻辑或，释放条件是两个信号同时为假。
   const [activeRuns, setActiveRuns] = useState(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    // 立即取一次，随后按固定间隔轮询。轮询而非 WS 推送：后端
-    // AutomationTriggered 事件当前没有前端消费者，且保活信号丢一次
-    // 无害（下次 tick 自愈），不值得为它新建一条 WS 消息类型。
-    const tick = async () => {
-      const n = await api.getActiveAutomationRuns();
-      if (!cancelled) setActiveRuns(n);
-    };
-    void tick();
-    const timer = window.setInterval(() => void tick(), KEEP_AWAKE_POLL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, []);
+  // 保活巡检（P2-4：共享 usePolling —— 隐藏页不发请求、恢复可见立即补一次）。
+  // 轮询而非 WS 推送：后端 AutomationTriggered 事件当前没有前端消费者，
+  // 且保活信号丢一次无害（下次 tick 自愈），不值得为它新建一条 WS 消息类型。
+  usePolling(async () => {
+    setActiveRuns(await api.getActiveAutomationRuns());
+  }, KEEP_AWAKE_POLL_MS);
 
   // 「运行会话时保持电脑唤醒」开关的状态镜像 + 手机是否在跑。
   // 开关本身存在 localStorage（自动化页写入），这里跟着事件同步，

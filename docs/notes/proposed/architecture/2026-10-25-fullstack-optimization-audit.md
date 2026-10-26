@@ -450,7 +450,10 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 验证：`tsc --noEmit` 通过；`check-design-guard` clean。
 
-**未做（其余 13 处，全是「定期拉取后端」）**：`App.tsx`(3：keep-awake / mobile-active / presence heartbeat)、`MissionBoardView`(2：members 10s / static 60s)、`TwinView`(历史)、`FileSearchWindow`(helper 状态 2s)、`useBackendConnection`、`useChannelsStatus`、`useCustomApps`、`CustomAppsView`、`ImChannelsCard` 配对轮询。这些要统一 query 缓存（含失效键与 `visibilitychange` 暂停、请求去重）后才谈收敛，属独立批次。另有 3 处非轮询用途（`main.tsx` 启动进度爬条、`chatStateReset` 的 approval retry 计时器 Map、测试）不改。
+**已迁移 4 处「定期拉取」到 `usePolling`（同批补完）**：新增 `hooks/usePolling.ts`——隐藏页不发请求、恢复可见**立即补一次**（否则最长等一个 interval 才刷新）、`run` 走 ref 避免闭包变化导致 interval 重建。
+- `FileSearchWindow`（2s 状态）、`TwinView`（8s 历史）、`CustomAppsView`（5s 自动刷新，保留失败阈值 + `immediate:false` 避免与首次加载重复）、`App.tsx` keep-awake（10s 保活巡检）。
+
+**未做（其余 9 处）**：`App.tsx` mobile-active(15s) / presence heartbeat(30s)、`MissionBoardView`(2：10s/60s)、`useBackendConnection`(30s，已有 visibility 判断)、`useChannelsStatus`(30s)、`useCustomApps`(退避轮询)、`ImChannelsCard` 配对轮询、`useSafeTimeout`。它们要么请求体量大（需请求去重/缓存键），要么已被现有 `visibilityState` 判断覆盖，收益低于改动风险。另有 3 处非轮询用途（`main.tsx` 启动进度爬条、`chatStateReset` 的 approval retry 计时器 Map、测试）不改。
 
 ### 其余剩余项的处置结论（2026-10-26 复核）
 

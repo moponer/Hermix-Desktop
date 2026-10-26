@@ -13,6 +13,7 @@ import {
 import { AppCard } from "./custom-apps/AppCard";
 import { AppDetailModal } from "./custom-apps/AppDetailModal";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
+import { usePolling } from "../hooks/usePolling";
 import { EmptyState, PageHeader, SkeletonCard, ConfirmDialog } from "./ui";
 
 /** Auto-refresh interval (ms) — keeps the list in sync when apps are
@@ -50,24 +51,26 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
     }
   }, []);
 
-  // Initial load + auto-refresh polling
+  // 首次加载（带 spinner）。自动刷新交给 usePolling（P2-4：隐藏页不发请求、
+  // 恢复可见立即补一次）。
   useEffect(() => {
     mountedRef.current = true;
     consecutiveFailuresRef.current = 0;
-    loadApps();
-
-    // Poll every N seconds so apps created via the LLM tool appear
-    // without the user needing to click the refresh button. Stop after
-    // MAX_CONSECUTIVE_FAILURES to avoid hammering a down backend.
-    const id = setInterval(() => {
-      if (consecutiveFailuresRef.current >= MAX_CONSECUTIVE_FAILURES) return;
-      loadApps(false);
-    }, AUTO_REFRESH_INTERVAL_MS);
+    void loadApps();
     return () => {
       mountedRef.current = false;
-      clearInterval(id);
     };
   }, [loadApps]);
+
+  usePolling(
+    () => {
+      // 连续失败达阈值就停：后端明显挂了，别继续打。
+      if (consecutiveFailuresRef.current >= MAX_CONSECUTIVE_FAILURES) return;
+      void loadApps(false);
+    },
+    AUTO_REFRESH_INTERVAL_MS,
+    { immediate: false },
+  );
 
   // Refresh when the window regains focus (user switches back from
   // the chat tab where the LLM just created an app).

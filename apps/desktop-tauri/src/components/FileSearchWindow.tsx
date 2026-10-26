@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fetchJSON } from "../api";
+import { usePolling } from "../hooks/usePolling";
 import { SAVE } from "./strings";
 
 // ── 类型（对应 hermix-filesearch core/model.rs 的 serde camelCase 输出） ──
@@ -129,23 +130,14 @@ export function FileSearchWindow() {
     } catch { /* ignore */ }
   }, []);
 
-  useEffect(() => {
-    let stopped = false;
-    const tick = async () => {
-      try {
-        const s = await fetchJSON<StatusResponse>("/v1/filesearch/status");
-        if (!stopped) setStatus(s);
-      } catch {
-        // helper 未运行 / 握手中：状态栏已有文案，不刷屏。
-      }
-    };
-    void tick();
-    const timer = window.setInterval(tick, 2000);
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-    };
-  }, []);
+  // 2s 状态轮询（P2-4）：隐藏页不发请求，恢复可见立即补一次。
+  usePolling(async () => {
+    try {
+      setStatus(await fetchJSON<StatusResponse>("/v1/filesearch/status"));
+    } catch {
+      // helper 未运行 / 握手中：状态栏已有文案，不刷屏。
+    }
+  }, 2000);
 
   // 搜索：150ms 防抖 + 请求序号防乱序 + abort 上一发。
   useEffect(() => {

@@ -26,6 +26,7 @@ import { MissionBoardView } from "./MissionBoardView";
 import { AlertTriangle, X } from "lucide-react";
 
 import * as api from "../api";
+import { usePolling } from "../hooks/usePolling";
 import type { AutomationTask, Session } from "../types";
 import { AliCharacter, type AliState } from "./twin/AliCharacter";
 import { TWIN_SESSION_ID, type TwinInlineApi } from "../app/routes";
@@ -147,11 +148,8 @@ export function TwinView({ sessions, onOpenChat, onOpenSession, onDeleteSession,
     }
   }, []);
 
-  useEffect(() => {
-    void loadHistory();
-    const t = setInterval(() => void loadHistory(), HISTORY_POLL_MS);
-    return () => clearInterval(t);
-  }, [loadHistory]);
+  // 8s 历史轮询（P2-4）：隐藏页不发请求，恢复可见立即补一次。
+  usePolling(loadHistory, HISTORY_POLL_MS);
 
   // 这一轮刚结束：立刻对齐一次落库历史，别让用户等下一个 8s 轮询
   // （那段时间里屏幕上还是内存里的两行，历史一到会闪一下）。
