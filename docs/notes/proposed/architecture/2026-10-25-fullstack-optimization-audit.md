@@ -462,6 +462,8 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 | **P3-2** focus embedded 单 Mutex | **不做**。正确修法是把 `conn` 改 `Arc<Mutex<Connection>>` 才能进 `spawn_blocking`（触及所有读写方法）；改用 `block_in_place` 反而制造「worker 变阻塞线程」的反模式（`registry.rs` 已有 12 处前车之鉴）。且 pre-turn 的 memory_prefetch 已有 3s/5s 超时兜底，收益被限制。 |
 | **P3-3** dev 体验 | **已满足**。`dev:vite` 脚本已存在；`optimizeDeps.include` 只列 2 个是真动态链（`plugin-fs` 经 desktopBridge、`docx-preview`），echarts/katex/refractor 是静态 import 且已进 `manualChunks`，vite 默认扫描能覆盖。原建议的 `optimizeDeps.entries` 自动扫描对变量路径无效。 |
 | **P2-10** esbuild.exe 移出 resources | **误判，不移**。它是**运行期必需**：`hermix-plugin/src/validate.rs::run_esbuild_check` 用它做工作台 JS/TS 真语法校验，`hx_packager` 用它把 TSX 编到 `app.js`。移出会让 `validate` 退回手写括号匹配兜底、打包链断掉。 |
+| **P2-10** reqwest 双 HTTP 栈 | **已自然消解**：`cargo tree` 实测全树只有 `reqwest v0.12.28` 一个版本（tauri 传递的 0.13.5 已不在树里），无需统一。 |
+| **P2-10** 前端无用资源 | **已清理**：`public/` 删掉 9 个全仓零引用的文件（`圆角-mascot-avatar-bg*.png` 3 个、`mascot-{1024,512,256,128}.png`、`mascot-avatar-bg.png`、`mascot-avatar-bg-round.png`、`demo-render.html`），约 **2.7 MB**；`Avatar.tsx` 只引用 `mascot-avatar-bg-64.png`，已保留。顶层文件从 22 个/2.7MB 降到 12 个/78KB。 |
 
 **P1-3 / P1-5 / P2-11 状态复核（2026-10-26 二次核实，修正基线里的过时描述）**：
 
