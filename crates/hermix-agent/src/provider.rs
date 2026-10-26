@@ -966,13 +966,16 @@ impl LlmProvider for GenericProvider {
 
         if !resp.status().is_success() {
             let status = resp.status();
+            let headers = resp.headers().clone();
             let body_text = resp
                 .text()
                 .await
                 .unwrap_or_else(|_| "<no body>".to_string());
-            return Err(AgentError::LlmApi(format!(
-                "API error {status}: {}", crate::agent_helpers::redact_body_for_log(&body_text)
-            )));
+            return Err(crate::agent_helpers::api_error_from_response(
+                status,
+                &headers,
+                &body_text,
+            ));
         }
 
         let resp_json: Value = resp
@@ -1050,8 +1053,13 @@ impl LlmProvider for GenericProvider {
 
             if !resp.status().is_success() {
                 let status = resp.status();
+                let headers = resp.headers().clone();
                 let body_text = resp.text().await.unwrap_or_else(|_| "<no body>".to_string());
-                yield Err(AgentError::LlmApi(format!("API error {status}: {}", crate::agent_helpers::redact_body_for_log(&body_text))));
+                yield Err(crate::agent_helpers::api_error_from_response(
+                    status,
+                    &headers,
+                    &body_text,
+                ));
                 return;
             }
 
@@ -1648,13 +1656,16 @@ impl LlmProvider for AnthropicProvider {
 
         if !resp.status().is_success() {
             let status = resp.status();
+            let headers = resp.headers().clone();
             let body_text = resp
                 .text()
                 .await
                 .unwrap_or_else(|_| "<no body>".to_string());
-            return Err(AgentError::LlmApi(format!(
-                "API error {status}: {}", crate::agent_helpers::redact_body_for_log(&body_text)
-            )));
+            return Err(crate::agent_helpers::api_error_from_response(
+                status,
+                &headers,
+                &body_text,
+            ));
         }
 
         let resp_json: Value = resp
@@ -1725,8 +1736,13 @@ impl LlmProvider for AnthropicProvider {
 
             if !resp.status().is_success() {
                 let status = resp.status();
+                let headers = resp.headers().clone();
                 let body_text = resp.text().await.unwrap_or_else(|_| "<no body>".to_string());
-                yield Err(AgentError::LlmApi(format!("API error {status}: {}", crate::agent_helpers::redact_body_for_log(&body_text))));
+                yield Err(crate::agent_helpers::api_error_from_response(
+                    status,
+                    &headers,
+                    &body_text,
+                ));
                 return;
             }
 
@@ -2080,13 +2096,16 @@ impl LlmProvider for OpenRouterProvider {
 
         if !resp.status().is_success() {
             let status = resp.status();
+            let headers = resp.headers().clone();
             let body_text = resp
                 .text()
                 .await
                 .unwrap_or_else(|_| "<no body>".to_string());
-            return Err(AgentError::LlmApi(format!(
-                "API error {status}: {}", crate::agent_helpers::redact_body_for_log(&body_text)
-            )));
+            return Err(crate::agent_helpers::api_error_from_response(
+                status,
+                &headers,
+                &body_text,
+            ));
         }
 
         let resp_json: Value = resp

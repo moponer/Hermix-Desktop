@@ -795,18 +795,62 @@ fn strip_prompt_mirror(s: &str) -> String {
     }
 }
 
-pub fn classify_error(err: &str) -> ErrorClass {
-    let lower = err.to_lowercase();
+/// 非 2xx 响应 → 统一的 [`hermix_core::AgentError::LlmApi`] 错误串。
+///
+/// 除了状态码与（已脱敏的）body，还把 `Retry-After` 响应头的秒数一并带上——
+/// `classify_error` / `parse_retry_after_ms` 都只在错误串上工作，而 header
+/// 此前只喂了内部限流追踪器，退避只能靠 body 散文猜。header 是权威值，
+/// 其秒数形态天然命中 `parse_retry_after_ms` 的 `(retry-after: N)` 分支。
+/// HTTP-date 形态不解析（罕见；落空即回退本地指数退避）。
+/// 同时收口 provider 里 7 处逐字重复的非 2xx 构造。
+pub(crate) fn api_error_from_response(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body_text: &str,
+) -> hermix_core::AgentError {
+    let retry_after_secs = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok());
+    let redacted = redact_body_for_log(body_text);
+    match retry_after_secs {
+        // 尾部形态：`parse_retry_after_ms` 要求数字的"下一词"为空或单位词，
+        // body 跟在后面会把下一词变成正文词而落空。
+        Some(secs) => hermix_core::AgentError::LlmApi(format!(
+            "API error {status}: {redacted} (retry-after: {secs})"
+        )),
+        None => hermix_core::AgentError::LlmApi(format!("API error {status}: {redacted}")),
+    }
+}
 
-    // Terminal quota / billing / plan errors — checked FIRST so they win
-    // over the generic rate-limit phrases below. Providers commonly wrap
-    // these in HTTP 429, but retrying cannot change the outcome: the
-    // budget resets on a daily/monthly boundary or requires a plan change.
-    // Retrying only burns the retry budget and adds up to ~90s of backoff
-    // before the (inevitable) failure surfaces. Policy mirrors ZCode's
-    // BigModel business-error table: transient load retries, quota/plan/
-    // permission does not — even when carried by 429.
-    if lower.contains("insufficient_quota")
+/// 从 provider 压平的错误串里取 HTTP 状态码。
+///
+/// 错误形态：`LLM API error: API error 400 Bad Request: {body}`
+/// （`provider.rs` 的 `format!("API error {status}: …")` + thiserror 的
+/// `LLM API error: ` 前缀）。只认紧跟在 `api error ` 之后的三位数字——
+/// 遍历每个出现点，跳过前缀里那个（`llm api error: `）与后面不接数字的。
+fn extract_http_status(lower: &str) -> Option<u16> {
+    const MARKER: &str = "api error ";
+    let mut from = 0;
+    while let Some(pos) = lower[from..].find(MARKER) {
+        let start = from + pos + MARKER.len();
+        let digits: String = lower[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if digits.len() == 3 {
+            return digits.parse().ok();
+        }
+        from = start;
+    }
+    None
+}
+
+/// 终态配额 / 计费 / 套餐错误。即使被 HTTP 429 承载也不重试：额度按日/月
+/// 边界重置或需改套餐，重试只烧重试预算、白等 ~90s 指数退避。
+/// 策略对齐 ZCode 的 BigModel 业务错误表：瞬时负载重试，配额/套餐/权限不重试。
+fn is_quota_error(lower: &str) -> bool {
+    lower.contains("insufficient_quota")
         || lower.contains("exceeded your current quota")
         || lower.contains("quota exhausted")
         || lower.contains("quota exceeded")
@@ -820,31 +864,25 @@ pub fn classify_error(err: &str) -> ErrorClass {
         || lower.contains("credit balance")
         || lower.contains("plan expired")
         || lower.contains("subscription expired")
-    {
-        return ErrorClass::Quota;
-    }
+}
 
-    // Rate limiting — exact status or well-known phrases
-    if lower.contains("rate limit")
+fn is_rate_limit_error(lower: &str) -> bool {
+    lower.contains("rate limit")
         || lower.contains("rate_limit")
         || lower.contains("too many requests")
-    {
-        return ErrorClass::RateLimit;
-    }
+}
 
-    // Context overflow
-    if lower.contains("context length")
+fn is_context_overflow_error(lower: &str) -> bool {
+    lower.contains("context length")
         || lower.contains("maximum context")
         || lower.contains("token limit")
         || lower.contains("context_length_exceeded")
         || lower.contains("reduce the length")
-    {
-        return ErrorClass::ContextOverflow;
-    }
+}
 
-    // Auth — exact status codes and well-known phrases
+fn is_auth_error(lower: &str) -> bool {
     // Use word-boundary checks for status codes to avoid substring matches
-    if lower.contains("401") && !lower.contains("4010") && !lower.contains("4011")
+    lower.contains("401") && !lower.contains("4010") && !lower.contains("4011")
         || lower.contains("403") && !lower.contains("4030") && !lower.contains("4031")
         || lower.contains("unauthorized")
         || lower.contains("unauthenticated")
@@ -853,12 +891,10 @@ pub fn classify_error(err: &str) -> ErrorClass {
         || lower.contains("invalid_api_key")
         || lower.contains("access denied")
         || lower.contains("forbidden")
-    {
-        return ErrorClass::Auth;
-    }
+}
 
-    // Retryable server / network errors
-    if lower.contains("500")
+fn is_retryable_error(lower: &str) -> bool {
+    lower.contains("500")
         || lower.contains("502")
         || lower.contains("503")
         || lower.contains("504")
@@ -873,7 +909,49 @@ pub fn classify_error(err: &str) -> ErrorClass {
         || lower.contains("overloaded")
         || lower.contains("temporarily unavailable")
         || lower.contains("service unavailable")
-    {
+}
+
+pub fn classify_error(err: &str) -> ErrorClass {
+    let lower = err.to_lowercase();
+
+    // --- HTTP 状态码优先（P1-12）---
+    // 旧实现全靠子串匹配：body 里的 "max_tokens 500 exceeds" 会被
+    // `contains("500")` 误判为 Retryable、白等 ~90s；反向地，Anthropic 的
+    // `overloaded_error` 若不含关键词就落 Fatal 直接放弃。现在状态码能解析
+    // 出来就按它分类，关键词判定只作兜底（两路共用下面的谓词）。
+    if let Some(status) = extract_http_status(&lower) {
+        // 终态配额/计费即使 429 也不重试（见 is_quota_error 的裁决记录）。
+        if is_quota_error(&lower) {
+            return ErrorClass::Quota;
+        }
+        // 400 携带 context_length_exceeded 属于上下文溢出，不是普通客户端错误。
+        if is_context_overflow_error(&lower) {
+            return ErrorClass::ContextOverflow;
+        }
+        return match status {
+            401 | 403 => ErrorClass::Auth,
+            429 => ErrorClass::RateLimit,
+            // 服务端错误 + 明确的"稍后重试"客户端状态。
+            408 | 425 | 500..=599 => ErrorClass::Retryable,
+            // 其余 4xx 是客户端错误：重试改变不了结果。
+            _ => ErrorClass::Fatal,
+        };
+    }
+
+    // --- 无状态码：子串兜底（沿用原有顺序）---
+    if is_quota_error(&lower) {
+        return ErrorClass::Quota;
+    }
+    if is_rate_limit_error(&lower) {
+        return ErrorClass::RateLimit;
+    }
+    if is_context_overflow_error(&lower) {
+        return ErrorClass::ContextOverflow;
+    }
+    if is_auth_error(&lower) {
+        return ErrorClass::Auth;
+    }
+    if is_retryable_error(&lower) {
         return ErrorClass::Retryable;
     }
 
@@ -1132,6 +1210,111 @@ mod tests {
             classify_error("rate limit exceeded, try again shortly"),
             ErrorClass::RateLimit
         );
+    }
+
+    #[test]
+    fn status_code_wins_over_body_keywords() {
+        // P1-12：body 里的 "500" 曾被 contains("500") 误判为 Retryable，
+        // 一个 400 客户端错误白等 ~90s 指数退避。
+        assert_eq!(
+            classify_error(
+                "LLM API error: API error 400 Bad Request: invalid_request_error: \
+                 max_tokens 500 exceeds the maximum allowed for this model"
+            ),
+            ErrorClass::Fatal,
+            "a 400 must not become Retryable just because the body mentions 500"
+        );
+        assert_eq!(
+            classify_error("LLM API error: API error 404 Not Found: model not found"),
+            ErrorClass::Fatal
+        );
+    }
+
+    #[test]
+    fn status_code_maps_server_errors_to_retryable() {
+        for status in ["500 Internal Server Error", "502 Bad Gateway", "529 overloaded_error"] {
+            assert_eq!(
+                classify_error(&format!("LLM API error: API error {status}: upstream failed")),
+                ErrorClass::Retryable,
+                "{status} must stay retryable even without a keyword"
+            );
+        }
+        assert_eq!(
+            classify_error("LLM API error: API error 408 Request Timeout: "),
+            ErrorClass::Retryable
+        );
+    }
+
+    #[test]
+    fn status_code_429_still_respects_quota_vocabulary() {
+        // 429 默认 RateLimit，但 body 的配额词汇仍是终态（P0 裁决）。
+        assert_eq!(
+            classify_error("LLM API error: API error 429 Too Many Requests: insufficient_quota"),
+            ErrorClass::Quota
+        );
+        assert_eq!(
+            classify_error("LLM API error: API error 429 Too Many Requests: slow down"),
+            ErrorClass::RateLimit
+        );
+    }
+
+    #[test]
+    fn status_code_400_with_context_vocabulary_is_overflow() {
+        assert_eq!(
+            classify_error(
+                "LLM API error: API error 400 Bad Request: context_length_exceeded"
+            ),
+            ErrorClass::ContextOverflow
+        );
+        assert_eq!(
+            classify_error("LLM API error: API error 401 Unauthorized: invalid_api_key"),
+            ErrorClass::Auth
+        );
+    }
+
+    #[test]
+    fn extract_http_status_skips_thiserror_prefix_and_non_numeric_tails() {
+        // thiserror 前缀里的 "API error" 后面跟的是 ": "，不是数字。
+        assert_eq!(
+            super::extract_http_status("llm api error: api error 400 bad request: x"),
+            Some(400)
+        );
+        assert_eq!(super::extract_http_status("api error 503 service unavailable"), Some(503));
+        assert_eq!(super::extract_http_status("connection reset"), None);
+        assert_eq!(super::extract_http_status("api error 40 too short"), None);
+    }
+
+    #[test]
+    fn api_error_carries_retry_after_header_for_backoff() {
+        use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("12"));
+        let err = api_error_from_response(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            &headers,
+            r#"{"error":{"message":"slow down"}}"#,
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("retry-after: 12"), "header value must be carried: {msg}");
+        // 权威值必须能被退避解析器捞到——此前 header 只喂了内部限流器，
+        // 退避只能靠 body 散文猜（P1-12）。
+        assert_eq!(parse_retry_after_ms(&msg), Some(12_000));
+        assert_eq!(classify_error(&msg), ErrorClass::RateLimit);
+    }
+
+    #[test]
+    fn api_error_without_retry_after_keeps_plain_shape() {
+        let headers = reqwest::header::HeaderMap::new();
+        let err = api_error_from_response(
+            reqwest::StatusCode::BAD_REQUEST,
+            &headers,
+            "invalid request: max_tokens 500 exceeds the maximum",
+        );
+        let msg = err.to_string();
+        assert!(!msg.contains("retry-after"), "no header → no suffix: {msg}");
+        // 端到端：provider 形态的错误串经 thiserror 前缀后仍按状态码分类，
+        // body 里的 "500" 不再把它误判成 Retryable。
+        assert_eq!(classify_error(&msg), ErrorClass::Fatal);
     }
 
     #[test]

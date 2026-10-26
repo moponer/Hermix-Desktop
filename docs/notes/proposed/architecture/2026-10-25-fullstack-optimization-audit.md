@@ -565,3 +565,16 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 - **为什么是端口而不是直接依赖**：`hermix-vault` 依赖 `hermix-config`（`hermix_home`）。让 config 反向依赖 vault 会成环；端口放 config、实现放 server 两条依赖都是单向的。
 - **迁移是惰性的**：已有明文 `config.yaml` 在**下一次保存**时自动迁移成引用，启动时不做写操作（避免启动即写盘）。因此「从不改配置」的用户，明文 key 会一直留到第一次保存为止 —— ACL 收紧同样只在写盘时生效。这条是已知边界，若要"启动即迁移"需另加一次显式迁移步骤。
 - **降级语义的两面**：写入侧降级（A 的拍板），读取侧不放行（避免把引用串当密钥）。二者不矛盾：前者保证用户能改配置，后者保证配置里出现的引用不会被误用。
+
+### 批次 13（P1-12 错误分类）— 2026-10-26 交付
+
+`classify_error` 由"纯子串匹配"改为**状态码优先、关键词兜底**：
+
+- 新增 `extract_http_status`：从 provider 压平的 `LLM API error: API error 400 Bad Request: {body}` 里取状态码（遍历每个 `api error ` 出现点，跳过 thiserror 前缀那个与后面不接三位数字的）。
+- 状态码分支：`401|403 → Auth`、`429 → RateLimit`、`408|425|500..=599 → Retryable`、其余 4xx → `Fatal`；进入前先判 `is_quota_error`（429 携带配额词汇仍是终态，P0 裁决）与 `is_context_overflow_error`（400 + `context_length_exceeded` 是溢出不是普通客户端错误）。
+- 原有五段子串判定抽成 `is_quota_error` / `is_rate_limit_error` / `is_context_overflow_error` / `is_auth_error` / `is_retryable_error`，状态码分支与无状态码兜底共用同一套关键词（顺序与内容逐字保留，无状态码路径行为不变）。
+- **P1-12 真正修掉的两个缺陷**：① `400` + body 含 `max_tokens 500 exceeds` 曾被 `contains("500")` 判 Retryable、白等 ~90s；② `529 overloaded_error` 一类非标准 5xx 若不含关键词会落 `Fatal` 直接放弃。现在都在状态码分支上正确归类。
+- **`Retry-After` 权威值接入**：新增 `api_error_from_response(status, headers, body)`，把响应头的 `Retry-After` 秒数带进错误串尾部（`… (retry-after: N)`）。此前 header 只喂了内部限流追踪器（`update_rate_limit`），退避只能靠 body 散文猜。形态放尾部是刻意的——`parse_retry_after_ms` 要求数字的"下一词"为空或单位词。HTTP-date 不解析（罕见，落空即回退本地指数退避）。
+- 顺带收口 provider 里 **7 处逐字重复**的非 2xx 构造（`provider.rs` 3 非流式 + 2 流式、`api_bridge.rs` 1 + 1）到该辅助函数。
+
+验证：`cargo check -p hermix-agent --all-targets` 零警告；agent **1204 passed, 0 failed**（+7 新测试：5 状态码分类 + 2 Retry-After 端到端）。
