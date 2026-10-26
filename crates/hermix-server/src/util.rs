@@ -421,19 +421,51 @@ pub(crate) fn parse_permission_level(value: Option<&str>) -> Option<PermissionLe
 }
 
 /// Convert wire-format images (raw bytes) to agent-format images (base64).
+/// 单张图片的硬上限（与 WS 帧上限对齐）。
+///
+/// 图片在这里被编码成 base64 塞进 LLM 请求体，体积再涨 33%；没有上限时
+/// 一张 50MB 的图会直接把请求体和内存一起撑爆（P2-8）。
+const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+
+/// 一轮全部图片的总上限。
+const MAX_TOTAL_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+
 /// 多图支持 — client sends `Vec<ImageAttachment>` with binary
 /// `bytes`; the LLM API needs `data:<mime>;base64,<...>` URLs, so we
 /// encode here.
+///
+/// 超限的图片整张跳过（写 warn），与附件走同一套"跳过而非截断"策略：
+/// 半张图对多模态模型来说是不可解析的输入。
 pub(crate) fn convert_wire_images(
     images: &Option<Vec<hermix_transport::ImageAttachment>>,
 ) -> Option<Vec<hermix_core::traits::AgentImage>> {
     images.as_ref().map(|imgs| {
-        imgs.iter()
-            .map(|img| hermix_core::traits::AgentImage {
+        let mut out = Vec::with_capacity(imgs.len());
+        let mut total: usize = 0;
+        for img in imgs {
+            if img.bytes.len() > MAX_IMAGE_BYTES {
+                tracing::warn!(
+                    bytes = img.bytes.len(),
+                    limit = MAX_IMAGE_BYTES,
+                    "convert_wire_images: image exceeds per-image limit; skipped"
+                );
+                continue;
+            }
+            total = total.saturating_add(img.bytes.len());
+            if total > MAX_TOTAL_IMAGE_BYTES {
+                tracing::warn!(
+                    total,
+                    limit = MAX_TOTAL_IMAGE_BYTES,
+                    "convert_wire_images: total image budget exhausted; remaining skipped"
+                );
+                break;
+            }
+            out.push(hermix_core::traits::AgentImage {
                 base64: base64::engine::general_purpose::STANDARD.encode(&img.bytes),
                 mime_type: img.mime_type.clone(),
-            })
-            .collect()
+            });
+        }
+        out
     })
 }
 

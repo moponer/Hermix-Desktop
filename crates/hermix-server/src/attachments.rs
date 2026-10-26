@@ -11,9 +11,23 @@
 use hermix_transport::FileAttachment;
 use std::path::{Path, PathBuf};
 
+/// 单个附件的硬上限。
+///
+/// 附件以 `Vec<u8>` 走 wire（JSON 数字数组，膨胀约 4 倍），HTTP 侧的
+/// `RequestBodyLimitLayer` 只挡到 2MB 量级就已放大成十几 MB；WS 侧又有
+/// 8MB 帧上限。一个 16MB 的附件已经接近"模型不可能用得上"的量级，再大
+/// 只是把磁盘写满（P2-8：此前 `fs::write` 完全没有上限）。
+const MAX_ATTACHMENT_BYTES: usize = 16 * 1024 * 1024;
+
+/// 单轮全部附件的总上限：防止一次请求带 20 个 16MB 把磁盘吃光。
+const MAX_TOTAL_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
+
 /// Persist every attachment under `dir`; returns the paths that were
 /// written successfully (failed writes are logged and skipped — a broken
 /// attachment must not fail the whole turn).
+///
+/// 超限的附件整份跳过而不是截断：截断后的 PDF/图片对模型来说是「损坏的
+/// 文档」，比附件缺失更难排查（模型会反复重试解析）。
 pub fn persist_attached_files_in(dir: &Path, files: &[FileAttachment]) -> Vec<String> {
     if files.is_empty() {
         return Vec::new();
@@ -23,7 +37,27 @@ pub fn persist_attached_files_in(dir: &Path, files: &[FileAttachment]) -> Vec<St
         return Vec::new();
     }
     let mut paths = Vec::with_capacity(files.len());
+    let mut total_bytes: usize = 0;
     for (i, f) in files.iter().enumerate() {
+        if f.bytes.len() > MAX_ATTACHMENT_BYTES {
+            tracing::warn!(
+                name = %f.name,
+                bytes = f.bytes.len(),
+                limit = MAX_ATTACHMENT_BYTES,
+                "persist_attached_files: attachment exceeds per-file limit; skipped"
+            );
+            continue;
+        }
+        total_bytes = total_bytes.saturating_add(f.bytes.len());
+        if total_bytes > MAX_TOTAL_ATTACHMENT_BYTES {
+            tracing::warn!(
+                name = %f.name,
+                total = total_bytes,
+                limit = MAX_TOTAL_ATTACHMENT_BYTES,
+                "persist_attached_files: total attachment budget exhausted; remaining skipped"
+            );
+            break;
+        }
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
@@ -135,6 +169,17 @@ mod tests {
         let missing = std::env::temp_dir().join("hermix-att-nonexistent-dir");
         assert!(persist_attached_files_in(&missing, &[]).is_empty());
         assert!(!missing.exists());
+    }
+
+    #[test]
+    fn oversized_attachment_is_skipped_not_written() {
+        // P2-8：超限附件整份跳过（不截断——截断的文档对模型更难排查）。
+        let tmp = std::env::temp_dir().join(format!("hermix-att-big-{}", std::process::id()));
+        let big = vec![0u8; MAX_ATTACHMENT_BYTES + 1];
+        let paths = persist_attached_files_in(&tmp, &[fa("ok.txt", b"hi"), fa("big.bin", &big)]);
+        assert_eq!(paths.len(), 1, "oversized attachment must be skipped");
+        assert!(paths[0].ends_with("ok.txt"));
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
