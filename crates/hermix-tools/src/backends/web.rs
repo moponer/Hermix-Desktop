@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::sync::LazyLock;
 
 use crate::tools::web::{WebExtractBackend, WebSearchBackend};
 use hermix_core::ToolError;
@@ -164,15 +165,23 @@ impl WebSearchBackend for BaiduHtmlSearchBackend {
     }
 }
 
+/// Baidu 结果页正则。`LazyLock` 只编译一次——此前每个搜索结果页在函数体内
+/// 重编译两条正则（P1-10）。
+static BAIDU_H3: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)<h3[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>\s*</h3>"#)
+        .expect("static regex")
+});
+static BAIDU_A: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)<a[^>]+href="(https?://[^"]+)"[^>]*>(.*?)</a>"#).expect("static regex")
+});
+
 /// Parse Baidu's `h3.a` result blocks. Falls back to a loose link pattern
 /// when Baidu's class names have rotated.
 fn parse_baidu_results(html: &str, limit: usize) -> Vec<Value> {
     // Primary pattern: <h3 class="..."><a href="...">title</a></h3>
-    let re_h3 = Regex::new(r#"(?s)<h3[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>\s*</h3>"#)
-        .expect("static regex");
+    let re_h3 = &*BAIDU_H3;
     // Secondary pattern: any <a href="http..."> inside the result container.
-    let re_a = Regex::new(r#"(?s)<a[^>]+href="(https?://[^"]+)"[^>]*>(.*?)</a>"#)
-        .expect("static regex");
+    let re_a = &*BAIDU_A;
 
     let mut out: Vec<Value> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -544,21 +553,27 @@ impl WebSearchBackend for DuckDuckGoHtmlSearchBackend {
     }
 }
 
+/// DuckDuckGo 结果页正则（`LazyLock`，P1-10）。
+static DDG_RESULT_A: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>"#)
+        .expect("static regex")
+});
+static DDG_FALLBACK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)<a[^>]+href="(https?://[^"]+)"[^>]*class="result__a"[^>]*>(.*?)</a>"#)
+        .expect("static regex")
+});
+static DDG_SNIPPET: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>"#).expect("static regex")
+});
+
 /// Parse DuckDuckGo HTML search results.
 fn parse_ddg_results(html: &str, limit: usize) -> Vec<Value> {
     // DuckDuckGo result pattern: <a rel="nofollow" class="result__a" href="...">title</a>
-    let re_a = Regex::new(
-        r#"(?s)<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>"#,
-    )
-    .expect("static regex");
+    let re_a = &*DDG_RESULT_A;
     // Fallback: any link in result container
-    let re_fallback = Regex::new(
-        r#"(?s)<a[^>]+href="(https?://[^"]+)"[^>]*class="result__a"[^>]*>(.*?)</a>"#,
-    )
-    .expect("static regex");
+    let re_fallback = &*DDG_FALLBACK;
     // Snippet pattern
-    let re_snippet =
-        Regex::new(r#"(?s)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>"#).expect("static regex");
+    let re_snippet = &*DDG_SNIPPET;
 
     let mut out: Vec<Value> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -718,18 +733,22 @@ impl WebSearchBackend for BingHtmlSearchBackend {
     }
 }
 
+/// Bing 结果页正则（`LazyLock`，P1-10）。
+static BING_H2: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>\s*</h2>"#)
+        .expect("static regex")
+});
+static BING_A: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)<a[^>]+href="(https?://[^"]+)"[^>]*class="b_algo"[^>]*>(.*?)</a>"#)
+        .expect("static regex")
+});
+
 /// Parse Bing HTML search results.
 fn parse_bing_results(html: &str, limit: usize) -> Vec<Value> {
     // Bing result pattern: <h2><a href="...">title</a></h2>
-    let re_h2 = Regex::new(
-        r#"(?s)<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>\s*</h2>"#,
-    )
-    .expect("static regex");
+    let re_h2 = &*BING_H2;
     // Fallback pattern
-    let re_a = Regex::new(
-        r#"(?s)<a[^>]+href="(https?://[^"]+)"[^>]*class="b_algo"[^>]*>(.*?)</a>"#,
-    )
-    .expect("static regex");
+    let re_a = &*BING_A;
 
     let mut out: Vec<Value> = Vec::new();
     let mut seen = std::collections::HashSet::new();

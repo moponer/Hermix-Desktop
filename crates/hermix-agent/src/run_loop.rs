@@ -519,7 +519,7 @@ impl AgentLoop {
                 PostLlmAction::Break(resp) => {
                     return TurnLlmOutcome::Response { response: resp, turn_usage_acc };
                 }
-                PostLlmAction::RetryReasoning | PostLlmAction::RetryEmpty => continue,
+                PostLlmAction::RetryEmpty => continue,
             }
         }
     }
@@ -632,10 +632,17 @@ self.notify_phase(&LoopPhase::Prefetch, total_turns);
             tracing::debug!(phase = %LoopPhase::LlmCall, turn = total_turns, "run: LLM API call");
 self.notify_phase(&LoopPhase::LlmCall, total_turns);
             let api_start = Instant::now();
+            // 零新信息守卫命中后，本轮请求不再携带工具 schema —— 模型
+            // 只能输出结论，空转循环到此为止（见 `RepeatGuard`）。
+            let turn_tools: &[ToolSchema] = if state.repeat_guard.tools_disabled() {
+                &[]
+            } else {
+                &tool_schemas
+            };
             let (response, turn_usage_acc) = match self
                 .call_turn_llm(
                     &mut ctx,
-                    &tool_schemas,
+                    turn_tools,
                     turn_runtime_route.as_ref(),
                     &mut state.cost_guard,
                     None,
@@ -1148,10 +1155,16 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
             // "正在思考…（第 N 轮）" so the user knows the agent is working.
             self.emit_status("thinking", &format!("正在思考…（第 {} 轮）", total_turns));
             let api_start = Instant::now();
+            // 同 `run()`：零新信息命中后不再下发工具 schema。
+            let turn_tools: &[ToolSchema] = if state.repeat_guard.tools_disabled() {
+                &[]
+            } else {
+                &tool_schemas
+            };
             let (response, turn_usage_acc) = match self
                 .call_turn_llm(
                     &mut ctx,
-                    &tool_schemas,
+                    turn_tools,
                     turn_runtime_route.as_ref(),
                     &mut state.cost_guard,
                     Some(StreamCallCtx {

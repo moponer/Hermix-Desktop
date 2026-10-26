@@ -76,7 +76,7 @@ impl AgentLoop {
             crate::tool_call_validator::ValidationOutcome::RetryInvalidTool { .. } => {
                 self.emit_status("lifecycle", "Invalid tool call detected — retrying");
             }
-            crate::tool_call_validator::ValidationOutcome::FatalInvalidTool { invalid_names } => {
+            crate::tool_call_validator::ValidationOutcome::FatalInvalidTool { .. } => {
                 self.emit_status(
                     "lifecycle",
                     &format!(
@@ -84,8 +84,7 @@ impl AgentLoop {
                         self.config.invalid_tool_call_max_retries
                     ),
                 );
-                // 名字已经通过 `apply_outcome` 进了系统消息，这里只是变量占位。
-                let _ = invalid_names;
+                // 名字已经通过 `apply_outcome` 进了系统消息，此处只补状态提示。
             }
             crate::tool_call_validator::ValidationOutcome::RetryInvalidJson => {
                 self.emit_status("lifecycle", "Invalid tool JSON arguments — retrying");

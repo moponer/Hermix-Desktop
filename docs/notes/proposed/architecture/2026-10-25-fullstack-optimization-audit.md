@@ -417,6 +417,18 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 验证：`hermix-store` 4（+1 只读语义测试）、`hermix-plugin` 3、`hermix-tools` 808、`hermix-agent` 1206 全绿；四 crate `cargo check --all-targets` 零警告。至此全仓 SQLite 打开只剩 `hermix_store::open_connection` 单一入口。
 
+### 批次 16（P1-10 web 正则 + P2-12 死代码）— 2026-10-26 交付
+
+- **P1-10 web 正则**：`backends/web.rs` 三处搜索结果解析函数体内的 7 条 `Regex::new`（百度 2 / DuckDuckGo 3 / Bing 2）提为 `static LazyLock<Regex>`，只编译一次。此前每个搜索结果页重编译一遍。
+- **P2-12 死代码**：删 `PostLlmAction::RetryReasoning`（自 thinking-only 响应改立即 `Break` 后从未构造，`#[allow(dead_code)]` 掩盖至今）；`tool_prep.rs` 的 `let _ = invalid_names;` 哑变量改为模式 `{ .. }`。
+
+**明确不做的两项**（理由记录，避免下次重复评估）：
+- `build_active_skills_block`（无 tools 的包装，仅测试调用）：它是 `pub` API 且测试有 5 处调用，删 8 行要改 5 处测试，净收益为负。
+- `no_op_compression_engine`：`pub mod`，跨 crate 可见，删除需先确认无外部消费者，属独立核查，不做。
+- P2-5「描述双源」经核对**不成立**：`terminal.rs:73` 是工具级描述（何时用/不用），`:288-305` 是 `command` 参数级描述（怎么执行），两个层次不是同一事实的重复。
+
+验证：agent **1207 passed**、tools **808 passed** 全绿。（注：`agent_loop/types.rs::RepeatGuard::streak` 的 dead_code 警告来自并行会话对该文件的未提交改动，非本批引入。）
+
 ### 批次 11（P1-9 技能扫描缓存）— 2026-10-26 交付
 
 **先量后改**：新增探针 `skill_loader::tests::probe_scan_cost`（`#[ignore]`），实测 `with_dir + scan()`：

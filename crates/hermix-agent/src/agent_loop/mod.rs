@@ -415,16 +415,12 @@ pub(crate) enum PostLlmAction {
     /// LLM produced tool calls or visible text — leave the retry
     /// loop with this response.
     Break(hermix_core::LlmResponse),
-    /// Reasoning-only response; the message has been pushed onto
-    /// `ctx` and the caller should re-enter the retry loop.
-    /// No longer constructed — reasoning-only responses
-    /// now Break immediately. Kept for pattern-match exhaustiveness
-    /// and future use.
-    #[allow(dead_code)]
-    RetryReasoning,
     /// Empty response (no reasoning, no content, no tools); the
     /// caller should re-enter the retry loop without touching
     /// `ctx`.
+    ///
+    /// （原先还有一个 `RetryReasoning` 变体，自 thinking-only 响应改为
+    /// 立即 `Break` 后从未被构造，2026-10-26 随死代码清理删除。）
     RetryEmpty,
 }
 
