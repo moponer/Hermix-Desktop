@@ -2313,21 +2313,41 @@ streamPhaseRef.current = null;
     // `execution_timeline` (rendered as a collapsible block) instead
     // of separate `role: "tool"` messages. This ensures streaming
     // and reload produce identical visuals.
-    const appendChunk = (chunk: string) => {
+    //
+    // chunk 攒批（P1-3 第二步，与下方 pendingToolChunks 同一模式）：文本
+    // chunk 先落闭包局部 buffer，requestAnimationFrame 合并后一次
+    // setSessions 应用（同帧 N chunks → 1 次 App 级重渲）。appendTextStep
+    // 是纯文本拼接，攒批与逐 chunk 结果逐字一致。done/error 强制 flush，
+    // 尾批 chunk 不滞留；`onApprovalRequest` 不换 assistant id（见其内
+    // 注释），flush 目标全程稳定。
+    let pendingTextChunks = "";
+    let textChunkFlushScheduled = false;
+    const flushPendingTextChunks = () => {
+      textChunkFlushScheduled = false;
+      const batch = pendingTextChunks;
+      pendingTextChunks = "";
+      if (!batch) return;
       const target = currentAssistantIdRef.current;
       if (!target) return;
-      streamPhaseRef.current = "text";
       setSessions((prev) => updateSession(prev, sessionId, (s) => {
         return {
           ...s,
           messages: patchMessageById(s.messages, target, (m) => ({
             ...m,
-            content: m.content + chunk,
-            unified_steps: appendTextStep(m.unified_steps, chunk),
+            content: m.content + batch,
+            unified_steps: appendTextStep(m.unified_steps, batch),
           })),
           updated_at: new Date().toISOString(),
         };
       }));
+    };
+    const appendChunk = (chunk: string) => {
+      streamPhaseRef.current = "text";
+      pendingTextChunks += chunk;
+      if (!textChunkFlushScheduled) {
+        textChunkFlushScheduled = true;
+        requestAnimationFrame(flushPendingTextChunks);
+      }
     };
 
     // finalizeToolMessage removed. Tool completion is now
@@ -2746,6 +2766,9 @@ streamPhaseRef.current = null;
             // 强制 flush 尾批 tool_stdout —— error 后不再有 rAF 机会，
             // 不 flush 会把最后一批 stdout 滞留在 pending Map 里丢掉。
             flushPendingToolChunks();
+            // 文本 chunk 同理：error 文本要写进同一条 assistant，
+            // 未 flush 的尾批文本会在 `= null` 之后被丢掉。
+            flushPendingTextChunks();
             // The error frame arrives immediately (no API key,
             // config error, etc.) — React may batch the
             // setStreamingSessionId(sessionId)+null into one render
@@ -3394,6 +3417,9 @@ return {
             // 强制 flush 尾批 tool_stdout —— 之后 rAF 可能不再跑
             // （后台/最小化），不 flush 会丢最后一批 stdout 分片。
             flushPendingToolChunks();
+            // 文本 chunk 同理：done 的 fallback 判据读 target.content，
+            // 未 flush 的尾批文本会让判据读到旧值。
+            flushPendingTextChunks();
             setPrefetchIntent(null);
             setStreamPhase(null);
             // `task_in_flight` settle: the backend saw this retry land on a

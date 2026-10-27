@@ -480,6 +480,18 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 验证：`cargo check -p hermix-server --all-targets` 零错误零警告；`cargo test -p hermix-server --lib` **507 passed**。
 
+### 批次 26（P1-3 第二步收口：文本 chunk rAF 攒批）— 2026-10-27 交付
+
+审计原定的「流式增量挪进独立 store」拆开复核：**拷贝部分已被 93dc6c0a 消除**（`appendChunk` 走 `patchMessageById`，未命中返原数组、命中才换新对象，O(会话数×消息数) 深拷贝不复存在）；剩余成本是**每 chunk 一次 App 级 `setSessions` 重渲**。本批给文本 chunk 补上与 `pendingToolChunks` 同款的 rAF 攒批：chunk 落闭包局部 buffer，同帧 N chunks 合并成 1 次重渲；`onDone` / `onError` 强制 flush（后者的 fallback 判据读 `target.content`，未 flush 会读到旧值）；`appendTextStep` 是纯文本拼接，攒批逐字等价。`onApprovalRequest` 不换 assistant id（其内注释），flush 目标全程稳定。
+
+**完整 store 化（`useSyncExternalStore` + 消息内容出 App state）不单独做**：它与 App.tsx 拆分是同一个动作（消息内容离开 `useState` 后，只有 MessageList 子组件订阅它才有意义），继续挂起等待「冻结前端并行改动」的窗口。本轮改动的三个 flush 点都在 send 闭包内、与既有 `pendingToolChunks` 模式同构，不与并行工作冲突。
+
+验证：`tsc --noEmit` 通过；前端 vitest **372 passed**。
+
+### P1-5 最终结论（2026-10-27 复核，关闭）
+
+维持 2026-10-26 结论并升级为**关闭**：`virtua` 解决的是「千条 DOM」的渲染压力，而当前 `INITIAL_MESSAGE_WINDOW = 60` 下 DOM 只有 60 条——虚拟化收益在数学上不存在。接入它的唯一前提是先把窗口放大（无限滚动），那是「会话历史浏览体验」的产品决策而非性能修复；流式气泡高度/滚动锚定两个前置问题只有放大窗口后才有值得解决的意义。`virtua` 依赖保留待产品决策后启用。
+
 ### 批次 19（P3-4 配置热重载）— 2026-10-26 交付
 
 两处改动，都针对「handler 每请求重读」这一实际开销：
