@@ -461,6 +461,25 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 验证：`tsc --noEmit` 通过。
 
+### 批次 25（P1-13 第三步：ws.rs 拆模块目录）— 2026-10-27 交付
+
+`ws.rs`（3567 行，审计基线 3680）拆成 `ws/` 模块目录，**顶层函数级搬移**（零逻辑改动）：
+
+| 文件 | 行数 | 内容 |
+|---|---|---|
+| `ws/mod.rs` | 2650 | 主循环三件套：`handle_ws` / `handle_ws_stream_send`（巨石本体）/ `handle_ws_stream` + 心跳/宽限/重试常量 + `StreamSendOutcome` |
+| `ws/inbound.rs` | 418 | `handle_inbound_frame`（入站分派）+ `approval_outcome_for` + 源码形状断言测试（`include_str!` 改为拼接 mod.rs + inbound.rs） |
+| `ws/outbound.rs` | 237 | `push_model_list` / `task_in_flight_status` / `todo_change_to_stream` |
+| `ws/lookup.rs` | 135 | `lookup_pending_approval` / `lookup_pending_resource` |
+| `ws/dedup.rs` | 87 | `dedup_key` / `check_recent_send` / `DEDUP_*` |
+| `ws/broadcast.rs` | 71 | `SESSION_BROADCASTS` 注册表 + `next_envelope_seq` |
+
+`approval.rs` 测试用的 `ws::check_recent_send` / `ws::dedup_key` / `ws::DEDUP_WINDOW_SECS` 经 mod.rs re-export 保持原路径。`DEDUP_WINDOW_SECS` 的唯一消费者是 `#[cfg(test)]` 用例，re-export 加 `#[allow(unused_imports)]`。
+
+**mod.rs 剩余的 2650 行几乎全是 `handle_ws_stream_send` 巨石函数本体（~2250 行）**——它是单函数，内部几十个闭包互捕局部变量，拆它必须逐段抽函数并配完整 WS 回归，是独立批次（审计方向中的 `outbound/text` / `outbound/tool` 边界指的就是这层）。
+
+验证：`cargo check -p hermix-server --all-targets` 零错误零警告；`cargo test -p hermix-server --lib` **507 passed**。
+
 ### 批次 19（P3-4 配置热重载）— 2026-10-26 交付
 
 两处改动，都针对「handler 每请求重读」这一实际开销：
