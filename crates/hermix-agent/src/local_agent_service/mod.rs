@@ -590,6 +590,18 @@ impl LocalAgentService {
             }
         }
 
+        // 上一轮被打断（停止 / panic / 断连）会在历史尾部留下「没人回复的
+        // 提问」。不清掉的话本轮历史是 `[user(旧), user(新)]`，模型会先回答
+        // 旧的那条 —— 用户看到的就是「她跑去看上一条」（2026-10-27 实报）。
+        let orphans = drop_unanswered_trailing_users(&mut messages);
+        if orphans > 0 {
+            tracing::warn!(
+                session_id,
+                dropped = orphans,
+                "turn start: dropped unanswered trailing user message(s) from an interrupted turn"
+            );
+        }
+
         // Append the new user message
         // 多图支持 — 优先用新数组，回退到旧字段保持兼容
         let images: Vec<(&str, &str)> = if let Some(ref imgs) = overrides.images {

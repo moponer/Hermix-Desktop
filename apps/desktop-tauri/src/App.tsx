@@ -702,7 +702,6 @@ setPage("chat");
             // 人格固定 `ali`：桌面与手机两个入口看到的是同一个她。
             personality: "ali",
             permissionLevel: opts.permissionLevel,
-            ...(opts.systemPrompt ? { systemPromptOverride: opts.systemPrompt } : {}),
           },
         );
         return true;

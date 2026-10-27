@@ -27,6 +27,8 @@ import { AlertTriangle, X } from "lucide-react";
 
 import * as api from "../api";
 import { usePolling } from "../hooks/usePolling";
+import { useCurrentModel } from "../hooks/useCurrentModel";
+import { friendlyModelName } from "./ModelSelector";
 import type { AutomationTask, Session } from "../types";
 import { AliCharacter, type AliState } from "./twin/AliCharacter";
 import { TWIN_SESSION_ID, type TwinInlineApi } from "../app/routes";
@@ -72,33 +74,13 @@ interface TwinViewProps {
   twin: TwinInlineApi;
 }
 
-type Mode = "watch" | "dispatch" | "summary";
-
 /** 中轴两态。数据态不是装饰：它承载「现在这一刻最该看的那个数」。 */
 type CenterMode = "chat" | "data" | "tasks";
-
-const MODES: { id: Mode; label: string }[] = [
-  { id: "watch", label: "盯住" },
-  { id: "dispatch", label: "派活" },
-  { id: "summary", label: "总结" },
-];
 
 const STATUS_TEXT: Record<string, string> = {
   ok: "上次成功",
   failed: "上次失败",
   running: "运行中",
-};
-
-/**
- * 动作模式 → 这一轮的指令。
- *
- * 三个 chip 是控件，不是装饰：不落到请求里就是假按钮。用 `systemPrompt`
- * （前置块）而不是替换人格提示 —— 模式调的是这一轮的重心，不是她是谁。
- */
-const MODE_PROMPT: Record<Mode, string> = {
-  watch: "这一轮以「盯住」为主：只报新变化与异常，不扩大范围，不主动起新任务。",
-  dispatch: "这一轮以「派活」为主：把事派出去执行（能派子 agent 就派），完成后汇总结果与还差什么。",
-  summary: "这一轮以「总结」为主：先给结论，再列依据；不展开无关细节。",
 };
 
 /**
@@ -192,7 +174,15 @@ export function TwinView({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState<"default" | "full">("default");
-  const [mode, setMode] = useState<Mode>("summary");
+  /**
+   * 她没有独立模型设置：`twin.send` 不下发 model，后端按
+   * `overrides.model → config 默认模型` 解析，所以她跑的就是全局默认模型。
+   * 这里把它显式显示出来 —— 此前这一页完全不提模型，用户无法判断她在用什么。
+   */
+  const { defaultModel } = useCurrentModel();
+  const modelName = defaultModel
+    ? friendlyModelName(defaultModel.slice(defaultModel.indexOf(":") + 1))
+    : "未配置";
   const [draft, setDraft] = useState("");
   /** 上次成功核对的时刻（ms）。给在场位显示「多久没看过了」。 */
   const [checkedAt, setCheckedAt] = useState<number | null>(null);
@@ -369,19 +359,16 @@ ${d.conclusions}`,
     }
     setDraft("");
     setNotice(null);
-    const ok = await twin.send(text, {
-      permissionLevel: level,
-      systemPrompt: MODE_PROMPT[mode],
-    });
+    const ok = await twin.send(text, { permissionLevel: level });
     if (!ok) setNotice("这一轮没发出去（原因见下方错误）");
-  }, [draft, twin, level, mode]);
+  }, [draft, twin, level]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     void sendDraft();
   };
 
-  const sendDisabled = twin.streaming || draft.trim().length === 0;
+  const sendDisabled = draft.trim().length === 0;
 
   return (
     <div className="twin-screen">
@@ -399,6 +386,11 @@ ${d.conclusions}`,
           <span className="twin-head__sub">{stateText}</span>
         </div>
         <div className="twin-head__side twin-head__side--r">
+          {/* 她跟随全局默认模型（无独立设置）：把模型摆出来，用户才知道
+              这一路对话是谁在答。 */}
+          <span className="twin-head__kv" title="跟随全局默认模型（设置 → 模型）">
+            模型 <b className="twin-head__model">{modelName}</b>
+          </span>
           <span className="twin-head__kv">
             在跑 <b>{busy}</b>
           </span>
@@ -750,31 +742,34 @@ ${d.conclusions}`,
                     onFocus={() => {
                       manualAtRef.current = Date.now();
                     }}
-                    placeholder="跟她说点什么，或者直接派活"
+                    placeholder={
+                      twin.streaming ? "她正在跑这一轮" : "跟她说点什么"
+                    }
                     aria-label="给助手阿黎发消息"
                     disabled={twin.streaming}
                   />
-                  <div className="twin-modes" role="group" aria-label="动作模式">
-                    {MODES.map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        className="twin-mode"
-                        aria-pressed={mode === m.id}
-                        onClick={() => setMode(m.id)}
-                      >
-                        {m.label}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    type="submit"
-                    className="twin-cfield__send"
-                    aria-label="发送"
-                    disabled={sendDisabled}
-                  >
-                    发送
-                  </button>
+                  {/* 停止必须在这一格：她在跑的时候输入框是禁用的，若停在
+                      右翼「她」那张卡里，用户在主视线里找不到打断的入口
+                      （2026-10-27 实报「还有没有停止按钮」）。 */}
+                  {twin.streaming ? (
+                    <button
+                      type="button"
+                      className="twin-cfield__send twin-cfield__send--stop"
+                      aria-label="停止这一轮"
+                      onClick={twin.stop}
+                    >
+                      停止
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      className="twin-cfield__send"
+                      aria-label="发送"
+                      disabled={sendDisabled}
+                    >
+                      发送
+                    </button>
+                  )}
                 </div>
               </form>
             </div>

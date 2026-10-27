@@ -139,12 +139,65 @@ pub(super) fn with_attached_files_note<'a>(
     }
 }
 
+/// 清掉历史尾部「没人回复的 user 消息」（原地，返回删掉几条）。
+///
+/// 触发场景：上一轮在模型给出回复之前就结束了 —— 用户点了停止、后端 panic、
+/// 断连、进程被杀。early-persist 已经把那条 user 消息写进历史，却没机会写回
+/// assistant 回复，于是库里留下一条**孤儿提问**。
+///
+/// 不清理的后果不是"少一条记录"，而是**下一轮答错题**：新消息追加在孤儿提问
+/// 之后，历史尾巴变成 `[user(旧), user(新)]`，模型会先回答旧的那条，用户看到
+/// 的就是「她跑去看上一条」（2026-10-27 实报，crash dump 里两条连续性 user
+/// 消息即现场）。所以新一轮开始时只删尾部**连续**的 user 行 —— 碰到
+/// assistant / tool / system 立刻停手，正常历史一条不动。
+pub(super) fn drop_unanswered_trailing_users(messages: &mut Vec<Message>) -> usize {
+    let mut dropped = 0;
+    while messages.last().map(|m| m.role == MessageRole::User) == Some(true) {
+        messages.pop();
+        dropped += 1;
+    }
+    dropped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn assistant_with(content: &str) -> Message {
         Message::assistant(content)
+    }
+
+    #[test]
+    fn drops_orphan_user_turns_left_by_an_interrupted_turn() {
+        // 现场形态：旧提问早于十几个小时落库，回复从未写回，新提问追加在后。
+        let mut msgs = vec![
+            Message::user("我第一天问的"),
+            Message::assistant("答完了"),
+            Message::user("一页纸速览 美观一点的"),
+            Message::user("超星学习的能继续吗"),
+        ];
+        assert_eq!(drop_unanswered_trailing_users(&mut msgs), 2);
+        assert_eq!(msgs.len(), 2, "只留到最后一对有问有答的轮次");
+        assert_eq!(msgs[1].role, MessageRole::Assistant);
+    }
+
+    #[test]
+    fn keeps_a_normal_history_untouched() {
+        let mut msgs = vec![
+            Message::user("q1"),
+            Message::assistant_with_tool_calls(None, vec![]),
+            Message::user("q2"),
+            Message::assistant("a2"),
+        ];
+        let before = msgs.len();
+        assert_eq!(drop_unanswered_trailing_users(&mut msgs), 0);
+        assert_eq!(msgs.len(), before);
+    }
+
+    #[test]
+    fn drops_nothing_when_history_is_empty() {
+        let mut msgs: Vec<Message> = Vec::new();
+        assert_eq!(drop_unanswered_trailing_users(&mut msgs), 0);
     }
 
     #[test]

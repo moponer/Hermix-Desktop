@@ -68,7 +68,11 @@ export function toTranscriptRows(
 /**
  * 合并落库历史与内存中的本轮。
  *
- * - live 为空：纯用 history 的尾部。
+ * - 先裁掉 history 尾部「没人回复的提问」：上一轮被打断（停止 / 崩溃 /
+ *   断连）时 early-persist 已经把提问落库，回复却没写回，库里就留下孤儿
+ *   提问。她不回答它，摆出来是两条连续的用户气泡，看起来像「她答错了题」
+ *   （2026-10-27 实报：历史尾部 `[user(旧), user(新)]`）。
+ * - live 为空：纯用裁过的 history 尾部。
  * - live 非空：在 history 里找最后一条与 live 最后一条 user 相同的行，
  *   该行之前的部分接上 live，再统一裁到 `TRANSCRIPT_CAP`。
  */
@@ -77,16 +81,20 @@ export function mergeTranscript(
   live: TranscriptRow[],
   cap: number = TRANSCRIPT_CAP,
 ): TranscriptRow[] {
-  if (live.length === 0) return history.slice(-cap);
+  let end = history.length;
+  while (end > 0 && history[end - 1].role === "user") end -= 1;
+  const trimmed = history.slice(0, end);
+
+  if (live.length === 0) return trimmed.slice(-cap);
   const lastUser = [...live].reverse().find((r) => r.role === "user")?.text;
-  let cut = history.length;
+  let cut = trimmed.length;
   if (lastUser) {
-    for (let i = history.length - 1; i >= 0; i--) {
-      if (history[i].role === "user" && history[i].text === lastUser) {
+    for (let i = trimmed.length - 1; i >= 0; i--) {
+      if (trimmed[i].role === "user" && trimmed[i].text === lastUser) {
         cut = i;
         break;
       }
     }
   }
-  return [...history.slice(0, cut), ...live].slice(-cap);
+  return [...trimmed.slice(0, cut), ...live].slice(-cap);
 }

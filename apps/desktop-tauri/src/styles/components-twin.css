@@ -1268,6 +1268,16 @@
 .twin-head__kv b.is-hot {
   color: var(--color-warning);
 }
+/* 模型名可能很长（`MiniMax-M3.1-flash`、`Qwen2.5-72B-Instruct`）：
+   顶栏单行，截断比换行或挤压权限按钮都好。 */
+.twin-head__model {
+  display: inline-block;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
 .twin-head__perm {
   height: 26px;
   padding: 0 10px;
@@ -1719,20 +1729,6 @@
   font: inherit;
   font-size: var(--text-ui);
 }
-.twin-modes {
-  display: flex;
-  gap: 2px;
-}
-.twin-mode {
-  height: 22px;
-  padding: 0 7px;
-  font-size: var(--text-micro);
-  color: var(--color-text-tertiary);
-}
-.twin-mode[aria-pressed="true"] {
-  color: var(--color-text-primary);
-  background: var(--color-bg-tertiary);
-}
 .twin-cfield__send {
   height: 26px;
   padding: 0 12px;
@@ -1742,6 +1738,11 @@
 }
 .twin-cfield__send:disabled {
   opacity: 0.45;
+}
+/* 停止态：中性底 + 语义红文字（12px 以下小字走文字安全档）。 */
+.twin-cfield__send--stop {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-error);
 }
 
 /* 数据态 */

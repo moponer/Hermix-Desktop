@@ -24,12 +24,10 @@ const TwinView = lazy(() => import("../components/TwinView").then((m) => ({ defa
  */
 export const TWIN_SESSION_ID = "twin:ali";
 
-/** 内联对话随这一轮下发的两项设置（都来自她那页的可见控件）。 */
+/** 内联对话随这一轮下发的设置（都来自她那页的可见控件）。 */
 export interface TwinSendOptions {
   /** 顶部「权限」开关：默认会为高风险操作弹审批。 */
   permissionLevel: "default" | "full";
-  /** 底部动作模式（盯住 / 派活 / 总结）对应的这一轮指令。 */
-  systemPrompt?: string;
 }
 
 /** 她这一轮在干什么 —— 她那页用它就地渲染，不依赖宿主会话表。 */

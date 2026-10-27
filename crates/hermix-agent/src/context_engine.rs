@@ -222,7 +222,13 @@ impl MaskingStrategy {
             let placeholder = placeholder_for(*kind);
             let span_len = end - start;
             let s = *start;
-            if s + span_len <= out.len() {
+            // 双保险：`scan_prefixed` 已把末端回退到字符边界，这里再确认一次。
+            // `replace_range` 落在多字节字符中间会 panic（is_char_boundary，
+            // 2026-10-27 实报：工具输出含中文时整轮被打死），宁可少遮一段。
+            if s + span_len <= out.len()
+                && out.is_char_boundary(s)
+                && out.is_char_boundary(s + span_len)
+            {
                 out.replace_range(s..s + span_len, &placeholder);
             }
             spans.push(MaskedSpan {
@@ -237,6 +243,17 @@ impl MaskingStrategy {
     }
 }
 
+/// 从 `i` 往前回退到最近的字符边界（`i` 越界则返回 `s.len()`）。
+fn floor_char_boundary(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 fn scan_prefixed(
     body: &str,
     prefix: &str,
@@ -248,9 +265,14 @@ fn scan_prefixed(
     let pb = prefix.as_bytes();
     let mut i = 0;
     while i + pb.len() <= bytes.len() {
-        if &bytes[i..i + pb.len()] == pb {
-            // take total_len bytes; clamp at body end.
-            let end = (i + total_len).min(bytes.len());
+        // 前缀必须起在单词开头：`task-` / `risk-` 里的 `sk-` 不是密钥，
+        // 否则会把普通英文单词连同后面 30 字节一起遮掉。
+        let at_word_start = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+        if at_word_start && &bytes[i..i + pb.len()] == pb {
+            // take total_len bytes; clamp at body end, then back off to a char
+            // boundary —— 中文/emoji 会让 `i + total_len` 落在多字节字符中间，
+            // 直接拿去 replace_range 会 panic（2026-10-27 实报）。
+            let end = floor_char_boundary(body, (i + total_len).min(bytes.len()));
             if end - i >= pb.len() + 4 {
                 out.push((i, end, kind));
                 i = end;
@@ -651,6 +673,33 @@ mod tests {
             m.apply("sk-aaaabbbbccccddddeeeeffffgggghhhh sk-aaaabbbbccccddddeeeeffffgggghhhh");
         assert!(!out.contains("sk-aaaabbbb"));
         assert!(spans.len() <= 2);
+    }
+
+    /// 回归（2026-10-27 实报 panic `assertion failed: self.is_char_boundary(n)`）：
+    /// 密钥前缀后面紧跟中文时，固定 30 字节的遮蔽窗口会落在多字节字符中间，
+    /// `replace_range` 直接 panic，整轮对话被打死（工具结果里带中文必踩）。
+    #[test]
+    fn masking_never_panics_when_window_lands_inside_cjk() {
+        let m = default_redaction_strategy();
+        // 30 字节窗口 = "sk-abé"(7B) + 23B，23 不是 3 的倍数 → 落在一个
+        // 三字节汉字的中间。修复前这里 `replace_range` 直接 panic。
+        let body = "结果 sk-abé中文说明文字继续，后面还有很长的一段中文。";
+        let (out, spans) = m.apply(body);
+        assert_eq!(spans.len(), 1, "密钥仍要被遮掉");
+        assert!(out.contains("[REDACTED:openai-key]"), "out={out}");
+        assert!(
+            out.contains("后面还有很长的一段中文"),
+            "遮蔽窗口不许吃掉后续正文：{out}"
+        );
+    }
+
+    /// 单词中段的 `sk-` 不是密钥：`task-based` 曾被盗吞 30 字节。
+    #[test]
+    fn masking_ignores_prefix_inside_a_word() {
+        let m = MaskingStrategy::new(&[MaskKind::OpenaiKey]);
+        let (out, spans) = m.apply("a task-based workflow and a risk-free run");
+        assert!(spans.is_empty(), "词中段的 sk- 不构成密钥");
+        assert_eq!(out, "a task-based workflow and a risk-free run");
     }
 
     //

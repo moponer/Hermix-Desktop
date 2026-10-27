@@ -29,8 +29,24 @@ describe("toTranscriptRows", () => {
 
 describe("mergeTranscript", () => {
   it("没有本轮消息时只显示落库历史的尾部", () => {
-    const history = [row("user", "a"), row("assistant", "b"), row("user", "c")];
+    const history = [row("user", "a"), row("assistant", "b")];
     expect(mergeTranscript(history, [])).toEqual(history);
+  });
+
+  it("落库历史尾部的孤儿提问不显示（她没有回答过它）", () => {
+    const history = [row("user", "a"), row("assistant", "b"), row("user", "被打断的提问")];
+    expect(mergeTranscript(history, []).map((r) => r.text)).toEqual(["a", "b"]);
+  });
+
+  /// 2026-10-27 实报：上一轮被打断后历史是 `[user(旧), user(新)]`，新问题
+  /// 的回复开头却在讲旧问题 —— 界面上就是两条用户气泡 + 一段文不对题的回复。
+  it("历史尾部两条连续 user（旧孤儿 + 本轮）只显示本轮", () => {
+    const history = [row("user", "一页纸速览 美观一点的"), row("user", "超星学习的能继续吗")];
+    const live = [row("user", "超星学习的能继续吗"), row("assistant", "查一下超星那边")];
+    expect(mergeTranscript(history, live).map((r) => r.text)).toEqual([
+      "超星学习的能继续吗",
+      "查一下超星那边",
+    ]);
   });
 
   it("本轮落库后不重复显示同一条 user", () => {
