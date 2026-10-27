@@ -149,6 +149,14 @@ export function Composer(p: ComposerProps) {
     <div
       className="composer transition-colors relative"
       style={{ overflow: "visible" }}
+      onMouseDown={(e) => {
+        // 视觉上的"整块面"就是输入区：点空白处也要进输入态。此前只有顶部
+        // 那行透明 textarea 能拿焦点，框内大片留白点了没反应。
+        const t = e.target as HTMLElement;
+        if (t.closest("button, a, input, textarea, select, label, [role='menu'], [role='listbox'], [data-composer-panel]")) return;
+        e.preventDefault();
+        p.textareaRef.current?.focus();
+      }}
       onDragEnter={(e) => {
         if (!e.dataTransfer?.types?.includes("Files")) return;
         dragCounter.current += 1;

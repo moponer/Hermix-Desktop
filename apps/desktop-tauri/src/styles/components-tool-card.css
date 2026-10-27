@@ -1563,16 +1563,11 @@
    components.css 是 components-*.css 的陈旧副本，两者曾同时加载且后者
    胜出，288 个选择器被双定义。以下是仅存在于旧副本里的规则，随该文件
    一并删除。 */
-:root[data-theme="light"] .composer {
-  background: var(--glass-liquid-bg);
-  backdrop-filter: var(--glass-liquid-blur);
-  -webkit-backdrop-filter: var(--glass-liquid-blur);
-  
-  box-shadow:
-    var(--glass-inset-highlight),
-    var(--glass-inset-shadow),
-    var(--glass-shadow);
-}
+/* `.composer` 的 light 玻璃态覆盖已删除（2026-10-27）：light 主题已在
+   同日从 themes/registry 移除（只留 notion / notion-dark），这条
+   `:root[data-theme="light"]` 规则永不命中，且一旦命中会用 rgba(251,251,251,.82)
+   的玻璃底 + --glass-shadow 压掉输入区的实色面与聚焦反馈。输入区材质
+   归 components-controls.css 单一归属。 */
 
 :root[data-theme="light"] .popover {
   position: absolute;

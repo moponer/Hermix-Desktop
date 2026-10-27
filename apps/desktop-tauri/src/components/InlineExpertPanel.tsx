@@ -93,6 +93,8 @@ export function InlineExpertPanel({
       /* 无描边：面板本身是 bg-secondary、压在白色对话区上，底色差已经把
          边界说清楚了，底边那条线是重复表达。 */
       className="bg-bg-secondary"
+      /* 面板内的空白点击不该被 Composer 的"整面聚焦输入框"接管 */
+      data-composer-panel=""
       style={{ animation: "slideDown 0.15s ease-out" }}
     >
       <style>{`

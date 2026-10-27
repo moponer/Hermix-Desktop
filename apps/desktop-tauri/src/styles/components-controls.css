@@ -187,19 +187,25 @@
 
 .composer {
   border-radius: var(--radius-xl);
-  /* 墨与纸 v4：输入区用 bg-input（暗 #1f1f1f / 浅 #f6f6f6）——与画布
-     （暗 #141414 / 浅 #fff）拉开一档，composer 成为独立面而非"画布上的描边框" */
+  /* 墨与纸 v4：输入区用 bg-input —— 与画布拉开一档，composer 是独立面
+     而非"画布上的描边框"。但这一档在 notion 下近乎不可见：bg-input 是
+     #f7f7f5（纸面 #fff，亮度比 1.05:1），而 --shadow-paper 在 notion 是
+     `0 0 0 1px rgba(55,53,47,.04)` —— 4% alpha 的 1px 环，等于没有
+     （2026-10-27 用户实测"完全看不出输入位置"）。故补一圈 1px 发丝环把面
+     勾出来：环走 box-shadow，不写 border（G11 禁结构框线）。 */
   background: var(--color-bg-input);
-  box-shadow: var(--shadow-paper);
+  box-shadow: var(--shadow-paper), 0 0 0 1px var(--color-border-secondary);
   overflow: visible;
-  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+  transition: box-shadow var(--duration-fast) ease;
 }
-/* 输入区聚焦 = 整体边界亮起品牌绿，"可以说话了"的状态可见 */
+/* 输入区聚焦 = 环保持 + 主题墨色晕圈（零色相；accent 混进边框会发脏）。
+   原先只有 3px 晕圈、没有环，浅色下等于没有反馈；那条 `border-color`
+   还是死声明（本元素没有 border）。 */
 .composer:focus-within {
-  /* 聚焦反馈走阴影不走描边（用户实测：accent 混进边框发脏）——
-     描边只升一档到控件描边色，晕圈用主题墨色（零色相）。 */
-  border-color: var(--color-border-secondary);
-  box-shadow: var(--shadow-paper), 0 0 0 3px color-mix(in srgb, var(--color-text-primary) 9%, transparent);
+  box-shadow:
+    var(--shadow-paper),
+    0 0 0 1px var(--color-border-secondary),
+    0 0 0 4px color-mix(in srgb, var(--color-text-primary) 12%, transparent);
 }
 /* Composer 三层材质 · ③ 底部副条（墨与纸 v4）：渐变贴底而非平涂，
    顶部分隔线与外框描边共用同一 token（--color-border-primary）——
