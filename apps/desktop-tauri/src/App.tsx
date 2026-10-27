@@ -628,7 +628,7 @@ setPage("chat");
     async (text: string, opts: TwinSendOptions): Promise<boolean> => {
       if (twinChat.streaming) return false;
       setTwinPending([]);
-      setTwinTurn({ user: text, reply: "", activity: null, error: null });
+      setTwinTurn({ user: text, reply: "", activity: null, error: null, events: [] });
       try {
         await twinChat.send(
           TWIN_SESSION_ID,
@@ -637,7 +637,16 @@ setPage("chat");
             onChunk: (chunk) =>
               setTwinTurn((t) => (t ? { ...t, reply: t.reply + chunk } : t)),
             onToolStart: (info) =>
-              setTwinTurn((t) => (t ? { ...t, activity: info.tool } : t)),
+              setTwinTurn((t) =>
+                t
+                  ? {
+                      ...t,
+                      activity: info.tool,
+                      // 工具流水：值守页「刚才发生」实时体现这一轮做了什么。
+                      events: [...(t.events ?? []), info.tool].slice(-30),
+                    }
+                  : t,
+              ),
             onToolComplete: () =>
               setTwinTurn((t) => (t ? { ...t, activity: null } : t)),
             onApprovalRequest: (req) =>
@@ -4141,6 +4150,8 @@ return {
     startCreateWorkflowFlow,
     chatNode: chatViewNode,
     activeSessionId,
+    // 值守页「在跑」口径：主对话这条轮次流也算活动（她的轮次在她的 api 里）。
+    mainStreaming: streamingSessionId !== null,
     twin: twinApi,
     // 运行工作流后的跳转：落到新对话空屏，不落在可能早已过期的激活会话
     // （如工作台会话）。跑起来的会话出现在侧栏，用户自行点入。

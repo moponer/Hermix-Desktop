@@ -39,6 +39,8 @@ export interface TwinTurn {
   /** 当前正在跑的工具名（工具调用期间有值），给一行动态提示用。 */
   activity: string | null;
   error: string | null;
+  /** 这一轮的工具流水（按到达顺序，尾部保留最近 ~30 条）——值守页「刚才发生」用它实时体现进度。 */
+  events?: string[];
 }
 
 /** 等她拍板的一件事：审批（工具）或澄清（问题）。 */
@@ -98,6 +100,8 @@ export interface RouteContext {
   chatNode: ReactNode;
   /** 当前激活会话 id —— 工作台浮窗历史下拉高亮当前对话线。 */
   activeSessionId: string | null;
+  /** 主对话是否有轮次在跑 —— 值守页「在跑」口径要把它和她的轮次一起计入。 */
+  mainStreaming: boolean;
   /** 工作流运行后的跳转：切回对话页（新对话空屏），不落在旧激活会话上。 */
   openChat: () => void;
 }
@@ -118,6 +122,7 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
             onOpenChat={() => ctx.handleSelectSession(TWIN_SESSION_ID)}
             onOpenSession={ctx.handleSelectSession}
             onDeleteSession={ctx.handleDeleteSession}
+            mainStreaming={ctx.mainStreaming}
             twin={ctx.twin}
           />
         </Suspense>

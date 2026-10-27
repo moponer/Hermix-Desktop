@@ -58,6 +58,12 @@ interface TwinViewProps {
   /** 删除某条会话（宿主负责乐观更新会话表与激活态回退）。 */
   onDeleteSession: (id: string) => void;
   /**
+   * 主对话是否有轮次在跑。「在跑」的口径必须把三方都数进来：自动化在途
+   * run + 她自己的轮次（`twin.streaming`）+ 主对话的轮次 —— 少了后两者，
+   * 顶栏「正在执行」与面板「0 个任务在跑」就是两个不相干的世界（实测脱节）。
+   */
+  mainStreaming?: boolean;
+  /**
    * 她自己的发送器（App 顶层的第二个 `useStreamChat` 实例）。
    *
    * 独立实例 = 与任何对话并行、互不禁用；本轮文本、未决审批、澄清都在
@@ -110,7 +116,14 @@ function BoxHead({ title, meta }: { title: string; meta?: React.ReactNode }) {
   );
 }
 
-export function TwinView({ sessions, onOpenChat, onOpenSession, onDeleteSession, twin }: TwinViewProps) {
+export function TwinView({
+  sessions,
+  onOpenChat,
+  onOpenSession,
+  onDeleteSession,
+  twin,
+  mainStreaming = false,
+}: TwinViewProps) {
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
   const [activeRuns, setActiveRuns] = useState(0);
   /** 最近的工作日志（daily_memory）—— 左翼与右翼的真实数据源之一。 */
@@ -151,8 +164,9 @@ export function TwinView({ sessions, onOpenChat, onOpenSession, onDeleteSession,
   // 8s 历史轮询（P2-4）：隐藏页不发请求，恢复可见立即补一次。
   usePolling(loadHistory, HISTORY_POLL_MS);
 
-  // 这一轮刚结束：立刻对齐一次落库历史，别让用户等下一个 8s 轮询
+  // 这一轮刚结束：立刻对齐落库历史，别让用户等下一个 8s 轮询
   // （那段时间里屏幕上还是内存里的两行，历史一到会闪一下）。
+  // 面板补刷在 loadBoard 声明之后的另一个 effect 里（日志摘要那时才落库）。
   const prevStreamingRef = useRef(twin.streaming);
   useEffect(() => {
     if (prevStreamingRef.current && !twin.streaming) void loadHistory();
@@ -187,9 +201,16 @@ export function TwinView({ sessions, onOpenChat, onOpenSession, onDeleteSession,
   /** 用户手动切回对话的时刻 —— 冷却期内不被自动切换抢屏。 */
   const manualAtRef = useRef(0);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  /**
+   * 面板数据（任务 / 在跑数 / 工作日志）。分两档：
+   * `withLoading` 只在进页首刷用（显示核对中）；轮询与轮次结束后的补刷
+   * 静默进行 —— 这块数据与对话流无关，streaming 期间照刷（历史轮询才跳过）。
+   */
+  const loadBoard = useCallback(async (withLoading: boolean) => {
+    if (withLoading) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const [list, active, days] = await Promise.all([
         api.getAutomationTasks(),
@@ -198,12 +219,14 @@ export function TwinView({ sessions, onOpenChat, onOpenSession, onDeleteSession,
       ]);
       setTasks(list);
       setActiveRuns(active);
-      // 值守口径：daily_memory 的行首是 `[sessionId] …`。只有阿黎工作域
-      // 的会话（她的对话 twin:ali / 自动化 automati* / 成员工单 member::）
-      // 才进「最近工作日志」与「刚才发生」——普通主对话的用户消息流水
-      // 会把面板刷成聊天记录（实测 smoke 测试会话泄漏进来）。
+      // 值守口径：daily_memory 摘要行的会话 id 可能带 `[twin:…]` 方括号
+      //（回合结束时确定性落库的行是 `- HH:MM [sid] 摘要`，`[` 在行中），
+      // 也可能是 LLM 自己用 daily_memory 工具写的自由文本。锚行首会把
+      // 前者全部漏掉 —— 面板日志恒 0 的直接原因（2026-10-27 修复）。
+      // 只有阿黎工作域的会话（twin: / automati* / member::）才进面板，
+      // 普通主对话的用户消息流水不混进来。
       const dutyScope = (d: api.DailyMemoryDay) =>
-        /^\[(twin:|automati|member::)/m.test(
+        /\[(twin:|automati|member::)/.test(
           `${d.goals}
 ${d.progress}
 ${d.conclusions}`,
@@ -211,15 +234,29 @@ ${d.conclusions}`,
       setWorkDays(days.filter(dutyScope));
       setCheckedAt(Date.now());
     } catch (e) {
-      setError(String(e));
+      if (withLoading) setError(String(e));
     } finally {
-      setLoading(false);
+      if (withLoading) setLoading(false);
     }
   }, []);
+
+  const refresh = useCallback(() => loadBoard(true), [loadBoard]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // 面板轮询：她这一轮跑着、自动化到点触发、别的会话在跑，数字都要动。
+  // 轮询间隔与落库历史一致（8s），一次 tick 三项一起对齐。
+  usePolling(() => loadBoard(false), HISTORY_POLL_MS);
+
+  // 这一轮刚结束：面板补刷一次 —— 工作日志摘要在会话结束那一刻落库，
+  // 不补刷「刚才发生 / 日志天」要干等下一个轮询周期才动。
+  const boardEndRef = useRef(twin.streaming);
+  useEffect(() => {
+    if (boardEndRef.current && !twin.streaming) void loadBoard(false);
+    boardEndRef.current = twin.streaming;
+  }, [twin.streaming, loadBoard]);
 
   const enabledTasks = useMemo(() => {
     const list = tasks.filter((t) => t.enabled);
@@ -249,16 +286,24 @@ ${d.conclusions}`,
     [sessions],
   );
 
+  /**
+   * 「在跑」的统一口径（2026-10-27）：自动化在途 run + 她的轮次 +
+   * 主对话的轮次。此前只有第一项，顶栏明明写着「正在执行」、面板却是
+   * 0 —— 两个数字不同源，用户看到的就是「那边在跑，这边不动」。
+   */
+  const turnBusy = (twin.streaming ? 1 : 0) + (mainStreaming ? 1 : 0);
+  const busy = activeRuns + turnBusy;
+
   const stateText = twin.streaming
     ? "正在执行 · 你刚交代的这一轮"
-    : activeRuns > 0
-      ? `运行中 · ${activeRuns} 个任务在跑`
+    : busy > 0
+      ? `运行中 · ${busy} 个任务在跑`
       : `静默观察 · ${enabledTasks.length} 个任务待触发`;
 
   // 角色姿态与"她在干什么"是同一件事的两个表达，必须同源。
   const aliState: AliState = error
     ? "alert"
-    : twin.streaming || activeRuns > 0
+    : busy > 0
       ? "running"
       : loading
         ? "thinking"
@@ -272,8 +317,8 @@ ${d.conclusions}`,
         : "正在跑你刚交代的这一轮"
       : loading
         ? "正在核对任务状态"
-        : activeRuns > 0
-          ? `盯着 ${activeRuns} 个在跑的任务，异常才出声`
+        : busy > 0
+          ? `盯着 ${busy} 个在跑的任务，异常才出声`
           : enabledTasks.length > 0
             ? `${enabledTasks.length} 个任务待触发，暂时没有要打扰你的事`
             : "还没有启用的任务，我这儿暂时没什么可盯的";
@@ -345,17 +390,17 @@ ${d.conclusions}`,
         <div className="twin-head__main">
           <h1 className="twin-head__title">阿黎</h1>
           <span
-            className={`twin-head__state${activeRuns > 0 ? " is-live" : ""}`}
+            className={`twin-head__state${busy > 0 ? " is-live" : ""}`}
             title={stateText}
           >
             <i aria-hidden />
-            {activeRuns > 0 ? "值守中" : "静默"}
+            {busy > 0 ? "值守中" : "静默"}
           </span>
           <span className="twin-head__sub">{stateText}</span>
         </div>
         <div className="twin-head__side twin-head__side--r">
           <span className="twin-head__kv">
-            在跑 <b>{activeRuns}</b>
+            在跑 <b>{busy}</b>
           </span>
           <span className="twin-head__kv">
             已启用 <b>{enabledTasks.length}</b>
@@ -440,9 +485,9 @@ ${d.conclusions}`,
             <div className="twin-grid">
               <div>
                 <div
-                  className={`twin-grid__v${activeRuns > 0 ? " is-live" : " is-zero"}`}
+                  className={`twin-grid__v${busy > 0 ? " is-live" : " is-zero"}`}
                 >
-                  {activeRuns}
+                  {busy}
                 </div>
                 <div className="twin-grid__k">在跑</div>
               </div>
@@ -778,7 +823,7 @@ ${d.conclusions}`,
                 </svg>
                 <div className="twin-ring__ctr">
                   <div className="twin-ring__big">
-                    {runningRatio != null ? Math.round(runningRatio * 100) : activeRuns}
+                    {runningRatio != null ? Math.round(runningRatio * 100) : busy}
                     {runningRatio != null ? <span>%</span> : null}
                   </div>
                   <div className="twin-ring__sub">
@@ -787,7 +832,13 @@ ${d.conclusions}`,
                   <div className="twin-ring__fig">
                     {runningTask
                       ? `${runningTask.name} · 第 ${runningTask.run_count} 次`
-                      : "没有正在跑的任务"}
+                      : twin.turn?.activity
+                        ? `她正在用 ${twin.turn.activity}`
+                        : twin.streaming
+                          ? "她这一轮在跑"
+                          : mainStreaming
+                            ? "另一条对话在跑"
+                            : "没有正在跑的任务"}
                   </div>
                 </div>
               </div>
@@ -799,7 +850,7 @@ ${d.conclusions}`,
 
               <div className="twin-strip">
                 <div>
-                  <div className="twin-strip__v">{activeRuns}</div>
+                  <div className="twin-strip__v">{busy}</div>
                   <div className="twin-strip__k">在跑</div>
                 </div>
                 <div>
@@ -872,7 +923,34 @@ ${d.conclusions}`,
           <section className="twin-box twin-box--grow twin-box--quiet">
             <BoxHead title="刚才发生" meta={`${workDays.length} 条`} />
             <div className="twin-rows">
-              {workDays.length === 0 ? (
+              {/* 她的轮次进行中：工具流水实时置顶 —— 不等落库，这一轮做了
+                  什么当下就能看见（否则跑任务的整段时间里右翼纹丝不动）。 */}
+              {twin.turn ? (
+                <div aria-live="polite">
+                  {twin.streaming && (
+                    <div className="twin-row">
+                      <span className="twin-row__t">此刻</span>
+                      <span className="twin-row__m">
+                        {twin.turn.activity
+                          ? `正在用 ${twin.turn.activity}`
+                          : "正在跑你交代的这一轮"}
+                      </span>
+                      <span className="twin-row__k">这一轮</span>
+                    </div>
+                  )}
+                  {(twin.turn.events ?? [])
+                    .slice(-6)
+                    .reverse()
+                    .map((e, i) => (
+                      <div key={`live-${i}`} className="twin-row">
+                        <span className="twin-row__t">刚刚</span>
+                        <span className="twin-row__m">{e}</span>
+                        <span className="twin-row__k">这一轮</span>
+                      </div>
+                    ))}
+                </div>
+              ) : null}
+              {workDays.length === 0 && !twin.turn ? (
                 <p className="twin-muted">
                   她还没有值守记录。派成员、跑自动化或跟她聊过后，这里会出现工作日志。
                 </p>
