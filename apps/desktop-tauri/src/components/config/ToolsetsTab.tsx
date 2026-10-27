@@ -3,8 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Boxes, X } from "lucide-react";
 import * as api from "../../api";
 import type { ToolsetInfo } from "../../api";
-import { pickIconByName } from "./toolTabsData";
-import { ToolCardIcon } from "./ToolCardIcon";
+import { InitialIcon } from "../ui/InitialIcon";
+
 import { ToggleSwitch } from "../ToggleSwitch";
 import { SearchBar, Grid, EmptyHint, SkeletonGrid, SummaryBar } from "./toolTabsShared";
 import { ENABLED, SAVE_FAILED, failure } from "../strings";
@@ -214,7 +214,7 @@ function ToolsetCard({
   saving: boolean;
   onToggle: (name: string, next: boolean) => void;
 }) {
-  const Icon = pickIconByName(toolset.name);
+
   // 工具清单默认只露 4 个：8 个工具的工具集一屏塞满会把网格撑得很乱。
   // 「全部工具」展开是原型里确认过的交互，卡片自带这个能力，不需要另外加工具。
   const [expanded, setExpanded] = useState(false);
@@ -224,9 +224,7 @@ function ToolsetCard({
   return (
     <div className="flex flex-col gap-2 rounded-[var(--radius-lg)] bg-[var(--color-bg-card)] px-2.5 py-2.5">
       <div className="flex items-center gap-2.5">
-        <ToolCardIcon category={toolset.label}>
-          <Icon className="icon-sm" />
-        </ToolCardIcon>
+        <InitialIcon name={toolset.label} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">

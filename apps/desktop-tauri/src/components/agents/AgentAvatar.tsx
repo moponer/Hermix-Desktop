@@ -1,4 +1,5 @@
 import { cx } from "../../lib/cx";
+import { initialOf } from "../../lib/initialIcon";
 import { toneClass, type IconTone } from "../../lib/categoryTone";
 import type { AgentColorTheme } from "./types";
 
@@ -39,17 +40,13 @@ const THEME_TONE: Record<AgentColorTheme, IconTone> = {
 };
 
 /**
- * 取头像字：中日韩字符取首字，其余取首字符大写。
- * 用 `Array.from` 而不是 `s[0]` —— emoji / 生僻字是代理对，`s[0]` 会切出半个码元。
+ * 取头像字：实现收敛到 lib/initialIcon 的 `initialOf`（2026-10-27）——
+ * 此前这里与 InitialIcon 各写一份「取首字」，规则已经漂移（emoji /
+ * 标点开头的名字两边取字不同）。空的兜底保留 "?"（专家头像的既有语义）。
  */
 export function avatarInitial(name?: string | null): string {
-  const s = (name ?? "").trim();
-  if (!s) return "?";
-  const first = Array.from(s)[0] ?? "?";
-  // 汉字 / 假名 / 谚文：原样；拉丁等：大写
-  return /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(first)
-    ? first
-    : first.toUpperCase();
+  const s = initialOf(name);
+  return s === "·" ? "?" : s;
 }
 
 export function AgentAvatar({

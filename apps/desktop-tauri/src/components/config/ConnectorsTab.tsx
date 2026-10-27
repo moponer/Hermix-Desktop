@@ -2,9 +2,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, Network } from "lucide-react";
 import * as api from "../../api";
-import { parseMcpJson, pickIconByName } from "./toolTabsData";
+import { parseMcpJson } from "./toolTabsData";
 import { McpCatalogGrid } from "./McpCatalogGrid";
-import { ToolCardIcon } from "./ToolCardIcon";
+import { InitialIcon } from "../ui/InitialIcon";
 import { ToolListRow } from "./ToolListRow";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { ConfirmDialog, Input, SelectField, TextArea } from "../ui";
@@ -335,15 +335,10 @@ function ConnectorRow({
   onToggle: (enabled: boolean) => void;
   onRemove: () => void;
 }) {
-  const Icon = pickIconByName(server.name);
   return (
     <ToolListRow
       dimmed={!server.enabled}
-      icon={
-        <ToolCardIcon category="mcp">
-          <Icon className="icon-sm" />
-        </ToolCardIcon>
-      }
+      icon={<InitialIcon name={server.name} />}
       title={server.name}
       meta={server.transport}
       /* 只留一句能分辨 server 的信息：描述优先，没有就退回命令行。

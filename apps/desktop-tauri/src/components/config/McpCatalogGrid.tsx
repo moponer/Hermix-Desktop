@@ -18,25 +18,13 @@
 //    `env: {}`，点安装必然 400 —— 它们其实一直是"看得见装不上"。凭据对话框
 //    是这批条目能否使用的唯一前提，优先级高于任何目录美化。
 import { useEffect, useMemo, useState } from "react";
-import {
-  Blocks, Database, Globe, Loader2, Package, ShieldAlert, Terminal, Wrench,
-} from "lucide-react";
+import { Loader2, ShieldAlert, Terminal } from "lucide-react";
 import * as api from "../../api/rest";
 import type { CatalogEntry } from "../../api/types";
 import { toastError, toastSuccess } from "../../hooks/useToast";
 import { Button, ConfirmDialog, Modal } from "../ui";
 import { LOADING } from "../strings";
-import { ToolCardIcon } from "./ToolCardIcon";
-
-const CATEGORY_ICON: Record<string, React.ReactNode> = {
-  办公: <Blocks className="icon-md" />,
-  开发: <Wrench className="icon-md" />,
-  检索: <Globe className="icon-md" />,
-  通讯: <Globe className="icon-md" />,
-  数据: <Database className="icon-md" />,
-  通用: <Package className="icon-md" />,
-  其它: <Terminal className="icon-md" />,
-};
+import { InitialIcon } from "../ui/InitialIcon";
 
 /** 目录类目 → 图标色调。
  *
@@ -203,11 +191,8 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
               }`}
             >
               <div className="flex items-center gap-2.5">
-                {/* 与插件 / 技能 / 工具集三页共用 ToolCardIcon（此前这里自写一套
-                    实色块 + 阴影，是四页里唯一漂出去的一处）。 */}
-                <ToolCardIcon category={item.category}>
-                  {CATEGORY_ICON[item.category] ?? CATEGORY_ICON["其它"]}
-                </ToolCardIcon>
+                {/* 与插件 / 技能 / 工具集三页共用 InitialIcon（首字 + 稳定色） */}
+                <InitialIcon name={name} />
                 <div className="min-w-0 flex-1">
                   <span className="truncate text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
                     {name}

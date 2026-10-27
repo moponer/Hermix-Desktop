@@ -13,15 +13,13 @@ import {
   ShieldAlert,
   ClipboardList,
   FileText,
-  Repeat2,
   type LucideIcon,
 } from "lucide-react";
 import { reportError } from "../lib/reportError";
 import * as api from "../api";
 import type { AutomationTask } from "../types";
 import type { IconTone } from "../lib/categoryTone";
-import { toneForCategory } from "../lib/categoryTone";
-import { ToolCardIcon } from "./config/ToolCardIcon";
+import { InitialIcon } from "./ui/InitialIcon";
 import { AiGenerateButton } from "./AiGenerateButton";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "../desktopBridge";
@@ -361,9 +359,6 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
         <p className="text-[length:var(--text-ui)] text-text-muted mb-2">定时任务模板</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           {TEMPLATES.map((t) => {
-            /* 大写化再渲染：JSX 里 `<t.icon />` 会被当成名为 "t.icon" 的
-               HTML 标签（小写开头），React 会静默渲染成空元素。 */
-            const Glyph = t.icon;
             return (
               <button
                 key={t.name}
@@ -371,7 +366,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
                 className="m-lift text-left rounded-xl bg-bg-card p-3.5 hover:bg-bg-hover"
               >
                 <div className="flex items-center gap-2">
-                  <ToolCardIcon tone={t.tone}><Glyph className="icon-md" /></ToolCardIcon>
+                  <InitialIcon name={t.name} size="md" />
                   <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">
                     {t.name}
                   </span>
@@ -480,9 +475,7 @@ function TaskCard({
             色调的彩色图标块 + 固定的 Clock 图标（定时任务的语义恒等于时钟，
             不需要靠用户填字符串来表达）。旧任务里的 emoji 数据仍在库里，
             只是不再渲染。 */}
-        <ToolCardIcon tone={task.category ? toneForCategory(task.category) : "amber"}>
-          <Clock className="icon-md" />
-        </ToolCardIcon>
+        <InitialIcon name={task.name} size="md" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">
@@ -1101,9 +1094,7 @@ function WorkflowCard({
   return (
     <div className="flex flex-col gap-2 p-3.5 rounded-xl bg-bg-card">
       <div className="flex items-start gap-2.5">
-        {/* 与定时任务卡（Clock / amber）区分：工作流是「可复跑的流程」，
-            用 Repeat2 + violet，两族卡片在混排时靠色相即可分辨。 */}
-        <ToolCardIcon tone="violet"><Repeat2 className="icon-md" /></ToolCardIcon>
+        <InitialIcon name={wf.name} size="md" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">

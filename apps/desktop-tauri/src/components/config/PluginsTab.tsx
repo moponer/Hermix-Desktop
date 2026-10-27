@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import * as api from "../../api";
 import type { PluginSettings } from "../../api";
 import { BUILTIN_PLUGINS, DEFAULT_PLUGIN_SETTINGS } from "./toolTabsData";
-import { ToolCardIcon } from "./ToolCardIcon";
+import { InitialIcon } from "../ui/InitialIcon";
 import { ToolListRow } from "./ToolListRow";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { SearchBar, Section, Grid, SummaryBar } from "./toolTabsShared";
@@ -68,7 +68,6 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
             return (
               <PluginCard
                 key={plugin.id}
-                icon={<plugin.icon className="icon-md" />}
                 name={plugin.name}
                 description={plugin.description}
                 badge={plugin.category}
@@ -92,18 +91,15 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
 // ── Shared building blocks ──────────────────────────────────────────
 
 export function PluginCard({
-  icon,
   name,
   description,
   badge,
-  category,
   enabled,
   saving,
   disabled,
   highlight = false,
   onToggle,
 }: {
-  icon: React.ReactNode;
   name: string;
   description: string;
   badge: string;
@@ -128,7 +124,7 @@ export function PluginCard({
     <ToolListRow
       dimmed={!enabled}
       className={highlight ? "bg-[var(--color-bg-card-hover)]" : undefined}
-      icon={<ToolCardIcon category={category}>{icon}</ToolCardIcon>}
+      icon={<InitialIcon name={name} />}
       title={name}
       meta={badge}
       description={description}

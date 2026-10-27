@@ -53,3 +53,16 @@
 }
 
 /* ── Hide scrollbar but keep scrollable ── */
+
+/* ── 首字图标里的字形（InitialIcon）─────────────────────────────
+   与 .cat-icon 的档位对齐：sm(28)=14 · md(36)=16 · lg(48)=18。
+   600 字重 + line-height 1：汉字在小方块里上下留白才均等；用 500 会显得
+   比同排文字轻，看起来像「没对齐」。 */
+.initial-glyph {
+  font-size: var(--text-ui);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+}
+.cat-icon--md .initial-glyph { font-size: var(--text-body); }
+.cat-icon--lg .initial-glyph { font-size: var(--text-title); }
