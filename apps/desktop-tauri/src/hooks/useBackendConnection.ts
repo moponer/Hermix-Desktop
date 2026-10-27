@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "../ipc";
 import { listen } from "@tauri-apps/api/event";
 import * as api from "../api";
+import { usePolling } from "./usePolling";
 
 export type ConnState = "connecting" | "online" | "offline";
 
@@ -54,13 +55,9 @@ export function useBackendConnection() {
     }
   }, []);
 
-  useEffect(() => {
-    check();
-    const interval = setInterval(() => {
-      if (document.visibilityState === "visible") void check();
-    }, 30_000);
-    return () => clearInterval(interval);
-  }, [check]);
+  // 30s 探测收敛进 usePolling（P2-4）：行为与原先的手写 visibilityState
+  // 判断一致，另外多出「恢复可见立刻补探一次」，切回窗口不用等满 30s。
+  usePolling(() => check(), 30_000);
 
   useEffect(() => {
     let cancelled = false;

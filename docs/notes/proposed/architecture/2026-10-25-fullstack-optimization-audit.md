@@ -455,6 +455,12 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 **未做（其余 7 处）**：`App.tsx` mobile-active(15s) / presence heartbeat(30s)、`useBackendConnection`(30s，已有 visibility 判断)、`useChannelsStatus`(30s)、`useCustomApps`(退避轮询)、`ImChannelsCard` 配对轮询、`useSafeTimeout`。它们要么请求体量大（需请求去重/缓存键），要么已被现有 `visibilityState` 判断覆盖，收益低于改动风险。另有 3 处非轮询用途（`main.tsx` 启动进度爬条、`chatStateReset` 的 approval retry 计时器 Map、测试）不改。
 
+**P2-4 收口（2026-10-27，批次 24）**：剩余 7 处逐一复核完毕——
+- **再收敛 2 处**：`useBackendConnection`(30s 探测)、`useChannelsStatus`(30s)。原先手写的 `visibilityState` 判断本就是 `usePolling` 行为的子集，收敛后还多出「恢复可见立即补探一次」。
+- **有意保留 5 处，各有语义理由**：`App.tsx` mobile-active(15s)/presence heartbeat(30s)——防休眠与「人在不在」信号**必须**在页面隐藏时持续跑，与 `usePolling` 的「隐藏不发」语义正交，收敛即倒退；`useCustomApps`——setTimeout 退避 + focus 重拉，比 `usePolling` 高一级；`ImChannelsCard` 配对轮询——用户主动触发 + 300 次上限，非后台负载；`useSafeTimeout`——非轮询用途。
+
+验证：`tsc --noEmit` 通过。
+
 ### 批次 19（P3-4 配置热重载）— 2026-10-26 交付
 
 两处改动，都针对「handler 每请求重读」这一实际开销：

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { getChannelStatus, type ChannelStatusItem } from "../api";
+import { usePolling } from "./usePolling";
 
 /**
  * IM 通道连接状态（含机器人名）。
@@ -9,19 +10,9 @@ import { getChannelStatus, type ChannelStatusItem } from "../api";
  */
 export function useChannelsStatus(): ChannelStatusItem[] | null {
   const [status, setStatus] = useState<ChannelStatusItem[] | null>(null);
-  useEffect(() => {
-    let ok = true;
-    const load = () => {
-      getChannelStatus().then((r) => {
-        if (ok) setStatus(r ? r.platforms : null);
-      });
-    };
-    load();
-    const t = window.setInterval(load, 30_000);
-    return () => {
-      ok = false;
-      window.clearInterval(t);
-    };
-  }, []);
+  usePolling(async () => {
+    const r = await getChannelStatus();
+    setStatus(r ? r.platforms : null);
+  }, 30_000);
   return status;
 }
