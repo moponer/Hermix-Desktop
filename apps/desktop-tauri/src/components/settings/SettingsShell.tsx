@@ -278,7 +278,7 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
   const contentNode = (
     <div
       key={current.id}
-      className="settings-page-fade min-w-0 flex-1 overflow-y-auto bg-[var(--color-bg-secondary)]"
+      className="settings-page-fade min-w-0 flex-1 overflow-y-auto bg-[var(--color-bg-primary)]"
     >
       <PageBody def={current} toolQuery={toolQuery} onToolQuery={setToolQuery} />
     </div>

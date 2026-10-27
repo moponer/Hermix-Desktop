@@ -15,29 +15,31 @@
 
 /* ─── 通用 token（共享预览样式所需 + viewer UI） ───────────────── */
 :root {
+  /* 2026-10-27：旧色系（墨绿 / 夜墨）已删除，默认即 Notion 亮色。
+     取值与桌面端 themes/notion.css 同源，Notion 暗色见 notion.css。 */
   --bg-primary: #ffffff;
-  --bg-secondary: #f5f5f5;
-  --bg-tabbar: #ececec;
-  --bg-tertiary: #ededed;
-  --bg-card: #ffffff;
-  --bg-card-hover: #f6f6f6;
-  --bg-hover: rgba(20, 20, 20, 0.06);
-  --bg-accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --bg-secondary: #f7f7f5;
+  --bg-tabbar: #efefed;
+  --bg-tertiary: #f1f1ef;
+  --bg-card: #fbfbfa;
+  --bg-card-hover: #f4f4f2;
+  --bg-hover: #f1f1ef;
+  --bg-accent-soft: color-mix(in srgb, var(--accent) 10%, transparent);
 
-  --border: #d4d4d4;
-  --border-subtle: #e5e5e5;
-  --text-primary: #181818;
-  --text-secondary: #565656;
-  --text-muted: #5f5f5f;
-  --text-faint: #6a6a6a;
+  --border: #d3d1cb;
+  --border-subtle: #e9e9e7;
+  --text-primary: #37352f;
+  --text-secondary: #605c54;
+  --text-muted: #6b6862;
+  --text-faint: #706c65;
   /* 强调色底上的文字（主按钮）：色值只在 token 层出现，组件里一律 var()。 */
   --text-on-accent: #ffffff;
 
-  --accent: #1e4a3c;
-  --accent-strong: #163a2f;
-  --danger: #c74436;
-  --info: #4f7fa3;
-  --success: #3e8153;
+  --accent: #1c6ac4;
+  --accent-strong: #175b9e;
+  --danger: #bf4134;
+  --info: #467191;
+  --success: #3a794e;
 
   /* 分类色板（与主程序 lib/categoryTone 的 8 档一一对应）—— 查看器与主程序
      共用 icon-tone.css，因此这套 token 必须与主程序 tokens.css 同名同序。 */
@@ -156,54 +158,8 @@
 }
 
 /* 暗色由 JS 写入的 data-theme 驱动（theme.ts），不用媒体查询——
-   用户强制亮色时 OS 暗色不应抢走 token。 */
-:root[data-theme="dark"] {
-  --bg-primary: #141414;
-  --bg-secondary: #1f1f1f;
-  --bg-tabbar: #1a1a1a;
-  --bg-tertiary: #292929;
-  --bg-card: #1f1f1f;
-  --bg-card-hover: #262626;
-  --bg-hover: rgba(255, 255, 255, 0.06);
-  --bg-accent-soft: rgba(111, 174, 148, 0.16);
-
-  --border: #3a3a3a;
-  --border-subtle: #2a2a2a;
-  --text-primary: #e9e9e9;
-  --text-secondary: #b0b0b0;
-  --text-muted: #8a8a8a;
-  --text-faint: #6f6f6f;
-
-  --accent: #6fae94;
-  --accent-strong: #86c0a8;
-  --danger: #e06b52;
-  --info: #8a9aa8;
-  --success: #84b383;
-
-  /* 暗色主题此前**漏定义**这个令牌：`box-shadow: var(--shadow-focus-flat)`
-     因 var() 解析失败而整条声明被丢弃 → 键盘焦点在暗色下完全不可见。
-     这里补上，并比亮色略强（暗底上同等浓度更不明显）。 */
-  --shadow-focus-flat: 0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent);
-
-  /* 菜单投影：暗底上同等浓度更弱，提浓一档（与 focus-flat 同理由）。 */
-  --shadow-menu: 0 8px 20px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
-
-  --color-tone-slate: #9aa4b2;
-  --color-tone-blue: #6aa9f0;
-  --color-tone-cyan: #4fc3d9;
-  --color-tone-green: #6cc08a;
-  --color-tone-amber: #e0b054;
-  --color-tone-orange: #f09a5c;
-  --color-tone-rose: #ef8ba0;
-  --color-tone-violet: #a992ee;
-  /* 实心色块上的字形前景色：暗底提亮档的 tone 压白字只有 2.0~2.6:1，
-     改用深墨 = 6.99~9.14:1。 */
-  --color-on-tone: #12151c;
-
-  --color-bg-code: #1a1a1a;
-  --color-bg-code-header: #141414;
-  --color-bg-code-border: #292929;
-}
+   用户强制亮色时 OS 暗色不应抢走 token。
+   2026-10-27：旧深色套（夜墨）已删除；暗色只有 Notion 夜，取值见 notion.css。 */
 
 * { box-sizing: border-box; }
 
@@ -570,7 +526,7 @@ html, body, #root {
 }
 /* 深色下投影失效（黑底上投黑没有对比），分界只能靠亮度差：secondary
    (#1f1f1f) 与 primary (#141414) 只差 4%，侧栏直接提亮一档。 */
-:root[data-theme="dark"] .sidebar { background: #232323; }
+/* 旧暗色例外已删除（Notion 夜的外壳规则住在 notion.css）。 */
 .sb-head {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--text-muted);
@@ -1129,11 +1085,7 @@ html, body, #root {
    面板提亮后内部控件的旧配色全部倒挂（输入框/气泡 --bg-secondary
    #1f1f1f 比面板 #202020 还暗，糊成一片）——控件整体再亮一档：
    头部 #262626、输入框与助手气泡 #2a2a2a，placeholder 提到 muted。 */
-:root[data-theme="dark"] .ai-side { background: #202020; }
-:root[data-theme="dark"] .ai-head { background: #262626; }
-:root[data-theme="dark"] .ai-input,
-:root[data-theme="dark"] .ai-msg-assistant { background: #2e2e2e; }
-:root[data-theme="dark"] .ai-input::placeholder { color: var(--text-muted); }
+/* 旧暗色 AI 栏例外已删除（见 notion.css 的 [data-theme^="notion"] 规则）。 */
 .ai-head {
   display: flex; align-items: center; gap: 8px;
   /* 高度 32px 与右侧 .tabbar / 目录列表表头同档——三栏的"标题行"

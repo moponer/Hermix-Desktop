@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
 import { useStreamChatContext } from "../context/StreamChatContext";
 import { IM_SOURCE_LABEL, imSourceOf, type ImSource } from "../utils/time";
-import { PanelRight, PanelLeftOpen, Search, ArrowUp, ArrowUpRight, AlertTriangle, AppWindow, Workflow, FileText, PenLine, Image as ImageIcon } from "lucide-react";
+import { PanelRight, PanelLeftOpen, Search, ArrowUp, AlertTriangle, AppWindow, Workflow, FileText, PenLine, Image as ImageIcon } from "lucide-react";
 import { SidebarRevealRow } from "./SidebarRevealRow";
 import { resolveSessionSelectedModel } from "../utils/sessionModel";
 import type {
@@ -22,6 +22,7 @@ import type { AcuiState } from "../acui/types";
 import type { AcuiDecisionBus } from "../acui/AcuiRegistry";
 import { AcuiPanel } from "../acui/AcuiPanel";
 import { StreamErrorCard, type ErrorKind } from "./StreamErrorBanner";
+import { WelcomeHero } from "./WelcomeHero";
 import { useModelSelector } from "./ModelSelector";
 import { useContextWindows } from "../hooks/useContextWindows";
 import { toastError, toastInfo } from "../hooks/useToast";
@@ -162,15 +163,8 @@ const MAX_DOC_MB = 30;
 const MAX_DOC_BYTES = MAX_DOC_MB * 1024 * 1024;
 
 // ── 欢迎页快捷入口 ──────────────────────────────────────────
-/** 建议行（墨与纸 v4）：四条快捷入口，一键填入输入框。
- *  内容必须对应 Hermix 真实能力——差异审查 / 文档写作 / 定时自动化 /
- *  文件落盘，不放假能力。 */
-const WELCOME_SUGGESTIONS: string[] = [
-  "审查当前工作区的未提交改动，按风险从高到低给我一份清单",
-  "把这段会议记录整理成一页纸纪要，行动项单独列出",
-  "每天早上 9 点汇总昨天未读的消息和待办，生成一份日报",
-  "为当前项目写一份新人上手指南，保存到 docs/ 目录",
-];
+/* 2026-10-27：输入框下方的四条「建议行」已移除（用户要求去掉），
+   欢迎页只保留字标 + 能力 chip + 输入框。 */
 
 /** 能力 chip 行（墨与纸 v4）：对应真实能力，点击填入能力专属 prompt 模板。
  *  独立应用=对话式创建桌面应用；工作流=自动化工作流；代码开发=差异审查；
@@ -1107,6 +1101,8 @@ export const ChatView = memo(function ChatView({
         <div className="w-full max-w-3xl flex flex-col items-center py-12">
           {!isWorkbenchChat && (
             <>
+              {/* 字标：欢迎页的视觉锚点（逐字上浮，见 WelcomeHero） */}
+              <WelcomeHero />
               {/* 能力 chip 行：点击加载能力专属 prompt 模板。
                   场景切换（办公 / 开发）不在这里重复一遍 —— 输入框工具条上
                   已有同一个开关，两处两行同样式的药丸只会让人分不清哪行是模式。 */}
@@ -1183,32 +1179,6 @@ export const ChatView = memo(function ChatView({
               />
             )}
           </div>
-          {/* 建议行（墨与纸 v4，对齐 WorkBuddy 快捷入口）：左对齐自适应宽度
-              圆角矩形（非药丸、不居中），↗ 表示"填入输入框"。内容全部对应
-              Hermix 真实能力：差异审查 / 文档写作 / 定时自动化 / 文件落盘。 */}
-          {!isWorkbenchChat && (
-            <div className="w-full max-w-3xl flex flex-col items-start gap-1.5 mt-3">
-              {WELCOME_SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => {
-                    setInput(s);
-                    textareaRef.current?.focus();
-                  }}
-                  className="group flex w-auto max-w-full items-center gap-6 rounded-[var(--radius-lg)] bg-[var(--color-bg-card)] px-4 py-2.5 text-left transition-colors hover:bg-[var(--color-bg-card-hover)]"
-                >
-                  <span className="text-[length:var(--text-ui)] text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]">
-                    {s}
-                  </span>
-                  <ArrowUpRight
-                    className="icon-sm shrink-0 text-[var(--color-text-faint)] group-hover:text-[var(--color-text-secondary)]"
-                    aria-hidden="true"
-                  />
-                </button>
-              ))}
-            </div>
-          )}
         </div>
         </div>
       </div>

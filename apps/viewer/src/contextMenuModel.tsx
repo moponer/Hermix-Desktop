@@ -110,8 +110,8 @@ export interface MenuContext {
 }
 
 const THEME_ITEMS: Array<{ mode: ThemeMode; label: string; icon: typeof Sun }> = [
-  { mode: "light", label: "浅色主题", icon: Sun },
-  { mode: "dark", label: "深色主题", icon: Moon },
+  { mode: "notion", label: "Notion 主题", icon: FileText },
+  { mode: "notion-dark", label: "Notion 夜", icon: Moon },
   { mode: "system", label: "跟随系统", icon: Monitor },
 ];
 

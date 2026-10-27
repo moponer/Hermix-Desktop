@@ -28,6 +28,7 @@ import {
   type PreviewKind,
 } from "@hermix/preview";
 import { viewerFileSource } from "./fileSource";
+import { isDarkResolved, type ResolvedTheme } from "./theme";
 import { currentWindowLabel } from "./windowRole";
 
 /** 目录条目（共享层的 mtime 可能是 null）。 */
@@ -177,7 +178,7 @@ export function PinWindow() {
             <PreviewSurface
               payload={preview.payload}
               source={viewerFileSource}
-              isDark={document.documentElement.dataset.theme === "dark"}
+              isDark={isDarkResolved((document.documentElement.dataset.theme ?? "light") as ResolvedTheme)}
               fileName={fileName}
               resolvedPath={preview.resolvedPath}
               zoom={100}

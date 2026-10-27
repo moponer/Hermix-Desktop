@@ -1,0 +1,42 @@
+/* ════════════════════════════════════════════════════════════════════
+   welcome-hero.css — 欢迎页字标「HERMIX 逐字上浮」
+   ──────────────────────────────────────────────────────────────────
+   纯 CSS 动画，无 JS 定时器、无渐变（Notion 主题禁渐变）。
+   颜色只有一处来源：--color-text-hero。
+   ════════════════════════════════════════════════════════════════════ */
+
+.hero-wordmark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 与下方输入区拉开距离：48px ≈ 16px 正文的三段行高 */
+  margin-bottom: 48px;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.26em;
+  /* letter-spacing 会在最后一个字母后留一份空白，左侧补一份保持视觉居中 */
+  padding-left: 0.26em;
+  line-height: 1;
+  color: var(--color-text-hero);
+  user-select: none;
+}
+
+.hero-letter {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: hero-rise 640ms var(--ease-out) forwards;
+}
+
+@keyframes hero-rise {
+  to { opacity: 1; transform: none; }
+}
+
+/* 降低动效偏好：直接给最终态 */
+@media (prefers-reduced-motion: reduce) {
+  .hero-letter {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}

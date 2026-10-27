@@ -1,0 +1,146 @@
+/* ════════════════════════════════════════════════════════════════════
+   notion-app.css — Notion 主题的应用外壳层
+   ──────────────────────────────────────────────────────────────────
+   作用域 `[data-theme^="notion"]`，亮暗两套共用（取值全部来自令牌，
+   跟着主题自动切换）。覆盖三件事：
+
+   1. **零渐变**：Notion 的界面里没有渐变。副条、代码遮罩、进度条、
+      骨架扫光、查看器顶线、加载光晕一律换成实色。
+   2. **工具结果面板 = Notion 代码块**：暖底、小圆角、等宽、无描边。
+   3. **文件查看器 / 弹层 / 消息提示**：统一到同一套面阶 + 发丝线 + 小圆角，
+      不再出现第二套圆角或第二套阴影。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 一、零渐变 ─────────────────────────────────────────────────── */
+
+/* 输入框底部副条：Notion 零渐变 —— 用最深一档实色做"卡座"。
+   原先这里填的是 bg-input（与输入区同色），三段面因此塌成一块、
+   副条看不出是独立区块；顶线由 components-controls 的发丝负责。 */
+:root[data-theme^="notion"] .composer-subbar {
+  background: var(--color-bg-quaternary);
+}
+
+/* 代码块底部的「还有更多」遮罩：一条压向代码底色的渐变 */
+:root[data-theme^="notion"] .code-fade {
+  display: none;
+}
+
+/* 工具行进度：accent 渐变 → 实色 */
+:root[data-theme^="notion"] .tw-msg-progress-fill {
+  background: var(--color-accent);
+}
+
+/* 骨架屏扫光 */
+:root[data-theme^="notion"] .m-shimmer {
+  background-image: none;
+  background-color: var(--color-bg-tertiary);
+  animation: none;
+}
+
+/* 文件查看器：顶部渐隐线 + 加载光晕 */
+:root[data-theme^="notion"] .preview-pane .preview-body::before {
+  display: none;
+}
+:root[data-theme^="notion"] .preview-pane .preview-loading {
+  background: var(--color-bg-secondary);
+}
+
+/* 错误卡片顶部的渐隐细线 */
+:root[data-theme^="notion"] .stream-error-card::before,
+:root[data-theme^="notion"] .stream-error-card__detail::before {
+  display: none;
+}
+
+/* 图片预览的 alpha 棋盘格（共用预览层用四条 45° 渐变拼出来）。
+   Notion 的图片块直接铺在纸面上，没有棋盘格；这里改成实色底。 */
+:root[data-theme^="notion"] .preview-pane .preview-image-stage,
+:root[data-theme^="notion"] .preview-fullscreen .preview-image-stage {
+  background-image: none;
+  background-color: var(--color-bg-secondary);
+}
+
+/* ── 二、工具结果面板：Notion 代码块 ─────────────────────────────
+   暖底、6px 圆角、等宽 12、上下 12px 内边距；不要描边、不要投影。 */
+:root[data-theme^="notion"] .tw-msg-output {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--color-bg-code);
+  border-radius: var(--radius-md);
+  color: var(--color-text-on-code);
+  font-size: var(--text-meta);
+  line-height: 1.6;
+}
+:root[data-theme^="notion"] .tw-msg-output-text {
+  color: var(--color-text-on-code);
+  font-size: var(--text-meta);
+  line-height: 1.6;
+}
+:root[data-theme^="notion"] .tw-msg-output-copy {
+  color: var(--color-text-faint);
+  background: var(--color-bg-code-header);
+  border-radius: var(--radius-sm);
+}
+
+/* ── 三、文件查看器（PreviewPane / CodeView）─────────────────────
+   Notion 的代码呈现：暖底 + 行号淡色 + 顶部一条发丝线，头栏不另起色块。 */
+:root[data-theme^="notion"] .preview-pane .preview-head {
+  background: var(--color-bg-primary);
+  box-shadow: inset 0 -1px 0 var(--color-border-primary);
+}
+:root[data-theme^="notion"] .preview-pane .preview-filename {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+:root[data-theme^="notion"] .preview-pane .preview-lang,
+:root[data-theme^="notion"] .preview-pane .preview-stats {
+  color: var(--color-text-faint);
+  font-size: var(--text-tiny);
+}
+:root[data-theme^="notion"] .preview-pane .code-viewport {
+  background: var(--color-bg-code);
+  border-radius: var(--radius-md);
+}
+:root[data-theme^="notion"] .preview-pane .code-gutter {
+  background: transparent;
+  color: var(--color-text-faint);
+}
+:root[data-theme^="notion"] .preview-pane .code-copy-btn {
+  background: var(--color-bg-code-header);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+}
+
+/* ── 四、弹层与消息提示：一套圆角、一套阴影 ─────────────────────── */
+:root[data-theme^="notion"] .toast {
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+}
+:root[data-theme^="notion"] .stream-error-card {
+  border-radius: var(--radius-md);
+}
+:root[data-theme^="notion"] .approval-tool-pill,
+:root[data-theme^="notion"] .approval-pill {
+  border-radius: var(--radius-sm);
+}
+
+/* ── 五、设置页：Notion 的分区标题与行距 ─────────────────────────
+   分区标题 18/600（Notion 的 H2），说明 12 灰；分区之间靠 36px 留白，
+   不画分隔线、不加底色卡片。 */
+:root[data-theme^="notion"] .settings-section {
+  margin-bottom: 2.25rem;
+}
+:root[data-theme^="notion"] .settings-section__title {
+  /* 用令牌而不是 em：父级带 `text-[length:var(--text-ui)]`（14），
+     1.125em 只会得到 15.75px；Notion 的分区标题是 18。 */
+  font-size: var(--text-title);
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--color-text-primary);
+}
+:root[data-theme^="notion"] .settings-section__hint {
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+}
+:root[data-theme^="notion"] .settings-section__head {
+  margin-bottom: 0.875rem;
+}

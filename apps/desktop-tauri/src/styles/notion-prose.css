@@ -1,0 +1,251 @@
+/* ════════════════════════════════════════════════════════════════════
+   notion-prose.css — Notion 主题下的「LLM 输出」排版层
+   ──────────────────────────────────────────────────────────────────
+   只在 :root[data-theme^="notion"] 下生效，其余主题逐字节不变。
+
+   三件事与基线不同：
+   1. 标题比例换成 Notion 的 em 阶梯（1.875 / 1.5 / 1.25 / 1.125 / 1 / .875），
+      相对正文 16px 换算即 30 / 24 / 20 / 18 / 16 / 14。
+   2. 块间距收紧：段落 0.75em、列表项 0.2em —— Notion 靠留白分块，
+      不靠段与段之间的大空隙。
+   3. 边界一律用 background / box-shadow 画（G11 禁结构 border）：
+      引用是左侧 3px 墨轨，表格是行分隔 + 表头淡底。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 正文：Notion 不加字距，行高按中文字面调到 1.65 ── */
+:root[data-theme^="notion"] .prose {
+  font-size: var(--text-body);
+  line-height: var(--leading-reading);
+  letter-spacing: 0;
+}
+
+/* ── 标题阶梯（Notion 原比例）── */
+:root[data-theme^="notion"] .prose h1,
+:root[data-theme^="notion"] .prose h2,
+:root[data-theme^="notion"] .prose h3,
+:root[data-theme^="notion"] .prose h4,
+:root[data-theme^="notion"] .prose h5,
+:root[data-theme^="notion"] .prose h6 {
+  line-height: 1.3;
+  letter-spacing: 0;
+  margin: 1.4em 0 0.4em;
+}
+:root[data-theme^="notion"] .prose h1 {
+  font-size: 1.875em;
+  font-weight: 600;
+  margin-top: 1.6em;
+  color: var(--color-text-primary);
+}
+:root[data-theme^="notion"] .prose h2 {
+  font-size: 1.5em;
+  font-weight: 600;
+  margin-top: 1.4em;
+  color: var(--color-text-primary);
+}
+:root[data-theme^="notion"] .prose h3 {
+  font-size: 1.25em;
+  font-weight: 600;
+  margin-top: 1.2em;
+  color: var(--color-text-primary);
+}
+:root[data-theme^="notion"] .prose h4 {
+  font-size: 1.125em;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+:root[data-theme^="notion"] .prose h5 {
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+:root[data-theme^="notion"] .prose h6 {
+  font-size: 0.875em;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+/* 标题紧跟标题时不要堆成楼梯（LLM 常写「## 大标题 / ### 子标题」）。 */
+:root[data-theme^="notion"] .prose h1 + h2,
+:root[data-theme^="notion"] .prose h2 + h3,
+:root[data-theme^="notion"] .prose h3 + h4 {
+  margin-top: 0.4em;
+}
+
+/* ── 段落与列表：块间距收紧，列表缩进按 Notion 的 1.5em ── */
+:root[data-theme^="notion"] .prose p {
+  margin: 0 0 0.75em;
+}
+:root[data-theme^="notion"] .prose p + p {
+  margin-top: 0;
+}
+:root[data-theme^="notion"] .prose ul,
+:root[data-theme^="notion"] .prose ol {
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+:root[data-theme^="notion"] .prose li {
+  margin: 0.2em 0;
+}
+:root[data-theme^="notion"] .prose li::marker {
+  color: var(--color-text-secondary);
+}
+
+/* ── 引用：Notion 是左侧 3px 墨轨 + 无底色 + 正文字色 ──
+   轨道用 inset 阴影画：实色、无渐变（G11 禁结构 border），颜色取
+   `--color-border-secondary`（#d3d1cb）而不是 border-strong —— 后者在
+   16px 正文旁是两根粗黑竖线，压得正文抬不起头。 */
+:root[data-theme^="notion"] .prose blockquote {
+  padding: 0.1em 0 0.1em 0.9em;
+  margin: 0.9em 0;
+  background: none;
+  box-shadow: inset 3px 0 0 var(--color-border-secondary);
+  border-radius: 0;
+  color: var(--color-text-primary);
+  font-style: normal;
+}
+
+/* ── 表格：表头淡底 + 行分隔（无竖线）── */
+:root[data-theme^="notion"] .prose table {
+  font-size: 1em;
+}
+:root[data-theme^="notion"] .prose th,
+:root[data-theme^="notion"] .prose td {
+  padding: 0.4em 0.6em;
+  box-shadow: inset 0 -1px 0 var(--color-border-primary);
+}
+:root[data-theme^="notion"] .prose th {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: 1em;
+  font-weight: 600;
+}
+:root[data-theme^="notion"] .prose tbody tr:hover {
+  background: var(--color-bg-hover-subtle);
+}
+
+/* ── 行内代码：暖灰芯片 + 4px 圆角 + 暖红字（Notion 的原样做法）── */
+:root[data-theme^="notion"] .prose :not(pre) > code {
+  background: var(--color-code-inline-bg);
+  color: var(--color-inline-code-fg, var(--color-text-on-code));
+  border-radius: 4px;
+  padding: 0.15em 0.35em;
+  font-size: 0.875em;
+}
+
+/* ── 任务清单：Notion 的空心方块（16px、2px 圆角）── */
+:root[data-theme^="notion"] .prose .md-task-box {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1.5px var(--color-border-secondary);
+  color: transparent;
+}
+:root[data-theme^="notion"] .prose .md-task-box[data-checked="true"] {
+  background: var(--color-accent);
+  box-shadow: none;
+  color: var(--color-on-accent);
+}
+
+/* ── 代码块：同一底色走到底，头栏不另起一层 ── */
+:root[data-theme^="notion"] .md-codeblock {
+  border-radius: var(--radius-md);
+  background: var(--color-bg-code);
+}
+:root[data-theme^="notion"] .md-codeblock__head {
+  background: var(--color-bg-code);
+  color: var(--color-text-faint);
+}
+
+/* ── 分隔线：1px，用背景画（避免结构 border）── */
+:root[data-theme^="notion"] .prose hr {
+  border: 0;
+  height: 1px;
+  background: var(--color-border-primary);
+  margin: 1.4em 0;
+}
+
+/* ── 链接：Notion 是下划线 + 下划线偏移，不是底线边框 ── */
+:root[data-theme^="notion"] .prose a {
+  border-bottom: 0;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--color-accent-line);
+}
+:root[data-theme^="notion"] .prose a:hover {
+  text-decoration-color: var(--color-link);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   对话过程块：工具调用行 / 思考旁注 / 审批
+   ──────────────────────────────────────────────────────────────────
+   Notion 的正文流里没有彩色方块，也没有卡片框。过程信息一律压成
+   「一行灰字 + 悬停才亮」；颜色只留给失败与运行中两种状态
+   （Notion 的数据库状态标签本身也是彩色的，所以状态点保留色相）。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* 工具行图标：彩色实底方块 → 单色字形。
+   `.tw-msg-icon-tile` 的底色由组件 inline style 写入，只能 !important 压掉。 */
+:root[data-theme^="notion"] .tw-msg-icon-tile {
+  background: transparent !important;
+  box-shadow: none;
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+}
+:root[data-theme^="notion"] .tw-msg-icon-tile .tw-msg-icon-svg {
+  color: var(--color-text-secondary) !important;
+}
+:root[data-theme^="notion"] .tw-msg-row[data-state="run"] .tw-msg-icon-tile .tw-msg-icon-svg {
+  color: var(--color-accent) !important;
+}
+:root[data-theme^="notion"] .tw-msg-row[data-state="err"] .tw-msg-icon-tile .tw-msg-icon-svg {
+  color: var(--color-error) !important;
+}
+
+/* 工具行：悬停只给淡染，不给灰块；圆角收到本主题的小圆角 */
+:root[data-theme^="notion"] .tw-msg-row {
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+}
+:root[data-theme^="notion"] .tw-msg-row:hover,
+:root[data-theme^="notion"] .tw-msg-row[data-open="true"],
+:root[data-theme^="notion"] .tw-msg-row:focus-visible {
+  background: var(--color-bg-hover-subtle);
+}
+
+/* 时间线轨：1.5px 发丝线（Notion 的分隔线观感），行距按块密度 */
+:root[data-theme^="notion"] .tool-rail::before {
+  background: var(--color-border-primary);
+}
+:root[data-theme^="notion"] .tool-head {
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+}
+:root[data-theme^="notion"] .tool-head:hover {
+  background: var(--color-bg-hover-subtle);
+}
+:root[data-theme^="notion"] .tool-name {
+  font-size: var(--text-meta);
+}
+
+/* 思考旁注：标签与正文同号（14），正文不再用 13 的旧档；
+   轨道换成发丝色 —— 它标记的是「这段是旁注」，不是正文的一部分。 */
+:root[data-theme^="notion"] .reasoning-label {
+  font-size: var(--text-meta);
+  font-weight: 500;
+  color: var(--color-text-faint);
+}
+:root[data-theme^="notion"] .tl-reasoning-row {
+  margin-left: 14px;
+  padding-left: 10px;
+  background: none;
+  box-shadow: inset 2px 0 0 var(--color-border-secondary);
+}
+:root[data-theme^="notion"] .tl-reasoning-row .prose,
+:root[data-theme^="notion"] .tl-reasoning-row .prose :is(p, li, td, th, blockquote, strong, em) {
+  font-size: var(--text-ui);
+  line-height: 1.6;
+}
+:root[data-theme^="notion"] .tl-reasoning-row pre {
+  font-size: var(--text-meta);
+}

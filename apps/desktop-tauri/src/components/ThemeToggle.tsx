@@ -1,5 +1,5 @@
 import { useState, useRef, type ComponentType, type ReactNode } from "react";
-import { Sun, Moon, Monitor, Check, ChevronDown } from "lucide-react";
+import { Sun, Moon, Monitor, Check, ChevronDown, FileText } from "lucide-react";
 import { useTheme, SYSTEM_THEME } from "../hooks/useTheme";
 import { THEMES } from "../styles/themes/registry";
 import { PopoverShell } from "./PopoverShell";
@@ -7,6 +7,8 @@ import { PopoverShell } from "./PopoverShell";
 const ICONS: Record<string, ComponentType<{ className?: string }>> = {
   light: Sun,
   dark: Moon,
+  notion: FileText,
+  "notion-dark": FileText,
 };
 const DEFAULT_ICON = Monitor;
 /** 跟随系统时触发器用 Monitor 图标（其字面义就是"跟着系统走"）。 */

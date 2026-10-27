@@ -29,7 +29,8 @@ function systemPrefersDark(): boolean {
  */
 export function resolveTheme(mode: ThemeMode): string {
   if (mode !== SYSTEM_THEME) return mode;
-  return systemPrefersDark() ? "dark" : "light";
+  // 旧色系（dark）已删除：系统偏好暗色 → Notion 夜。
+  return systemPrefersDark() ? "notion-dark" : "notion";
 }
 
 function applyTheme(id: string) {
@@ -52,7 +53,8 @@ function readStored(): ThemeMode {
     if (v === SYSTEM_THEME) return SYSTEM_THEME;
     if (v && isKnownTheme(v)) return v;
   } catch (e) { reportError("theme", e); }
-  return "light";
+  // 默认 Notion（旧存储值 light/dark 会被 isKnownTheme 判否，落到这里）。
+  return "notion";
 }
 
 /* ── 强调色（L1）────────────────────────────────────────────────
@@ -145,7 +147,7 @@ export function useTheme() {
     setModeState((cur) => {
       const resolvedCur = resolveTheme(cur);
       const idx = THEMES.findIndex((t) => t.id === resolvedCur);
-      return THEMES[(idx + 1) % THEMES.length]?.id ?? "light";
+      return THEMES[(idx + 1) % THEMES.length]?.id ?? "notion";
     });
   }, []);
   /** `null` 回到"跟随主题"。非 hex 形状会被 normalizeAccent 忽略。 */

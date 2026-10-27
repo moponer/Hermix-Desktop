@@ -18,15 +18,15 @@ import {
   ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search,
   Funnel, FunnelX, FileSearch,
   ChevronRight, HardDrive, ExternalLink, Sparkles, X,
-  Monitor, Moon, Sun, Activity, Info, LogOut, Settings2, Pencil, List, Globe,
+  Monitor, Moon, Activity, Info, LogOut, Settings2, Pencil, List, Globe,
   LayoutGrid, PanelRightClose, PanelsTopLeft, Copy, MoreHorizontal,
-  Maximize2, Shrink, Loader2,
+  Maximize2, Shrink, Loader2, FileText,
 } from "lucide-react";
 import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { resolveKind } from "@hermix/preview";
 import type { DirEntryLike, DriveRootLike } from "@hermix/preview";
 import { viewerFileSource } from "./fileSource";
-import { useTheme, type ThemeMode } from "./theme";
+import { isDarkResolved, useTheme, type ThemeMode } from "./theme";
 import { AiSidebar, type PendingSend } from "./AiSidebar";
 import { joinConversationPrompt } from "./aiPrompts";
 import { ContextMenu } from "./ContextMenu";
@@ -87,8 +87,8 @@ const MODE_KEY = "hermix.viewer.mode";
 
 const THEME_LABEL: Record<ThemeMode, string> = {
   system: "跟随系统",
-  light: "浅色",
-  dark: "深色",
+  notion: "Notion",
+  "notion-dark": "Notion 夜",
 };
 
 /** 工具栏换挡阈值：窗口窄于此值时，右侧开关组收进「⋯」弹出菜单。
@@ -864,15 +864,15 @@ export function App() {
             icon: <Monitor size={13} />,
           },
           {
-            id: "theme-light",
-            label: "浅色",
-            checked: themeMode === "light",
-            icon: <Sun size={13} />,
+            id: "theme-notion",
+            label: "Notion",
+            checked: themeMode === "notion",
+            icon: <FileText size={13} />,
           },
           {
-            id: "theme-dark",
-            label: "深色",
-            checked: themeMode === "dark",
+            id: "theme-notion-dark",
+            label: "Notion 夜",
+            checked: themeMode === "notion-dark",
             icon: <Moon size={13} />,
           },
         ],
@@ -934,11 +934,11 @@ export function App() {
         case "theme-system":
           setTheme("system");
           break;
-        case "theme-light":
-          setTheme("light");
+        case "theme-notion":
+          setTheme("notion");
           break;
-        case "theme-dark":
-          setTheme("dark");
+        case "theme-notion-dark":
+          setTheme("notion-dark");
           break;
         case "sys-panel":
           setSysOpen(true);
@@ -2316,10 +2316,10 @@ export function App() {
             >
               {themeMode === "system" ? (
                 <Monitor size={16} />
-              ) : themeMode === "light" ? (
-                <Sun size={16} />
-              ) : (
+              ) : themeMode === "notion-dark" ? (
                 <Moon size={16} />
+              ) : (
+                <FileText size={16} />
               )}
             </button>
           </div>
@@ -2743,7 +2743,7 @@ export function App() {
                   path={active.path}
                   name={active.name}
                   source={viewerFileSource}
-                  isDark={theme === "dark"}
+                  isDark={isDarkResolved(theme)}
                   canEdit={mode === "heavy"}
                   editRequest={editRequest}
                   showName={mode !== "pure"}
@@ -2831,16 +2831,16 @@ export function App() {
                 onSelect: () => setTheme("system"),
               },
               {
-                id: "theme-light",
-                label: `主题：${THEME_LABEL.light}`,
-                checked: themeMode === "light",
-                onSelect: () => setTheme("light"),
+                id: "theme-notion",
+                label: `主题：${THEME_LABEL.notion}`,
+                checked: themeMode === "notion",
+                onSelect: () => setTheme("notion"),
               },
               {
-                id: "theme-dark",
-                label: `主题：${THEME_LABEL.dark}`,
-                checked: themeMode === "dark",
-                onSelect: () => setTheme("dark"),
+                id: "theme-notion-dark",
+                label: `主题：${THEME_LABEL["notion-dark"]}`,
+                checked: themeMode === "notion-dark",
+                onSelect: () => setTheme("notion-dark"),
               },
             ],
           ]}

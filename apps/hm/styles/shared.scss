@@ -9,7 +9,7 @@
 
 /* 提示条：默认中性，warn / err 覆色。 */
 .hm-notice {
-  border-radius: 18rpx;
+  border-radius: 8rpx;
   font-size: $fs-mini;
   line-height: 1.5;
   color: $fg2;
@@ -31,7 +31,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 44rpx;
+  border-radius: $r-pill;
   font-size: $fs-sub;
 }
 .hm-pill:active {

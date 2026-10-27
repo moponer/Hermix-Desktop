@@ -239,10 +239,14 @@
   vertical-align: -2px;
   border-radius: 4px;
   color: transparent;
+  /* 未勾选的方块此前**完全没有可见外形**（只有 checked 态还了 accent 底），
+     渲染出来是一段 6px 的空隙 —— 任务清单退化成缩进段落。用 inset 环补外形：
+     不写 border，避免撞 G11「CSS 层结构描边」门禁。 */
+  box-shadow: inset 0 0 0 1px var(--color-border-secondary);
 }
 .prose .md-task-box[data-checked="true"] {
   background: var(--color-accent);
-  border-color: var(--color-accent);
+  box-shadow: none;
   color: var(--color-on-accent);
 }
 

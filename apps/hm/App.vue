@@ -16,15 +16,38 @@ import { onLaunch, onError, onUnhandledRejection } from '@dcloudio/uni-app'
 import { checkClockSkew } from './core/clock'
 import { reportFatal } from './core/boot'
 
-function applyHmTheme(t: 'light' | 'dark') {
-  const cls = t === 'light' ? 'theme-light' : 'theme-dark'
-  const other = t === 'light' ? 'theme-dark' : 'theme-light'
+type HmTheme = 'notion' | 'notion-dark'
+
+/** 旧色系（墨绿 / 夜墨）已删除，只留 Notion 亮/暗。 */
+const THEME_CLASS: Record<HmTheme, string> = {
+  notion: 'theme-notion',
+  'notion-dark': 'theme-notion-dark',
+}
+
+/** 旧存储值迁移：light → notion，dark → notion-dark。 */
+function normalizeTheme(v: unknown): HmTheme {
+  if (v === 'notion-dark' || v === 'dark') return 'notion-dark'
+  return 'notion'
+}
+
+function applyHmTheme(t: HmTheme) {
+  const cls = THEME_CLASS[t] ?? THEME_CLASS.notion
   try { uni.setStorageSync('hm-theme', t) } catch {}
-  // 非 H5 端（如小程序）没有 document，仅支持浅色默认，跳过切换。
+  // 非 H5 端（如小程序）没有 document，仅支持默认浅色，跳过切换。
   if (typeof document === 'undefined') return
-  const root = document.documentElement
-  root.classList.add(cls)
-  root.classList.remove(other)
+  const paint = () => {
+    // **三处都要挂**：默认值同时声明在 `:root` 与 `uni-page-body`（`page` 在
+    // H5 编译成后者），只改 <html> 的话页体上的默认值会把主题值再盖回去 ——
+    // 现象是「算出来是 Notion、画出来还是墨绿」。
+    const nodes = [document.documentElement, document.body, document.querySelector('uni-page-body')]
+    for (const el of nodes) {
+      if (!el) continue
+      for (const c of Object.values(THEME_CLASS)) el.classList.toggle(c, c === cls)
+    }
+  }
+  paint()
+  // uni-page-body 可能晚于 onLaunch 挂载：下一帧补一次。
+  requestAnimationFrame(paint)
 }
 ;(globalThis as any).__hmSetTheme = applyHmTheme
 
@@ -32,7 +55,8 @@ onLaunch(() => {
   // 默认浅色（墨绿）主题；曾手动切到“深色”则回退深色。
   let saved: string | null = null
   try { saved = uni.getStorageSync('hm-theme') } catch {}
-  applyHmTheme(saved === 'dark' ? 'dark' : 'light')
+  // 默认 Notion；旧版本存过 light/dark 的一并迁移到 notion / notion-dark。
+  applyHmTheme(normalizeTheme(saved))
 
   // 时钟偏差必须在**配对前**就量一次：请求签名含 unix 时间戳，容许窗口只有
   // ±300 秒，设备时间不准会全部 401，而用户看到的现象是「配对成功了但连不上」
@@ -75,38 +99,48 @@ body {
  * 同时挂到 page 以兼容小程序端（小程序根不是 :root，而是 page）。
  * 默认浅色：与 uni.scss 的 $hm-* 墨绿浅色套一一对应。 */
 :root, page {
-  --c-base: #f2f3f5;
-  --c-paper: #f2f3f5;   /* 页 / 对话底 */
-  --c-card: #ffffff;    /* 卡片 */
-  --c-raised: #eef0f3;  /* 输入底 / 次表面 */
-  --c-fg: #1a1d21;     /* 主文字 */
-  --c-fg2: #5f636b;    /* 次要文字 */
-  --c-fg3: #9aa0a8;    /* 辅助文字（仅大字/图标） */
-  --c-fg4: #9aa0a8;
-  --c-accent: #2f6b4f; /* 墨绿主色 */
+  /* Notion 亮色（默认，与桌面端 themes/notion.css 同源）。
+     旧色系（墨绿 / 夜墨）2026-10-27 已删除。 */
+  --c-base: #efefed;
+  --c-paper: #ffffff;
+  --c-card: #fbfbfa;
+  --c-raised: #f1f1ef;
+  --c-fg: #37352f;
+  --c-fg2: #605c54;
+  --c-fg3: #6b6862;
+  --c-fg4: #8a8782;
+  --c-accent: #1c6ac4;
   --c-on-accent: #ffffff;
-  --c-ok: #2ba24a;
-  --c-warn: #e8920c;
-  --c-warn-bg: #fdf2e0;
-  --c-err: #e5484d;
-  --c-err-bg: #fdecec;
+  --c-ok: #3a794e;
+  --c-warn: #b07a1a;
+  --c-warn-bg: #fdecc8;
+  --c-err: #bf4134;
+  --c-err-bg: #ffe2dd;
 }
-/* 深色：与桌面端同源（青碧 #6fae94），保留为可切换项。 */
-:root.theme-dark, page.theme-dark {
-  --c-base: #101113;
-  --c-paper: #161719;
-  --c-card: #1d1f22;
-  --c-raised: #24262a;
-  --c-fg: #ededed;
-  --c-fg2: #9a9ea6;
-  --c-fg3: #7f848c;
-  --c-fg4: #5f636b;
-  --c-accent: #6fae94;
-  --c-on-accent: #14201b;
+/* 旧深色套（夜墨）已删除。 */
+
+/* ── 主题套 3/4：Notion（浅 / 深）· 2026-10-27 增加 ───────────────
+ * 取值与桌面端 themes/notion.css、themes/notion-dark.css 同源：
+ * 暖灰纸面（#f7f7f5 / #191919）+ 墨色文字 + Notion 蓝（#1c6ac4 / #6ba6ff）。
+ * 手机端默认就是这一套，四端（桌面 / 查看器 / 手机 / 网页）看起来是同一个产品。
+ * 语义四色改用文字安全档的取值，保证在暖底与深底上都 ≥4.5:1。 */
+/* 亮色即上面 `:root, page` 的默认值，不再单列一套（避免两份取值漂移）。 */
+
+:root.theme-notion-dark, page.theme-notion-dark {
+  --c-base: #101010;
+  --c-paper: #191919;
+  --c-card: #1f1f1f;
+  --c-raised: #2c2c2c;
+  --c-fg: #d4d4d4;
+  --c-fg2: #a3a3a3;
+  --c-fg3: #9b9b9b;
+  --c-fg4: #6f6f6f;
+  --c-accent: #6ba6ff;
+  --c-on-accent: #0d1520;
   --c-ok: #84b383;
   --c-warn: #d3a34c;
-  --c-warn-bg: #332916;
+  --c-warn-bg: #2b2519;
   --c-err: #e06b52;
-  --c-err-bg: #20262b;
+  --c-err-bg: #262020;
 }
 </style>

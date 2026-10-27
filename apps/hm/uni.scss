@@ -39,46 +39,21 @@ $warn-bg: var(--c-warn-bg);
 $err: var(--c-err);
 $err-bg: var(--c-err-bg);
 
-/* ── 主题套 2：墨绿（浅色）· 2026-10-15 增加 ─────────────────────
- * 与上面的暗色默认套**并列**的第二套主题，不替换、不混用。
- * 与默认套的最大差异是主色：墨绿 #2f6b4f 是新造的品牌色（默认套的青碧
- * #6fae94 与桌面端同源），启用本套即接受「端间主色分叉」。
- * 取值与角色一一对应，命名 $hm-* 与暗色套的 $base/$card/... 区分开：
- *   $hm-bg        页面底        $hm-text      主文字（~13:1）
- *   $hm-surface   卡片/表单底   $hm-text-2    次要文字（~5.0:1）
- *   $hm-surface-2 输入底/次表面 $hm-text-3    辅助文字（仅大字/图标）
- *   $hm-surface-3 弱表面        $hm-primary   主色（墨绿）
- *   $hm-border    描边          $hm-primary-weak / -border 主色弱底/边
- *   $hm-danger / $hm-warn / $hm-ok 语义色     $hm-bubble-out 发出气泡
- * $hm-on-primary 表里未列，按白补（#2f6b4f 底上白字 ≈ 5.9:1，达标）。
- * 现状：**已接线**——暗色 $ 变量已改为引用 CSS 自定义属性（--c-*，见 App.vue
- * 的 :root / :root.theme-dark），浅色（墨绿）默认、深色可切换；两套一起动。 */
-$hm-bg: #f2f3f5;
-$hm-surface: #ffffff;
-$hm-surface-2: #eef0f3;
-$hm-surface-3: #f7f8fa;
-$hm-text: #1a1d21;
-$hm-text-2: #5f636b;
-$hm-text-3: #9aa0a8;
-$hm-primary: #2f6b4f;
-$hm-primary-weak: #e2eae6;
-$hm-primary-border: #acc4b9;
-$hm-border: #e3e6ea;
-$hm-danger: #e5484d;
-$hm-warn: #e8920c;
-$hm-ok: #2ba24a;
-$hm-bubble-out: #2f6b4f;
-$hm-on-primary: #ffffff;
+/* ── 2026-10-27：旧色系（墨绿 $hm-* 与夜墨）**已删除** ────────────
+ * 全站只剩 Notion 亮/暗两套，取值在 App.vue 的 :root 与
+ * :root.theme-notion-dark（与桌面端 themes/notion*.css 同源）。
+ * 页面/组件一律用上面的 $base/$card/$fg… 别名，不要再新造第二套颜色。 */
 
 /* 阴影：暗底上几乎看不见，只用于浮层与抽屉的「脱离页面」暗示。
  * 卡片级别的层次靠 $paper → $card 的底色差，不靠这里。 */
 $shadow-pop: 0 8rpx 32rpx rgba(0, 0, 0, 0.45);
 $shadow-drawer: -8rpx 0 48rpx rgba(0, 0, 0, 0.5);
 
-/* 形状：气泡 15、卡片 12、按钮全圆角。亮/暗跟随系统（这里给暗色）。 */
-$r-bubble: 15px;
-$r-card: 12px;
-$r-pill: 999px;
+/* 形状：Notion 的克制圆角 —— 卡片 6、气泡 8、控件 4（原来卡片 12 / 气泡 15 /
+ * 按钮全圆角，是移动端卡片流的形状，和桌面端的稿纸观感对不上）。 */
+$r-bubble: 8px;
+$r-card: 6px;
+$r-pill: 4px;
 
 /* ── 2026-10-12 移动端原生感改造 ─────────────────────────────────
  * 字号梯度对齐原生（Android sp / iOS pt ≈ 2×rpx），不再用网页小字：

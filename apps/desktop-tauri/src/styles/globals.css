@@ -26,6 +26,10 @@
 @import "./agent-avatar.css";
 @import "./motion.css";
 @import "./utilities.css";
+/* 主题级排版层：只在 data-theme 命中时生效（当前只有 notion）。 */
+@import "./notion-prose.css";
+@import "./notion-app.css";
+@import "./welcome-hero.css";
 
 /* Tailwind dark: 变体已废除 —— .dark 类不再挂载（useTheme 只设 data-theme），
    语义色一律走 token，token 值随 data-theme 自动切换。残留 dark: 前缀类均为死类。 */

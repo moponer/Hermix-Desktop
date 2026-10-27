@@ -570,7 +570,9 @@ if (typeHits > 0) {
 
   const contrastFailures = [];
   const contrastSkipped = [];
-  for (const themeId of ["light", "dark", "ink-green"]) {
+  // 新增主题必须加进这个名单，否则它的对比度完全不测（门禁全绿地放过它）。
+  // 2026-10-27：旧色系主题（light / dark / ink-green）已删除，只剩 Notion 亮/暗。
+  for (const themeId of ["notion", "notion-dark"]) {
     const vars = themeValues(themeId);
     if (!vars) continue;
     for (const [fgKey, bgKey, min, label] of CONTRAST_PAIRS) {

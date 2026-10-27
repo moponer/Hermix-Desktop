@@ -22,16 +22,18 @@
         }
         function apply(id) {
           root.setAttribute("data-theme", id);
-          try { root.style.colorScheme = id === "light" ? "light" : "dark"; } catch (_) {}
+          try { root.style.colorScheme = id === "notion-dark" ? "dark" : "light"; } catch (_) {}
         }
         var stored = null;
         try { stored = localStorage.getItem("hermix.desktop.theme"); } catch (_) {}
-        if (stored === "light" || stored === "dark" || stored === "rainforest" || stored === "sunset") {
+        // 2026-10-27：旧色系主题（light / dark / rainforest / sunset）已删除，
+        // 只保留 Notion 亮/暗两套；旧存储值一律落到 notion。
+        if (stored === "notion" || stored === "notion-dark") {
           apply(stored);
         } else {
           var darkPref = false;
           try { darkPref = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches; } catch (_) {}
-          apply(darkPref ? "dark" : "light");
+          apply(darkPref ? "notion-dark" : "notion");
         }
       })();
     </script>
@@ -70,21 +72,15 @@
         --sp-accent: var(--color-accent, #6fae94);
         --sp-track: var(--color-border-subtle, #2b271f);
       }
-      html[data-theme="light"]:root, :root:not([data-theme]) {
-        --sp-bg: #ffffff; --sp-ink: #242424; --sp-ink-soft: #6e6e6e;
-        --sp-accent: #1e4a3c; --sp-track: #ececea;
+      /* 2026-10-27：旧色系主题（light / dark / rainforest / sunset）已删除，
+         启动遮罩只保留 Notion 亮/暗两套，取值与 themes/notion*.css 同源。 */
+      html[data-theme="notion"]:root, :root:not([data-theme]) {
+        --sp-bg: #ffffff; --sp-ink: #37352f; --sp-ink-soft: #6b6862;
+        --sp-accent: #1c6ac4; --sp-track: #e9e9e7;
       }
-      html[data-theme="dark"]:root {
-        --sp-bg: #0b0b0b; --sp-ink: #f4f4f4; --sp-ink-soft: #9d9d97;
-        --sp-accent: #6fae94; --sp-track: #26221c;
-      }
-      html[data-theme="rainforest"]:root {
-        --sp-bg: #0c1210; --sp-ink: #e8f1e9; --sp-ink-soft: #85a08b;
-        --sp-accent: #2dd4bf; --sp-track: #1c2822;
-      }
-      html[data-theme="sunset"]:root {
-        --sp-bg: #1d1915; --sp-ink: #e8e0d2; --sp-ink-soft: #7d7260;
-        --sp-accent: #e0701c; --sp-track: #332c23;
+      html[data-theme="notion-dark"]:root {
+        --sp-bg: #191919; --sp-ink: #d4d4d4; --sp-ink-soft: #9b9b9b;
+        --sp-accent: #6ba6ff; --sp-track: #2f2f2f;
       }
 
       html, body, #root { height: 100%; margin: 0; }
@@ -112,27 +108,26 @@
         -webkit-font-smoothing: antialiased;
       }
 
-      /* ── Splash root（2026-10-23 重设计）─────────────────────────
-         旧版是「112px 吉祥物 + 顶光径向渐变 + 6px 流光进度条 + 环形阶段点」，
-         四套装饰叠在一起 —— 启动屏停留 3-8 秒，装饰越多越显得廉价。
+      /* ── Splash root（2026-10-27 重设计 · Notion 式）─────────────────
+         旧版是「墨点 + 描边环 + 6px 流光条 + 百分比 + 四段阶段列表」，
+         五层装饰叠在一张启动屏上。启动屏停留 3–8 秒，元素越多越廉价。
 
-         新版只保留三层信息：**标记 / 进度 / 当前在做什么**。
-         背景改为纯平纸面（去掉径向渐变：它是唯一一处「发光」装饰，且
-         在四套主题下都压不住底纹），层次全靠字号与墨色。
+         新版只留三样东西：**字标 / 一条 2px 进度 / 一句状态**。
+         字标与主界面欢迎页同一套处理（600 / 0.26em 字距 / 满对比墨），
+         切换那一刻是「同一张纸翻过来」，而不是两个品牌。
 
-         退场从 scale(0.995) 改成整体上移 8px + 淡出：缩放会让文字在最后
-         一帧轻微抖动，上移是「交班」的语义（启动屏让位给主界面）。 */
+         退场：上移 6px + 淡出（缩放会让文字末尾抖一帧）。 */
       #splash {
         position: fixed; inset: 0;
         display: flex; align-items: center; justify-content: center;
         background: var(--sp-bg);
         z-index: 9999;
-        transition: opacity 0.32s ease, transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+        transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
         overflow: hidden;
       }
       #splash.hide {
         opacity: 0;
-        transform: translateY(-8px);
+        transform: translateY(-6px);
         pointer-events: none;
       }
 
@@ -156,157 +151,61 @@
       .sp-win-btn:hover { background: color-mix(in srgb, var(--sp-ink) 12%, transparent); }
       .sp-win-btn.sp-close:hover { background: #c42b1c; color: #fff; }
 
-      /* ── Stage 列布局 ── */
+      /* ── 舞台：字标 + 进度，垂直居中 ── */
       .sp-stage {
         position: relative; z-index: 1;
         display: flex; flex-direction: column; align-items: center;
-        text-align: center; width: 320px;
+        text-align: center;
       }
 
-      /* ── 标记：墨点 + 描边环（自绘入场）─────────────────────────
-         不用位图：启动屏必须在 CSS 就绪的同一帧就能画出来，图片要等
-         一次网络/磁盘往返，慢时先闪一个空格子。
-         造型取「墨点落纸」—— 一滴墨（accent 实色）+ 一圈细环（12% 墨），
-         与应用的「墨与纸」语言同源。
-
-         动画只有两条，都是一次性的（不是装饰性循环）：
-           · 环用 stroke-dashoffset 从 0 画到满（0.9s）
-           · 墨点从 0.6 放大到 1（0.7s，慢 0.15s 起，先有环再有墨）
-         循环动效一律不做 —— 启动屏停留时长不可控，循环动画停在半途最尴尬。 */
-      .sp-mark {
-        position: relative;
-        width: 88px; height: 88px;
-        opacity: 0;
-        animation: sp-fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.05s forwards;
-      }
-      .sp-mark svg { width: 100%; height: 100%; display: block; overflow: visible; }
-      .sp-mark-ring {
-        fill: none;
-        stroke: var(--sp-track);
-        stroke-width: 2;
-        stroke-dasharray: 220;
-        stroke-dashoffset: 220;
-        transform: rotate(-90deg);
-        transform-origin: 50% 50%;
-        animation: sp-draw 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.1s forwards;
-      }
-      .sp-mark-drop {
-        fill: var(--sp-accent);
-        transform: scale(0.6);
-        transform-origin: 50% 62%;
-        animation: sp-drop 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.25s forwards;
-      }
-      .sp-mark-shadow {
-        fill: var(--sp-accent);
-        opacity: 0.14;
-        transform: scale(0.6);
-        transform-origin: 50% 62%;
-        animation: sp-drop 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.25s forwards;
-      }
-
-      /* ── 品牌 + 副标 ── */
-      .sp-title {
-        margin-top: 24px;
-        font-size: 25px; font-weight: 600; letter-spacing: -0.01em;
+      /* ── 字标：逐字上浮（与 WelcomeHero 同一组参数）── */
+      .sp-wordmark {
+        display: inline-flex;
+        font-size: 26px; font-weight: 600;
+        letter-spacing: 0.26em;
+        /* 字距会在末字后留一份空白，左侧补一份保持视觉居中 */
+        padding-left: 0.26em;
+        line-height: 1;
         color: var(--sp-ink);
-        opacity: 0; transform: translateY(8px);
-        animation: sp-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.34s forwards;
+        user-select: none;
       }
-      .sp-title .sp-title-dim { color: var(--sp-ink-soft); font-weight: 500; }
-      .sp-desc {
-        margin-top: 8px; font-size: 13px; line-height: 1.55;
-        color: var(--sp-ink-soft); max-width: 320px;
-        opacity: 0; transform: translateY(8px);
-        animation: sp-fade-up 0.7s ease 0.44s forwards;
+      .sp-wordmark span {
+        display: inline-block;
+        opacity: 0;
+        transform: translateY(8px);
+        animation: sp-rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
       }
 
-      /* ── 进度：2px 轨道（不是 6px）─────────────────────────────
-         6px 的进度条在 320px 宽的启动屏上是一道粗棒，配上流光和高亮阴影
-         就成了「进度条组件」而不是「状态指示」。2px 是发丝级：看得见在走，
-         又不抢标记的焦点。填充用纯 accent（去掉渐变与外发光）。 */
+      /* ── 进度：220px 发丝条，纯 accent 填充，无流光无阴影 ── */
       .sp-progress-wrap {
-        margin-top: 40px; width: 320px;
+        margin-top: 44px; width: 220px;
         opacity: 0;
-        animation: sp-fade-up 0.7s ease 0.54s forwards;
+        animation: sp-fade 0.6s ease 0.42s forwards;
       }
       .sp-progress-track {
         position: relative; width: 100%; height: 2px;
         background: var(--sp-track); border-radius: 999px; overflow: hidden;
       }
       .sp-progress-bar {
-        height: 100%; width: 0%; border-radius: 999px;
-        background: var(--sp-accent);
-        transition: width 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+        height: 100%; width: 0%;
+        background: var(--sp-accent); border-radius: 999px;
+        transition: width 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94);
       }
-      .sp-progress-meta {
-        display: flex; justify-content: space-between; align-items: baseline;
-        margin-top: 10px;
-      }
-      #sp-progress-text {
-        font-size: 12px; color: var(--sp-ink-soft); letter-spacing: 0.01em;
-      }
-      .sp-pct {
-        font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-        font-size: 13px; font-weight: 600; color: var(--sp-ink-soft);
-        font-variant-numeric: tabular-nums; line-height: 1;
-      }
-      .sp-pct .sp-pct-sign { font-size: 11px; font-weight: 500; margin-left: 1px; }
-
-      /* ── 阶段列表：扁平圆点，无描边 ───────────────────────────
-         旧版每个圆点都有 1.5px 边框（pending 是空心圈、done 是勾）。
-         无描边体系下改成三档**填充浓度**：已完成=accent 实色、进行中=
-         accent + 外扩晕、未开始=轨道色。浓度差代替框线。 */
-      .sp-stages {
-        margin-top: 26px; width: 320px; text-align: left;
-        opacity: 0;
-        animation: sp-fade-up 0.7s ease 0.64s forwards;
-      }
-      .sp-stage-item {
-        display: flex; align-items: center; gap: 12px;
-        padding: 5px 0; font-size: 12.5px; color: var(--sp-ink-soft);
-        opacity: 0.5;
-        transition: color 0.45s ease, opacity 0.45s ease;
-      }
-      .sp-stage-item .sp-ico {
-        flex: 0 0 8px; width: 8px; height: 8px;
-        border: 0; border-radius: 50%;
-        background: var(--sp-track);
-        position: relative;
-        transition: background-color 0.4s ease, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-      }
-      .sp-stage-item .sp-label { flex: 1; text-align: left; }
-      .sp-stage-item.done { opacity: 0.7; }
-      .sp-stage-item.done .sp-ico { background: var(--sp-accent); }
-      /* 进行中：圆点放大 + 一圈 12% 晕（不是描边，是同色淡染） */
-      .sp-stage-item.active { opacity: 1; color: var(--sp-ink); font-weight: 500; }
-      .sp-stage-item.active .sp-ico {
-        background: var(--sp-accent);
-        transform: scale(1.15);
-        box-shadow: 0 0 0 4px color-mix(in srgb, var(--sp-accent) 14%, transparent);
+      .sp-status {
+        margin-top: 14px;
+        font-size: 12px; letter-spacing: 0.02em;
+        color: var(--sp-ink-soft);
+        min-height: 1.2em;
       }
 
-      /* ── Footer ── */
-      .sp-footer {
-        position: absolute; bottom: 18px; left: 0; right: 0;
-        text-align: center; font-size: 10.5px; letter-spacing: 0.14em;
-        color: var(--sp-ink-soft); text-transform: uppercase; z-index: 1;
-      }
+
 
       /* ── Keyframes ── */
-      @keyframes sp-fade-up {
-        from { opacity: 0; transform: translateY(10px); }
-        to   { opacity: 1; transform: translateY(0); }
+      @keyframes sp-rise {
+        to { opacity: 1; transform: none; }
       }
-      /* 环自绘：dashoffset 从满到 0 —— 只动 stroke 属性，不触发布局。 */
-      @keyframes sp-draw {
-        to { stroke-dashoffset: 0; }
-      }
-      /* 墨点落纸：0.6 → 1，overshoot 到 1.04 再回落（手写的缓动曲线里
-         带一点点回压，比线性放大更像「落下」而不是「弹出」）。 */
-      @keyframes sp-drop {
-        0%   { transform: scale(0.6); opacity: 0; }
-        60%  { transform: scale(1.04); opacity: 1; }
-        100% { transform: scale(1); opacity: 1; }
+      @keyframes sp-fade {
+        to { opacity: 1; }
       }
 
       /* ── Reduced motion ── */
@@ -316,11 +215,7 @@
           animation-delay: 0ms !important;
           transition-duration: 0.15s !important;
         }
-        .sp-mark, .sp-title, .sp-desc, .sp-progress-wrap, .sp-stages {
-          opacity: 1 !important; transform: none !important;
-        }
-        .sp-mark-ring { stroke-dashoffset: 0 !important; }
-        .sp-mark-drop, .sp-mark-shadow { transform: none !important; opacity: 1 !important; }
+        .sp-wordmark span, .sp-progress-wrap { opacity: 1 !important; transform: none !important; }
       }
     </style>
   </head>
@@ -347,41 +242,17 @@
       </div>
 
       <div class="sp-stage">
-        <!-- 墨点落纸：纯矢量，不依赖任何外部资源（位图要等一次往返，
-             慢时会先闪一个空格子）。造型与应用的「墨与纸」语言同源。 -->
-        <div class="sp-mark" aria-hidden="true">
-          <svg viewBox="0 0 88 88">
-            <circle class="sp-mark-ring" cx="44" cy="44" r="35" />
-            <!-- 淡影：墨点下方 14% 同色，给扁平造型一点厚度 -->
-            <ellipse class="sp-mark-shadow" cx="44" cy="60" rx="9" ry="3.5" />
-            <!-- 墨滴：上尖下圆 -->
-            <path class="sp-mark-drop"
-              d="M44 22c7.2 8.4 12 15.1 12 21.2C56 50.4 50.6 56 44 56s-12-5.6-12-12.8C32 37.1 36.8 30.4 44 22z" />
-          </svg>
-        </div>
-
-        <div class="sp-title">Hermix <span class="sp-title-dim">Desktop</span></div>
-        <div class="sp-desc">正在准备本地环境，完成后自动进入主界面。</div>
+        <!-- 字标：纯文本，CSS 就绪的同一帧就能画出来（位图要等一次往返，
+             慢启动时会先闪一个空格子）。逐字上浮与主界面欢迎页一致。 -->
+        <div class="sp-wordmark" aria-hidden="true"><span style="animation-delay:0ms">H</span><span style="animation-delay:70ms">E</span><span style="animation-delay:140ms">R</span><span style="animation-delay:210ms">M</span><span style="animation-delay:280ms">I</span><span style="animation-delay:350ms">X</span></div>
 
         <div class="sp-progress-wrap">
           <div class="sp-progress-track">
             <div class="sp-progress-bar" id="sp-progress-bar"></div>
           </div>
-          <div class="sp-progress-meta">
-            <span id="sp-progress-text">正在准备运行环境</span>
-            <span class="sp-pct"><span id="sp-progress-pct">0</span><span class="sp-pct-sign">%</span></span>
-          </div>
-        </div>
-
-        <div class="sp-stages" id="sp-stages">
-          <div class="sp-stage-item active" data-i="0"><span class="sp-ico"></span><span class="sp-label">准备运行环境</span></div>
-          <div class="sp-stage-item" data-i="1"><span class="sp-ico"></span><span class="sp-label">加载内置能力</span></div>
-          <div class="sp-stage-item" data-i="2"><span class="sp-ico"></span><span class="sp-label">启动本地服务</span></div>
-          <div class="sp-stage-item" data-i="3"><span class="sp-ico"></span><span class="sp-label">准备就绪</span></div>
+          <div class="sp-status" id="sp-progress-text">正在准备运行环境</div>
         </div>
       </div>
-
-      <div class="sp-footer">Hermix Desktop · Local-first AI</div>
     </div>
 
     <!-- 截图覆盖窗（data-overlay）的 React 前占位：黑底 + 「正在截取屏幕…」，

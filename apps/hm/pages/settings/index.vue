@@ -44,6 +44,26 @@ const note = ref('')
 
 const paired = ref(isPaired())
 
+/* ── 外观：4 套主题（默认 Notion，与桌面端同源）──────────────────
+ * 真正换色的是 App.vue 的 --c-* 变量；这里只负责记住选择并把
+ * 全局钩子叫起来（__hmSetTheme 由 App.vue 挂到 globalThis）。 */
+const THEMES = [
+  { id: 'notion', label: 'Notion' },
+  { id: 'notion-dark', label: 'Notion 夜' },
+] as const
+const theme = ref<string>('notion')
+try {
+  const stored = uni.getStorageSync('hm-theme')
+  if (stored) theme.value = String(stored)
+} catch {
+  /* 存储不可用：保持默认 */
+}
+function pickTheme(t: string) {
+  theme.value = t
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(globalThis as any).__hmSetTheme?.(t)
+}
+
 /** 已配对电脑清单（设备管理区）。onShow 刷新：从配对页回来要看到新机器。 */
 const devices = ref<DeviceRec[]>([])
 onShow(() => {
@@ -242,6 +262,20 @@ function resetPairing() {
       </view>
     </view>
 
+    <!-- 3.5 外观：默认单套 Notion，另三套保留给用户回退 -->
+    <text class="sec-t">外观</text>
+    <view class="theme-row">
+      <view
+        v-for="t in THEMES"
+        :key="t.id"
+        class="theme-pill"
+        :class="{ on: theme === t.id }"
+        @tap="pickTheme(t.id)"
+      >
+        <text>{{ t.label }}</text>
+      </view>
+    </view>
+
     <!-- 4. 页脚：版本 + 危险操作 -->
     <view class="foot">
       <text class="ver">Hermix M {{ version }}</text>
@@ -303,6 +337,24 @@ function resetPairing() {
   margin: 32rpx $gutter 12rpx;
   font-size: $fs-mini;
   color: $fg4;
+}
+/* 外观选择：药丸行（与全站 hm-pill 同形，只是尺寸小一号） */
+.theme-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin: 0 $gutter 12rpx;
+}
+.theme-pill {
+  padding: 14rpx 26rpx;
+  border-radius: $r-pill;
+  background: $card;
+  font-size: $fs-mini;
+  color: $fg2;
+}
+.theme-pill.on {
+  background: $accent;
+  color: $on-accent;
 }
 .drow {
   display: flex;

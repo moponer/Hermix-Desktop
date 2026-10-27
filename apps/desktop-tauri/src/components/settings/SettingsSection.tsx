@@ -41,15 +41,15 @@ export function SettingsSection({
   className?: string;
 }) {
   return (
-    <section className={cx("mb-7", className)}>
-      <div className="mb-2.5 flex items-center justify-between gap-3">
-        <h2 className="text-[length:var(--text-ui)] font-semibold text-[var(--color-text-primary)]">
+    <section className={cx("mb-7 settings-section", className)}>
+      <div className="mb-2.5 flex items-center justify-between gap-3 settings-section__head">
+        <h2 className="text-[length:var(--text-ui)] font-semibold text-[var(--color-text-primary)] settings-section__title">
           {title}
         </h2>
         <div className="flex shrink-0 items-center gap-2">
           {action}
           {!action && hint && (
-            <span className="text-[length:var(--text-tiny)] text-[var(--color-text-faint)]">
+            <span className="text-[length:var(--text-tiny)] text-[var(--color-text-faint)] settings-section__hint">
               {hint}
             </span>
           )}

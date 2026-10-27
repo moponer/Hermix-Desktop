@@ -4,8 +4,18 @@
 // 否则用户强制亮色时 OS 暗色仍会抢走 token。
 import { useCallback, useEffect, useState } from "react";
 
-export type ThemeMode = "system" | "light" | "dark";
-export type ResolvedTheme = "light" | "dark";
+export type ThemeMode = "system" | "notion" | "notion-dark";
+export type ResolvedTheme = Exclude<ThemeMode, "system">;
+
+/** 工具栏循环顺序（Notion 亮 → Notion 夜 → 跟随系统）。
+    2026-10-27：旧色系（light / dark）已删除。 */
+export const THEME_CYCLE: ThemeMode[] = ["notion", "notion-dark", "system"];
+
+/** 这套主题是不是暗底 —— 语法高亮 / 共享预览的 isDark 只问这里。
+    不要写 `theme === "dark"`：Notion 暗色同样需要暗底配色。 */
+export function isDarkResolved(theme: ResolvedTheme): boolean {
+  return theme === "notion-dark";
+}
 
 const STORAGE_KEY = "hermix.viewer.theme";
 const MQ_DARK = "(prefers-color-scheme: dark)";
@@ -20,21 +30,21 @@ function systemPrefersDark(): boolean {
 
 export function resolveTheme(mode: ThemeMode): ResolvedTheme {
   if (mode !== "system") return mode;
-  return systemPrefersDark() ? "dark" : "light";
+  return systemPrefersDark() ? "notion-dark" : "notion";
 }
 
 function apply(mode: ThemeMode): ResolvedTheme {
   const resolved = resolveTheme(mode);
   const root = document.documentElement;
   root.dataset.theme = resolved;
-  root.style.colorScheme = resolved;
+  root.style.colorScheme = isDarkResolved(resolved) ? "dark" : "light";
   return resolved;
 }
 
 function readStored(): ThemeMode {
   try {
     const v = localStorage.getItem(STORAGE_KEY);
-    if (v === "light" || v === "dark" || v === "system") return v;
+    if (v && (THEME_CYCLE as string[]).includes(v)) return v as ThemeMode;
   } catch {
     /* localStorage 不可用（如禁存策略）：退回跟随系统 */
   }
@@ -71,7 +81,10 @@ export function useTheme(): {
   }, [mode]);
 
   const cycle = useCallback(() => {
-    setMode((m) => (m === "system" ? "light" : m === "light" ? "dark" : "system"));
+    setMode((m) => {
+      const i = THEME_CYCLE.indexOf(m);
+      return THEME_CYCLE[(i + 1) % THEME_CYCLE.length];
+    });
   }, []);
 
   return { resolved, mode, cycle, set: setMode };

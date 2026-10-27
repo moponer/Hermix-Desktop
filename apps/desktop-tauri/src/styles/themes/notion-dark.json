@@ -1,0 +1,7 @@
+{
+  "id": "notion-dark",
+  "label": "Notion 夜",
+  "builtin": true,
+  "colorScheme": "dark",
+  "description": "Notion 暗色：页面 #191919 + 蓝强调；无投影、小圆角、发丝分隔线"
+}
