@@ -494,6 +494,14 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 验证：`cargo check -p hermix-server` 零警告；`cargo test -p hermix-server --lib` **507 passed**。
 
+### 批次 23（P1-13 第二步：`prepare_turn` 抽单一实现）— 2026-10-27 交付
+
+`send_message` 与 `send_message_stream` 前置 ~200 行逐字重复（审计 172 行佐证）收敛进 `local_agent_service::PreparedTurn` / `prepare_turn()`：load_session（读失败拒绝降级）→ gateway 预压缩告警 → slash 拦截（`handle_slash` 参数，保持只在非流式）→ 附件注释 + 用户消息入列 → 模型/人格解析 → `apply_overrides` + 专家 toolset 并集 → session stamp → provider → per-session `ToolCallContext` → scoped memory → bridge registry。净删 ~310 行。
+
+有意留在调用方的差异（见 `PreparedTurn` doc）：automation 重打标只属非流式；early-persist（流式）在装配完成后立即执行——两者之间只隔同步毫秒级装配、无 await 让出，崩溃保护窗口不变。
+
+验证：`cargo check -p hermix-agent` 零警告；`cargo test -p hermix-agent --lib` **1212 passed**。
+
 ### 其余剩余项的处置结论（2026-10-26 复核）
 
 | 项 | 结论 |
@@ -660,7 +668,7 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 |---|---|
 | P1-11 `run`/`run_stream` 合并双循环 | 高风险：两条循环 + 20 处调用点，改错会让 finish_reason / 中断语义静默漂移。要单独一批 + 完整 WS 回归 |
 | P1-13 拆分三个巨石文件 | 先抽 `apply_approval_response` / `prepare_turn` 再谈拆；只拆文件不减少耦合（`ws.rs` 已经拆过一次仍重复） |
-| P1-1 剩余的 `to_vec` | 入参 `&[Message]` 由 trait 签名决定；再往下要改 `get_definitions()` 的返回类型（见批次 4 说明） |
+| P1-1 剩余的 `to_vec` | **2026-10-27 复核后关闭**。`get_definitions()` 的深拷贝不在热路径——每 run 仅一次（`bridge_tool_registry`），~109 个 schema ≈ 100-200KB 一次 memcpy，微秒级；而消除它要把 `ToolEntry.schema` 改 `Arc` 并级联 agent 侧 `AgentToolRegistry` 与贯穿 loop 的几十处 `tool_schemas: &[ToolSchema]` 签名（`bridge → register → schemas()` 每 run 反正各做一次深拷贝，净收益≈0）。与 P1-2 复核结论一致：剩下只有每次 run 一次的必要组装 |
 | P1-2 工具 schema 缓存 | 缓存失效条件（工具集版本 / 配置 / 可用性）判断错会让模型看到过期工具列表 —— 静默错，代价高于收益 |
 | P1-3 前端流式 store 化 | 需要把 `App.tsx` 的 41 处 `setSessions` 收敛到独立 store，属 P1-13 同级别改动 |
 | P1-5 虚拟列表 | `virtua` 已在依赖里，但接入需要先解决"流式气泡高度变化 + 滚动锚定"，单独一批 |

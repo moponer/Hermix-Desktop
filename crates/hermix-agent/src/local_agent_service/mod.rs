@@ -514,66 +514,36 @@ impl LocalAgentService {
 
 }
 
-#[async_trait]
-impl AgentService for LocalAgentService {
-    /// Delegate to the inherent `interrupt_all` method so the server
-    /// can call this through `Arc<dyn AgentService>` on shutdown.
-    fn interrupt_all(&self) {
-        // The inherent method is defined above on `LocalAgentService`.
-        // We call it by method resolution — Rust picks the inherent
-        // method over the trait default.
-        LocalAgentService::interrupt_all(self);
-    }
+/// `send_message` / `send_message_stream` 共享的 turn 前置装配（审计 P1-13）。
+///
+/// 收敛此前在两条路径上逐字重复的 ~180 行前置段。有意留在调用方的差异：
+/// - slash 命令拦截只在非流式路径存在（automations 只走 `send_message`），
+///   由 `handle_slash` 参数保留，不在本次收敛里扩散到流式；
+/// - `automation_meta` 重打标只属于非流式（自动化派发路径）；
+/// - 预保存时机不同：流式侧 early-persist 在装配完成后立即执行（两者之间
+///   只隔同步的毫秒级装配，无 await 让出，崩溃保护窗口不变），
+///   非流式侧 `persist_pre_turn` 在完整装配后执行。
+struct PreparedTurn {
+    /// 附件说明注入后的用户文本（automation prompt 复用它）。
+    text: String,
+    messages: Vec<Message>,
+    effective_model: String,
+    effective_overrides: AgentOverrides,
+    agent_config: crate::AgentConfig,
+    tool_ctx: Arc<hermix_tools::ToolCallContext>,
+    agent_tool_registry: Arc<crate::agent_loop::ToolRegistry>,
+    provider: Arc<dyn LlmProvider>,
+}
 
-    /// Delegate to the inherent `interrupt_session` so a remote channel
-    /// can stop one session's turn through `Arc<dyn AgentService>`
-    /// without touching anyone else's.
-    fn interrupt_session(&self, sid: &str) -> bool {
-        LocalAgentService::interrupt_session(self, sid)
-    }
-
-    /// Delegate to the inherent `steer_session` so a remote channel can
-    /// inject mid-run guidance into one session's turn through
-    /// `Arc<dyn AgentService>`.
-    fn steer_session(&self, sid: &str, text: &str) -> bool {
-        LocalAgentService::steer_session(self, sid, text)
-    }
-
-    /// Delegate to the inherent `spawn_warmup` so the server can warm a
-    /// specific provider through `Arc<dyn AgentService>` when the UI
-    /// switches the active model.
-    fn warm_up_provider(&self, model: &str) {
-        let m = model.trim().to_string();
-        if m.is_empty() || m == "unknown" {
-            return;
-        }
-        self.spawn_warmup(m);
-    }
-
-    // TODO(L8): send_message and send_message_stream share ~300 lines of
-    // duplicated setup code (session loading, gateway safety net, image
-    // handling, model resolution, etc.). Consider extracting a shared
-    // `prepare_and_run` helper that both methods call with a
-    // streaming/non-streaming mode flag.
-    #[instrument(
-        name = "send_message",
-        level = "info",
-        skip_all,
-        fields(
-            session_id = %session_id,
-            text_len = text.len(),
-            has_override_model = overrides.model.is_some(),
-            has_override_personality = overrides.personality.is_some(),
-        )
-    )]
-    async fn send_message(
+impl LocalAgentService {
+    /// 装配一轮对话所需的全部上下文。`handle_slash` 只在非流式路径为 true。
+    fn prepare_turn(
         &self,
         session_id: &str,
         text: &str,
-        overrides: AgentOverrides,
-    ) -> Result<AgentReply, AgentError> {
-        // Load existing session messages.
-        //
+        overrides: &AgentOverrides,
+        handle_slash: bool,
+    ) -> Result<PreparedTurn, AgentError> {
         // 读失败**不能**降级成空历史：这一轮结束时会把 messages 整段写回
         // （`persist_session` / `save_session_atomic`），于是「DB 读错一次」
         // 变成「用户的整段会话被空内容覆盖」—— 不可逆。宁可让这一轮报错。
@@ -588,6 +558,7 @@ impl AgentService for LocalAgentService {
                 return Err(e);
             }
         };
+        tracing::debug!(session_id, loaded_messages_len = messages.len(), "turn messages loaded");
 
         // O3.2: Gateway pre-compression safety net. Detect sessions that
         // have grown beyond 85% of a typical context window (200K tokens)
@@ -597,7 +568,7 @@ impl AgentService for LocalAgentService {
         self.gateway_token_warn(session_id, &mut messages);
 
         // Intercept slash commands: /command args → load skill and inject content
-        if text.starts_with('/') {
+        if handle_slash && text.starts_with('/') {
             let mut orch = crate::skill_orchestrator::SkillOrchestrator::default_dir();
             let commands = orch.scan_skill_commands();
             let cmd_name = text.trim_start_matches('/').split_whitespace().next().unwrap_or("");
@@ -631,37 +602,11 @@ impl AgentService for LocalAgentService {
         } else {
             vec![]
         };
-        let text = with_attached_files_note(text, overrides.attached_file_paths.as_deref());
+        let text = with_attached_files_note(text, overrides.attached_file_paths.as_deref()).into_owned();
         if !images.is_empty() {
             messages.push(Message::user_with_images(&text, &images));
         } else {
-            messages.push(Message::user(text.as_ref()));
-        }
-
-        // An externally-triggered turn (an automation run) must not leave
-        // a fabricated "user asked this" line behind. Both the prompt we
-        // just pushed and the reply the loop will produce are relabelled
-        // `Automation` for storage, so the early-save (crash protection)
-        // and the final save agree, and `load_session` keeps handing the
-        // model only turns a person actually took part in.
-        //
-        // The prompt's role is restored to `User` again before
-        // `agent.run` (see below) and relabelled once more before the
-        // post-run persist. What travels with it across that window is
-        // `automation_meta` — the marker both relabels key off, so a
-        // historical user message can never be caught by them.
-        //
-        // Only the non-streaming path carries this — automations dispatch
-        // through `send_message`, never `send_message_stream`.
-        let automation_meta = overrides.external_delivery.as_ref().map(|d| AutomationMeta {
-            automation_name: d.source_label.clone(),
-            run_id: d.run_id.clone(),
-            prompt: Some(text.to_string()),
-            fallback_reason: d.fallback_reason.clone(),
-        });
-        if let (Some(meta), Some(last)) = (automation_meta.as_ref(), messages.last_mut()) {
-            last.role = MessageRole::Automation;
-            last.automation_meta = Some(meta.clone());
+            messages.push(Message::user(text.as_str()));
         }
 
         // Determine effective model and personality.
@@ -669,7 +614,7 @@ impl AgentService for LocalAgentService {
         // the previous inline `match` made the "user-selected model takes
         // effect" guarantee only verifiable via full WebSocket roundtrips,
         // which is how the "UI switch does nothing" bug went uncaught.
-        let effective_model = self.resolve_effective_model(&overrides)?;
+        let effective_model = self.resolve_effective_model(overrides)?;
         let cfg_snapshot = self.current_config();
 
         let effective_personality = overrides
@@ -722,14 +667,6 @@ impl AgentService for LocalAgentService {
         // 会话内恒定的"会话起始时间"，供系统提示尾部的 Conversation
         // started 块使用（缓存稳定性：每 turn 变化会打碎 provider 前缀缓存）。
         agent_config.session_started_at = Some(chrono::Local::now().to_rfc3339());
-
-        //(session isolation): the per-session workspace,
-        // approval context, session id, and message id are now carried
-        // by `ToolCallContext` (built below) and read directly by
-        // `execute_with_context` — no process-global Arc writes needed.
-        // The global Arc fields on `ToolRegistryInner` are kept as a
-        // backward-compat fallback for the non-context dispatch path
-        // (tests, headless callers) but are no longer written here.
 
         //compute the wire-format id of the upcoming assistant
         // message so `ToolCallContext.message_id` can carry it.
@@ -790,6 +727,114 @@ impl AgentService for LocalAgentService {
             tool_ctx.clone(),
             memory_handler,
         ));
+
+        Ok(PreparedTurn {
+            text,
+            messages,
+            effective_model,
+            effective_overrides,
+            agent_config,
+            tool_ctx,
+            agent_tool_registry,
+            provider,
+        })
+    }
+}
+
+#[async_trait]
+impl AgentService for LocalAgentService {
+    /// Delegate to the inherent `interrupt_all` method so the server
+    /// can call this through `Arc<dyn AgentService>` on shutdown.
+    fn interrupt_all(&self) {
+        // The inherent method is defined above on `LocalAgentService`.
+        // We call it by method resolution — Rust picks the inherent
+        // method over the trait default.
+        LocalAgentService::interrupt_all(self);
+    }
+
+    /// Delegate to the inherent `interrupt_session` so a remote channel
+    /// can stop one session's turn through `Arc<dyn AgentService>`
+    /// without touching anyone else's.
+    fn interrupt_session(&self, sid: &str) -> bool {
+        LocalAgentService::interrupt_session(self, sid)
+    }
+
+    /// Delegate to the inherent `steer_session` so a remote channel can
+    /// inject mid-run guidance into one session's turn through
+    /// `Arc<dyn AgentService>`.
+    fn steer_session(&self, sid: &str, text: &str) -> bool {
+        LocalAgentService::steer_session(self, sid, text)
+    }
+
+    /// Delegate to the inherent `spawn_warmup` so the server can warm a
+    /// specific provider through `Arc<dyn AgentService>` when the UI
+    /// switches the active model.
+    fn warm_up_provider(&self, model: &str) {
+        let m = model.trim().to_string();
+        if m.is_empty() || m == "unknown" {
+            return;
+        }
+        self.spawn_warmup(m);
+    }
+
+    // TODO(L8): send_message and send_message_stream share ~300 lines of
+    // duplicated setup code (session loading, gateway safety net, image
+    // handling, model resolution, etc.). Consider extracting a shared
+    // `prepare_and_run` helper that both methods call with a
+    // streaming/non-streaming mode flag.
+    #[instrument(
+        name = "send_message",
+        level = "info",
+        skip_all,
+        fields(
+            session_id = %session_id,
+            text_len = text.len(),
+            has_override_model = overrides.model.is_some(),
+            has_override_personality = overrides.personality.is_some(),
+        )
+    )]
+    async fn send_message(
+        &self,
+        session_id: &str,
+        text: &str,
+        overrides: AgentOverrides,
+    ) -> Result<AgentReply, AgentError> {
+        let PreparedTurn {
+            text,
+            mut messages,
+            effective_model,
+            agent_config,
+            tool_ctx,
+            agent_tool_registry,
+            provider,
+            ..
+        } = self.prepare_turn(session_id, text, &overrides, true)?;
+
+        // An externally-triggered turn (an automation run) must not leave
+        // a fabricated "user asked this" line behind. Both the prompt we
+        // just pushed and the reply the loop will produce are relabelled
+        // `Automation` for storage, so the early-save (crash protection)
+        // and the final save agree, and `load_session` keeps handing the
+        // model only turns a person actually took part in.
+        //
+        // The prompt's role is restored to `User` again before
+        // `agent.run` (see below) and relabelled once more before the
+        // post-run persist. What travels with it across that window is
+        // `automation_meta` — the marker both relabels key off, so a
+        // historical user message can never be caught by them.
+        //
+        // Only the non-streaming path carries this — automations dispatch
+        // through `send_message`, never `send_message_stream`.
+        let automation_meta = overrides.external_delivery.as_ref().map(|d| AutomationMeta {
+            automation_name: d.source_label.clone(),
+            run_id: d.run_id.clone(),
+            prompt: Some(text.to_string()),
+            fallback_reason: d.fallback_reason.clone(),
+        });
+        if let (Some(meta), Some(last)) = (automation_meta.as_ref(), messages.last_mut()) {
+            last.role = MessageRole::Automation;
+            last.automation_meta = Some(meta.clone());
+        }
 
         // Pre-save: persist the user's message BEFORE running the agent.
         // If `agent.run()` fails (provider error / network timeout / API
@@ -1060,45 +1105,16 @@ impl AgentService for LocalAgentService {
             text_len = text.len(),
             "send_message_stream entry"
         );
-        // Load existing session messages（读失败不降级成空历史，理由同 `send_message`）
-        let mut messages = match self.session_persistence.load_session(session_id) {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::error!(
-                    session_id,
-                    error = %e,
-                    "load_session failed; refusing to run a stream turn on a degraded (empty) history"
-                );
-                return Err(e);
-            }
-        };
-        tracing::debug!(
-            session_id,
-            loaded_messages_len = messages.len(),
-            "send_message_stream messages loaded"
-        );
-
-        // O3.2: Gateway pre-compression safety net (stream path).
-        self.gateway_token_warn(session_id, &mut messages);
-
-        // Append the new user message
-        // 多图支持 — 优先用新数组，回退到旧字段保持兼容
-        let images: Vec<(&str, &str)> = if let Some(ref imgs) = overrides.images {
-            imgs.iter()
-                .map(|i| (i.mime_type.as_str(), i.base64.as_str()))
-                .collect()
-        } else if let Some(ref image) = overrides.image {
-            let mime = overrides.image_mime_type.as_deref().unwrap_or("image/jpeg");
-            vec![(mime, image.as_str())]
-        } else {
-            vec![]
-        };
-        let text = with_attached_files_note(text, overrides.attached_file_paths.as_deref());
-        if !images.is_empty() {
-            messages.push(Message::user_with_images(&text, &images));
-        } else {
-            messages.push(Message::user(text.as_ref()));
-        }
+        let PreparedTurn {
+            text: _,
+            mut messages,
+            effective_model,
+            effective_overrides,
+            agent_config,
+            tool_ctx,
+            agent_tool_registry,
+            provider,
+        } = self.prepare_turn(session_id, text, &overrides, false)?;
 
         // early persist — save the user message BEFORE
         // running the streaming agent. Without this, an abort (WS
@@ -1136,128 +1152,6 @@ impl AgentService for LocalAgentService {
                  session may show empty on reload if agent is aborted"
             );
         }
-
-        // Determine effective model and personality.
-        // extracted to `resolve_effective_model` for testability —
-        // the previous inline `match` made the "user-selected model takes
-        // effect" guarantee only verifiable via full WebSocket roundtrips,
-        // which is how the "UI switch does nothing" bug went uncaught.
-        let effective_model = self.resolve_effective_model(&overrides)?;
-        let cfg_snapshot = self.current_config();
-
-        let effective_personality = overrides
-            .personality
-            .clone()
-            .or_else(|| cfg_snapshot.personality.clone());
-
-        // Build agent configuration
-        let mut agent_config = build_agent_config(&cfg_snapshot, &effective_model, Some("local"));
-        if let Some(personality) = effective_personality {
-            agent_config.personality = Some(personality);
-        }
-        // Apply per-turn overrides (expert system prompt / tool whitelist /
-        // workspace root / permission level). When `permission` is unset we
-        // default to the safe option.
-        let mut effective_overrides = overrides.clone();
-        if effective_overrides.permission.is_none() {
-            effective_overrides.permission = Some(config_resolve::default_permission());
-        }
-        let (mut agent_config, mut allowed_tools) =
-            config_resolve::apply_overrides(agent_config, &effective_overrides);
-
-        // 专家 toolset（P1，STABILITY_AND_REMOTE_PLAN §3.2-2）：把受聘专家
-        // 声明的工具组成员并进本轮白名单。allowed 本就是过滤集——扩大它
-        // 只会多放行，不会撤销 floor 或用户已启用的任何工具（专家只能加，
-        // 不能删）。未知组名 = 空成员 = no-op。allowed 为 None（无过滤）时
-        // 本来就全量可用，无需处理。
-        if let Some(ts) = effective_overrides.expert_toolset.as_deref() {
-            let members = self.tool_registry.toolset_members(ts);
-            if !members.is_empty() {
-                allowed_tools
-                    .get_or_insert_with(std::collections::HashSet::new)
-                    .extend(members);
-            }
-        }
-
-        // (fix): `apply_overrides` does not propagate the
-        // session id into AgentConfig — it only sets system_prompt,
-        // workspace and permission level. Without this stamp, every
-        // downstream consumer that reads `self.config.session_id`
-        // (memory_prefetch, OnSessionStart hook context, persist_session_terminal,
-        // `do_pre_turn_setup`'s INFO log, etc.) falls back to "" via
-        // `as_deref().unwrap_or("")`. The most visible symptom is the
-        // `do_pre_turn_setup: entering turn=N session=""` line in
-        // stdout that hides the real session from operator log scans.
-        // The bigger correctness impact is on memory_prefetch
-        // (skips per-session cache lookup) and persist_session_terminal
-        // (writes to an empty-string session row, polluting DB).
-        agent_config.session_id = Some(session_id.to_string());
-        // 会话内恒定的"会话起始时间"，供系统提示尾部的 Conversation
-        // started 块使用（缓存稳定性：每 turn 变化会打碎 provider 前缀缓存）。
-        agent_config.session_started_at = Some(chrono::Local::now().to_rfc3339());
-
-        //(session isolation): the per-session workspace,
-        // approval context, session id, and message id are now carried
-        // by `ToolCallContext` (built below) and read directly by
-        // `execute_with_context` — no process-global Arc writes needed.
-        // The global Arc fields on `ToolRegistryInner` are kept as a
-        // backward-compat fallback for the non-context dispatch path
-        // (tests, headless callers) but are no longer written here.
-
-        //compute the wire-format id of the upcoming assistant
-        // message so `ToolCallContext.message_id` can carry it.
-        let upcoming_assistant_idx = messages.len();
-        let upcoming_assistant_id =
-            format!("{}-{}", session_id, upcoming_assistant_idx);
-
-        // Build provider
-        let provider = self.resolve_provider(&effective_model)?;
-
-        //(session isolation): build per-session ToolCallContext.
-        let tool_ctx = Arc::new(hermix_tools::ToolCallContext {
-            session_id: session_id.to_string(),
-            workspace: agent_config.workspace.clone().map(std::path::PathBuf::from),
-            approval_ctx: hermix_tools::TerminalApprovalContext {
-                session_id: session_id.to_string(),
-                requester: effective_overrides.approval_requester.clone(),
-                on_event: effective_overrides.on_event.clone(),
-            },
-            permission_profile: agent_config.permission_profile.clone(),
-            message_id: Some(upcoming_assistant_id.clone()),
-            stdout_cb: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            active_call_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            progress_cb: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            active_tool: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            // §5.5 第 5 层：桌面 WS 路径固定 Local。HTTP 路径走独立 dispatcher
-            // （handler 从 axum Extension<Origin> 取出来覆盖）；这里不加分支，
-            // 等配对 / TLS 落地后再扩。
-            origin: hermix_core::Origin::Local,
-            // §5.5 第 4 层：桌面 WS 路径无设备维度，能力位集 = None。
-            // HTTP 路径由 handler 从 Extension 取出 device_scopes 覆盖填入。
-            device_scopes: None,
-        });
-
-        // P0 (memory isolation): give this agent its own scoped memory
-        // backend so the `memory` tool reads/writes only this session's
-        // (private 1:1) or room's (group chat) directory and never the
-        // shared global `~/.hermix/memories`. Group rooms arrive here with
-        // `config.memory_dir` already set by the gateway dispatcher; private
-        // chats derive `<home>/sessions/<sid>/memories` from session_id.
-        let memory_handler: Option<Arc<MemoryHandler>> = {
-            let dir = agent_config.resolved_memory_dir();
-            let _ = std::fs::create_dir_all(&dir);
-            Some(Arc::new(MemoryHandler::new(Arc::new(
-                FileMemoryBackend::with_dir(dir),
-            ))))
-        };
-
-        // Bridge tool registry with optional whitelist from overrides
-        let agent_tool_registry = Arc::new(bridge_tool_registry(
-            &self.tool_registry,
-            allowed_tools.as_ref(),
-            tool_ctx.clone(),
-            memory_handler,
-        ));
 
         // Convert Arc to Box for AgentLoop
         let stream_forwarder = on_chunk.clone();
