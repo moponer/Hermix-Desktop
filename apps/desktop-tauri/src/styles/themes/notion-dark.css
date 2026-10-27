@@ -20,6 +20,7 @@
   --color-bg-secondary: #202020;    /* 侧栏 / 顶栏 */
   --color-bg-inset: #202020;
   --color-bg-input: #202020;
+  --color-bg-composer: #202020;    /* 输入框卡面：比纸面 #191919 亮一档 */
   --color-bg-card-hover: #262626;
   --color-bg-tertiary: #2c2c2c;
   --color-bg-hover: #2c2c2c;
@@ -176,5 +177,6 @@
   --radius-lg: 6px;
   --radius-xl: 6px;
   --radius-2xl: 6px;
+  --radius-composer: 12px;   /* 输入框比同主题卡片更圆一档 */
   --radius-3xl: 10px;
 }

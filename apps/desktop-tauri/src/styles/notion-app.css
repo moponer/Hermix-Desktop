@@ -13,12 +13,9 @@
 
 /* ── 一、零渐变 ─────────────────────────────────────────────────── */
 
-/* 输入框底部副条：Notion 零渐变 —— 用最深一档实色做"卡座"。
-   原先这里填的是 bg-input（与输入区同色），三段面因此塌成一块、
-   副条看不出是独立区块；顶线由 components-controls 的发丝负责。 */
-:root[data-theme^="notion"] .composer-subbar {
-  background: var(--color-bg-quaternary);
-}
+/* 输入框副条不再有独立的 Notion 化配色：底色归 .composer-deck（底栏托盘），
+   `.composer-subbar` 全局只负责布局。原先那条「填成 bg-input」的覆盖
+   会把设置行从托盘里抠出来，已随之删除。 */
 
 /* 代码块底部的「还有更多」遮罩：一条压向代码底色的渐变 */
 :root[data-theme^="notion"] .code-fade {

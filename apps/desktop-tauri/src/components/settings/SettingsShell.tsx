@@ -257,7 +257,7 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
                       用户明确要求"这个菜单的图标不要颜色"，故回退到本方案。彩色
                       块保留在内容区的设置行与配置页列表上。） */}
                   <Icon className="icon-md shrink-0" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate text-[length:var(--text-body)]">{label}</span>
+                  <span className="min-w-0 flex-1 truncate text-[length:var(--text-ui)]">{label}</span>
                 </button>
               ))}
             </div>

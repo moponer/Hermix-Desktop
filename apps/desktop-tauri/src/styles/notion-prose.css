@@ -4,8 +4,11 @@
    只在 :root[data-theme^="notion"] 下生效，其余主题逐字节不变。
 
    三件事与基线不同：
-   1. 标题比例换成 Notion 的 em 阶梯（1.875 / 1.5 / 1.25 / 1.125 / 1 / .875），
-      相对正文 16px 换算即 30 / 24 / 20 / 18 / 16 / 14。
+   1. 标题走 `--text-*` 七档（display 20 / title 16 / body 14 / meta 12）。
+      **不用 em 阶梯**：原先是 1.875 / 1.5 / 1.25 / 1.125 / 1 / .875 相对
+      "正文 16px" 换算（30/24/20/18/16/14），但正文实际是 `--text-body` 14px，
+      于是 h1 实渲染 26.25px、h2 21px —— 比其它主题的 20/16 大 31%，
+      标题与七档脱钩（2026-10-27 实测，用户报「输出文本字那么大」）。
    2. 块间距收紧：段落 0.75em、列表项 0.2em —— Notion 靠留白分块，
       不靠段与段之间的大空隙。
    3. 边界一律用 background / box-shadow 画（G11 禁结构 border）：
@@ -31,35 +34,35 @@
   margin: 1.4em 0 0.4em;
 }
 :root[data-theme^="notion"] .prose h1 {
-  font-size: 1.875em;
+  font-size: var(--text-display);
   font-weight: 600;
   margin-top: 1.6em;
   color: var(--color-text-primary);
 }
 :root[data-theme^="notion"] .prose h2 {
-  font-size: 1.5em;
+  font-size: var(--text-title);
   font-weight: 600;
   margin-top: 1.4em;
   color: var(--color-text-primary);
 }
 :root[data-theme^="notion"] .prose h3 {
-  font-size: 1.25em;
+  font-size: var(--text-title);
   font-weight: 600;
   margin-top: 1.2em;
   color: var(--color-text-primary);
 }
 :root[data-theme^="notion"] .prose h4 {
-  font-size: 1.125em;
+  font-size: var(--text-body);
   font-weight: 600;
   color: var(--color-text-primary);
 }
 :root[data-theme^="notion"] .prose h5 {
-  font-size: 1em;
+  font-size: var(--text-body);
   font-weight: 600;
   color: var(--color-text-primary);
 }
 :root[data-theme^="notion"] .prose h6 {
-  font-size: 0.875em;
+  font-size: var(--text-meta);
   font-weight: 600;
   color: var(--color-text-secondary);
 }
@@ -105,7 +108,7 @@
 
 /* ── 表格：表头淡底 + 行分隔（无竖线）── */
 :root[data-theme^="notion"] .prose table {
-  font-size: 1em;
+  font-size: var(--text-body);
 }
 :root[data-theme^="notion"] .prose th,
 :root[data-theme^="notion"] .prose td {
@@ -115,7 +118,7 @@
 :root[data-theme^="notion"] .prose th {
   background: var(--color-bg-secondary);
   color: var(--color-text-primary);
-  font-size: 1em;
+  font-size: var(--text-body);
   font-weight: 600;
 }
 :root[data-theme^="notion"] .prose tbody tr:hover {
@@ -128,7 +131,7 @@
   color: var(--color-inline-code-fg, var(--color-text-on-code));
   border-radius: 4px;
   padding: 0.15em 0.35em;
-  font-size: 0.875em;
+  font-size: var(--text-meta);
 }
 
 /* ── 任务清单：Notion 的空心方块（16px、2px 圆角）── */

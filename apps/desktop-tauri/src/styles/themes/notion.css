@@ -25,6 +25,7 @@
   --color-bg-secondary: #f7f7f5;    /* 侧栏 / 顶栏 */
   --color-bg-inset: #f7f7f5;
   --color-bg-input: #f7f7f5;
+  --color-bg-composer: #fbfbfa;    /* 输入框卡面：比纸面白一档、比 bg-input 亮 */
   --color-bg-card-hover: #f4f4f2;
   --color-bg-tertiary: #f1f1ef;
   --color-bg-hover: #f1f1ef;
@@ -192,5 +193,6 @@
   --radius-lg: 6px;
   --radius-xl: 6px;
   --radius-2xl: 6px;
+  --radius-composer: 12px;   /* 输入框比同主题卡片更圆一档 */
   --radius-3xl: 10px;
 }

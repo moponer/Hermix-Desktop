@@ -11,7 +11,7 @@
   justify-content: center;
   /* 与下方输入区拉开距离：48px ≈ 16px 正文的三段行高 */
   margin-bottom: 48px;
-  font-size: 30px;
+  font-size: var(--text-hero);
   font-weight: 600;
   letter-spacing: 0.26em;
   /* letter-spacing 会在最后一个字母后留一份空白，左侧补一份保持视觉居中 */
