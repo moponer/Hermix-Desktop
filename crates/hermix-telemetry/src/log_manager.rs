@@ -218,6 +218,15 @@ impl CategoryLayer {
     }
 }
 
+/// 把任意字符串转成「带双引号、正确转义」的 JSON 字符串字面量。
+///
+/// `serde_json::to_string(&str)` 的输出就是 `"…"`（含外层引号），换行 / 引号 /
+/// 反斜杠 / 控制字符全部按 JSON 规范转义。用它拼 JSON 字段值，不再手写
+/// `replace('"', "\\\"")` —— 那种写法漏掉换行和反斜杠，会破坏 JSONL 的一行一 JSON。
+fn json_escape(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
 /// Format a tracing `Event` into a String using the `Visit` trait.
 fn format_event(event: &Event<'_>, json_mode: bool) -> String {
     use tracing::field::Visit;
@@ -236,30 +245,20 @@ fn format_event(event: &Event<'_>, json_mode: bool) -> String {
         }
 
         fn finish_json(&self, ts: &str, level: &str, target: &str) -> String {
-            let fields_str = self
-                .other_fields
-                .iter()
-                .map(|(k, v)| format!("\"{}\":\"{}\"", k, v.replace('"', "\\\"")))
-                .collect::<Vec<_>>()
-                .join(",");
-            if fields_str.is_empty() {
-                format!(
-                    "{{\"ts\":\"{}\",\"level\":\"{}\",\"target\":\"{}\",\"msg\":\"{}\"}}\n",
-                    ts,
-                    level,
-                    target,
-                    self.msg.replace('"', "\\\"")
-                )
-            } else {
-                format!(
-                    "{{\"ts\":\"{}\",\"level\":\"{}\",\"target\":\"{}\",\"msg\":\"{}\",{}}}\n",
-                    ts,
-                    level,
-                    target,
-                    self.msg.replace('"', "\\\""),
-                    fields_str
-                )
+            // 用 serde_json 逐值转义，而不是手写 `replace('"', …)`：此前只转义
+            // 双引号，消息里的换行 / 回车 / 制表符 / 反斜杠都会原样落进 JSONL，
+            // 一行一 JSON 的约定被打破、行解析器读到半行损坏 JSON。`json_escape`
+            // 返回带引号且正确转义的 JSON 字符串字面量，键名一并走它。
+            let mut parts = vec![
+                format!("\"ts\":{}", json_escape(ts)),
+                format!("\"level\":{}", json_escape(level)),
+                format!("\"target\":{}", json_escape(target)),
+                format!("\"msg\":{}", json_escape(&self.msg)),
+            ];
+            for (k, v) in &self.other_fields {
+                parts.push(format!("{}:{}", json_escape(k), json_escape(v)));
             }
+            format!("{{{}}}\n", parts.join(","))
         }
 
         /// Plain line: `ts LEVEL [target] msg key=value …`.
@@ -820,5 +819,33 @@ mod tests {
             "bool field lost: {body}"
         );
         assert_eq!(body.lines().count(), 1, "must stay one line per event");
+    }
+
+    #[test]
+    fn json_lines_survive_newlines_quotes_and_backslashes() {
+        // JSON 模式必须一行一 JSON，且消息 / 字段里的换行、引号、反斜杠不能
+        // 破坏行结构。此前 finish_json 只 `replace('"', "\\\"")`，含换行的
+        // 消息会把一行 JSON 拆成两行，行解析器读到半行损坏 JSON。
+        let tmp = TempDir::new().unwrap();
+        let layer = CategoryLayer::new(tmp.path(), DEFAULT_MAX_BYTES, 5, 7, true).unwrap();
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let raw_msg = "first line\nsecond \"quoted\" line\\backslash";
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(
+                target: "hermix_server_routes",
+                field_a = "a\nb",
+                "{}",
+                raw_msg
+            );
+        });
+        let body = fs::read_to_string(tmp.path().join("server.log")).unwrap();
+        assert_eq!(body.lines().count(), 1, "must stay one line per event: {body:?}");
+        let line = body.lines().next().unwrap();
+        let value: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("invalid JSON line ({e}):\n{line}"));
+        assert_eq!(value["msg"], raw_msg, "msg must round-trip through JSON");
+        assert_eq!(value["field_a"], "a\nb", "field value must round-trip");
+        assert_eq!(value["level"], "INFO");
+        assert_eq!(value["target"], "hermix_server_routes");
     }
 }

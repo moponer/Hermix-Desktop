@@ -474,6 +474,14 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 验证：telemetry 13 passed（含 `read_log_range_from_file` / `plain_lines_keep_structured_fields`，确认节流不影响日志可读性）。
 
+### 批次 21（P2-7 JSON serde_json 序列化）— 2026-10-27 交付
+
+`log_manager.rs` 的 `finish_json` 此前手写 `replace('"', "\\\"")`，只转义双引号：消息 / 字段值里的**换行**、回车、制表符、**反斜杠**都原样落进 JSONL，一行一 JSON 的约定被打破，行解析器读到半行损坏 JSON。改为 `json_escape`（`serde_json::to_string(&str)` 返回带引号、全量转义的字符串字面量），键名与值统一走它；`hermix-telemetry` 加 `serde_json = { workspace = true }`（workspace 早已有该依赖，非新增）。
+
+验证：telemetry 14 passed（+`json_lines_survive_newlines_quotes_and_backslashes`：含换行 / 引号 / 反斜杠的消息 `serde_json::from_str` 往返后逐字段相等，且 `lines().count() == 1`）。
+
+非阻塞写盘仍未做（见下方处置结论）：收益被批次 20 的 flush 节流削掉大半，风险却落在「崩溃瞬间丢尾日志」这条排障命脉上。
+
 ### 其余剩余项的处置结论（2026-10-26 复核）
 
 | 项 | 结论 |
