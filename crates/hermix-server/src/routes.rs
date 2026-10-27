@@ -1754,7 +1754,7 @@ pub(crate) async fn approve_via_rest(
         for (rid, ok) in &batch_pairs {
             if *ok {
                 crate::util::record_approval_resolution(
-                    &state, &session_id, rid, choice,
+                    &state, &session_id, rid, choice, true,
                 )
                 .await;
             }
@@ -1777,55 +1777,16 @@ pub(crate) async fn approve_via_rest(
         if matched { "hit" } else { "miss — no pending entry" }
     );
 
-    // Persist the decision to the session timeline
-    let decision_str = match choice {
-        hermix_transport::ApprovalChoice::Once => "once",
-        hermix_transport::ApprovalChoice::Session => "session",
-        hermix_transport::ApprovalChoice::Always => "always",
-        hermix_transport::ApprovalChoice::Deny => "deny",
-    };
-    let _ = state
-        .session_persistence
-        .resolve_approval_message(&session_id, request_id, decision_str);
-
-    //Record side effects for session/always choices. P6 :
-    // resource-scope approvals (P6 direction 1, `risk: "resource"`)
-    // carry path/command-prefix grants — handled by the dedicated
-    // resource-side-effect path that persists to GatewayConfig. The
-    // existing command-only path remains as a fallback for the
-    // Dangerous-tier terminal approvals that don't carry a path.
-    // Only record on the **first** successful resolve. Duplicate
-    // responses (matched=false from the resolve call above) would
-    // otherwise re-grant the same path / re-add the same allowlist
-    // regex. `grant_path` / `grant_command` are idempotent, but
-    // `UserAllowlist::add_literal` and `session_bypass` push are
-    // not — so the matched gate is the cheapest place to dedupe.
-    if matched
-        && matches!(
-            choice,
-            hermix_transport::ApprovalChoice::Session
-                | hermix_transport::ApprovalChoice::Always
-        )
-    {
-        // Try the resource path first — for non-resource approvals
-        // (legacy terminal danger), `lookup_pending_resource` returns
-        // `(None, None)` and the function returns early without
-        // touching the profile. The regular command-side-effect then
-        // runs as the fallback.
-        record_resource_approval_side_effect(&state, &session_id, request_id, choice).await;
-        if let Ok(Some((tool, params, _expires_at))) =
-            ws::lookup_pending_approval(&state, &session_id, request_id).await
-        {
-            record_approval_side_effect(&state, &session_id, &tool, &params, choice);
-        }
-    }
+    // Persist decision + side effects (single source of truth).
+    crate::util::record_approval_resolution(&state, &session_id, request_id, choice, matched)
+        .await;
 
     Ok(Json(serde_json::json!({
         "ok": true,
         "session_id": session_id,
         "request_id": request_id,
         "matched": matched,
-        "decision": decision_str,
+        "decision": crate::util::approval_decision_str(choice),
     })))
 }
 

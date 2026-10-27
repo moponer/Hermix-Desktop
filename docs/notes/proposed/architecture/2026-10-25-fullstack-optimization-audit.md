@@ -482,6 +482,18 @@ Status: proposed — 2026-10-25 完成静态审查；**P0 八项当日全部交�
 
 非阻塞写盘仍未做（见下方处置结论）：收益被批次 20 的 flush 节流削掉大半，风险却落在「崩溃瞬间丢尾日志」这条排障命脉上。
 
+### 批次 22（P1-13 第一步：审批响应抽单一实现）— 2026-10-27 交付
+
+三份单条审批响应路径（`ws.rs` streaming 与非 streaming 各一处、`routes.rs` REST 一处）此前各写一遍「`decision_str` 4 态映射 → `resolve_approval_message` 落库 → `if matched && Session/Always` 记录资源级 + 命令级 side effect」，与 batch 路径早已抽出的 `util::record_approval_resolution` 完全同构却一直没接上（审计笔记 172 行佐证）。这次：
+
+1. `record_approval_resolution` 加 `matched: bool` 门控——重复响应（matched=false）不再 re-grant 同一路径 / re-add 同一 allowlist 正则；batch 调用点传 `true`（`resolve_batch` 循环已筛 `ok`），单条调用点传 `registry.resolve` 的返回值。
+2. `decision_str` 4 态映射提成 `util::approval_decision_str` 纯函数，REST 响应体与落库共用一份。
+3. 三份单条路径全部收敛成一行 `record_approval_resolution(..., matched)`，净删 ~130 行重复。
+
+顺带消除一处行为漂移：`ws.rs` 非 streaming 路径原本在 `lookup_pending_approval` 返回 `Ok(None)` 时打 `warn("command not found")`——资源审批（只有 path、无 command）选 session/always 是**正常**的，这条 warn 是误报，另两份路径也没有它。统一后三份一致静默。
+
+验证：`cargo check -p hermix-server` 零警告；`cargo test -p hermix-server --lib` **507 passed**。
+
 ### 其余剩余项的处置结论（2026-10-26 复核）
 
 | 项 | 结论 |

@@ -255,31 +255,47 @@ pub(crate) fn redact_sensitive(input: &str) -> String {
     out
 }
 
+/// Canonical 4-state decision string for the DB / REST payload.
+/// Older rows that store legacy 2-state values keep working unchanged;
+/// the UI reads `extra.decision` verbatim.
+pub(crate) fn approval_decision_str(choice: hermix_transport::ApprovalChoice) -> &'static str {
+    match choice {
+        hermix_transport::ApprovalChoice::Once => "once",
+        hermix_transport::ApprovalChoice::Session => "session",
+        hermix_transport::ApprovalChoice::Always => "always",
+        hermix_transport::ApprovalChoice::Deny => "deny",
+    }
+}
+
 /// Side-effects for one resolved approval — `resolve_approval_message`
 /// in the DB plus, for Session/Always choices, the resource-scope
 /// `permission_profile` push and the durable allowlist entry. The
 /// registry resolve itself is the caller's responsibility (so the
 /// batch path can iterate the registry's `resolve_batch` result
 /// without re-resolving already-resolved members).
+///
+/// `matched` gates the side effects to the **first** successful resolve:
+/// a duplicate response would otherwise re-grant the same path / re-add
+/// the same allowlist regex. Batch paths pass `true` (they already
+/// filtered `resolve_batch` members by `ok`); single-item paths pass the
+/// `registry.resolve` return value.
 pub(crate) async fn record_approval_resolution(
     state: &HttpServerState,
     session_id: &str,
     request_id: &str,
     choice: hermix_transport::ApprovalChoice,
+    matched: bool,
 ) {
-    let decision_str = match choice {
-        hermix_transport::ApprovalChoice::Once => "once",
-        hermix_transport::ApprovalChoice::Session => "session",
-        hermix_transport::ApprovalChoice::Always => "always",
-        hermix_transport::ApprovalChoice::Deny => "deny",
-    };
+    let decision_str = approval_decision_str(choice);
     let _ = state
         .session_persistence
         .resolve_approval_message(session_id, request_id, decision_str);
-    if matches!(
-        choice,
-        hermix_transport::ApprovalChoice::Session | hermix_transport::ApprovalChoice::Always
-    ) {
+    if matched
+        && matches!(
+            choice,
+            hermix_transport::ApprovalChoice::Session | hermix_transport::ApprovalChoice::Always
+        )
+    {
         record_resource_approval_side_effect(state, session_id, request_id, choice).await;
         if let Ok(Some((tool, params, _expires_at))) =
             ws::lookup_pending_approval(state, session_id, request_id).await

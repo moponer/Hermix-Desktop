@@ -2408,60 +2408,16 @@ pub(crate) async fn handle_ws_stream_send(
                                         "approval_response (streaming) resolve: {}",
                                         if matched { "hit" } else { "miss — no pending entry" },
                                     );
-                                    // Persist the decision (same as handle_ws_stream's path).
-                                    let decision_str = match choice {
-                                        hermix_transport::ApprovalChoice::Once => "once",
-                                        hermix_transport::ApprovalChoice::Session => "session",
-                                        hermix_transport::ApprovalChoice::Always => "always",
-                                        hermix_transport::ApprovalChoice::Deny => "deny",
-                                    };
-                                    if let Err(e) = state
-                                        .session_persistence
-                                        .resolve_approval_message(session_id, &request_id, decision_str)
-                                    {
-                                        tracing::warn!(
-                                            error = %e,
-                                            request_id = %request_id,
-                                            "failed to persist approval decision (streaming path)"
-                                        );
-                                    }
-                                    // Record side effects for session/always choices. P6
-                                    //: resource-scope approvals go
-                                    // through the dedicated path that updates
-                                    // GatewayConfig.permission_profile; the
-                                    // command-based path remains as fallback for
-                                    // legacy terminal Danger approvals. Only
-                                    // record on the first successful resolve —
-                                    // a duplicate response would re-grant the
-                                    // same path / re-add the same allowlist
-                                    // regex otherwise.
-                                    if matched
-                                        && matches!(
-                                            choice,
-                                            hermix_transport::ApprovalChoice::Session
-                                                | hermix_transport::ApprovalChoice::Always
-                                        )
-                                    {
-                                        record_resource_approval_side_effect(
-                                            &state,
-                                            session_id,
-                                            &request_id,
-                                            choice,
-                                        ).await;
-                                        if let Ok(Some((tool, params, _expires_at))) = lookup_pending_approval(
-                                            &state,
-                                            session_id,
-                                            &request_id,
-                                        ).await {
-                                            record_approval_side_effect(
-                                                &state,
-                                                session_id,
-                                                &tool,
-                                                &params,
-                                                choice,
-                                            );
-                                        }
-                                    }
+                                    // Persist decision + side effects (single source of
+                                    // truth in util::record_approval_resolution).
+                                    util::record_approval_resolution(
+                                        &state,
+                                        session_id,
+                                        &request_id,
+                                        choice,
+                                        matched,
+                                    )
+                                    .await;
                                 }
 WsClientMessage::ApprovalBatchResponse { batch_id, decision, note } => {
                                     tracing::info!(
@@ -2496,6 +2452,7 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision, note } => {
                                                 session_id,
                                                 &rid,
                                                 choice,
+                                                true,
                                             ).await;
                                             resolved_count += 1;
                                         }
@@ -3168,85 +3125,15 @@ async fn handle_inbound_frame(
                     "approval_response resolve: {}",
                     if matched { "hit" } else { "miss — no pending entry" },
                 );
-                // The DB stores the decision as a free-form
-                // string, so we persist the canonical 4-state
-                // name (`"once"` / `"session"` / `"always"`
-                // / `"deny"`) — older rows that store the
-                // legacy 2-state values keep working
-                // unchanged. The UI reads `extra.decision`
-                // verbatim and the user-facing card flips
-                // color to match.
-                let decision_str = match choice {
-                    hermix_transport::ApprovalChoice::Once => "once",
-                    hermix_transport::ApprovalChoice::Session => "session",
-                    hermix_transport::ApprovalChoice::Always => "always",
-                    hermix_transport::ApprovalChoice::Deny => "deny",
-                };
-                if let Err(e) = state
-                    .session_persistence
-                    .resolve_approval_message(
-                        &session_id,
-                        &request_id,
-                        decision_str,
-                    )
-                {
-                    tracing::warn!(
-                        error = %e,
-                        request_id = %request_id,
-                        "failed to persist approval decision"
-                    );
-                }
-                // 4-state side effects: `session` and
-                // `always` need to update their respective
-                // stores. The command to record is the
-                // `command` (or `cmd`) string from the
-                // persisted approval row's `arguments` JSON.
-                // If the row has been GC'd between the
-                // request and the response (it shouldn't —
-                // the registry keeps the request alive), we
-                // skip the side effect and log.
-                // Only record on the first successful
-                // resolve — duplicate responses would
-                // otherwise re-grant the same path /
-                // re-add the same allowlist regex (P6 fix
-                //).
-                if matched
-                    && matches!(
-                        choice,
-                        hermix_transport::ApprovalChoice::Session
-                            | hermix_transport::ApprovalChoice::Always
-                    )
-                {
-                    //P6 : resource-scope path
-                    // first, command-path as fallback for
-                    // legacy Danger-tier terminal approvals.
-                    record_resource_approval_side_effect(
-                        &state,
-                        &session_id,
-                        &request_id,
-                        choice,
-                    ).await;
-                    if let Ok(Some((tool, params, _expires_at))) = lookup_pending_approval(
-                        &state,
-                        &session_id,
-                        &request_id,
-                    ).await {
-                        record_approval_side_effect(
-                            &state,
-                            &session_id,
-                            &tool,
-                            &params,
-                            choice,
-                        );
-                    } else {
-                        tracing::warn!(
-                            session = %session_id,
-                            request_id = %request_id,
-                            "session/always picked but original command \
-                             not found in approval row; side effect skipped"
-                        );
-                    }
-                }
+                // Persist decision + side effects (single source of truth).
+                util::record_approval_resolution(
+                    &state,
+                    &session_id,
+                    &request_id,
+                    choice,
+                    matched,
+                )
+                .await;
                 tracing::debug!(
                     session = %session_id,
                     request_id = %request_id,
@@ -3296,6 +3183,7 @@ async fn handle_inbound_frame(
                             &session_id,
                             &rid,
                             choice,
+                            true,
                         ).await;
                         resolved_count += 1;
                     }
