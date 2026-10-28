@@ -459,102 +459,109 @@ function TaskCard({
   onToggle: () => void;
   onTrigger: () => void;
 }) {
+  const running = task.last_status === "running";
+  const failed = task.last_status === "failed";
+  const lastRun = task.last_run_at
+    ? new Date(task.last_run_at).toLocaleString("zh-CN", {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+
+  /* 状态徽标只表达「需要一眼看到」的三种情况；正常启用的任务不给徽标，
+     否则每张卡右上角都挂一个绿点，等于没有重点。 */
+  const chip = running
+    ? { text: "运行中", cls: "bg-[var(--color-info-soft)] text-[color:var(--color-text-info)]", dot: true }
+    : failed
+      ? { text: "失败", cls: "bg-[var(--color-error-soft)] text-[color:var(--color-text-error)]", dot: true }
+      : !task.enabled
+        ? { text: "已停用", cls: "bg-[var(--color-bg-tertiary)] text-[color:var(--color-text-faint)]", dot: false }
+        : null;
+
   return (
     <div
-      className={`relative flex flex-col gap-2 p-3.5 rounded-xl group ${
-        task.enabled
-          ? "bg-bg-card"
-          : "bg-bg-secondary"
+      className={`group flex flex-col rounded-[var(--radius-lg)] ${
+        task.enabled ? "bg-bg-card" : "bg-bg-secondary"
       }`}
     >
-      <div className="flex items-start gap-2.5">
-        {/* 2026-10-23：此前这里渲染 `task.icon`（一个 emoji 字符串），
-            缺省还兜底 "⏰"。emoji 的四个硬伤：字形由系统字体决定（Win10 /
-            Win11 两套风格）、尺寸跟随字号、颜色写死在字体里不跟主题、
-            与旁边 lucide 描边图标不是同一视觉体系。改为按 category 推导
-            色调的彩色图标块 + 固定的 Clock 图标（定时任务的语义恒等于时钟，
-            不需要靠用户填字符串来表达）。旧任务里的 emoji 数据仍在库里，
-            只是不再渲染。 */}
+      {/* ① 抬头：图标 · 标题/描述 · 状态 —— 一张卡最先被扫的三件事 */}
+      <div className="flex items-start gap-2.5 p-3.5 pb-3">
         <InitialIcon name={task.name} size="md" />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">
+          <div className="flex items-start gap-2">
+            <p className="min-w-0 flex-1 truncate text-[length:var(--text-ui)] font-semibold text-text-primary">
               {task.name}
             </p>
-            {task.last_status === "running" && (
-              <span className="text-[length:var(--text-ui)] text-text-info animate-pulse">
-                运行中
+            {chip && (
+              <span
+                className={`inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[length:var(--text-tiny)] ${chip.cls}`}
+              >
+                {chip.dot && <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />}
+                {chip.text}
               </span>
-            )}
-            {task.last_status === "failed" && (
-              <span className="text-[length:var(--text-ui)] text-text-error">失败</span>
             )}
           </div>
           {task.description && (
-            <p className="text-[length:var(--text-ui)] text-text-muted leading-relaxed mt-0.5 line-clamp-2">
+            <p className="mt-1 line-clamp-2 text-[length:var(--text-ui)] leading-relaxed text-text-muted">
               {task.description}
             </p>
           )}
-          <div className="flex items-center gap-2 mt-1.5 text-[length:var(--text-ui)] text-text-muted">
-            <span className="font-mono">{task.schedule}</span>
-            {task.schedule_label && <span>· {task.schedule_label}</span>}
-          </div>
-          <div className="flex items-center gap-2 mt-1 text-[length:var(--text-ui)] text-text-muted">
-            <span>
-              累计 {task.run_count} 次
-              {task.max_runs ? ` / 上限 ${task.max_runs}` : ""}
-            </span>
-            {task.last_run_at && (
-              <span>
-                · 上次{" "}
-                {new Date(task.last_run_at).toLocaleString("zh-CN", {
-                  month: "numeric",
-                  day: "numeric",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-              </span>
-            )}
-          </div>
         </div>
       </div>
 
-      {/* Action row */}
-      <div className="flex items-center gap-1.5 -mb-1 mt-1">
+      {/* ② 排期与统计：一条独立的信息带，靠上方发丝线与正文分开（inset 线，
+          不写 border：G11 禁结构框线）。cron 走等宽 + 次级墨，统计退到 faint。 */}
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 px-3.5 pb-2.5 pt-2 text-[length:var(--text-tiny)] text-[color:var(--color-text-faint)] shadow-[inset_0_1px_0_var(--color-border-subtle)]">
+        <span className="font-mono text-[length:var(--text-meta)] text-[color:var(--color-text-secondary)]">
+          {task.schedule}
+        </span>
+        {task.schedule_label && <span>{task.schedule_label}</span>}
+        <span className="ml-auto">
+          累计 {task.run_count} 次
+          {task.max_runs ? ` / 上限 ${task.max_runs}` : ""}
+          {lastRun ? ` · 上次 ${lastRun}` : ""}
+        </span>
+      </div>
+
+      {/* ③ 操作区：主行动（实底浅染）与次要图标按钮分色分形，启停退到最右 */}
+      <div className="mt-auto flex items-center gap-1 px-2.5 pb-2.5">
         <button
           onClick={onTrigger}
-          disabled={task.last_status === "running"}
-          className="flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded disabled:opacity-40"
+          disabled={running}
+          className="flex h-7 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-accent-soft)] px-2.5 text-[length:var(--text-ui)] font-[number:var(--font-weight-medium)] text-[color:var(--color-accent)] transition-colors hover:bg-[var(--color-accent-soft-strong)] disabled:opacity-40"
           title="立刻跑一次"
         >
           <Play className="icon-xs" /> 立即运行
         </button>
         <button
           onClick={onEdit}
-          className="flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded"
+          aria-label="编辑"
           title="编辑"
+          className="icon-btn flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-[color:var(--color-text-muted)] hover:bg-bg-hover hover:text-text-primary"
         >
-          <Pencil className="icon-xs" /> 编辑
+          <Pencil className="icon-xs" />
         </button>
         <button
           onClick={onDelete}
-          className="flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] text-text-faint hover:text-text-error hover:bg-bg-hover rounded"
+          aria-label={DELETE}
           title={DELETE}
-          aria-label={DELETE}>
+          className="icon-btn flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-[color:var(--color-text-faint)] hover:bg-bg-hover hover:text-text-error"
+        >
           <Trash2 className="icon-xs" />
         </button>
-        <div className="flex-1" />
         <button
           onClick={onToggle}
-          className={`flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] rounded ${
+          className={`ml-auto flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-[length:var(--text-tiny)] transition-colors hover:bg-bg-hover ${
             task.enabled
-              ? "text-text-success hover:bg-bg-hover"
-              : "text-text-faint hover:text-text-secondary hover:bg-bg-hover"
+              ? "text-[color:var(--color-text-secondary)]"
+              : "text-[color:var(--color-text-faint)]"
           }`}
           title={task.enabled ? "点击停用" : "点击启用"}
         >
           <Power className="icon-xs" />
-          {task.enabled ? "已启用" : "已停用"}
+          {task.enabled ? "停用" : "启用"}
         </button>
       </div>
     </div>
@@ -1091,55 +1098,66 @@ function WorkflowCard({
   onDelete: () => void;
 }) {
   const running = runningId === wf.id || wf.last_status === "running";
+  const failed = wf.last_status === "failed";
+  const lastRun = wf.last_run_at
+    ? new Date(wf.last_run_at).toLocaleString("zh-CN", {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
   return (
-    <div className="flex flex-col gap-2 p-3.5 rounded-xl bg-bg-card">
-      <div className="flex items-start gap-2.5">
+    <div className="flex flex-col rounded-[var(--radius-lg)] bg-bg-card">
+      {/* ① 抬头：图标 · 标题 · 状态 */}
+      <div className="flex items-start gap-2.5 p-3.5 pb-3">
         <InitialIcon name={wf.name} size="md" />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">
+          <div className="flex items-start gap-2">
+            <p className="min-w-0 flex-1 truncate text-[length:var(--text-ui)] font-semibold text-text-primary">
               {wf.name}
             </p>
             {running && (
-              <span className="text-[length:var(--text-ui)] text-text-info animate-pulse">运行中</span>
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-info-soft)] px-1.5 py-0.5 text-[length:var(--text-tiny)] text-[color:var(--color-text-info)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
+                运行中
+              </span>
             )}
-            {wf.last_status === "failed" && (
-              <span className="text-[length:var(--text-ui)] text-text-error">上次失败</span>
+            {!running && failed && (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-error-soft)] px-1.5 py-0.5 text-[length:var(--text-tiny)] text-[color:var(--color-text-error)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
+                上次失败
+              </span>
             )}
           </div>
           {wf.description && (
-            <p className="text-[length:var(--text-ui)] text-text-muted leading-relaxed mt-0.5 line-clamp-2">
+            <p className="mt-1 line-clamp-2 text-[length:var(--text-ui)] leading-relaxed text-text-muted">
               {wf.description}
-            </p>
-          )}
-          {wf.last_run_at && (
-            <p className="mt-1 text-[length:var(--text-ui)] text-text-muted">
-              上次{" "}
-              {new Date(wf.last_run_at).toLocaleString("zh-CN", {
-                month: "numeric",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
             </p>
           )}
         </div>
       </div>
-      <div className="flex items-center gap-1.5 mt-1">
+
+      {/* ② 运行记录：与正文之间用发丝线分开（inset 线，不写 border） */}
+      <div className="px-3.5 pb-2.5 pt-2 text-[length:var(--text-tiny)] text-[color:var(--color-text-faint)] shadow-[inset_0_1px_0_var(--color-border-subtle)]">
+        {lastRun ? `上次 ${lastRun}` : "还没有运行记录"}
+      </div>
+
+      {/* ③ 操作区：主行动浅染实底，删除退成图标按钮 */}
+      <div className="mt-auto flex items-center gap-1 px-2.5 pb-2.5">
         <button
           onClick={onRun}
           disabled={running}
-          className="flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded disabled:opacity-40"
+          className="flex h-7 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-accent-soft)] px-2.5 text-[length:var(--text-ui)] font-[number:var(--font-weight-medium)] text-[color:var(--color-accent)] transition-colors hover:bg-[var(--color-accent-soft-strong)] disabled:opacity-40"
           title="再跑一次"
         >
           <Play className="icon-xs" /> 再跑一次
         </button>
-        <div className="flex-1" />
         <button
           onClick={onDelete}
-          className="px-2 py-1 rounded text-text-faint hover:text-text-error hover:bg-bg-hover"
           aria-label={DELETE}
           title={DELETE}
+          className="icon-btn ml-auto flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-[color:var(--color-text-faint)] hover:bg-bg-hover hover:text-text-error"
         >
           <Trash2 className="icon-xs" />
         </button>

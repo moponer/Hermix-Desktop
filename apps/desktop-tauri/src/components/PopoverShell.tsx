@@ -142,6 +142,9 @@ export function PopoverShell({
   // 的 overflow/堆叠上下文都可能把它困住（真实症状就是"点了没反应"：面板
   // 开了但不可见）。portal + fixed 定位对祖先完全免疫；click-outside 用的
   // containerRef 仍挂在面板节点上，行为不变。
+  // 2026-10-28：浮层投影从 pop 档提到 modal 档。亮色主题里纸面与浮层同为白，
+  // pop 档（8px/24px，10%）压不住密集正文，卡片读起来像「正文里多了一段字」；
+  // modal 档是 16px/48px + 1px 发丝环，边界与「浮起」两个信号同时成立。
   return createPortal(
     <div
       ref={(el) => {
@@ -152,7 +155,7 @@ export function PopoverShell({
       aria-modal="false"
       style={anchorStyle}
       onPointerDown={(e) => e.stopPropagation()}
-      className={`${widthClass} shrink-0 rounded-xl bg-bg-elevated shadow-pop p-1.5 overflow-hidden z-[60] ${legacyClass} ${className}`}
+      className={`${widthClass} shrink-0 rounded-xl bg-bg-elevated shadow-modal p-1.5 overflow-hidden z-[60] ${legacyClass} ${className}`}
     >
       {children}
     </div>,
