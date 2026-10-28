@@ -359,9 +359,11 @@ function ConnectorRow({
             offLabel="停用"
             onLabel="启用"
           />
+          {/* 删除是危险且低频的次要操作：默认半透明（可发现但不抢眼），
+              悬停整行或聚焦时才提到全亮（2026-10-28 主次分级）。 */}
           <button
             onClick={onRemove}
-            className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-error-soft)] hover:text-[var(--color-text-error)]"
+            className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] opacity-40 transition-[opacity,background-color] group-hover:opacity-100 hover:bg-[var(--color-error-soft)] hover:text-[var(--color-text-error)] focus-visible:opacity-100"
             title={DELETE}
             aria-label={DELETE}>
             <Trash2 className="icon-md" />

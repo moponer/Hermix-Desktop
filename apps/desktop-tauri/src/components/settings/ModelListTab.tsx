@@ -529,7 +529,7 @@ export function ModelListTab() {
                     </span>
                   </div>
                 )}
-                <div className="flex items-center gap-3 px-3 py-2.5 hover:bg-bg-hover">
+                <div className="group flex items-center gap-3 px-3 py-2.5 hover:bg-bg-hover">
               {/* 厂商 logo 放在 28px 中性底块里：全站列表行都是同尺寸的
                   方块，模型行不能是个 16px 的裸 logo。底保持中性 —— 品牌
                   logo 自带颜色，铺在同色实底上会互相抵消（"logo 压 logo"），
@@ -585,7 +585,7 @@ export function ModelListTab() {
                 >
                   <Star className={`icon-sm ${row.isDefault ? "fill-current text-accent" : ""}`} />
                 </IconBtn>
-                <IconBtn title="编辑" onClick={() => { setEditing({
+                <IconBtn title="编辑" muted onClick={() => { setEditing({
                   providerId: row.providerId,
                   modelId: row.modelId,
                   isCustom: !row.isBuiltin,
@@ -600,11 +600,11 @@ export function ModelListTab() {
                 }); setAddOpen(true); }}>
                   <Pencil className="icon-sm" />
                 </IconBtn>
-                <IconBtn title="测试连接" onClick={() => void testRow(row)}>
+                <IconBtn title="测试连接" muted onClick={() => void testRow(row)}>
                   {testingId === row.id ? <Loader2 className="icon-sm animate-spin" /> : <Zap className="icon-sm" />}
                 </IconBtn>
                 {row.isEnabled && (
-                  <IconBtn title={`${DELETE}模型`} onClick={() => void remove(row)}>
+                  <IconBtn title={`${DELETE}模型`} muted onClick={() => void remove(row)}>
                     <Trash2 className="icon-sm" />
                   </IconBtn>
                 )}
@@ -669,11 +669,14 @@ function IconBtn({
   onClick,
   children,
   disabled = false,
+  muted = false,
 }: {
   title: string;
   onClick: () => void;
   children: React.ReactNode;
   disabled?: boolean;
+  /** 次要操作（编辑/测试/删除）：默认半透明，悬停整行或聚焦才提高到全亮。 */
+  muted?: boolean;
 }) {
   return (
     <button
@@ -681,9 +684,9 @@ function IconBtn({
       title={title}
       aria-label={title}
       disabled={disabled}
-      className={`h-7 w-7 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-tertiary ${
+      className={`h-7 w-7 rounded-md flex items-center justify-center text-text-muted transition-[opacity,background-color] hover:text-text-primary hover:bg-bg-tertiary focus-visible:opacity-100 ${
         disabled ? "opacity-40 cursor-not-allowed hover:text-text-muted hover:bg-transparent" : ""
-      }`}
+      } ${muted ? "opacity-50 group-hover:opacity-100" : ""}`}
     >
       {children}
     </button>

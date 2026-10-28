@@ -20,10 +20,19 @@ import { cx } from "../../lib/cx";
  *   3. **右侧堆积多个元素**：右边缘同时出现「箭头 + 开关」时，动作区宽度
  *      不一致，多行并排时开关左边缘参差。现在 action 只接一个节点。
  *
- * ## 层次（只有三层，别再往上加）
+ * ## 层次（四个区，靠结构与间距分开，不是靠"位置顺序"）
  *
- *   图标块（彩色） → 标题（primary，13px/500） → 描述（muted，12px，单行）
- * 徽标/元信息挂在标题行尾部，一律 11px faint，不参与主次。
+ *   ① 标题区   [图标] 标题 · 元信息 ………………… 主操作（右上，与标题对齐）
+ *   ② 描述区   一句说明（muted，12px，单行截断）
+ *   ③ 附属区   chips / 工具名等（可选，用 1px 分隔线与上面切开）
+ *
+ * 2026-10-28 重构：此前图标、标题、描述、动作全在一条 `items-center` 的水平线上，
+ * 主操作（开关）随卡片高度垂直居中，和标题/描述混成一层 —— 卡片一多就分不出
+ * "这块说的是什么、哪个是能点的"。现在：
+ *   · 外层改 `items-start`，图标与标题顶对齐，长描述不再把图标顶到中间；
+ *   · 主操作 `self-start` 固定贴在标题行右端，与标题同一基线；
+ *   · 附属信息走 `footer` 槽，与主体之间有一条极淡的分隔线（第三种区隔手段，
+ *     前两种是间距和子容器）。
  */
 export function ToolListRow({
   icon,
@@ -31,6 +40,7 @@ export function ToolListRow({
   description,
   meta,
   action,
+  footer,
   onClick,
   dimmed = false,
   className,
@@ -41,8 +51,10 @@ export function ToolListRow({
   description?: ReactNode;
   /** 标题行尾部的次要信息（类目、传输方式、工具数…）。 */
   meta?: ReactNode;
-  /** 右侧唯一动作：开关 或 箭头 或 按钮，不要叠两个。 */
+  /** 右侧主操作：开关 / 箭头，与标题同基线。 */
   action?: ReactNode;
+  /** 附属区：chips、工具名、次级动作。会在上面画一条分隔线。 */
+  footer?: ReactNode;
   /** 整行可点（图标区与文字区都响应）。 */
   onClick?: () => void;
   /** 停用态：整体降透明度，但保留可读性。 */
@@ -51,8 +63,9 @@ export function ToolListRow({
 }) {
   const body = (
     <>
-      {icon}
+      <div className="shrink-0 self-start">{icon}</div>
       <div className="min-w-0 flex-1">
+        {/* ① 标题区：标题 + 元信息 */}
         <div className="flex items-center gap-2">
           <span className="truncate text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
             {title}
@@ -63,18 +76,27 @@ export function ToolListRow({
             </span>
           )}
         </div>
+        {/* ② 描述区 */}
         {description && (
-          <p className="mt-0.5 truncate text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+          <p className="mt-1 truncate text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
             {description}
           </p>
         )}
+        {/* ③ 附属区：与主体用一条分隔线 + 上间距切开 */}
+        {footer && (
+          <div className="mt-2 border-t border-[var(--color-border-primary)] pt-2">
+            {footer}
+          </div>
+        )}
       </div>
-      {action && <div className="flex shrink-0 items-center gap-1">{action}</div>}
+      {action && (
+        <div className="ml-1 flex shrink-0 items-center gap-1 self-start">{action}</div>
+      )}
     </>
   );
 
   const shell = cx(
-    "group flex items-center gap-2.5 rounded-[var(--radius-lg)] px-2.5 py-2",
+    "group flex items-start gap-2.5 rounded-[var(--radius-lg)] px-2.5 py-2",
     "transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]",
     "bg-[var(--color-bg-card)]",
     dimmed && "opacity-60",

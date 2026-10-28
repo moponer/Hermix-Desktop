@@ -7,6 +7,7 @@ import { InitialIcon } from "../ui/InitialIcon";
 
 import { ToggleSwitch } from "../ToggleSwitch";
 import { SearchBar, Grid, EmptyHint, SkeletonGrid, SummaryBar, ToolGroupTitle, ToolHint } from "./toolTabsShared";
+import { ToolListRow } from "./ToolListRow";
 import { ENABLED, SAVE_FAILED, failure } from "../strings";
 
 // ── Toolsets tab: backend tool registry (a.k.a. toolset groups) ──────
@@ -231,25 +232,12 @@ function ToolsetCard({
   const desc = (toolset.description ?? "").trim();
   const realDescription = /^(.+)\s+category\s+—\s+\d+\s+tools?$/.test(desc) ? null : desc || null;
   return (
-    <div className="flex flex-col gap-2 rounded-[var(--radius-lg)] bg-[var(--color-bg-card)] px-2.5 py-2.5">
-      <div className="flex items-center gap-2.5">
-        <InitialIcon name={toolset.label} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
-              {toolset.label}
-            </span>
-            <span className="shrink-0 text-[length:var(--text-tiny)] text-[var(--color-text-faint)]">
-              {tools.length} 个工具
-            </span>
-          </div>
-          {/* 单行截断：旧版 hover 展开会让整个网格重排（鼠标下方目标乱跑）。 */}
-          {realDescription && (
-            <p className="mt-0.5 truncate text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
-              {realDescription}
-            </p>
-          )}
-        </div>
+    <ToolListRow
+      icon={<InitialIcon name={toolset.label} />}
+      title={toolset.label}
+      meta={`${tools.length} 个工具`}
+      description={realDescription ?? undefined}
+      action={
         <ToggleSwitch
           enabled={enabled}
           onToggle={() => onToggle(toolset.name, !enabled)}
@@ -257,31 +245,33 @@ function ToolsetCard({
           offLabel={`关闭 ${toolset.label} 工具集`}
           onLabel={`启用 ${toolset.label} 工具集`}
         />
-      </div>
-      {tools.length > 0 && (
-        /* 工具名与标题左对齐（28px 图标 + 10px 间距 = 38px），不缩进会显得
-           这行是"卡片的第四个部分"而不是"标题的补充"。 */
-        <div className="flex flex-wrap items-center gap-1 pl-[38px]">
-          {shown.map((tool) => (
-            <span
-              key={tool}
-              className="rounded-[var(--radius-sm)] bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 font-mono text-[length:var(--text-tiny)] text-[var(--color-text-secondary)]"
-            >
-              {tool}
-            </span>
-          ))}
-          {tools.length > 3 && (
-            <button
-              type="button"
-              onClick={() => setExpanded((v) => !v)}
-              aria-expanded={expanded}
-              className="rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[length:var(--text-tiny)] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]"
-            >
-              {expanded ? "收起" : `+${hidden}`}
-            </button>
-          )}
-        </div>
-      )}
-    </div>
+      }
+      /* 工具名走「附属区」：与标题/描述之间由分隔线 + 上间距隔开（2026-10-28）。
+         此前 chips 是卡片里的第二个平铺块，只靠 pl-[38px] 假装"属于标题"。 */
+      footer={
+        tools.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-1">
+            {shown.map((tool) => (
+              <span
+                key={tool}
+                className="rounded-[var(--radius-sm)] bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 font-mono text-[length:var(--text-tiny)] text-[var(--color-text-secondary)]"
+              >
+                {tool}
+              </span>
+            ))}
+            {tools.length > 3 && (
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                aria-expanded={expanded}
+                className="rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[length:var(--text-tiny)] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]"
+              >
+                {expanded ? "收起" : `+${hidden}`}
+              </button>
+            )}
+          </div>
+        ) : undefined
+      }
+    />
   );
 }
