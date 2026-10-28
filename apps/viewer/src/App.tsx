@@ -449,10 +449,33 @@ export function App() {
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   /** 垂直标签列表（标签太多时点开挑）。 */
   const [tabListOpen, setTabListOpen] = useState(false);
+  /** 标签条宿主：浮层开着时点它之外的任何地方自动收起。 */
+  const tabbarWrapRef = useRef<HTMLDivElement | null>(null);
   /** 预览铺满：目录槽 / AI 槽 / 驱动器栏全部让位，预览区独占主宽。
    *  组件只是 display:none 不卸载，Esc / 关闭预览即恢复——看大图
    *  时不再被左侧目录吃掉四分之一窗口。 */
   const [previewFull, setPreviewFull] = useState(false);
+
+  // 标签列表浮层：点浮层与标签条之外的任何地方自动收起（Esc 同样收起）。
+  // 用 pointerdown 而不是 click：外部按下的瞬间就该收，不等松手。
+  useEffect(() => {
+    if (!tabListOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const host = tabbarWrapRef.current;
+      if (host && e.target instanceof Node && host.contains(e.target)) return;
+      setTabListOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setTabListOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [tabListOpen]);
+
   /** 标签条右端的动作区（DOM 节点）：PreviewHost 经 portal 把编辑 /
    *  钉住 / 视图切换投进来，文件名行由此从预览区顶部消失（文件名
    *  标签上已有，显示两遍就是重复）。 */
@@ -2613,7 +2636,7 @@ export function App() {
           {/* heavy 模式走到这里必有标签（active !== null），标签条恒在；
               纯净模式保留「有标签才有」的旧规则（空屏由下面的空状态接管）。 */}
           {(mode === "heavy" || tabs.length > 0) && (
-          <div className="tabbar-wrap">
+          <div className="tabbar-wrap" ref={tabbarWrapRef}>
             <div className="tabbar" ref={tabbarRef}>
               {tabs.map((t) => (
                 <div
