@@ -4,6 +4,13 @@ import type { ReactNode } from "react";
 import { Search } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
+/**
+ * 工具页工具栏：搜索框（占满左侧）+ 可选右侧动作。
+ *
+ * **不设外边距**（2026-10-28）：四个工具页曾经各自在外面再套 mb-3/mb-4，
+ * 与本组件自带的 mb-5 叠加成双间距，页面越往下越松。现在统一由父级的
+ * `space-y-*` 控制节奏，工具栏自身只负责一行内的对齐。
+ */
 export function SearchBar({
   query,
   onQuery,
@@ -14,7 +21,7 @@ export function SearchBar({
   right?: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-2 mb-5">
+    <div className="flex w-full items-center gap-2">
       <div className="relative flex-1">
         <Search className="icon-md absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
         <input
@@ -26,6 +33,48 @@ export function SearchBar({
       </div>
       {right}
     </div>
+  );
+}
+
+/**
+ * 工具页的组标题 —— 统一四页的「区块名 + 计数」。
+ *
+ * 层级（自高到低，只有这五层）：
+ *   页头 16/600 · 组标题 13/600 · 卡片标题 13/500 · 描述 12 · 元信息 12 faint
+ *
+ * 此前插件用 SettingsSection 的 13/600、技能用裸 h4、工具集干脆没有组标题、
+ * 连接器用卡片头代替 —— 同一层信息在四页里长得不一样，连着点就觉得乱。
+ */
+export function ToolGroupTitle({
+  title,
+  count,
+  action,
+}: {
+  title: ReactNode;
+  count?: number;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="mb-2 flex items-center gap-2 px-1">
+      <h3 className="text-[length:var(--text-ui)] font-semibold text-[var(--color-text-primary)]">
+        {title}
+      </h3>
+      {count != null && (
+        <span className="text-[length:var(--text-tiny)] tabular-nums text-[var(--color-text-faint)]">
+          {count}
+        </span>
+      )}
+      {action && <div className="ml-auto flex shrink-0 items-center gap-2">{action}</div>}
+    </div>
+  );
+}
+
+/** 工具页的说明/脚注：统一一档（12 / muted），间距交给父级 space-y。 */
+export function ToolHint({ children }: { children: ReactNode }) {
+  return (
+    <p className="text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-muted)]">
+      {children}
+    </p>
   );
 }
 

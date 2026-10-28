@@ -108,7 +108,7 @@ export function SettingsStatBar({
 }) {
   const pct = total > 0 ? Math.round((enabled / total) * 100) : 0;
   return (
-    <div className="mb-3 flex items-center gap-3">
+    <div className="flex items-center gap-3">
       <p className="shrink-0 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
         共 <span className="font-medium tabular-nums text-[var(--color-text-primary)]">{total}</span> {totalLabel}
         <span className="mx-1.5 text-[var(--color-text-faint)]">·</span>

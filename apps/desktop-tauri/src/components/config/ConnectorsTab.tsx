@@ -10,7 +10,7 @@ import { ToggleSwitch } from "../ToggleSwitch";
 import { ConfirmDialog, Input, SelectField, TextArea } from "../ui";
 import { DELETE } from "../strings";
 import { toastError, toastSuccess } from "../../hooks/useToast";
-import { SearchBar, EmptyHint, SkeletonGrid, SummaryBar } from "./toolTabsShared";
+import { SearchBar, EmptyHint, SkeletonGrid, SummaryBar, ToolGroupTitle, ToolHint } from "./toolTabsShared";
 
 // ── Connectors tab: user-configured MCP servers ──────────────────────
 
@@ -119,7 +119,9 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
   };
 
   return (
-    <>
+    /* 统一骨架：工具栏 → 统计 → 「已配置服务」→「内置目录」两段。
+       间距交给 space-y-6；每段自带组标题，说明文字归到段内脚注。 */
+    <div className="space-y-6">
       <SearchBar query={query} onQuery={onQuery} />
 
       {!loading && servers.length > 0 && (
@@ -131,28 +133,30 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
         />
       )}
 
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-[length:var(--text-meta)] text-text-muted">
-          已配置的 MCP 服务：通过 stdio 启动本地子进程，或连接 HTTP 远程端点。
-        </span>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowAddForm((v) => !v)}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[length:var(--text-meta)] text-accent hover:bg-bg-tertiary"
-            title="添加自定义 MCP 服务"
-          >
-            <Plus className="icon-sm" /> 添加 MCP
-          </button>
-          <button
-            onClick={() => setConfirmReset(true)}
-            disabled={servers.length === 0}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[length:var(--text-meta)] text-text-secondary hover:text-text-error hover:bg-error-soft disabled:opacity-40"
-            title="恢复为内置官方 MCP 服务清单（丢弃全部自定义条目）"
-          >
-            恢复官方清单
-          </button>
-        </div>
-      </div>
+      <section className="space-y-3">
+        <ToolGroupTitle
+          title="已配置服务"
+          count={servers.length}
+          action={
+            <>
+              <button
+                onClick={() => setShowAddForm((v) => !v)}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[length:var(--text-meta)] text-accent hover:bg-bg-tertiary"
+                title="添加自定义 MCP 服务"
+              >
+                <Plus className="icon-sm" /> 添加 MCP
+              </button>
+              <button
+                onClick={() => setConfirmReset(true)}
+                disabled={servers.length === 0}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[length:var(--text-meta)] text-text-secondary hover:text-text-error hover:bg-error-soft disabled:opacity-40"
+                title="恢复为内置官方 MCP 服务清单（丢弃全部自定义条目）"
+              >
+                恢复官方清单
+              </button>
+            </>
+          }
+        />
 
       <ConfirmDialog
         open={confirmReset}
@@ -167,7 +171,7 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
       />
 
       {showAddForm && (
-        <div className="rounded-xl bg-bg-card p-4 mb-3 space-y-3">
+        <div className="rounded-xl bg-bg-card p-4 space-y-3">
           <div className="text-sm font-medium text-text-primary">添加 MCP 服务</div>
           {addError && (
             <div className="text-[length:var(--text-meta)] text-text-error bg-error/10 rounded px-2 py-1">{addError}</div>
@@ -315,14 +319,15 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
         </div>
       )}
 
-      <p className="text-[length:var(--text-meta)] text-text-muted mt-4 pb-5">
-        配置需要 {`npx`} / {`uvx`} 等运行时可用。密钥请填入 env 字段。
-      </p>
+        <ToolHint>
+          已配置的 MCP 服务通过 stdio 启动本地子进程，或连接 HTTP 远程端点；配置需要 npx / uvx 等运行时可用，密钥请填入 env 字段。
+        </ToolHint>
+      </section>
 
       {/* 内置目录：先逛清单，再决定装不装。放在已配置列表之后——
           自己的 server 是主角，逛目录是第二幕。 */}
       <McpCatalogGrid onInstalled={() => { void api.getMcpServers().then(setServers); }} />
-    </>
+    </div>
   );
 }
 

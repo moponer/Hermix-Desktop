@@ -6,7 +6,7 @@ import type { ToolsetInfo } from "../../api";
 import { InitialIcon } from "../ui/InitialIcon";
 
 import { ToggleSwitch } from "../ToggleSwitch";
-import { SearchBar, Grid, EmptyHint, SkeletonGrid, SummaryBar } from "./toolTabsShared";
+import { SearchBar, Grid, EmptyHint, SkeletonGrid, SummaryBar, ToolGroupTitle, ToolHint } from "./toolTabsShared";
 import { ENABLED, SAVE_FAILED, failure } from "../strings";
 
 // ── Toolsets tab: backend tool registry (a.k.a. toolset groups) ──────
@@ -134,7 +134,8 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
   const enabledCount = useMemo(() => toolsets.filter((t) => t.enabled).length, [toolsets]);
 
   return (
-    <>
+    /* 统一骨架：工具栏 → 统计 → 分组；间距交给 space-y-5。 */
+    <div className="space-y-5">
       <SearchBar query={query} onQuery={onQuery} />
 
       {!loading && toolsets.length > 0 && (
@@ -147,7 +148,7 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
       )}
 
       {error && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-text-error flex items-start justify-between gap-2">
+        <div className="px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-text-error flex items-start justify-between gap-2">
           <span>{error}</span>
           <button
             type="button"
@@ -160,7 +161,7 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
         </div>
       )}
       {warning && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-text-warning flex items-start justify-between gap-2">
+        <div className="px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-text-warning flex items-start justify-between gap-2">
           <span>{warning}</span>
           <button
             type="button"
@@ -185,7 +186,9 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
           }
         />
       ) : (
-        <Grid empty={false}>
+        <section>
+          <ToolGroupTitle title="全部工具集" count={filtered.length} />
+          <Grid empty={false}>
           {filtered.map((t) => (
             <ToolsetCard
               key={t.name}
@@ -195,11 +198,12 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
               onToggle={handleToggle}
             />
           ))}
-        </Grid>
+          </Grid>
+        </section>
       )}
 
-      <p className="text-[length:var(--text-meta)] text-text-muted pb-6">关闭后该组工具不再提供给模型。</p>
-    </>
+      <ToolHint>关闭后该组工具不再提供给模型。</ToolHint>
+    </div>
   );
 }
 

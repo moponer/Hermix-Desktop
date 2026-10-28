@@ -6,7 +6,7 @@ import { BUILTIN_PLUGINS, DEFAULT_PLUGIN_SETTINGS } from "./toolTabsData";
 import { InitialIcon } from "../ui/InitialIcon";
 import { ToolListRow } from "./ToolListRow";
 import { ToggleSwitch } from "../ToggleSwitch";
-import { SearchBar, Section, Grid, SummaryBar } from "./toolTabsShared";
+import { SearchBar, Grid, SummaryBar, ToolGroupTitle } from "./toolTabsShared";
 
 // ── Plugins tab: built-in toggles + discovered manifests ────────────
 
@@ -49,7 +49,9 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
     : BUILTIN_PLUGINS;
 
   return (
-    <>
+    /* 统一页面骨架（2026-10-28）：工具栏 → 统计 → 分组。
+       间距全部交给 space-y-5，子块不再各自写 mb-*。 */
+    <div className="space-y-5">
       <SearchBar query={query} onQuery={onQuery} />
 
       {!loading && BUILTIN_PLUGINS.length > 0 && (
@@ -61,7 +63,8 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
         />
       )}
 
-      <Section title="内置工具">
+      <section>
+        <ToolGroupTitle title="内置工具" count={filteredBuiltins.length} />
         <Grid empty={!loading && filteredBuiltins.length === 0} emptyText="没有匹配的内置工具。">
           {filteredBuiltins.map((plugin) => {
             const enabled = Boolean(settings[plugin.key]);
@@ -81,9 +84,8 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
             );
           })}
         </Grid>
-      </Section>
-
-    </>
+      </section>
+    </div>
   );
 }
 

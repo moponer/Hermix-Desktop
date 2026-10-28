@@ -5,7 +5,7 @@ import * as api from "../../api";
 import type { SkillInfo } from "../../api";
 import { CATEGORY_LABELS } from "./toolTabsData";
 import { SkillCard } from "./SkillCard";
-import { SearchBar, EmptyHint, SkeletonGrid, SummaryBar } from "./toolTabsShared";
+import { SearchBar, EmptyHint, SkeletonGrid, SummaryBar, ToolGroupTitle, ToolHint } from "./toolTabsShared";
 import { ALL, ENABLED, failure } from "../strings";
 
 // ── Skills tab: GET /api/skills + toggle ────────────────────────────
@@ -86,8 +86,9 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
   const enabledCount = useMemo(() => skills.filter((s) => s.enabled).length, [skills]);
 
   return (
-    <>
-      <div className="flex items-center justify-between gap-2 mb-3">
+    /* 统一骨架：工具栏 → 筛选 chips → 统计 → 分类分组；间距交给 space-y-5。 */
+    <div className="space-y-5">
+      <div className="flex items-center gap-2">
         <div className="flex-1">
           <SearchBar query={query} onQuery={onQuery} />
         </div>
@@ -107,7 +108,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
           挤成孤行（截图里「写作 1」单独吊在第二行），比溢出更难看；
           滚动条按全局样式隐藏，滚轮/触控板横扫即可。 */}
       {!loading && categoryOrder.length > 1 && (
-        <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto mb-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <button
             onClick={() => setCatFilter(null)}
             aria-pressed={catFilter === null}
@@ -137,7 +138,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         />      )}
 
       {error && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-text-error">
+        <div className="px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-text-error">
           {error}
         </div>
       )}
@@ -155,18 +156,8 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         />
       ) : (
         categoryOrder.map((cat) => (
-          <div key={cat} className="mb-5">
-            <div className="flex items-center gap-2 mb-2 px-1">
-              <h4 className="text-[length:var(--text-ui)] font-semibold text-text-primary">
-                {catLabel(cat)}
-              </h4>
-              {/* 计数不加药丸（2026-10-28）：分组标题旁一枚蓝色药丸 × 每个分组
-                  = 又一排蓝点；数字用 faint 灰与 ToolListRow 的 meta 同一档，
-                  分组数多时整页只剩标题是重的。 */}
-              <span className="text-[length:var(--text-tiny)] tabular-nums text-[var(--color-text-faint)]">
-                {grouped[cat].length}
-              </span>
-            </div>
+          <section key={cat}>
+            <ToolGroupTitle title={catLabel(cat)} count={grouped[cat].length} />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {grouped[cat].map((s) => (
                 <SkillCard key={s.name} skill={s} catLabel={catLabel} onToggle={(name) => {
@@ -174,12 +165,12 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
                 }} />
               ))}
             </div>
-          </div>
+          </section>
         ))
       )}
 
-      <p className="text-[length:var(--text-meta)] text-text-muted pb-6">禁用会从文件系统中删除该技能。</p>
-    </>
+      <ToolHint>禁用会从文件系统中删除该技能。</ToolHint>
+    </div>
   );
 }
 
