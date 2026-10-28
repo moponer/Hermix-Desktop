@@ -99,10 +99,14 @@ describe("TwinView 内联对话", () => {
     expect(twin.resolve).toHaveBeenCalledWith("c-1", "approved", "稳妥");
   });
 
-  it("她这一轮在跑时输入框与发送键都不可用", () => {
+  it("她这一轮在跑时输入框不可用，发送键换成停止", () => {
     renderTwin(makeTwin({ streaming: true }));
     expect(screen.getByLabelText("给助手阿黎发消息")).toBeDisabled();
-    expect(screen.getByLabelText("发送")).toBeDisabled();
+    // 跑动中输入框是禁用的，暂停入口必须在主视线里：发送键就地变「停止」。
+    // （此前这条断言还在找「发送」——那个按钮在这个状态下根本不渲染，
+    //  2026-10-27 加停止态时测试没跟上。）
+    expect(screen.queryByLabelText("发送")).toBeNull();
+    expect(screen.getByLabelText("停止这一轮")).toBeInTheDocument();
   });
 
   it("本轮出错时把错误原文显示在输入口上方", () => {

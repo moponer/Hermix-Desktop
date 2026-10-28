@@ -29,6 +29,13 @@ Status: implemented — 2026-10-23 落地；主程序 + 查看器 + 共享预览
    主程序与查看器共用一份。
 6. **动效统一到 `styles/motion.css`**：只动 transform / opacity，三档时长，
    ease-out 无回弹，reduced-motion 由 base.css 全局压掉。
+   （2026-10-28 补两条：① 页面级「角色语法」在 `components-twin.css` 末段 ——
+   每个组件只分配**一种**动作（读数跳动 / 面板上浮 / 进度追赶 / 待办一次性
+   光环 …），同族组件（页头读数与指标格）必须同动作，靠触发时机区分而不是
+   靠动作本身；该类页面允许在本地定义**第四档** `--twin-dur-progress: 480ms`
+   （进度是"追赶"语义，240ms 看不出在动），但仍不许自造 200/300 这类散值。
+   ② `prefers-reduced-motion` 同时压 `animation-iteration-count: 1` —— 只压
+   时长会让 infinite 动画以 10 万次/秒重启，降级反而变成高耗电。）
 7. **查看器与主程序同色同字**：中性轴改纯灰、强调色改松墨绿、字体栈补
    中文回退链；菜单栏文案压到 2–4 字。
 8. **专家头像 = 首汉字 / 首字母色块**（`AgentAvatar`），不再用 emoji。

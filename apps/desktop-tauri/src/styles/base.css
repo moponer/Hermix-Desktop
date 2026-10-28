@@ -109,6 +109,11 @@ select:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    /* 循环动画必须同时压成一次（2026-10-28）：只压时长不压次数，等于让
+       infinite 动画以 10 万次/秒重启，合成器与主线程一直在忙 —— 这是
+       "无障碍降级"反而变成高耗电的经典坑。压成 1 次后动画瞬间结束，
+       fill 状态由各规则自己声明，视觉上停在正常态。 */
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
 }

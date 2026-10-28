@@ -391,14 +391,19 @@ ${d.conclusions}`,
           <span className="twin-head__kv" title="跟随全局默认模型（设置 → 模型）">
             模型 <b className="twin-head__model">{modelName}</b>
           </span>
+          {/* 读数用 `key={值}` 触发重挂：元素重建一次 → CSS 的 twin-tick
+              动画重跑一次。8s 轮询里值没变就不重建，所以"跳动"只在数字真的
+              变时发生，不会成为周期性抖动。数字不可聚焦，重建不丢焦点。 */}
           <span className="twin-head__kv">
-            在跑 <b>{busy}</b>
+            在跑 <b key={busy}>{busy}</b>
           </span>
           <span className="twin-head__kv">
-            已启用 <b>{enabledTasks.length}</b>
+            已启用 <b key={enabledTasks.length}>{enabledTasks.length}</b>
           </span>
           <span className="twin-head__kv">
-            待批 <b className={pending.length > 0 ? "is-hot" : ""}>{pending.length}</b>
+            待批 <b key={pending.length} className={pending.length > 0 ? "is-hot" : ""}>
+              {pending.length}
+            </b>
           </span>
           <button
             type="button"
@@ -477,6 +482,7 @@ ${d.conclusions}`,
             <div className="twin-grid">
               <div>
                 <div
+                  key={busy}
                   className={`twin-grid__v${busy > 0 ? " is-live" : " is-zero"}`}
                 >
                   {busy}
@@ -485,6 +491,7 @@ ${d.conclusions}`,
               </div>
               <div>
                 <div
+                  key={enabledTasks.length}
                   className={`twin-grid__v${enabledTasks.length > 0 ? "" : " is-zero"}`}
                 >
                   {enabledTasks.length}
@@ -492,13 +499,17 @@ ${d.conclusions}`,
                 <div className="twin-grid__k">已启用</div>
               </div>
               <div>
-                <div className={`twin-grid__v${pending.length > 0 ? " is-hot" : " is-zero"}`}>
+                <div
+                  key={pending.length}
+                  className={`twin-grid__v${pending.length > 0 ? " is-hot" : " is-zero"}`}
+                >
                   {pending.length}
                 </div>
                 <div className="twin-grid__k">待批</div>
               </div>
               <div>
                 <div
+                  key={tasks.length}
                   className={`twin-grid__v${tasks.length > 0 ? "" : " is-zero"}`}
                 >
                   {tasks.length}
@@ -817,7 +828,10 @@ ${d.conclusions}`,
                   />
                 </svg>
                 <div className="twin-ring__ctr">
-                  <div className="twin-ring__big">
+                  <div
+                    key={runningRatio != null ? Math.round(runningRatio * 100) : busy}
+                    className="twin-ring__big"
+                  >
                     {runningRatio != null ? Math.round(runningRatio * 100) : busy}
                     {runningRatio != null ? <span>%</span> : null}
                   </div>
@@ -845,21 +859,30 @@ ${d.conclusions}`,
 
               <div className="twin-strip">
                 <div>
-                  <div className="twin-strip__v">{busy}</div>
+                  <div key={busy} className="twin-strip__v">
+                    {busy}
+                  </div>
                   <div className="twin-strip__k">在跑</div>
                 </div>
                 <div>
-                  <div className="twin-strip__v">{enabledTasks.length}</div>
+                  <div key={enabledTasks.length} className="twin-strip__v">
+                    {enabledTasks.length}
+                  </div>
                   <div className="twin-strip__k">已启用</div>
                 </div>
                 <div>
-                  <div className={`twin-strip__v${pending.length > 0 ? " is-hot" : ""}`}>
+                  <div
+                    key={pending.length}
+                    className={`twin-strip__v${pending.length > 0 ? " is-hot" : ""}`}
+                  >
                     {pending.length}
                   </div>
                   <div className="twin-strip__k">待批</div>
                 </div>
                 <div>
-                  <div className="twin-strip__v">{workDays.length}</div>
+                  <div key={workDays.length} className="twin-strip__v">
+                    {workDays.length}
+                  </div>
                   <div className="twin-strip__k">日志天</div>
                 </div>
               </div>
@@ -990,7 +1013,7 @@ ${d.conclusions}`,
       </div>
 
       {/* ── 底条 ─────────────────────────────────────────── */}
-      <footer className="twin-bottom">
+      <footer className={`twin-bottom${twin.streaming ? " is-live" : ""}`}>
         <span className="twin-bottom__live">
           <i aria-hidden />
           {twin.streaming ? "这一轮在电脑上执行中" : "在电脑上执行"}

@@ -280,8 +280,11 @@
   }
 }
 
-/* 眨眼：每 6 秒一次，由 steps 保证是「闭一下就睁」，不是脉冲 */
-.ali__eyes-dot {
+/* 眨眼：每 6 秒一次，由 steps 保证是「闭一下就睁」，不是脉冲。
+   眨眼挂在**眼球本身**而不是眼睛组：组上已经有 thinking 态的眯眼
+   （scaleY 0.45），animation 会盖掉同一属性上的静态 transform —— 挂在
+   组上等于眯眼永远看不见。分层之后两者相乘，互不吞没。 */
+.ali__eyes-dot circle {
   animation: ali-blink 6s steps(1, end) infinite;
   transform-box: fill-box;
   transform-origin: center;
@@ -1399,16 +1402,26 @@
 .twin-job__st.is-error {
   color: var(--color-error);
 }
+/* 进度轨：transform 驱动（2026-10-28）。
+   此前是 `width: calc(var(--p) * 100%)` —— 每次进度变化都要重排整条翼栏，
+   一屏六个任务同时刷新就是六次布局；而且宽度跳变无法做平滑过渡（过渡宽度
+   等于每帧重排）。scaleX 只走合成器，顺带得到「缓缓追上来」的观感。
+   --p 仍由行内 style 提供（运行时数值，不是静态样式）。 */
 .twin-track {
   height: 5px;
+  border-radius: var(--radius-full);
   background: var(--color-bg-tertiary);
   overflow: hidden;
 }
 .twin-track__fill {
   display: block;
+  width: 100%;
   height: 100%;
-  width: calc(var(--p, 0) * 100%);
+  border-radius: var(--radius-full);
   background: var(--color-accent);
+  transform: scaleX(var(--p, 0));
+  transform-origin: left center;
+  transition: transform var(--twin-dur-progress, 480ms) var(--ease-out);
 }
 .twin-job__meta {
   display: flex;
@@ -1572,6 +1585,16 @@
   font-size: var(--text-tiny);
   color: var(--color-text-tertiary);
   border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  /* 页签切换只换底与墨，不做位移 —— 一行里三个页签，任何横向位移都会
+     让相邻页签看起来在互相躲。按下缩 3% 是唯一的形变反馈。 */
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+.twin-ctab:active {
+  transform: scale(0.97);
 }
 .twin-ctab:hover {
   color: var(--color-text-primary);
@@ -1915,4 +1938,294 @@
   height: 5px;
   border-radius: 50%;
   background: var(--color-accent);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   动效语法（2026-10-28）
+   ──────────────────────────────────────────────────────────────────
+   这一页的动效不是「每个组件各加一点 transition」堆出来的 —— 那是上一版
+   的状态（hover 有的 120ms 有的 250ms 有的没有，同时给人「死板」和
+   「廉价」两种相反的感受）。这里先定语法，再给每个组件分配一个角色：
+
+   五条硬纪律（与 motion.css 同源，本文不再自造）：
+
+   1. **只有 transform / opacity 会动。** 两者在合成层完成，不触发布局、
+      不重绘邻近节点。本段唯一例外是「提醒光环」的 box-shadow —— 一次性、
+      单元素、只画不排，且用 opacity 动画驱动而不是过渡 shadow 本身。
+   2. **四档时长**：120 反馈 / 160 入场 / 240 面板级 / 480 进度追赶。
+      跨档跳级会被读成「这块卡了一下」，所以不许自造 200、300。
+   3. **一个缓动**：--ease-out（cubic-bezier(0.16, 1, 0.3, 1)）。入场收尾
+      稳、不弹跳；SVG 组同用一个，不出现「图标比面板更弹」。
+   4. **一种入场形**：上浮 6px + 淡入。距离统一 —— 4px 看不出在动，
+      10px 像掉下来；两个组件位移不同距离时，眼睛会以为它们来自两处。
+   5. **循环只给状态，不给装饰。** 呼吸只出现在「在跑 / 异常 / 等待」这类
+      真实状态上；静默（idle）时全页完全静止，包括她那滴墨。
+
+   角色分配 —— 每个组件只有**一种**动作，这是「各自有性格、整体不打架」
+   的唯一做法（同一种动作 + 不同的触发时机 = 一套语言）：
+
+     ① 顶栏状态点   呼吸（心跳）        在跑才动，静默死寂
+     ② 顶栏读数     数字跳动 tick       值变了才动，说明"这个数在变"
+     ③ 翼箱面板     上浮 + 刻度条生长   进页一次性，45ms 一档错峰
+     ④ 任务进度轨   缓慢追赶 scaleX     480ms，是"推进"语义，不是 hover
+     ⑤ 任务运行态   墨色呼吸            与面板呼吸同频（2.4s），只在 is-run
+     ⑥ 指标读数     数字跳动 tick       与②同一语法 —— 同族必须同动作
+     ⑦ 列表行       hover 染底 120ms    只换底色，不位移（密列表里位移=抖动）
+     ⑧ 页签         换底换墨 + 按下缩   不做横向滑动（三个页签会互相躲）
+     ⑨ 中轴切态     对话淡入 / 数据对焦 数据是"镜头对上"，用 240ms 缩放
+     ⑩ 消息         上浮入场            只给新挂载的消息，不给重渲染的旧消息
+     ⑪ 待办块       一次性光环 1.1s     「被叫住」——响一次就彻底消失
+     ⑫ 输入口       focus 染强调色淡底   不加焦点环（见 base.css 的决定）
+     ⑬ 她的墨团     常驻呼吸/眨眼 + 状态标记动   idle 时只剩慢浮与眨眼
+     ⑭ 底条 live 点 呼吸                只有在跑才亮起心跳
+
+   主题一致性：本段**没有一条字面色值**，全部经 --color-* 令牌合成，所以
+   浅色（纸 #ffffff / 面 #fbfbfa）与深色（纸 #191919 / 面 #1f1f1f）两套
+   主题的动效强度天然一致 —— 唯一依赖色相的是「提醒光环」（warning 混
+   透明）与「focus 淡底」（accent 混纸面），这两个颜色在各自主题里都是
+   已验过对比度的安全档，不随主题出现"深色下看不见 / 浅色下糊一片"。
+   面阶方向相反也不影响：hover 一律走 --color-bg-secondary（浅色下深一档、
+   深色下浅一档，两者都是"离纸面一格"），不写死向上或向下。
+
+   降级：prefers-reduced-motion 由 base.css 全局压掉，本段不重复写 media
+   query；单条规则的循环时长也因此被统一收敛。
+   ════════════════════════════════════════════════════════════════════ */
+
+.twin-screen {
+  /* 本页专有的第四档时长：进度轨是「追赶」语义 —— 240ms 看不清它在动，
+     800ms 又跟不上 8s 的轮询节奏，480ms 正好落在"看得出在推进、不等它"之间。 */
+  --twin-dur-progress: 480ms;
+  /* 错峰步长，与 motion.css 的 .m-stagger 同值，跨组件节奏才对齐。 */
+  --twin-stagger: 45ms;
+}
+
+/* ① 顶栏：状态点心跳 */
+.twin-head__state.is-live i {
+  animation: m-breathe 1.6s var(--ease-out) infinite;
+}
+
+/* ② 读数跳动：值变了才动（TwinView 里给 <b> 挂 key，换值即重挂 → 动画重跑一次）。
+   只跳 5px：读数在页头，跳多了像页面在抽动。 */
+@keyframes twin-tick {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.twin-head__kv b,
+.twin-grid__v,
+.twin-strip__v,
+.twin-ring__big {
+  animation: twin-tick var(--duration-base) var(--ease-out) backwards;
+}
+/* <b> 默认是行内元素，行内元素不接受 transform —— 不转 inline-block 的话
+   页头读数只有淡入没有跳动（其余三处本来就是块级）。 */
+.twin-head__kv b {
+  display: inline-block;
+}
+
+/* ③ 翼箱：整块上浮 + 标题刻度条生长。
+   fill-mode 用 backwards 而不是 both —— 动画结束后不残留 transform，
+   避免每个面板长期占着一个合成层、也避免意外成为 fixed 子元素的包含块。 */
+.twin-wing > .twin-box {
+  animation: m-rise var(--duration-base) var(--ease-out) backwards;
+}
+.twin-wing > .twin-box:nth-child(2) {
+  animation-delay: var(--twin-stagger);
+}
+.twin-wing > .twin-box:nth-child(3) {
+  animation-delay: calc(var(--twin-stagger) * 2);
+}
+.twin-wing > .twin-box:nth-child(4) {
+  animation-delay: calc(var(--twin-stagger) * 3);
+}
+@keyframes twin-bar {
+  from {
+    opacity: 0;
+    transform: scaleY(0.2);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+.twin-box__bar {
+  transform-origin: center top;
+  animation: twin-bar var(--duration-base) var(--ease-out) backwards;
+}
+/* 待办块出现时整块换底：底色过渡是 paint，但只是一块面板、且只在状态翻转时 */
+.twin-box--attn {
+  transition: background-color var(--duration-base) var(--ease-out);
+}
+
+/* ⑤ 任务运行态：墨色呼吸。文字不做缩放 —— 12px 的字一缩就糊。 */
+@keyframes twin-breath {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.twin-job__st.is-run {
+  animation: twin-breath 2.4s var(--ease-out) infinite;
+}
+
+/* ⑦ 列表行：hover 只换底色。
+   **不改几何**：行内加 padding 会把文字挤离面板标题的竖线，负外边距又会被
+   滚动容器的 overflow 裁掉 —— 两种都换不来"圆角内缩的高亮带"。所以这里只
+   叠一层底色，文字位置一像素不动（密列表里任何位置变化都会被读成抖动）。 */
+.twin-row:not(.twin-row--act) {
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+.twin-row:not(.twin-row--act):hover {
+  background: var(--color-bg-secondary);
+}
+.twin-row--act .twin-row__open {
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+.twin-row--act .twin-row__open:hover,
+.twin-row--act .twin-row__open:focus-visible {
+  background: var(--color-bg-secondary);
+}
+/* 可点行的悬停反馈此前写成 secondary → secondary（同一个值），等于没有反馈。
+   悬停时标题提一档到满墨，与「这是一条可点的记录」对齐。 */
+.twin-row--act .twin-row__open:hover .twin-row__m,
+.twin-row--act .twin-row__open:focus-visible .twin-row__m {
+  color: var(--color-text-primary);
+}
+/* 删除钮：常驻可见（淡墨）→ 悬停整行提一档 → 悬停它自己才变红。
+   三级递进的作用是"先看见、再确认、才危险"：常驻红色会让一屏三条记录
+   读成"三条都在报警"，常驻不可见则根本找不到删除入口。 */
+.twin-row--act .twin-row__del {
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.twin-row--act:hover .twin-row__del,
+.twin-row--act .twin-row__del:focus-visible {
+  color: var(--color-text-secondary);
+}
+
+/* ⑨ 中轴切态：对话是"回到刚才的位置"（纯淡入，不做位移，避免整列文字
+   在眼前滑过）；数据是"镜头对上"（240ms 轻微缩放，读数先落位）。 */
+.twin-chat {
+  animation: m-fade var(--duration-base) var(--ease-out) backwards;
+}
+.twin-data {
+  animation: m-pop var(--duration-slow) var(--ease-out) backwards;
+}
+/* 环的进度变化平滑推进；SVG 属性过渡只作用于一个 circle，代价可忽略。 */
+.twin-ring svg circle {
+  transition: stroke-dasharray var(--twin-dur-progress) var(--ease-out);
+}
+
+/* ⑩ 消息：只有新挂载的消息入场（旧消息的 DOM 不重建，不会重复播）。 */
+.twin-msg {
+  animation: m-rise var(--duration-base) var(--ease-out) backwards;
+}
+
+/* ⑪ 待办：一次性的"被叫住"光环。
+   用伪元素 + opacity/scale 播放，而不是过渡 box-shadow 本身 —— 后者每帧都在
+   重绘阴影，这里只有一块透明层在淡出。响一次就结束，不做无限脉冲。 */
+.twin-need,
+.twin-att__item {
+  position: relative;
+  border-radius: var(--radius-md);
+}
+.twin-need::after,
+.twin-att__item::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 42%, transparent);
+  opacity: 0;
+  animation: twin-ring 1.1s var(--ease-out) 120ms backwards;
+}
+@keyframes twin-ring {
+  0% {
+    opacity: 0;
+    transform: scale(0.995);
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.01);
+  }
+}
+
+/* ⑫ 输入口：focus 只把面染成强调色淡底，**不加焦点环**。
+   理由见 base.css 96-106：文本输入有插入符就是焦点指示，再套一圈光晕会被
+   读成"粗描边"。淡底用 --color-accent-soft（浅色是 accent 混白、深色是
+   accent 混输入底），两套主题都是「品牌色一点点」，不需要分主题写第二条。 */
+.twin-cfield {
+  border-radius: var(--radius-md);
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+.twin-cfield:focus-within {
+  background: var(--color-accent-soft);
+}
+.twin-cfield__send {
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+.twin-cfield__send:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+.twin-cfield__send:active:not(:disabled) {
+  transform: scale(0.96);
+}
+/* 停止态排在悬停之后：它要在悬停时不变成强调色（那不是主操作）。 */
+.twin-cfield__send--stop:hover:not(:disabled) {
+  background: var(--color-bg-active);
+}
+/* 就地拍板的按钮（共享 chip-flat 类，此处只补按下反馈，不改共享层） */
+.twin-need .chip-flat,
+.twin-att__item .chip-flat {
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+.twin-need .chip-flat:active,
+.twin-att__item .chip-flat:active {
+  transform: scale(0.96);
+}
+
+/* ⑬ 她的墨团：状态标记动，本体不动（本体的慢浮与眨眼是既有常驻动效）。
+   三个标记各自一种动法，且只在对应状态存在 —— idle 时三个都不渲染式地静着。 */
+@keyframes twin-push {
+  0%,
+  100% {
+    transform: translateX(0);
+    opacity: 0.45;
+  }
+  50% {
+    transform: translateX(2.5px);
+    opacity: 1;
+  }
+}
+.ali[data-state="running"] .ali__mark--running {
+  animation: twin-push 1.4s var(--ease-out) infinite;
+}
+.ali[data-state="thinking"] .ali__mark--thinking {
+  animation: twin-breath 2.4s var(--ease-out) infinite;
+}
+.ali[data-state="alert"] .ali__mark--alert {
+  animation: twin-breath 1.2s var(--ease-out) infinite;
+}
+
+/* ⑭ 底条：只有在跑时心跳（静止的圆点无法说明"这一轮还在执行"）。 */
+.twin-bottom.is-live .twin-bottom__live i {
+  animation: m-breathe 1.6s var(--ease-out) infinite;
 }
