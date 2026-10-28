@@ -187,25 +187,44 @@
 
 .composer {
   border-radius: var(--radius-composer, var(--radius-2xl));
-  /* 墨与纸 v4：输入框是"卡面"而不是"画布上的描边框"。
-     面用 --color-bg-composer（亮色纸白 / 暗色比纸亮一档），底栏再垫深一档 ——
-     两块靠材质差分层。单靠面上那一档不够：notion 的 --shadow-paper 是
-     `0 0 0 1px rgba(55,53,47,.04)`，4% alpha 的 1px 环等于没有
-     （2026-10-27 用户实测"完全看不出输入位置"），所以再补一圈 1px 发丝环。
-     环走 box-shadow，不写 border（G11 禁结构框线）。 */
-  background: var(--color-bg-composer, var(--color-bg-input));
-  box-shadow: var(--shadow-paper), 0 0 0 1px var(--color-border-secondary);
+  /* 2026-10-28：去掉外描边与投影。上一版为了「看得出输入位置」叠了
+     shadow-paper + 1px 发丝环，在 760px 宽的卡上读起来是一条粗边框；
+     输入区改由「卡面底色 vs 纸面」区分（--color-bg-composer 比 bg-primary
+     深一档），不再画框。 */
+  /* 不画框之后，输入区靠底色比纸面深一档来定位：bg-secondary（亮 #f7f7f5 /
+     暗 #202020）。bg-composer 只比纸差 2 个明度点，去了描边等于看不见。 */
+  background: var(--color-bg-secondary);
+  box-shadow: none;
   overflow: visible;
   transition: box-shadow var(--duration-fast) ease;
 }
-/* 输入区聚焦 = 环保持 + 主题墨色晕圈（零色相；accent 混进边框会发脏）。
-   原先只有 3px 晕圈、没有环，浅色下等于没有反馈；那条 `border-color`
-   还是死声明（本元素没有 border）。 */
+/* 聚焦时才给一条发丝环：静止态不画框，键盘用户仍需要位置反馈。 */
 .composer:focus-within {
-  box-shadow:
-    var(--shadow-paper),
-    0 0 0 1px var(--color-border-secondary),
-    0 0 0 4px color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+
+/* 工具栏与底栏排成一行（Composer 里两者同挂 .composer-footer）：
+   工具行 flex-1 且不换行，底栏 shrink-0 贴右。此前是两条独立 flex 行，
+   在窄容器里读起来就是「工具栏换行了」。 */
+.composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 6px;
+  min-width: 0;
+}
+.composer-footer .composer-toolrail {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  padding: 0;
+}
+.composer-footer .composer-subbar {
+  flex: 0 0 auto;
+  height: auto;
+  padding: 0;
+  gap: 2px;
 }
 /* Composer 两段式：白卡（输入区）/ 灰底栏（工具行 + 会话设置）。
    底栏是一整条托盘，与卡面只隔一根发丝；托盘内部靠字号与字色的重量

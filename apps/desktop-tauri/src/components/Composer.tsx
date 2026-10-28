@@ -368,6 +368,10 @@ export function Composer(p: ComposerProps) {
         placeholder={p.placeholder}
         onFilesAttach={p.onFilesAttach}
       />
+      {/* 工具行与底栏同一行：两块都挂在 .composer-footer 里，靠 CSS
+          排成一行（工具行 flex-1、底栏 shrink-0）。此前是两个独立 flex 行，
+          在 620px 宽里挤成两排，看上去像"换行"。 */}
+      <div className="composer-footer">
       <div
         ref={toolbarRef}
         className="composer-toolrail px-3 pt-2 pb-2 flex flex-wrap items-center gap-x-1 gap-y-1"
@@ -798,6 +802,7 @@ export function Composer(p: ComposerProps) {
           </div>
           </div>
         )}
+      </div>
     </div>
   );
 }
