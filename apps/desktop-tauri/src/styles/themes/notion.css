@@ -170,12 +170,14 @@
   --theme-bg-titlebar: #f7f7f5;
   --theme-bg-chat: #ffffff;
 
-  /* ── 排版：Notion 的字号阶（正文 16 / 界面 14 / 元信息 12）── */
-  --text-ui: 14px;
-  --text-body: 16px;
-  --text-title: 18px;
-  --text-display: 22px;
-  --text-hero: 32px;
+  /* ── 排版：字号**不在主题里定义**（2026-10-28 删除）──
+     这里曾覆盖 5 档（ui 14 / body 16 / title 18 / display 22 / hero 32），
+     但主题选择器 :root[data-theme] 优先级高于 tokens.css 的 @theme，于是：
+     ① 改 tokens.css 的 --text-* 对当前主题完全无效（"改了没反应"的根因之一）；
+     ② 只覆盖 5 档、漏了 meta/tiny，正文 16px 配元信息 11px，左侧导航比右侧
+        日志大 5px，整页割裂。
+     字号统一由 tokens.css 的七档供给 —— 样式只有一个出处。主题只保留行高、
+     列宽这类真正的主题特性。 */
   --leading-reading: 1.65;
 
   /* 行内代码的墨色（Notion 是暖红字压暖灰芯片）。只在本主题定义，

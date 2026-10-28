@@ -161,12 +161,9 @@
   --theme-bg-titlebar: #202020;
   --theme-bg-chat: #191919;
 
-  /* ── 排版（与亮色版一致）── */
-  --text-ui: 14px;
-  --text-body: 16px;
-  --text-title: 18px;
-  --text-display: 22px;
-  --text-hero: 32px;
+  /* ── 排版：字号不在这里定义（2026-10-28，与亮色版一并删除）──
+     主题层覆盖字号会盖掉 tokens.css 的七档（选择器优先级更高），且只覆盖
+     5 档、漏掉 meta/tiny 造成断层。字号统一走 tokens.css。 */
   --leading-reading: 1.65;
   --color-inline-code-fg: #f0907f;
   --width-wide: 708px;
