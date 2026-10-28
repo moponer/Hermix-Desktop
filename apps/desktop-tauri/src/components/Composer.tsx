@@ -381,8 +381,9 @@ export function Composer(p: ComposerProps) {
             代码目录固定，这两个 chip 是主对话专属，渲染出来只会误导。 */}
         {p.variant !== "workbench" && (
         <>
-        {/* composer-expert-group：绝对定位到输入框左上角外侧（见 components-controls.css），
-            DOM 仍在这里是为了不搬 popover 的 ref 与焦点顺序。 */}
+        {/* composer-expert-group：绝对定位到**卡片内部**的左上角、文字输入区之上
+            （见 components-controls.css）。DOM 仍在这里是为了不搬 popover 的 ref
+            与焦点顺序；卡片用 :has 给它预留顶部带子。 */}
         <div className="composer-expert-group flex items-center gap-0.5 min-w-0 shrink-0">
           <div className="relative">
             <button

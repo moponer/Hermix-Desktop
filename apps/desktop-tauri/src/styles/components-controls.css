@@ -217,10 +217,15 @@
   min-width: 0;
 }
 .composer-footer .composer-toolrail {
-  flex: 1 1 auto;
+  /* basis 必须是 0 而不是 auto：Composer 用 ResizeObserver 观察这条工具行，
+     按 clientWidth < 700 切换 compact（隐藏文字标签）。若 basis=auto，
+     宽度随内容伸缩 → compact 一开一关正好卡在 700 附近，形成
+     「宽度→compact→宽度」的测量回环，表现就是输入框一直在抖。
+     固定为 0 后宽度只由容器决定，观测值稳定。 */
+  flex: 1 1 0%;
   min-width: 0;
   flex-wrap: nowrap;
-  /* 不能裁剪：专家/模式组是绝对定位到框外的子元素 */
+  /* 不能裁剪：专家/模式组是绝对定位到卡片顶部的子元素 */
   overflow: visible;
   padding: 0;
   justify-content: flex-end;
