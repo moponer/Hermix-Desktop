@@ -811,14 +811,19 @@
   line-height: inherit;
   color: var(--color-link);
   cursor: pointer;
-  text-decoration: underline;
+  /* 蓝色即链接语义：靠颜色区分，不再常驻下划线（2026-10-28）。此前
+     常驻下划线让一句里多个文件路径都挂上线、显得很重，也和本类的注释
+     「becomes a link on hover (underline)」自相矛盾。下划线只在悬停 /
+     聚焦时出现，与正文其他超链接口径一致。 */
   text-underline-offset: 2px;
   text-decoration-thickness: 1px;
   vertical-align: middle;
   transition: color var(--duration-fast) ease;
 }
-.md-path-link:hover {
+.md-path-link:hover,
+.md-path-link:focus-visible {
   color: var(--color-link-hover);
+  text-decoration: underline;
 }
 /* 裸文件名（`App.tsx`）：中性引用，不带路径语义。用正文色而不是链接蓝
    —— 它出现在"改 App.tsx 的登录逻辑"这种句子里，是话题而不是跳转，

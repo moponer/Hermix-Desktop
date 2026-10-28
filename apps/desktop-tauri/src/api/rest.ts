@@ -60,6 +60,7 @@ export type { WorkflowEntry };
 
 import { invoke } from "../ipc";
 import { NEW_CHAT } from "../components/strings";
+import { cleanSessionTitle } from "../lib/sessionTitle";
 
 /** Per-request timeout. The stdio bridge has its own 120s oneshot
  *  timeout; we add a client-side deadline so a hung request surfaces
@@ -371,7 +372,10 @@ function toSession(s: SessionSummary): Session {
   const now = new Date().toISOString();
   return {
     id: s.id,
-    title: s.title?.trim() || NEW_CHAT,
+    // cleanSessionTitle：库里存着历史脏标题（首条消息是 LLM 产物时，
+    // `<think>` 推理原文 + JSON 外壳被原样切片入库），在数据入口洗一次，
+    // 侧栏行、删除确认卡、值守页「最近会话」就都不必各自防。
+    title: cleanSessionTitle(s.title) || NEW_CHAT,
     created_at: s.created_at ?? now,
     updated_at: s.updated_at ?? now,
     messages: [],
