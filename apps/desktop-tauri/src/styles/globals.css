@@ -29,7 +29,6 @@
 /* 主题级排版层：只在 data-theme 命中时生效（当前只有 notion）。 */
 @import "./notion-prose.css";
 @import "./notion-app.css";
-@import "./welcome-hero.css";
 /* 欢迎页「夜航」面板（A · 夜航方向）：局部暗底，颜色自成一套 --night-* 变量。 */
 @import "./welcome-night.css";
 /* Composer 的夜航态：工具行移到输入面外面 + 局部重定义主题令牌。 */
