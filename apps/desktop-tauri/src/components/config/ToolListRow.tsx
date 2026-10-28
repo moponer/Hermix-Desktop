@@ -82,12 +82,10 @@ export function ToolListRow({
             {description}
           </p>
         )}
-        {/* ③ 附属区：与主体用一条分隔线 + 上间距切开 */}
-        {footer && (
-          <div className="mt-2 border-t border-[var(--color-border-primary)] pt-2">
-            {footer}
-          </div>
-        )}
+        {/* ③ 附属区：**不画分隔线**，只留 1.5 的间距 + 更小更淡的字色。
+            线在浅色主题上会把卡片读成"表格行"；参考主流市场卡片，层次靠
+            字号递减 + 颜色递减 + 间距，不靠线。 */}
+        {footer && <div className="mt-1.5">{footer}</div>}
       </div>
       {action && (
         <div className="ml-1 flex shrink-0 items-center gap-1 self-start">{action}</div>
@@ -96,7 +94,9 @@ export function ToolListRow({
   );
 
   const shell = cx(
-    "group flex items-start gap-2.5 rounded-[var(--radius-lg)] px-2.5 py-2",
+    /* py-2.5 / px-3：比原来的 2/2.5 再松一档，卡片之间才有"块"的呼吸感
+       （参考市场卡片的内边距节奏）。 */
+    "group flex items-start gap-2.5 rounded-[var(--radius-lg)] px-3 py-2.5",
     "transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]",
     "bg-[var(--color-bg-card)]",
     dimmed && "opacity-60",

@@ -74,7 +74,10 @@ export function SettingsGrid({
 }) {
   const grid = cx(
     "grid gap-2",
-    cols === 2 ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1",
+    /* 三列（2026-10-28）：参考主流市场卡片的信息密度 —— 设置内容区 800px 宽时
+       三列约 260px/列，标题 + 单行描述 + 开关正好放得下；两列会让每张卡
+       横向拉得过长、右侧留白过多。窄屏仍退回单列。 */
+    cols === 2 ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1",
   );
   if (empty) {
     return (

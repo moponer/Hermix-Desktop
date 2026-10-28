@@ -248,15 +248,15 @@ function ToolsetCard({
       }
       /* 工具名走「附属区」：与标题/描述之间由分隔线 + 上间距隔开（2026-10-28）。
          此前 chips 是卡片里的第二个平铺块，只靠 pl-[38px] 假装"属于标题"。 */
+      /* 工具名做成参考市场卡片那样的「底部元信息行」：纯文字 + 「·」分隔，
+         不做灰底药丸 —— 药丸块本身有重量，一排六个就又把卡片糊满了。 */
       footer={
         tools.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-1">
-            {shown.map((tool) => (
-              <span
-                key={tool}
-                className="rounded-[var(--radius-sm)] bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 font-mono text-[length:var(--text-tiny)] text-[var(--color-text-secondary)]"
-              >
-                {tool}
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[length:var(--text-tiny)] text-[var(--color-text-faint)]">
+            {shown.map((tool, i) => (
+              <span key={tool} className="flex items-center gap-1.5">
+                {i > 0 && <span aria-hidden>·</span>}
+                <span className="font-mono">{tool}</span>
               </span>
             ))}
             {tools.length > 3 && (
@@ -264,7 +264,7 @@ function ToolsetCard({
                 type="button"
                 onClick={() => setExpanded((v) => !v)}
                 aria-expanded={expanded}
-                className="rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[length:var(--text-tiny)] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]"
+                className="ml-0.5 text-[length:var(--text-tiny)] font-medium text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
               >
                 {expanded ? "收起" : `+${hidden}`}
               </button>

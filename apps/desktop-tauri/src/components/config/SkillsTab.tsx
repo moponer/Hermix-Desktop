@@ -158,7 +158,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         categoryOrder.map((cat) => (
           <section key={cat}>
             <ToolGroupTitle title={catLabel(cat)} count={grouped[cat].length} />
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
               {grouped[cat].map((s) => (
                 <SkillCard key={s.name} skill={s} catLabel={catLabel} onToggle={(name) => {
                   setSkills((prev) => prev.map((p) => p.name === name ? { ...p, enabled: !p.enabled } : p));
