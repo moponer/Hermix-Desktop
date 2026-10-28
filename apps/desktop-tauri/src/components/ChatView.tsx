@@ -29,7 +29,6 @@ import { toastError, toastInfo } from "../hooks/useToast";
 import { injectIntoComposer, subscribeComposerInjection } from "../lib/composerInjection";
 import { useChannelsStatus } from "../hooks/useChannelsStatus";
 import { Composer } from "./Composer";
-import { TokenUsagePopover } from "./TokenUsagePopover";
 import { ApprovalDrawer, type PendingApprovals } from "./ApprovalDrawer";
 import { MessageList, type MessageListHandle, type StreamRow } from "./MessageList";
 import { useCustomApps } from "../hooks/useCustomApps";
@@ -1258,13 +1257,8 @@ export const ChatView = memo(function ChatView({
               />
             )}
 
-          {/* Token 消耗明细入口：图标悬停/聚焦弹出输入/输出/缓存/上下文卡片，
-              替代原先只塞进 title 的「缓存 N%」。上下文 % 仍在行内保留。 */}
-          <TokenUsagePopover
-            sessionId={sessionId}
-            contextUsage={stream.contextUsage}
-            isStreaming={isStreaming}
-          />
+          {/* 2026-10-28：原「上下文 14%」入口（TokenUsagePopover 的 Gauge + 圆点）
+              已移除 —— 左侧侧栏已显示上下文，这里重复一遍只是噪音。组件一并删除。 */}
 
           <div className="w-full relative">
             <ApprovalDrawer
