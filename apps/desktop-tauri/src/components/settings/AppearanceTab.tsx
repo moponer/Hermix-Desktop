@@ -1,7 +1,7 @@
 import { RotateCcw, Sun, Moon, Monitor, Check, Palette } from "lucide-react";
 
 import { useTheme, SYSTEM_THEME } from "../../hooks/useTheme";
-import { THEMES } from "../../styles/themes/registry";
+import { THEMES, isDarkTheme } from "../../styles/themes/registry";
 import { ACCENT_PALETTE, accentLabel } from "../../styles/themes/accentPalette";
 import { SettingsGroup, SettingsRow, Switch, IconTile } from "../ui";
 import { ChoiceCard } from "./ChoiceCard";
@@ -19,6 +19,15 @@ import { ThemeToggle } from "../ThemeToggle";
 export function AppearanceTab() {
   const { mode, resolved, setMode, accent, setAccent } = useTheme();
 
+  /* 明暗三选的选中态必须按**主题 id** 判断，不能写死 "light"/"dark"：
+     `mode` 存的是 registry 里的主题 id（"notion" / "notion-dark"），
+     旧代码 `mode === "light"` 恒为 false，导致「浅色」永远不显示选中
+     （2026-10-28 用户报「主题色没有默认的选择（浅色）」）。
+     这里从 registry 取各自的 id，避免硬编码。 */
+  const lightThemeId = THEMES.find((t) => !isDarkTheme(t.id))?.id ?? "notion";
+  const darkThemeId = THEMES.find((t) => isDarkTheme(t.id))?.id ?? "notion-dark";
+  const isSystem = mode === SYSTEM_THEME;
+
   return (
     <div className="space-y-7">
       {/* 明暗模式 */}
@@ -31,21 +40,21 @@ export function AppearanceTab() {
             label="浅色"
             icon={<Sun className="icon-lg" />}
             tone="amber"
-            selected={mode === "light"}
-            onSelect={() => setMode("light")}
+            selected={!isSystem && !isDarkTheme(resolved)}
+            onSelect={() => setMode(lightThemeId)}
           />
           <ChoiceCard
             label="深色"
             icon={<Moon className="icon-lg" />}
             tone="violet"
-            selected={mode === "dark"}
-            onSelect={() => setMode("dark")}
+            selected={!isSystem && isDarkTheme(resolved)}
+            onSelect={() => setMode(darkThemeId)}
           />
           <ChoiceCard
             label="跟随系统"
             icon={<Monitor className="icon-lg" />}
             tone="slate"
-            selected={mode === SYSTEM_THEME}
+            selected={isSystem}
             onSelect={() => setMode(SYSTEM_THEME)}
             meta={`当前：${THEMES.find((t) => t.id === resolved)?.label ?? resolved}`}
           />

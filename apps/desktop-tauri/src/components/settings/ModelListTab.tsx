@@ -10,7 +10,7 @@
 // 权威只有一处：后端 config.yaml。这里的 localStorage 只是缓存镜像，
 // 所有写操作走既有写路径后重新拉取。
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Star, Power, PowerOff, Trash2, Pencil, Zap, Loader2 } from "lucide-react";
 import * as api from "../../api";
 import { syncModelConfigLocal, writeModelConfigAndNotify } from "../../hooks/useCurrentModel";
@@ -22,6 +22,22 @@ import { DELETE, FAILED, LOADING, failure } from "../strings";
 import { Badge, ConfirmDialog, SettingsGroup, SettingsRow, Switch } from "../ui";
 import { toastError, toastSuccess } from "../../hooks/useToast";
 import { openExternalUrl } from "../../desktopBridge";
+
+/* ── 模型来源分组（2026-10-28）──────────────────────────────
+   旧版把内置 / 社区免费 / 自定义混在同一个列表里：同一屏既有
+   "MiniMax… · 内置"，又有 "免费模型 · Kilo · 自定义"、自己加的模型，
+   用户无法按来源归类（反馈：「免费和内置、自定义都混在一起了」）。
+   现在按来源分三组，组内仍按 默认 > 启用 排序。 */
+type ModelGroupKey = "builtin" | "free" | "custom";
+const GROUP_LABEL: Record<ModelGroupKey, string> = {
+  builtin: "内置模型",
+  free: "社区免费模型",
+  custom: "自定义模型",
+};
+const GROUP_ORDER: Record<ModelGroupKey, number> = { builtin: 0, free: 1, custom: 2 };
+function groupKeyOf(r: { isFree: boolean; isBuiltin: boolean }): ModelGroupKey {
+  return r.isFree ? "free" : r.isBuiltin ? "builtin" : "custom";
+}
 
 interface ModelRow {
   id: string; // `${providerId}:${modelId}`
@@ -387,11 +403,21 @@ export function ModelListTab() {
     () =>
       [...rows].sort(
         (a, b) =>
+          GROUP_ORDER[groupKeyOf(a)] - GROUP_ORDER[groupKeyOf(b)] ||
           Number(b.isDefault) - Number(a.isDefault) ||
           Number(b.isEnabled) - Number(a.isEnabled),
       ),
     [rows],
   );
+
+  const groupCounts = useMemo(() => {
+    const m = {} as Record<ModelGroupKey, number>;
+    for (const r of sorted) {
+      const k = groupKeyOf(r);
+      m[k] = (m[k] ?? 0) + 1;
+    }
+    return m;
+  }, [sorted]);
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
@@ -490,11 +516,20 @@ export function ModelListTab() {
             还没有配置任何模型。点右上角「添加模型」开始。
           </div>
         ) : (
-          sorted.map((row) => (
-            <div
-              key={row.id}
-              className="flex items-center gap-3 px-3 py-2.5 hover:bg-bg-hover"
-            >
+          sorted.map((row, i) => {
+            const gk = groupKeyOf(row);
+            const isNewGroup = i === 0 || groupKeyOf(sorted[i - 1]) !== gk;
+            return (
+              <Fragment key={row.id}>
+                {isNewGroup && (
+                  <div className="flex items-center gap-2 bg-[var(--color-bg-tertiary)]/60 px-3 py-1.5 text-[length:var(--text-meta)] font-medium text-[var(--color-text-secondary)]">
+                    {GROUP_LABEL[gk]}
+                    <span className="tabular-nums font-normal text-[var(--color-text-faint)]">
+                      {groupCounts[gk]}
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-center gap-3 px-3 py-2.5 hover:bg-bg-hover">
               {/* 厂商 logo 放在 28px 中性底块里：全站列表行都是同尺寸的
                   方块，模型行不能是个 16px 的裸 logo。底保持中性 —— 品牌
                   logo 自带颜色，铺在同色实底上会互相抵消（"logo 压 logo"），
@@ -575,7 +610,9 @@ export function ModelListTab() {
                 )}
               </div>
             </div>
-          ))
+              </Fragment>
+            );
+          })
         )}
       </div>
 

@@ -154,17 +154,24 @@ function GraphView() {
   return (
     <div className="space-y-3">
       {/* 概览行 */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] px-4 py-2.5 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] px-4 py-2.5 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
         <span className="flex items-center gap-1.5 font-medium text-[var(--color-text-primary)]">
           <Brain className="size-4 text-[var(--color-accent)]" /> 记忆总览
         </span>
         {stats ? (
           <>
-            <Stat label="事实" value={stats.facts} />
-            <Stat label="记忆帧" value={stats.frames} />
-            <Stat label="反思" value={stats.reflections} />
-            <Stat label="每日记忆" value={stats.daily_days} />
-            <Stat label="文本条目" value={stats.md_entries} />
+            {/* 规模：五个「条数」同类，收成一组（2026-10-28）。
+                原来六个指标平铺，量纲不同的「库大小」混在中间，
+                六个数字连读没有停顿。 */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <Stat label="事实" value={stats.facts} />
+              <Stat label="记忆帧" value={stats.frames} />
+              <Stat label="反思" value={stats.reflections} />
+              <Stat label="每日记忆" value={stats.daily_days} />
+              <Stat label="文本条目" value={stats.md_entries} />
+            </div>
+            {/* 存储：量纲是 MB，用一道竖线隔开，避免和条数读成同一序列 */}
+            <span aria-hidden className="h-3.5 w-px shrink-0 bg-[var(--color-border-primary)]" />
             <Stat label="库大小" value={formatBytes(stats.db_bytes)} />
           </>
         ) : (
@@ -202,10 +209,13 @@ function GraphView() {
                 if (next.has(kind)) next.delete(kind); else next.add(kind);
                 return next;
               })}
+              /* 显示/隐藏只在中性色内区分（2026-10-28）：原先每个"显示中"的
+                 类别都是一枚 accent 蓝药丸，6 个类别 = 6 块蓝，盖过图谱本身；
+                 现在是 显示中=灰底+次文本 / 已隐藏=极淡+删除线。 */
               className={`rounded-full px-2.5 py-0.5 text-[length:var(--text-meta)] transition-colors ${
                 hidden
-                  ? "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"
-                  : "bg-[var(--color-accent-soft-strong)] text-[var(--color-accent)]"
+                  ? "bg-transparent text-[var(--color-text-faint)] line-through"
+                  : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]"
               }`}
             >
               {KIND_LABELS[kind] ?? kind} · {count}

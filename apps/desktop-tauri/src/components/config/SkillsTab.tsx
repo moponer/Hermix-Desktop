@@ -5,7 +5,6 @@ import * as api from "../../api";
 import type { SkillInfo } from "../../api";
 import { CATEGORY_LABELS } from "./toolTabsData";
 import { SkillCard } from "./SkillCard";
-import { MgmtTag } from "./MgmtTag";
 import { SearchBar, EmptyHint, SkeletonGrid, SummaryBar } from "./toolTabsShared";
 import { ALL, ENABLED, failure } from "../strings";
 
@@ -103,9 +102,12 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
       </div>
 
       {/* 分类 chip：搜索框只能筛关键词，分组再多时仍需一键跨组跳。
-          无描边药丸——未选中=浅灰实心，选中=主色实心。 */}
+          无描边药丸——未选中=浅灰实心，选中=主色实心。
+          单行横向滚动（2026-10-28）：flex-wrap 在 10+ 个分类时会把最后一两个
+          挤成孤行（截图里「写作 1」单独吊在第二行），比溢出更难看；
+          滚动条按全局样式隐藏，滚轮/触控板横扫即可。 */}
       {!loading && categoryOrder.length > 1 && (
-        <div className="flex items-center gap-1.5 flex-wrap mb-3">
+        <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto mb-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <button
             onClick={() => setCatFilter(null)}
             aria-pressed={catFilter === null}
@@ -158,7 +160,12 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
               <h4 className="text-[length:var(--text-ui)] font-semibold text-text-primary">
                 {catLabel(cat)}
               </h4>
-              <MgmtTag tone="accent">{grouped[cat].length}</MgmtTag>
+              {/* 计数不加药丸（2026-10-28）：分组标题旁一枚蓝色药丸 × 每个分组
+                  = 又一排蓝点；数字用 faint 灰与 ToolListRow 的 meta 同一档，
+                  分组数多时整页只剩标题是重的。 */}
+              <span className="text-[length:var(--text-tiny)] tabular-nums text-[var(--color-text-faint)]">
+                {grouped[cat].length}
+              </span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {grouped[cat].map((s) => (

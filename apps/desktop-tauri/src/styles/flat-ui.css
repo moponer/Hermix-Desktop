@@ -71,6 +71,7 @@
    未选中用淡底 —— 两者差一档明度 + 一个色相，扫视即可分辨。 */
 .chip-flat {
   display: inline-flex;
+  flex-shrink: 0; /* 容器改单行横向滚动后，药丸不允许被压扁（2026-10-28） */
   align-items: center;
   gap: 5px;
   height: var(--control-h-sm);

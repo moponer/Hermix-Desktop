@@ -108,6 +108,17 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
     const labelColor = cssVar("--color-text-secondary");
     const edgeColor = cssVar("--color-border-primary");
     const cardBg = cssVar("--color-bg-card");
+    /* 常驻标签只给权重最高的前 N 个（2026-10-28）：全量常驻时 20+ 条长标签
+       在力导图里必然互相压——hideOverlap 只能藏「完全重叠」的，部分压住的
+       照样糊成一团（用户截图里的"你的任务：调研并整理…"叠字）。低权重节点
+       只留圆点，悬停/点击再看全文，画面才干净。 */
+    const labelBudget = 14;
+    const labeled = new Set(
+      [...nodes]
+        .sort((a, b) => b.salience - a.salience)
+        .slice(0, labelBudget)
+        .map((n) => n.id),
+    );
     const data = nodes.map((n) => {
       const color = palette[kinds.indexOf(n.kind) % palette.length];
       return {
@@ -125,6 +136,7 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
           borderColor: cardBg,
           borderWidth: 2,
         },
+        label: { show: labeled.has(n.id) },
       };
     });
     const series: GraphSeriesOption = {
@@ -140,7 +152,7 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
       scaleLimit: { min: 0.4, max: 4 },
       // 节点下方常驻内容缩略：记忆库不是「一屏圆点」，肉眼要能扫读。
       // hideOverlap 自动藏掉互相压住的标签，缩放时逐级浮现。
-      labelLayout: { hideOverlap: true },
+      labelLayout: { hideOverlap: true, moveOverlap: "shiftY" },
       label: {
         show: true,
         position: "bottom",
@@ -148,7 +160,9 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
         fontSize: 10,
         formatter: (p: unknown) => {
           const d = (p as { data?: { preview?: string; name?: string } }).data;
-          return shortText(d?.preview, 24) || shortText(d?.name, 24);
+          // 常驻标签压到 16 字：24 字在 420px 高的图里横向跨度过大，
+          // 两条就会撞在一起；全文在悬停（emphasis 60 字）与详情弹窗里。
+          return shortText(d?.preview, 16) || shortText(d?.name, 16);
         },
       },
       emphasis: {

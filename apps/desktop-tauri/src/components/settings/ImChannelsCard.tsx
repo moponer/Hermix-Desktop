@@ -1285,7 +1285,9 @@ function ImPane(props: {
         {bound ? (
           <>
             <span className="inline-flex items-center gap-1.5 text-[length:var(--text-ui)] text-text-primary">
-              <Check className="icon-sm text-accent" />
+              {/* 对勾用成功色而不是强调色：它表达「已绑定」这个状态，
+                  与右侧「通道已连接」的绿点同一语义；accent 只留给动作按钮。 */}
+              <Check className="icon-sm text-success" />
               已绑定 <span className="font-mono">{s?.id_preview}</span>
               {s?.source === "env" && <span className="text-text-muted">（环境变量）</span>}
             </span>
@@ -1389,7 +1391,10 @@ function ImPane(props: {
       )}
 
       {bound && meta?.sandboxNote && (
-        <p className="flex items-start gap-2 rounded-lg bg-warning-soft px-4 py-3 text-[length:var(--text-meta)] text-text-secondary leading-relaxed">
+        /* 沙箱提示从「整块 warning-soft 黄底」改为左侧细色条（2026-10-28）：
+           每个已绑定渠道都挂一块大黄，页面重心被提示吃掉；色条保留语义，
+           重量降到一段普通说明。 */
+        <p className="flex items-start gap-2 rounded-[var(--radius-md)] border-l-2 border-[var(--color-warning)] py-1.5 pl-3 text-[length:var(--text-meta)] text-text-muted leading-relaxed">
           <AlertTriangle className="icon-sm mt-0.5 shrink-0 text-warning" />
           <span>{meta.sandboxNote}</span>
         </p>

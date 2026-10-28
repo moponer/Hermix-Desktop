@@ -61,7 +61,7 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
         />
       )}
 
-      <Section title="内置工具" hint="由后端持久化保存于 dashboard_plugins.json">
+      <Section title="内置工具">
         <Grid empty={!loading && filteredBuiltins.length === 0} emptyText="没有匹配的内置工具。">
           {filteredBuiltins.map((plugin) => {
             const enabled = Boolean(settings[plugin.key]);

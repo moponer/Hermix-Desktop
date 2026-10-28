@@ -215,12 +215,17 @@ function ToolsetCard({
   onToggle: (name: string, next: boolean) => void;
 }) {
 
-  // 工具清单默认只露 4 个：8 个工具的工具集一屏塞满会把网格撑得很乱。
-  // 「全部工具」展开是原型里确认过的交互，卡片自带这个能力，不需要另外加工具。
+  // 工具清单默认只露 3 个：塞 4+ 个时灰底药丸把卡片下半截糊满（2026-10-28 截图），
+  // 「+N」展开是原型里确认过的交互，卡片自带这个能力，不需要另外加工具。
   const [expanded, setExpanded] = useState(false);
   const tools = toolset.tools;
-  const shown = expanded ? tools : tools.slice(0, 4);
+  const shown = expanded ? tools : tools.slice(0, 3);
   const hidden = tools.length - shown.length;
+  /* 后端没有真描述时吐的是 "approval category — 1 tools" 这种拼装串
+     （2026-10-28 用户截图点名"粗糙"）——识别到该模式整行不渲染：
+     工具数已经在标题旁（"N 个工具"），信息不丢，卡片也不掉档次。 */
+  const desc = (toolset.description ?? "").trim();
+  const realDescription = /^(.+)\s+category\s+—\s+\d+\s+tools?$/.test(desc) ? null : desc || null;
   return (
     <div className="flex flex-col gap-2 rounded-[var(--radius-lg)] bg-[var(--color-bg-card)] px-2.5 py-2.5">
       <div className="flex items-center gap-2.5">
@@ -235,9 +240,11 @@ function ToolsetCard({
             </span>
           </div>
           {/* 单行截断：旧版 hover 展开会让整个网格重排（鼠标下方目标乱跑）。 */}
-          <p className="mt-0.5 truncate text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
-            {toolset.description || "（无描述）"}
-          </p>
+          {realDescription && (
+            <p className="mt-0.5 truncate text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+              {realDescription}
+            </p>
+          )}
         </div>
         <ToggleSwitch
           enabled={enabled}
@@ -259,7 +266,7 @@ function ToolsetCard({
               {tool}
             </span>
           ))}
-          {tools.length > 4 && (
+          {tools.length > 3 && (
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
