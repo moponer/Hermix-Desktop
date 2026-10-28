@@ -32,7 +32,6 @@
 /* 欢迎页「夜航」面板（A · 夜航方向）：局部暗底，颜色自成一套 --night-* 变量。 */
 @import "./welcome-night.css";
 /* Composer 的夜航态：工具行移到输入面外面 + 局部重定义主题令牌。 */
-@import "./composer-night.css";
 
 /* Tailwind dark: 变体已废除 —— .dark 类不再挂载（useTheme 只设 data-theme），
    语义色一律走 token，token 值随 data-theme 自动切换。残留 dark: 前缀类均为死类。 */

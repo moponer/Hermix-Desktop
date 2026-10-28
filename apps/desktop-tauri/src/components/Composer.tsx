@@ -71,12 +71,6 @@ export interface ComposerProps {
   setKeepOriginalImage?: (v: boolean) => void;
   /** workbench = 工作台右栏：隐藏专家/目录等主对话专属 chip（工作台有自己的 skill 与代码目录，选这些是噪音）。 */
   variant?: "default" | "workbench";
-  /** night = 欢迎页「夜航」面板（局部暗底，2026-10-27 A 方向）。
-   *  与 default 的结构差异：**工具行从输入面内部移到输入面外面**（在上方），
-   *  输入面因此是干净的纯文字块；底栏留在下方。三层靠面阶差分层。
-   *  颜色不由这里决定 —— .composer--night 作用域内重定义了主题令牌，
-   *  工具类里的 var(--color-text-*) 自动落到夜航值。 */
-  surface?: "default" | "night";
   onStop?: (sessionId?: string) => boolean;
   /** Identifier of the session this Composer is rendered for. Threaded
    *  into the stop-button click so the stream-chat hook can verify
@@ -155,8 +149,7 @@ export function Composer(p: ComposerProps) {
 
   return (
     <div
-      className={`composer transition-colors relative${p.surface === "night" ? " composer--night" : ""}`}
-      data-surface={p.surface ?? "default"}
+      className="composer transition-colors relative"
       style={{ overflow: "visible" }}
       onMouseDown={(e) => {
         // 视觉上的"整块面"就是输入区：点空白处也要进输入态。此前只有顶部

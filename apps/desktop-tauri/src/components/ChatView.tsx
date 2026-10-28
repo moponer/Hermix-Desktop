@@ -1103,7 +1103,6 @@ export const ChatView = memo(function ChatView({
           <div className="w-full relative">
             <Composer
               variant={isWorkbenchChat ? "workbench" : "default"}
-              surface={isWorkbenchChat ? "default" : "night"}
               input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit} customApps={customApps}
               textareaRef={textareaRef} sending={sending} isStreaming={false}
               activeWorkspace={activeWorkspace} workspaces={workspaces} workspaceLocked={workspaceLocked}
