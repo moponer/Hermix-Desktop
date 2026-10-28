@@ -234,31 +234,31 @@
   gap: 2px;
 }
 
-/* 专家 + 模式：贴在输入框**左上角外侧**的一枚「页签」。
+/* 专家 + 模式：放在**卡片内部**的左上角，文字输入区之上。
    DOM 仍在工具行里（popover 的 ref 与焦点顺序不动），靠绝对定位脱离流；
-   父级 .composer 是 position:relative，top:0 + translateY(-100%) 让它的下沿
-   正好压住输入框上沿，再向下 1px 咬合。
+   卡片顶部因此预留一条 36px 的带子（下面的 :has 规则）。
 
-   关键是「像一个整体」：
-     · 与输入框**同底色**（--color-bg-secondary），接缝处看不出来；
-     · 只有上面两个角是圆的，下面两个角切平 —— 这是「页签」而不是「浮chip」；
-     · **不加投影**（上一版加了阴影，浮在半空，和框是两件东西）。 */
+   为什么不再浮在框外：上一版是「框外 + 阴影 + 独立圆角」，无论怎么调都
+   读成两个东西。要成为「一个整体」，只能让它们住在同一张卡上：
+   同底色、无自己的边框与投影，只是排在文字之上。 */
 .composer-expert-group {
   position: absolute;
-  top: 0;
+  top: 5px;
   left: 10px;
-  transform: translateY(calc(-100% + 1px));
   z-index: 2;
-  padding: 4px 6px 3px;
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-  background: var(--color-bg-secondary);
+  padding: 2px 4px;
+  background: transparent;
   box-shadow: none;
+  border-radius: var(--radius-sm);
 }
-/* 窄屏：左对齐到框内边距，标签自动收成图标（toolbarCompact） */
+/* 只有存在这组控件时才给顶部留白（工作台右栏没有它们，不多留） */
+.composer:has(.composer-expert-group) {
+  padding-top: 34px;
+}
+/* 窄屏：左边距与卡片内边距对齐 */
 @media (max-width: 560px) {
   .composer-expert-group {
     left: 6px;
-    padding: 3px 4px 2px;
   }
 }
 /* Composer 两段式：白卡（输入区）/ 灰底栏（工具行 + 会话设置）。
