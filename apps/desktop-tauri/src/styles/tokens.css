@@ -34,12 +34,12 @@
   /* R1-6（2026-10-16）：tiny 11→12。功能文字下限统一为 12px（桌面端
      125% 缩放下 11px 已是可读性下限）。tiny 与 meta 因此同为 12 ——
      新代码请直接用 --text-meta，tiny 仅作过渡别名保留。 */
-  --text-tiny: 12px;     /* 元信息：时间、计数、路径、参数预览 */
-  --text-meta: 12px;     /* 工具名、chip、命令输出、区块标题 */
-  --text-ui: 13px;       /* 界面文本：按钮、列表项、表单标签、思考正文 */
-  --text-body: 13px;     /* 对话正文（全局唯一正文字号，与 --text-ui 同值） */
-  --text-title: 16px;    /* 小标题：区块标题、弹窗标题 */
-  --text-display: 20px;  /* 页面标题 / 空态（一次性使用） */
+  --text-tiny: 11px;     /* 元信息：时间、计数、路径、参数预览 */
+  --text-meta: 11px;     /* 工具名、chip、命令输出、区块标题 */
+  --text-ui: 12px;       /* 界面文本：按钮、列表项、表单标签、思考正文 */
+  --text-body: 12px;     /* 对话正文（全局唯一正文字号，与 --text-ui 同值） */
+  --text-title: 15px;    /* 小标题：区块标题、弹窗标题 */
+  --text-display: 18px;  /* 页面标题 / 空态（一次性使用） */
   /* hero 28px（2026-10-18 裁决：40px 曾在两套规范间冲突——tokens 注释
      允许 hero 用 700，TYPOGRAPHY_SYSTEM.md 字重上限却是 600。裁决结果：
      统一服从字重上限 600，字号从 40 收到 28（与 --text-title 16 / display
@@ -53,19 +53,19 @@
      于是"用类名写"成了绕过档位的第二条路：设置左导航 14px（本该 13）、
      面板标题 18px（本该 16）都从这条缝里长出来。
      这里把原生刻度钉到七档值上 —— 无论写令牌还是写刻度，落点同一档。 */
-  --text-xs: 12px;      /* = meta */
-  --text-sm: 13px;      /* = ui（Tailwind 默认 14） */
-  --text-base: 13px;    /* = body（默认 16，统一为 13） */
-  --text-lg: 16px;      /* = title（默认 18） */
-  --text-xl: 20px;      /* = display */
+  --text-xs: 11px;      /* = meta */
+  --text-sm: 12px;      /* = ui（Tailwind 默认 14） */
+  --text-base: 12px;    /* = body（默认 16，统一为 12） */
+  --text-lg: 15px;      /* = title（默认 18） */
+  --text-xl: 18px;      /* = display */
 
   /* 旧名别名 —— 仅供 var(--font-size-*) 引用，禁止新代码使用 */
-  --font-size-display: 20px;
-  --font-size-h1: 16px;
-  --font-size-h2: 14px;
-  --font-size-body: 13px;
-  --font-size-meta: 12px;
-  --font-size-tiny: 12px;
+  --font-size-display: 18px;
+  --font-size-h1: 15px;
+  --font-size-h2: 13px;
+  --font-size-body: 12px;
+  --font-size-meta: 11px;
+  --font-size-tiny: 11px;
 
   /* ── 字重（4 档）────────────────────────────────────────────
      中文在 13px 以下用 700 会糊成块，所以最高只到 600。
@@ -227,7 +227,7 @@
   /* reading = 对话正文行长，随视口伸缩：窄屏守住 820px（约 50 汉字），
      宽屏/全屏按 68vw 跟到 1240px 封顶 —— 全屏下两侧空白不再夸张。
      代码块 / 表格 / 长命令行不跟随此档，各自按内容需要放宽。 */
-  /* 阅读测度：13px 正文下约 56 汉字 / 100 拉丁字符。此前 clamp(820,68vw,1240)
+  /* 阅读测度：12px 正文下约 61 汉字 / 108 拉丁字符。此前 clamp(820,68vw,1240)
      在 1440 窗口跑到 ~980px，一行 70 汉字，眼睛回行丢行——这是"输出像日志"
      的第一原因。 */
   --width-reading: min(780px, 100%);

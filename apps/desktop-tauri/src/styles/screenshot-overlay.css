@@ -26,12 +26,12 @@
      var(--text-*)` 会被整条丢弃、回退到继承的 16px（2026-10-27 统一字号时
      补齐）。改主应用档位时同步这里。 */
   --text-micro: 10px;
-  --text-tiny: 12px;
-  --text-meta: 12px;
-  --text-ui: 13px;
-  --text-body: 14px;
-  --text-title: 16px;
-  --text-display: 20px;
+  --text-tiny: 11px;
+  --text-meta: 11px;
+  --text-ui: 12px;
+  --text-body: 12px;
+  --text-title: 15px;
+  --text-display: 18px;
 }
 
 html[data-theme="dark"] {
