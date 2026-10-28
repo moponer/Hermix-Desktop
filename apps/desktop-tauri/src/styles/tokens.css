@@ -37,7 +37,7 @@
   --text-tiny: 12px;     /* 元信息：时间、计数、路径、参数预览 */
   --text-meta: 12px;     /* 工具名、chip、命令输出、区块标题 */
   --text-ui: 13px;       /* 界面文本：按钮、列表项、表单标签、思考正文 */
-  --text-body: 14px;     /* 对话正文（全局唯一正文字号） */
+  --text-body: 13px;     /* 对话正文（全局唯一正文字号，与 --text-ui 同值） */
   --text-title: 16px;    /* 小标题：区块标题、弹窗标题 */
   --text-display: 20px;  /* 页面标题 / 空态（一次性使用） */
   /* hero 28px（2026-10-18 裁决：40px 曾在两套规范间冲突——tokens 注释
@@ -55,7 +55,7 @@
      这里把原生刻度钉到七档值上 —— 无论写令牌还是写刻度，落点同一档。 */
   --text-xs: 12px;      /* = meta */
   --text-sm: 13px;      /* = ui（Tailwind 默认 14） */
-  --text-base: 14px;    /* = body（默认 16） */
+  --text-base: 13px;    /* = body（默认 16，统一为 13） */
   --text-lg: 16px;      /* = title（默认 18） */
   --text-xl: 20px;      /* = display */
 
@@ -63,7 +63,7 @@
   --font-size-display: 20px;
   --font-size-h1: 16px;
   --font-size-h2: 14px;
-  --font-size-body: 14px;
+  --font-size-body: 13px;
   --font-size-meta: 12px;
   --font-size-tiny: 12px;
 
@@ -227,7 +227,7 @@
   /* reading = 对话正文行长，随视口伸缩：窄屏守住 820px（约 50 汉字），
      宽屏/全屏按 68vw 跟到 1240px 封顶 —— 全屏下两侧空白不再夸张。
      代码块 / 表格 / 长命令行不跟随此档，各自按内容需要放宽。 */
-  /* 阅读测度：14px 正文下约 52 汉字 / 95 拉丁字符。此前 clamp(820,68vw,1240)
+  /* 阅读测度：13px 正文下约 56 汉字 / 100 拉丁字符。此前 clamp(820,68vw,1240)
      在 1440 窗口跑到 ~980px，一行 70 汉字，眼睛回行丢行——这是"输出像日志"
      的第一原因。 */
   --width-reading: min(780px, 100%);

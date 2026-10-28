@@ -87,7 +87,7 @@ text-tiny / text-meta / text-body / text-h1 / text-h2 / text-display
 | `--text-tiny` | 12px | 元信息：时间、计数、路径、参数预览 —— **与 `meta` 同值，仅作过渡别名**，新代码直接用 `meta` | 别名 |
 | `--text-meta` | 12px | 工具名、chip、命令输出、区块标题 | 已迁移 |
 | `--text-ui` | 13px | 界面文本：按钮、列表项、表单标签、**思考正文** | 已迁移 |
-| `--text-body` | 14px | **对话正文（全局唯一正文字号）** | 已迁移 |
+| `--text-body` | 13px | **对话正文（全局唯一正文字号，与 `ui` 同值）** | 已迁移 |
 | `--text-title` | 16px | 小标题：区块、弹窗 | 已迁移 |
 | `--text-display` | 20px | 页面标题 / 空态（一次性） | 已迁移 |
 
@@ -153,7 +153,7 @@ text-tiny / text-meta / text-body / text-h1 / text-h2 / text-display
 3. **Tailwind 原生刻度 — 在 `tokens.css` 的 `@theme` 钉到七档**
    组件里还有 100+ 处 `text-xs / text-sm / text-lg`，它们的默认值（sm=14、base=16、lg=18）
    与七档不是一套，等于绕过档位的第二条路。已在 `@theme` 覆盖：
-   `--text-xs:12px / --text-sm:13px / --text-base:14px / --text-lg:16px / --text-xl:20px`，
+   `--text-xs:12px / --text-sm:13px / --text-base:13px / --text-lg:16px / --text-xl:20px`，
    落点与七档一致。新代码优先写语义令牌，原生刻度作为兼容保留。
 
 4. **独立窗口自带令牌层**
@@ -171,8 +171,8 @@ text-tiny / text-meta / text-body / text-h1 / text-h2 / text-display
 
 | 内容 | 字号 | 字重 | 颜色 | 行高 |
 |---|---|---|---|---|
-| 对话正文 | `body` 14 | 400 | `text-primary` | 1.75 |
-| 用户气泡 | `body` 14 | 400 | `text-primary` | 1.68 |
+| 对话正文 | `body` 13 | 400 | `text-primary` | 1.75 |
+| 用户气泡 | `body` 13 | 400 | `text-primary` | 1.68 |
 | **思考正文** | `ui` 13 | 400 | **`text-thinking`** | 1.75 |
 | 轮次摘要行 | `meta` 12 | 500 | `text-secondary` | 1.4 |
 | 工具名 | `meta` 12 mono | 500 | `text-primary` | 1.4 |
