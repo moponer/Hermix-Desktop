@@ -22,6 +22,7 @@ import type { AcuiState } from "../acui/types";
 import type { AcuiDecisionBus } from "../acui/AcuiRegistry";
 import { AcuiPanel } from "../acui/AcuiPanel";
 import { StreamErrorCard, type ErrorKind } from "./StreamErrorBanner";
+import { TokenUsagePopover } from "./TokenUsagePopover";
 import { WelcomeNight } from "./WelcomeNight";
 import { useModelSelector } from "./ModelSelector";
 import { useContextWindows } from "../hooks/useContextWindows";
@@ -1257,8 +1258,13 @@ export const ChatView = memo(function ChatView({
               />
             )}
 
-          {/* 2026-10-28：原「上下文 14%」入口（TokenUsagePopover 的 Gauge + 圆点）
-              已移除 —— 左侧侧栏已显示上下文，这里重复一遍只是噪音。组件一并删除。 */}
+          {/* Token 消耗明细入口：只留 Gauge 按钮（点/悬停弹卡片）。
+              原来旁边那枚「圆点 + 14%」上下文指示已移除 —— 卡片里已有同一统计。 */}
+          <TokenUsagePopover
+            sessionId={sessionId}
+            contextUsage={stream.contextUsage}
+            isStreaming={isStreaming}
+          />
 
           <div className="w-full relative">
             <ApprovalDrawer
