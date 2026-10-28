@@ -1087,7 +1087,7 @@ export const ChatView = memo(function ChatView({
         )}
         {/* 工具行必须贴顶 —— 居中只作用于下面的内容区，否则行被 justify-center 拉下去 */}
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center">
-        <div className="welcome-stack w-full max-w-3xl flex flex-col items-center py-12">
+        <div className="w-full max-w-3xl flex flex-col items-center py-12">
           {!isWorkbenchChat && (
             /* 欢迎页 = 夜航面板（2026-10-27 A 方向）。
                锚点是一句承诺 + 吉祥物插画，能力入口是可读的场景句

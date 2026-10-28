@@ -57,29 +57,18 @@
   --night-ink-signature: var(--color-text-faint);
   --night-dot: var(--color-border-secondary);
 
-  background: var(--color-bg-composer);
+  background: transparent;
   color: var(--night-ink);
   font-family: var(--font-sans);
-  padding: 22px 26px 20px;
+  padding: 8px 0 28px;
   display: flex;
   flex-direction: column;
   align-items: center;
   max-width: 100%;
-  /* 2026-10-28：欢迎页要读成**一整块**，不是「上面一张卡 + 下面一张卡」。
-     面板与输入框同底色、同宽、无描边无投影；两者交界处切平圆角，
-     由 .welcome-stack 统一成一张竖卡（上半 hero / 下半输入）。 */
-  border-radius: var(--radius-composer, var(--radius-2xl)) var(--radius-composer, var(--radius-2xl)) 0 0;
+  /* 2026-10-28：hero **直接铺在主背景上**，不做卡面 —— 没有底色、没有圆角、
+     没有描边。只有输入框是有底色的一层，靠阴影产生浮起感。 */
+  border-radius: 0;
   box-shadow: none;
-}
-
-/* 欢迎态：hero 面板 + 输入框 = 一张连续卡面 */
-.welcome-stack > .night-panel {
-  margin-bottom: 0;
-}
-.welcome-stack .composer {
-  border-radius: 0 0 var(--radius-composer, var(--radius-2xl)) var(--radius-composer, var(--radius-2xl));
-  /* 与上半 hero 同底色，接缝才看不出来 */
-  background: var(--color-bg-composer);
 }
 
 /* ── 署名（HERMIX）────────────────────────────────────────────
@@ -130,8 +119,8 @@
   width: 100%;
   max-width: 540px;
   margin-top: 16px;
-  /* 场景卡也不描边：靠 elevated 与面板底色差分层（亮 = 白 / 暗 = #252525） */
-  background: var(--color-bg-elevated);
+  /* 场景卡：hero 已无底色，这张卡靠 bg-secondary 从纸面上浮出半档 */
+  background: var(--color-bg-secondary);
   border-radius: var(--radius-xl);
   padding: 13px 14px;
   display: flex;

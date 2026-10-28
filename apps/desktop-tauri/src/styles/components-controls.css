@@ -191,16 +191,19 @@
      shadow-paper + 1px 发丝环，在 760px 宽的卡上读起来是一条粗边框；
      输入区改由「卡面底色 vs 纸面」区分（--color-bg-composer 比 bg-primary
      深一档），不再画框。 */
-  /* 不画框之后，输入区靠底色比纸面深一档来定位：bg-secondary（亮 #f7f7f5 /
-     暗 #202020）。bg-composer 只比纸差 2 个明度点，去了描边等于看不见。 */
+  /* 输入区是唯一有底色的一层：bg-secondary 比纸面深一档（亮 #f7f7f5 /
+     暗 #202020）。**不画任何边框**，浮起感交给阴影 —— 用主墨的 7% 混色，
+     零色相、随主题深浅自动成立。 */
   background: var(--color-bg-secondary);
-  box-shadow: none;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-text-primary) 7%, transparent);
   overflow: visible;
-  transition: box-shadow var(--duration-fast) ease;
+  transition: box-shadow var(--duration-base) ease;
 }
-/* 聚焦时才给一条发丝环：静止态不画框，键盘用户仍需要位置反馈。 */
+/* 聚焦：只加阴影，不加边框（边框色一律不要）。 */
 .composer:focus-within {
-  box-shadow: 0 0 0 1px var(--color-border);
+  box-shadow:
+    0 2px 6px color-mix(in srgb, var(--color-text-primary) 10%, transparent),
+    0 8px 24px color-mix(in srgb, var(--color-text-primary) 8%, transparent);
 }
 
 /* 工具栏与底栏排成一行（Composer 里两者同挂 .composer-footer）：
