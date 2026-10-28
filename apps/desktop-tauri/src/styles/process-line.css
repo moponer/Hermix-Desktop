@@ -67,7 +67,7 @@
 
 .process-line-verb {
   flex: none;
-  font-size: var(--text-ui, 13px);
+  font-size: var(--text-ui);
   line-height: 1.5;
   color: var(--color-text-secondary);
   font-family: var(--font-family-primary);

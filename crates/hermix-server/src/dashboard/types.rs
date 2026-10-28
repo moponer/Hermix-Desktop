@@ -275,6 +275,16 @@ pub struct AnalyticsModelEntry {
     pub reasoning_tokens: u64,
     pub estimated_cost: f64,
     pub sessions: u32,
+    /// calls in this bucket whose provider-reported counts failed the
+    /// local-anchor sanity check (values already replaced by the local
+    /// estimate) — drives the "上报口径异常" badge.
+    #[serde(default)]
+    pub untrusted_calls: u64,
+    /// true when the pricing DB knows this model (or routes it as
+    /// subscription-included). false ⇒ the UI shows "—" instead of
+    /// a misleading $0.0000.
+    #[serde(default)]
+    pub cost_known: bool,
     /// estimated cache hit rate when the
     /// provider under-reports cache usage. `None` ⇒ use real data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -294,6 +304,14 @@ pub struct AnalyticsTotals {
     pub total_estimated_cost: f64,
     pub total_actual_cost: f64,
     pub total_sessions: u32,
+    /// provider reports that failed the local-anchor sanity check
+    /// across all models (values already replaced upstream).
+    #[serde(default)]
+    pub total_untrusted_calls: u64,
+    /// true when at least one model in the window has known pricing —
+    /// lets the UI distinguish "no cost data" from "genuinely free".
+    #[serde(default)]
+    pub cost_known: bool,
     /// estimated overall cache hit rate when
     /// the active providers under-report cache usage. `None` ⇒ real.
     #[serde(default, skip_serializing_if = "Option::is_none")]

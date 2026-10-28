@@ -1,8 +1,7 @@
 // src/components/AiGenerateButton.tsx
 // 位置：新建自动化页的 PROMPT 输入区。
-// 行为：用户描述大概情况 → AI 润色改写 → 回填到 PROMPT 输入框。
-// 与 1.3 的 PolishButton 走 **不同的 prompt 模板**（polish.automation.ts），
-// 强调结构化、保留 {{变量}} 占位符、可执行性强。
+// 行为：用户描述大概情况 → AI 改写 → 回填到 PROMPT 输入框。
+// 走 polish.automation.ts 模板：强调结构化、保留 {{变量}} 占位符、可执行性强。
 
 import { useState, useCallback } from "react";
 import { Sparkles, Loader2 } from "lucide-react";

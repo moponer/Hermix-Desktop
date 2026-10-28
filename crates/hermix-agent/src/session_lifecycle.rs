@@ -434,7 +434,86 @@ where
     );
     crate::hook_dispatch::inject_hook_context(&post_results, ctx);
 
-    cost_guard.record_usage(turn_usage_acc, response.model.as_str(), config);
+    // --- Usage accounting: sanity-check the provider's report against
+    // local anchors BEFORE anything downstream (cost guard, DB) sees it.
+    // Some providers/proxies report garbage counts (kilo-style free
+    // proxies report a session-cumulative prompt counter instead of the
+    // per-request size). Two detectors:
+    //   1. cumulative counter: reported prompt ≥ 1.5 × the sum of all
+    //      previous calls' reported prompts — physically impossible for
+    //      a per-request count, exact signature of a running total;
+    //   2. anchor outlier: reported prompt > 6 × the local estimate of
+    //      this request's conversation AND > 25K (the floor encodes the
+    //      system-prompt + tools overhead every real request carries;
+    //      without it, tiny-context first turns would false-positive).
+    // On a hit the value is replaced — marginal (reported − prev_sum)
+    // for detector 1, the local estimate for detector 2 — and the row
+    // is flagged so the dashboard can badge it.
+    let mut accounted = turn_usage_acc.cloned();
+    let mut untrusted = false;
+    if let Some(u) = accounted.as_mut() {
+        let prev_prompt_sum = cost_guard
+            .accumulated_usage
+            .as_ref()
+            .map_or(0, |a| a.prompt_tokens);
+        let ctx_est = hermix_core::estimate_messages_tokens(ctx.get_messages());
+        let reported = u.prompt_tokens;
+        let cumulative_hit =
+            prev_prompt_sum > 0 && reported >= prev_prompt_sum + prev_prompt_sum / 2;
+        let anchor_hit = ctx_est > 0 && reported > 6 * ctx_est && reported > 25_000;
+        if cumulative_hit || anchor_hit {
+            let marginal = reported.saturating_sub(prev_prompt_sum);
+            u.prompt_tokens = if cumulative_hit && marginal >= ctx_est {
+                marginal
+            } else {
+                ctx_est
+            };
+            u.total_tokens = u.prompt_tokens + u.completion_tokens;
+            untrusted = true;
+            tracing::warn!(
+                reported_prompt = reported,
+                prev_sum = prev_prompt_sum,
+                local_est = ctx_est,
+                replaced_prompt = u.prompt_tokens,
+                "usage anchor: provider-reported prompt_tokens failed sanity check; replaced with local estimate"
+            );
+        }
+        // Completion anchor: the response text we actually received is a
+        // hard upper bound on the real completion size.
+        let resp_est = estimate_response_tokens(&response.message);
+        if resp_est > 0 && u.completion_tokens > 6 * resp_est {
+            tracing::warn!(
+                reported_completion = u.completion_tokens,
+                local_est = resp_est,
+                "usage anchor: provider-reported completion_tokens failed sanity check; replaced with local estimate"
+            );
+            u.completion_tokens = resp_est;
+            u.total_tokens = u.prompt_tokens + u.completion_tokens;
+            untrusted = true;
+        }
+        // Per-call cost from the pricing DB / config rates, stamped onto
+        // the row itself so the dashboard cost aggregates are built from
+        // the same numbers the cost guard saw.
+        if u.estimated_cost.is_none() {
+            if let Some(cost) =
+                crate::cost_guard::estimate_usage_cost_usd(u, &response.model, config)
+            {
+                u.estimated_cost = Some(cost.max(0.0));
+            }
+        }
+    }
+    cost_guard.record_usage(accounted.as_ref(), response.model.as_str(), config);
+
+    // Per-call persistence: one token_usage row per successful API call
+    // (previously one accumulated row per agent run at finalize). These
+    // rows ARE the same numbers the cost guard merged — at call
+    // granularity, with garbage reports already replaced above.
+    // Best-effort: a failed insert never breaks the response.
+    if let Some(u) = accounted.as_ref() {
+        if u.prompt_tokens > 0 || u.completion_tokens > 0 || u.cache_read_tokens > 0 {
+            persist_call_usage(config, &response.model, u, untrusted);
+        }
+    }
 
     // --- Cost guard ---
     let action = cost_guard.evaluate_thresholds(
@@ -684,6 +763,48 @@ pub(crate) fn flush_acceptance_advisory(
 /// All hooks are fire-and-forget (`let _ =`); failures never break
 /// the response. The same `finalize_agent_result` is also called by
 /// `graceful_interrupt_result` for non-natural exits.
+/// Local token estimate of one assistant response: visible content +
+/// reasoning + tool-call arguments. A hard upper bound on the real
+/// completion size (chat templates wrap, not inflate).
+fn estimate_response_tokens(m: &Message) -> u64 {
+    let mut est = 0u64;
+    if let Some(c) = &m.content {
+        est += hermix_core::estimate_prompt_tokens(c);
+    }
+    if let Some(r) = &m.reasoning_content {
+        est += hermix_core::estimate_prompt_tokens(r);
+    }
+    if let Some(tcs) = &m.tool_calls {
+        for tc in tcs {
+            est += 8 + hermix_core::estimate_prompt_tokens(&tc.function.arguments);
+        }
+    }
+    est
+}
+
+/// Persist one API call's usage row to `token_usage` (best-effort).
+fn persist_call_usage(config: &AgentConfig, model: &str, usage: &UsageStats, untrusted: bool) {
+    let Some(sid) = config.session_id.as_ref() else {
+        return;
+    };
+    if sid.trim().is_empty() {
+        return;
+    }
+    let home_buf = config
+        .hermix_home
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(hermix_config::paths::hermix_home);
+    let sp = crate::session_persistence::SessionPersistence::new(&home_buf);
+    if let Err(e) = sp.persist_token_usage(sid, model, usage, untrusted) {
+        tracing::warn!(
+            session_id = %sid,
+            error = %e,
+            "failed to persist per-call token_usage (non-fatal); /insights will show stale data"
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn finalize_agent_result(
     config: &AgentConfig,
@@ -747,29 +868,9 @@ pub fn finalize_agent_result(
     );
 
     //: persist the final accumulated token usage
-    // to `token_usage` so `/insights` can chart real numbers. We do
-    // this *after* the session-end hooks fire (so a hook can still
-    // mutate usage if needed) and *before* we build the `AgentResult`
-    // (so callers see the same numbers in `result.usage` that we
-    // just wrote to disk). Best-effort: a failed insert never
-    // breaks the response.
-    if let (Some(sid), Some(usage)) = (config.session_id.as_ref(), accumulated_usage.as_ref()) {
-        if !sid.trim().is_empty() && (usage.prompt_tokens > 0 || usage.completion_tokens > 0) {
-            let home_buf = config
-                .hermix_home
-                .as_ref()
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(hermix_config::paths::hermix_home);
-            let sp = crate::session_persistence::SessionPersistence::new(&home_buf);
-            if let Err(e) = sp.persist_token_usage(sid, &config.model, usage) {
-                tracing::warn!(
-                    session_id = %sid,
-                    error = %e,
-                    "P1-3: failed to persist token_usage (non-fatal); /insights will show stale data"
-                );
-            }
-        }
-    }
+    // Token usage persistence moved to `process_post_response` — one
+    // row per API call (with local-anchor sanity replacement) instead
+    // of one accumulated row per run here.
 
     AgentResult {
         messages: messages_for_persisted_result(config, ctx, persist_user_idx),

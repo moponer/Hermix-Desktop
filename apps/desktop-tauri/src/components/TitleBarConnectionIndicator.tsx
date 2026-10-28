@@ -30,7 +30,7 @@ export function TitleBarConnectionIndicator() {
         : "正在连接…"
       }
       aria-label="连接状态"
-      className="titlebar-conn-indicator"
+      className="titlebar-conn-indicator no-drag"
       style={{ cursor: isOffline && !restarting ? "pointer" : "default" }}
       data-tauri-no-drag
     >

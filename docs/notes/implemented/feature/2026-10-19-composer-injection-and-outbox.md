@@ -8,7 +8,7 @@ Status: implemented — 2026-10-19 当日落地：注入总线、会话级 outbo
 |---|---|
 | 注入总线 | `src/lib/composerInjection.ts`：`replace / append / at-caret` 三种模式；无订阅者时排队，ChatView 挂载时回放 |
 | 草稿 | ChatView 内 `drafts: Record<sessionKey,string>`，切会话隔离，400ms 防抖写 `hermix.composer.drafts.v1` |
-| 预填 / 语音 / 润色 | 全部改走注入总线（不再 `setInput(prev + text)` 拼接） |
+| 预填 / 语音 / 增强 | 全部改走注入总线（不再 `setInput(prev + text)` 拼接） |
 | 引用 / 编辑重发 | 助手消息「引用」注入 `> 段落`；用户消息「编辑」把原文注入并聚焦 |
 | Outbox 数据 | `QueuedMessage` 增 `id / sessionId / overrides / status / attempts / error / createdAt`；入队时快照模型、权限、领域、专家、工具、技能、工作区 |
 | 排空 | 只取当前会话队首；用快照 overrides；`drainingRef` 单飞；失败置 `failed` 停在队首等用户处理（不再按文本前缀重试 3 次后静默丢弃） |
@@ -115,7 +115,7 @@ interface InjectionRequest {
 ```
 
 - ChatView 持有**注入队列**（不是单个 prop），按序消费：`replace` 覆盖、`append` 追加、`at-caret` 在当前 selection 处插入并把光标放到插入末尾。
-- 现有 `pendingPrefill` / `pendingFileAttachment` / `VoiceButton` / `PolishButton` 全部改走该通道。
+- 现有 `pendingPrefill` / `pendingFileAttachment` / `VoiceButton` / `EnhanceButton` 全部改走该通道。
 - 草稿按会话隔离：`drafts: Record<sessionKey, { text; images; files; updatedAt }>`，切会话保存 / 恢复，localStorage 防抖持久化（键 `hermix.draft.<sessionId>`，欢迎态用 `welcome`）。
 - 为消息层提供 `onInsertQuote(message)` 与 `onEditMessage(message)`：前者生成 `> 引用` 片段，后者把原文注入并把光标放末尾。
 

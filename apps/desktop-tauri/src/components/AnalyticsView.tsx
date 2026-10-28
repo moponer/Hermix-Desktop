@@ -171,6 +171,11 @@ export function AnalyticsView() {
   };
 
   const formatCost = (n: number) => `$${n.toFixed(4)}`;
+  // $0.0000 only means something when the pricing DB knows the model
+  // (subscription-included proxies bill 0). Unknown pricing shows "—"
+  // instead of a misleading zero.
+  const costLabel = (cost: number, known?: boolean) =>
+    cost === 0 && known === false ? "—" : formatCost(cost);
 
   const totalsHit = effectiveHitRate(
     totals.total_cache_read,
@@ -237,7 +242,7 @@ export function AnalyticsView() {
           icon={<DollarSign className="icon-md" />}
           tone="amber"
           label="预估费用"
-          value={formatCost(totals.total_estimated_cost)}
+          value={costLabel(totals.total_estimated_cost, totals.cost_known)}
         />
         <StatCard
           icon={<Database className="icon-md" />}
@@ -277,7 +282,12 @@ export function AnalyticsView() {
                 : "";
               return (
                 <div key={m.model} className="flex items-center justify-between gap-4 text-sm">
-                  <span className="text-text-secondary truncate max-w-narrow">{m.model}</span>
+                  <span className="text-text-secondary truncate max-w-narrow">
+                    {m.model}
+                    {(m.untrusted_calls ?? 0) > 0 && (
+                      <span className="text-text-faint"> ·{m.untrusted_calls} 次上报异常，已按本地估算</span>
+                    )}
+                  </span>
                   {/* 数值列用等宽栅格 + 右对齐 + tabular-nums：
                       位数一变就左右跳、左边缘不共线（审计问题 56）。 */}
                   <div className="grid grid-cols-4 gap-4 text-right">
@@ -286,7 +296,7 @@ export function AnalyticsView() {
                     <span className={`tabular-nums ${hit == null ? "text-text-faint" : hitRateColor(hit)}`}>
                       {hitRateLabel(hit)}{estNote}
                     </span>
-                    <span className="text-accent tabular-nums">{formatCost(m.estimated_cost)}</span>
+                    <span className="text-accent tabular-nums">{costLabel(m.estimated_cost, m.cost_known)}</span>
                   </div>
                 </div>
               );

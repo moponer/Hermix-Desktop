@@ -263,21 +263,18 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/memory/daily", get(memory_inspect::get_daily_memory))
         .route("/api/memory/pin", post(memory_inspect::pin_memory))
         // §2 Polish — doc rewrite endpoints used by the desktop
-        // "润色" / "改写" affordances. `polish::post_polish_chat`
-        // rebuilds a natural-language message, `polish::post_polish_automation`
-        // rewrites a draft into a structured automation PROMPT.
-        // Each handler binds to a single template constant from
-        // `polish.rs`; the front-end sends `{draft, ctx}` and gets
-        // back `{ok, text, error?}` so it can keep its existing
-        // whitespace-only fallback if the backend is unreachable.
-        .route("/api/polish/chat", post(polish::post_polish_chat))
+        // "改写" affordance (automation PROMPT) and "增强" (prompt
+        // enhancement). Each handler binds to a single template
+        // constant from `polish.rs`; the front-end sends
+        // `{draft, ctx}` / `{draft, recentTurns, hasAttachments}` and
+        // gets back `{ok, text, error?}`.
         .route(
             "/api/polish/automation",
             post(polish::post_polish_automation),
         )
         // 增强提示词：把一句模糊需求扩写成六段结构的提示词。
-        // 与上面两个「改写」端点的区别是**扩写**而非同义替换，
-        // 场景模板随请求下发（前端目录 src/data/enhanceScenarios.ts）。
+        // 与「改写」端点的区别是**扩写**而非同义替换，场景规格表
+        // 内置在 ENHANCE_PROMPT 里，前端不传场景。
         .route("/api/polish/enhance", post(polish::post_polish_enhance))
         // Custom agent (persona) persistence — read/write JSON files
         // under `$HERMIX_HOME/agents/*.json`. The front-end `AgentsView`

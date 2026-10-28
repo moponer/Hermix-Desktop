@@ -22,6 +22,16 @@
   --color-accent: #2f4a63;
   --color-on-accent: #ffffff;
   --color-accent-line: color-mix(in srgb, var(--color-accent) 18%, white);
+  /* 字号七档同源：独立入口不加载 tokens.css，缺了这几行 `font-size:
+     var(--text-*)` 会被整条丢弃、回退到继承的 16px（2026-10-27 统一字号时
+     补齐）。改主应用档位时同步这里。 */
+  --text-micro: 10px;
+  --text-tiny: 12px;
+  --text-meta: 12px;
+  --text-ui: 13px;
+  --text-body: 14px;
+  --text-title: 16px;
+  --text-display: 20px;
 }
 
 html[data-theme="dark"] {
@@ -46,7 +56,7 @@ html[data-theme="dark"] {
   align-items: center;
   justify-content: center;
   color: rgba(255, 255, 255, 0.75);
-  font-size: 14px;
+  font-size: var(--text-body);
   background: transparent;
 }
 
@@ -71,7 +81,7 @@ html[data-theme="dark"] {
   border-radius: 6px;
   background: transparent;
   color: #fff;
-  font-size: 13px;
+  font-size: var(--text-ui);
   cursor: pointer;
 }
 
@@ -114,7 +124,7 @@ html[data-theme="dark"] {
   border-radius: 4px;
   background: #14532d;
   color: #ffffff;
-  font-size: 12px;
+  font-size: var(--text-meta);
   line-height: 1.5;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -129,7 +139,7 @@ html[data-theme="dark"] {
   border-radius: 4px;
   background: rgba(20, 20, 20, 0.85);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--text-meta);
   font-family: ui-monospace, Consolas, monospace;
   pointer-events: none;
   white-space: nowrap;
@@ -157,7 +167,7 @@ html[data-theme="dark"] {
 /* 操作提示（把「现在能做什么」写清楚，别让用户猜） */
 .so-hint {
   color: rgba(255, 255, 255, 0.75);
-  font-size: 12px;
+  font-size: var(--text-meta);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -171,7 +181,7 @@ html[data-theme="dark"] {
   border-radius: 6px;
   background: transparent;
   color: rgba(255, 255, 255, 0.82);
-  font-size: 13px;
+  font-size: var(--text-ui);
   cursor: pointer;
 }
 
@@ -249,7 +259,7 @@ html[data-theme="dark"] {
   border-radius: 8px;
   background: rgba(120, 20, 20, 0.92);
   color: #fff;
-  font-size: 13px;
+  font-size: var(--text-ui);
   z-index: 20;
   max-width: 70vw;
   word-break: break-all;
@@ -313,7 +323,7 @@ html[data-theme="dark"] {
   border: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.82);
-  font-size: 13px;
+  font-size: var(--text-ui);
   cursor: pointer;
 }
 
@@ -333,7 +343,7 @@ html[data-theme="dark"] {
 
 /* 工具按钮里的文字标签：12px，与 16px 图标同一基线视觉 */
 .se-toolbar .se-label {
-  font-size: 12px;
+  font-size: var(--text-meta);
   line-height: 1;
 }
 

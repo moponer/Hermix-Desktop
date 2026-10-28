@@ -603,6 +603,7 @@ impl UsageStats {
     /// | OpenAI Chat Completions | `prompt_tokens` / `completion_tokens` | `prompt_tokens_details.cached_tokens` | — | `completion_tokens_details.reasoning_tokens` |
     /// | Anthropic Messages | `input_tokens` / `output_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` | `reasoning_tokens` |
     /// | OpenAI Responses | `input_tokens` / `output_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` | — |
+    /// | DeepSeek native | `prompt_tokens` / `completion_tokens` | `prompt_cache_hit_tokens` | — | — |
     ///
     /// Fields absent from the response default to 0. `estimated_cost` is
     /// always `None` — cost calculation is external (`CostGuard`).
@@ -624,7 +625,8 @@ impl UsageStats {
             .unwrap_or(prompt + completion);
 
         // Cache read: Anthropic / OpenAI Responses top-level, or
-        // OpenAI Chat Completions nested in prompt_tokens_details
+        // OpenAI Chat Completions nested in prompt_tokens_details,
+        // or DeepSeek native `prompt_cache_hit_tokens`
         let cache_read = usage
             .get("cache_read_input_tokens")
             .and_then(|v| v.as_u64())
@@ -634,6 +636,7 @@ impl UsageStats {
                     .and_then(|d| d.get("cached_tokens"))
                     .and_then(|v| v.as_u64())
             })
+            .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(|v| v.as_u64()))
             .unwrap_or(0);
 
         // Cache creation: Anthropic / OpenAI Responses only
@@ -669,6 +672,55 @@ impl UsageStats {
 /// Helper for `skip_serializing_if` on `u64` zero values.
 fn is_zero_u64(v: &u64) -> bool {
     *v == 0
+}
+
+/// Locally estimate the token count of `text` — the anchor used to
+/// detect providers that report garbage usage (cumulative counters,
+/// fixed constants). ASCII runs at ~4 chars/token; every non-ASCII
+/// char (CJK dominates in practice) counts as ~1 token. This is the
+/// same ratio empirical tests on this codebase's system prompt
+/// measured (2026-10-21: chars÷4 undercounted real usage ~1.8× because
+/// ~20-25% of chars were CJK at ≈1 token each).
+pub fn estimate_prompt_tokens(text: &str) -> u64 {
+    let mut ascii = 0u64;
+    let mut non_ascii = 0u64;
+    for ch in text.chars() {
+        if ch.is_ascii() {
+            ascii += 1;
+        } else {
+            non_ascii += 1;
+        }
+    }
+    ascii / 4 + non_ascii
+}
+
+/// Estimate the prompt-token footprint of a conversation: sum over
+/// messages of content/tool-call/reasoning text plus a small per-message
+/// role-overhead constant (provider chat templates wrap each message).
+pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
+    let mut total = 0u64;
+    for m in messages {
+        total += 4; // role + delimiters overhead
+        if let Some(c) = &m.content {
+            total += estimate_prompt_tokens(c);
+        }
+        if let Some(parts) = &m.content_parts {
+            for p in parts {
+                if let ContentPart::Text { text, .. } = p {
+                    total += estimate_prompt_tokens(text);
+                }
+            }
+        }
+        if let Some(tcs) = &m.tool_calls {
+            for tc in tcs {
+                total += 8 + estimate_prompt_tokens(&tc.function.arguments);
+            }
+        }
+        if let Some(r) = &m.reasoning_content {
+            total += estimate_prompt_tokens(r);
+        }
+    }
+    total
 }
 
 /// Record of a tool error during execution.
@@ -1237,6 +1289,38 @@ mod tests {
 
         let msg = Message::system("You are helpful");
         assert_eq!(msg.role, MessageRole::System);
+    }
+
+    #[test]
+    fn estimate_prompt_tokens_ascii_vs_cjk() {
+        // 8 ASCII chars → 2 tokens
+        assert_eq!(estimate_prompt_tokens("abcdefgh"), 2);
+        // 5 CJK chars → 5 tokens (1 token/char, not chars÷4)
+        assert_eq!(estimate_prompt_tokens("你好世界呀"), 5);
+        // mixed: 8 ascii / 4 + 4 cjk
+        assert_eq!(estimate_prompt_tokens("abcdefgh你好世界"), 6);
+        assert_eq!(estimate_prompt_tokens(""), 0);
+    }
+
+    #[test]
+    fn estimate_messages_tokens_counts_content_and_tools() {
+        let msgs = vec![
+            Message::user("abcdefgh"), // 2 + 4 overhead
+            Message::assistant("你好世界呀"), // 5 + 4 overhead
+        ];
+        assert_eq!(estimate_messages_tokens(&msgs), 15);
+    }
+
+    #[test]
+    fn from_json_parses_deepseek_native_cache_fields() {
+        let json = serde_json::json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_cache_hit_tokens": 600,
+        });
+        let u = UsageStats::from_json(&json);
+        assert_eq!(u.prompt_tokens, 1000);
+        assert_eq!(u.cache_read_tokens, 600);
     }
 
     #[test]

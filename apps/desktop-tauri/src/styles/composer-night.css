@@ -1,0 +1,136 @@
+/* ════════════════════════════════════════════════════════════════════
+   composer-night.css — Composer 的「夜航」态
+   ──────────────────────────────────────────────────────────────────
+   2026-10-27：欢迎页 A · 夜航方向。结构差异只有一处，但很关键：
+   **工具行从输入面内部移到输入面外面**（在上方）。
+
+   为什么工具类不用重写：Composer 内部全部用语义类（text-text-secondary /
+   bg-bg-hover / bg-bg-tertiary …），而 Tailwind 生成的这些类**解析成
+   var(--color-text-secondary) 这样的变量引用**。所以只要在夜航作用域内
+   **重新定义这批主题变量**，Composer 里所有既有的语义类就自动落到夜航值，
+   一行组件代码都不用改。
+
+   这里是「局部换肤」而不是「全局换肤」：变量作用域限定在
+   .composer--night 之下，浅色主题下这块输入区依然是暗的。
+
+   注意 popover：模型/权限/目录弹层是 createPortal 到 body 的
+   （PopoverShell 注释：祖先 overflow 会把它困住），所以它们**不在**
+   .composer--night 作用域内 —— 弹层仍是浅色。这是有意为之：
+   浮层用浅色在暗底上反而更跳，是常见的暗色界面惯例。
+   ════════════════════════════════════════════════════════════════════ */
+
+.composer--night {
+  /* ── 面阶：外框（透明）→ 工具行 → 输入面 → 底栏 ──────────────
+     输入面是唯一"亮着"的一档：#242120 压在 #1b1918 的工具行上。 */
+  --color-bg-composer: #242120;
+  --color-bg-tertiary: #1b1918;
+  --color-bg-input: #242120;
+  --color-bg-hover: #2f2c2b;
+  --color-bg-active: #35312f;
+  --color-bg-quaternary: #2b2827;
+  --color-bg-elevated: #242120;
+
+  /* ── 墨阶 ── */
+  --color-text-primary: #f3f0ec;
+  --color-text-secondary: rgba(243, 240, 236, 0.72);
+  --color-text-tertiary: rgba(243, 240, 236, 0.62);
+  --color-text-muted: rgba(243, 240, 236, 0.58);
+  --color-text-faint: rgba(243, 240, 236, 0.42);
+  --color-text-hero: #f3f0ec;
+
+  /* ── 发丝线 ── */
+  --color-border-secondary: rgba(255, 255, 255, 0.12);
+  --color-border-primary: rgba(255, 255, 255, 0.09);
+
+  /* ── 强调：暖橙（与吉祥物耳麦同族）── */
+  --color-accent: #f08a3c;
+  --color-on-accent: #1a1207;
+  --color-accent-soft: rgba(240, 138, 60, 0.16);
+  --color-accent-soft-strong: rgba(240, 138, 60, 0.24);
+
+  /* ── chip 前景/底色 ── */
+  --color-chip-model-bg: rgba(255, 255, 255, 0.07);
+  --color-chip-model-fg: #f3f0ec;
+  --color-chip-workspace-bg: rgba(255, 255, 255, 0.07);
+  --color-chip-workspace-fg: rgba(243, 240, 236, 0.72);
+  --color-chip-permission-bg: rgba(255, 255, 255, 0.07);
+  --color-chip-permission-fg: rgba(243, 240, 236, 0.72);
+
+  /* ── 发送按钮：亮块（暗底上"能发"的信号要够强）── */
+  --color-inverse-surface: #f3f0ec;
+  --color-inverse-on-surface: #171514;
+
+  /* ── 阴影：暗底上不用投影分层，靠面阶差 ── */
+  --shadow-paper: 0 0 0 1px rgba(255, 255, 255, 0.05);
+
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+/* ── 夜航态的结构：工具行 / 输入面 / 底栏 ───────────────────
+   JSX 里的文档顺序是「输入面 → 工具行 → 底栏」（工具行在输入框下面），
+   参考图是「工具行 → 输入面 → 底栏」。改 DOM 顺序会牵动 popover 的
+   ref 与焦点顺序，所以这里用 flex order 换**视觉顺序**，DOM 不动。
+   好处：工具行浮在输入面上方 = 一排干净图标；输入面是纯文字块。 */
+.composer--night {
+  display: flex;
+  flex-direction: column;
+}
+/* order 0 = 专家面板（在最上，保持原位置） */
+.composer--night .composer-toolrail {
+  order: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px 8px;
+  min-height: 28px;
+  flex-wrap: wrap;
+}
+.composer--night .mention-input {
+  order: 2;
+}
+.composer--night .composer-subbar {
+  order: 3;
+}
+
+/* 输入面：唯一亮着的一档 */
+.composer--night .mention-input {
+  background: var(--color-bg-composer);
+  box-shadow: 0 0 0 1px var(--color-border-secondary);
+  border-radius: var(--radius-xl);
+  overflow: visible;
+}
+
+/* 输入面里的 textarea 与 backdrop 跟着换成夜航墨色。
+   AppMentionInput 的 backdrop 用的是 text-text-primary（→ var），
+   textarea 本身文字是 transparent（由 backdrop 着色），但 caretColor
+   是硬编码 var(--color-text-primary) —— 变量换了它自动跟着换。 */
+.composer--night .mention-input textarea {
+  caret-color: var(--color-accent);
+}
+
+/* 底栏：输入面下方的收尾一行（模型 / 目录 / 权限）。
+   夜航态下它没有自己的面色 —— 三层已经靠「工具行无底 / 输入面有底 /
+   底栏无底」拉开了，再给它垫色又会变成第三条带。 */
+.composer--night .composer-subbar {
+  padding: 0 2px;
+  margin-top: 8px;
+}
+
+/* 工具行里的按钮在夜航下用 chip 底色（浅色主题里是灰底），
+   这里给一枚更淡的底，避免纯图标悬停时才出现底色（点击目标不明确）。 */
+.composer--night .composer-toolrail button {
+  color: var(--color-text-muted);
+}
+.composer--night .composer-toolrail button:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 窄屏：夜航态的面板更窄，工具行图标间距收紧 */
+@media (max-width: 560px) {
+  .composer--night .composer-toolrail {
+    padding: 0 0 6px;
+  }
+}

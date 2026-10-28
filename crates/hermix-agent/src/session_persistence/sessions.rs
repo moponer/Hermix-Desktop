@@ -6,20 +6,21 @@ use hermix_core::{AgentError, Message};
 use super::*;
 
 impl SessionPersistence {
-    /// persist one LLM turn's token usage to the
-    /// append-only `token_usage` table. Called from `agent_loop` after
-    /// every successful API response so `aggregate_usage` can later
-    /// sum real numbers instead of returning 0.
-    /// Caller passes the raw `UsageStats` from the LLM response. We
-    /// store it verbatim — no rounding, no batching — so a future
-    /// `/insights` panel can chart per-turn granularity if we ever
-    /// expose it. `estimated_cost` is `None` if the provider didn't
-    /// populate it; the aggregator treats None as 0.
+    /// Persist ONE LLM API call's token usage to the append-only
+    /// `token_usage` table. Called from `process_post_response` after
+    /// every successful API response — one row per call, not per turn —
+    /// so each row's numbers are the provider's verbatim report for that
+    /// single request (with garbage reports already replaced by the
+    /// local anchor upstream in `process_post_response`). `estimated_cost`
+    /// is the per-call cost stamped by the caller when pricing is known;
+    /// `untrusted` marks rows whose reported counts failed the local
+    /// sanity check.
     pub fn persist_token_usage(
         &self,
         session_id: &str,
         model: &str,
         usage: &hermix_core::UsageStats,
+        untrusted: bool,
     ) -> Result<(), AgentError> {
         self.ensure_db()?;
         let conn = open_with_wal(&self.db_path)?;
@@ -40,8 +41,8 @@ impl SessionPersistence {
             "INSERT INTO token_usage
                 (session_id, model, prompt_tokens, completion_tokens,
                  total_tokens, cache_read_tokens, cache_creation_tokens,
-                 reasoning_tokens, estimated_cost, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 reasoning_tokens, untrusted, estimated_cost, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 session_id,
                 model,
@@ -51,6 +52,7 @@ impl SessionPersistence {
                 usage.cache_read_tokens as i64,
                 usage.cache_creation_tokens as i64,
                 usage.reasoning_tokens as i64,
+                untrusted as i64,
                 usage.estimated_cost,
                 now,
             ],

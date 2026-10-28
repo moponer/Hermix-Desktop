@@ -2193,6 +2193,7 @@ fn parse_sse_chunk(json: &Value) -> Option<StreamChunk> {
                         .and_then(|d| d.get("cached_tokens"))
                         .and_then(|v| v.as_u64())
                 })
+                .or_else(|| u.get("prompt_cache_hit_tokens").and_then(|v| v.as_u64()))
                 .unwrap_or(0),
             cache_creation_tokens: u
                 .get("cache_creation_input_tokens")

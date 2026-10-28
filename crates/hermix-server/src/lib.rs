@@ -429,6 +429,12 @@ pub fn router(state: HttpServerState) -> Router {
             "/v1/sessions/{session_id}/messages",
             get(routes::get_session_messages).post(routes::send_message),
         )
+        // Cumulative token usage for one conversation (composer token
+        // card): input/output totals + cache hit/write + reasoning.
+        .route(
+            "/v1/sessions/{session_id}/usage",
+            get(routes::get_session_usage),
+        )
         // Persist the frontend-built `unified_steps` timeline for the
         // most recent assistant turn (sent by the desktop client right
         // after a stream completes). Keeps inline tool interleaving

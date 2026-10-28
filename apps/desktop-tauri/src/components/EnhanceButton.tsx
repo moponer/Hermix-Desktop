@@ -1,13 +1,10 @@
 // src/components/EnhanceButton.tsx
-// 位置：输入框工具条，润色按钮右侧。
+// 位置：输入框工具条，语音按钮右侧。
 // 行为：**一键**把草稿扩写成结构化提示词回填输入框；再点一次 = 还原原文。
 //
-// 与 PolishButton（润色）的分工：
-// - 润色：同义替换，文字更清楚，长度不放大。
-// - 增强：**扩写**，补齐角色/背景/任务拆解/输入/约束/输出格式，
-//   段内按草稿隐含的场景（周报/方案/竞品分析…）落到具体产出规格。
-//   场景规格表在后端提示词里（ENHANCE_PROMPT），**用户不需要选场景**。
-// 两者提示词模板互不共用。
+// 增强 = **扩写**，补齐角色/背景/任务拆解/输入/约束/输出格式，
+// 段内按草稿隐含的场景（周报/方案/竞品分析…）落到具体产出规格。
+// 场景规格表在后端提示词里（ENHANCE_PROMPT），**用户不需要选场景**。
 
 import { useCallback, useEffect, useState } from "react";
 import { Wand2, Loader2, RotateCcw } from "lucide-react";
@@ -19,6 +16,9 @@ interface EnhanceButtonProps {
   draft: string;
   /** 把增强结果回填到输入框（**覆盖**原值） */
   onResult: (enhanced: string) => void;
+  /** 输入框当前选中的模型（`provider:model`）：让增强由同一个模型完成，
+   *  而不是悄悄回落到全局默认模型。 */
+  model?: string;
   /** 选填：当前对话上下文片段，让增强出的提示词更连贯 */
   recentTurns?: string;
   /** 选填：是否有附件 */
@@ -32,6 +32,7 @@ interface EnhanceButtonProps {
 export function EnhanceButton({
   draft,
   onResult,
+  model,
   recentTurns,
   hasAttachments,
   disabled,
@@ -64,20 +65,26 @@ export function EnhanceButton({
     try {
       const enhanced = await polishEnhance({
         draft,
+        model,
         ctx: { recentTurns, hasAttachments },
       });
       setLastOriginal(draft);
       setLastEnhanced(enhanced);
       onResult(enhanced);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "增强失败";
+      // 增强是整轮非流式生成，慢源最可能的结果是超时 —— 把英文的
+      // 「request timed out after 90000ms」原样甩给用户等于没说。
+      const raw = e instanceof Error ? e.message : "";
+      const msg = raw.includes("timed out")
+        ? "增强超时：模型 90s 内没写完，换更快的模型或缩短草稿后再试"
+        : raw || "增强失败";
       toastError(msg);
     } finally {
       setLoading(false);
     }
-  }, [loading, showingEnhanced, lastOriginal, draft, recentTurns, hasAttachments, onResult]);
+  }, [loading, showingEnhanced, lastOriginal, draft, model, recentTurns, hasAttachments, onResult]);
 
-  // 快捷键：textarea 聚焦时 Ctrl+Shift+/ 触发增强（Ctrl+/ 是润色）。
+  // 快捷键：textarea 聚焦时 Ctrl+Shift+/ 触发增强。
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.code !== "Slash" || !e.shiftKey) return;

@@ -2,6 +2,7 @@ pub mod backdrop;
 pub mod cdp_probe;
 pub mod commands;
 pub mod commands_custom_app;
+pub mod desktop_log;
 pub mod commands_workbench;
 pub mod file_search_controller;
 pub mod frontend_log;
@@ -11,6 +12,7 @@ pub mod markitdown;
 pub mod portable_env;
 pub mod screenshot;
 pub mod screenshot_controller;
+pub mod shutdown;
 pub mod sidecar;
 pub mod single_instance;
 pub mod stdio_bridge;
@@ -618,11 +620,29 @@ fn boot_stage() -> String {
         .unwrap_or_default()
 }
 
+/// 前端 dev server（`tauri.conf.json` 的 `devUrl`）是否在听。
+/// 只在 debug 构建里用；300ms 对回环足够，端口不通会立刻失败。
+#[cfg(debug_assertions)]
+fn dev_server_reachable() -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    let Ok(addr) = "127.0.0.1:1420".parse::<SocketAddr>() else {
+        return true; // 解析不了就当可达，别用诊断逻辑挡住启动
+    };
+    TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
+}
+
 pub fn run() {
-    // ── 单实例守护（2026-10-25）────────────────────────────────
+    // ── stderr 落盘（必须最先）─────────────────────────────────
+    // GUI 子系统没有控制台，`eprintln!` 全部丢失；下面的单实例判定、托盘
+    // 创建、sidecar 拉起恰好都只在失败路径上打日志（见 desktop_log.rs）。
+    desktop_log::init();
+
+    // ── 单实例守护（2026-10-25，2026-10-27 改按 exe 路径打键）──────
     // 必须放在一切副作用（Builder / sidecar / 全局热键 / viewer 拉起）
-    // 之前：第二个进程在此直接退出，双开引发的服务端口抢占、热键冲突、
-    // viewer 重复拉起从根上消失。机制见 single_instance.rs 模块注释。
+    // 之前：同一 exe 的第二个进程在此退出，双开引发的服务抢占、热键冲突、
+    // viewer 重复拉起从根上消失。**锁按 exe 绝对路径区分**——安装版关在
+    // 托盘时曾把 `cargo run` 的 dev 进程挡死（拿到 ALREADY_EXISTS 后静默
+    // return，控制台只有 "Running …"）。机制见 single_instance.rs 模块注释。
     if !single_instance::acquire_or_notify() {
         return;
     }
@@ -721,6 +741,32 @@ pub fn run() {
             None,
         ))
         .setup(|app| {
+            // dev 模式必须由 vite 供页面（devUrl = 127.0.0.1:1420）。直接
+            // `cargo run` / IDE 里点运行时没有那个 dev server，WebView2 只会
+            // 显示浏览器的 "localhost 拒绝连接" 错误页 —— 看起来像"程序没
+            // 启动"，其实是没界面可加载。这里提前判死并说明怎么起。
+            #[cfg(debug_assertions)]
+            if !dev_server_reachable() {
+                eprintln!(
+                    "[Hermix] dev 模式：前端 dev server (127.0.0.1:1420) 不可达，\
+                     直接用 cargo run 只能得到空白窗口。请改用 `npm run dev`（在 \
+                     apps/desktop-tauri 下），它由 tauri 的 beforeDevCommand 起 vite。"
+                );
+                use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                app.dialog()
+                    .message(
+                        "前端 dev server（127.0.0.1:1420）没有运行，界面无法加载。\n\n\
+                         请用 `npm run dev` 启动（在 apps/desktop-tauri 目录下）；\
+                         `cargo run` 只会得到空白窗口。",
+                    )
+                    .title("Hermix Desktop（dev）")
+                    .kind(MessageDialogKind::Error)
+                    .blocking_show();
+                shutdown::cleanup(app.handle());
+                app.handle().exit(0);
+                return Ok(());
+            }
+
             // 单实例监听：第二个进程 SetEvent 过来时弹主窗（关到托盘的
             // 情况也能唤回）。见 single_instance.rs。
             single_instance::spawn_show_listener(app.handle().clone());
@@ -942,8 +988,22 @@ pub fn run() {
             {
                 let _ = app.manage(system_settings::TrayState::default());
                 if system_settings::read_desktop_settings().tray {
-                    if let Err(e) = system_settings::build_tray(app.handle()) {
-                        eprintln!("[Hermix] 恢复托盘失败: {e}");
+                    match system_settings::build_tray(app.handle()) {
+                        // 成功也要留一行：排查"托盘看不见"时要能区分「没建」
+                        // 与「建了但系统没显示」（2026-10-27）。
+                        Ok(()) => eprintln!(
+                            "[Hermix] 托盘图标已创建（tray_by_id={}）",
+                            app.tray_by_id(system_settings::TRAY_ID).is_some()
+                        ),
+                        Err(e) => {
+                            eprintln!("[Hermix] 恢复托盘失败: {e}");
+                            // 托盘建不起来 → 关窗拦截不会生效（点 X 直接退出），
+                            // 这个差异必须让用户看见，否则他以为程序"藏起来了"。
+                            let _ = app.emit(
+                                "hermix:tray-error",
+                                format!("托盘图标创建失败：{e}（点击关闭按钮将直接退出程序）"),
+                            );
+                        }
                     }
                 }
             }
@@ -959,10 +1019,11 @@ pub fn run() {
             let state = handle.state::<AppState>();
             let started = {
                 let mut sb = state.sidecar.lock().unwrap();
-                sb.start(&handle).is_ok()
+                sb.start(&handle)
             };
 
-            if started {
+            match started {
+                Ok(()) => {
                 // Start the watchdog: if the bridge is unhealthy 30 times
                 // in a row (5s interval = 150s of total outage), automatically
                 // restart the sidecar with exponential backoff.
@@ -994,6 +1055,15 @@ pub fn run() {
                     // 事件已带 handle2（clone），这里用原 handle 标注最终阶段。
                     set_boot_stage(&handle, "服务已就绪，正在进入主界面");
                 });
+                }
+                // spawn 失败（二进制缺失 / 被杀软拦 / 端口与库被占）此前是
+                // **完全静默**的：前端只能靠 20s 探测超时去猜。这里把真实
+                // 原因（含子进程 stderr）立刻送到启动页与 toast。
+                Err(err) => {
+                    eprintln!("[Hermix] sidecar 启动失败: {err}");
+                    set_boot_stage(&handle, &format!("本地服务启动失败：{err}"));
+                    let _ = handle.emit("hermix:backend-error", err);
+                }
             }
             Ok(())
         })
@@ -1014,10 +1084,14 @@ pub fn run() {
                         system_settings::notify_hidden_once(app);
                     }
                 }
+                // 只认主窗。**这里曾对任意窗口生效**：关闭内置浏览器面板
+                // （`browser-panel` 是真销毁，不是隐藏）或关闭截图覆盖窗都会
+                // 走进来，把整个后端 sidecar 停掉 —— 表现就是「关一次浏览器
+                // 面板，之后点什么都报错」。其它窗口的销毁与后端生命周期无关。
                 tauri::WindowEvent::Destroyed => {
-                    let state = window.state::<AppState>();
-                    let mut sb = state.sidecar.lock().unwrap();
-                    sb.stop();
+                    if window.label() == "main" {
+                        shutdown::cleanup(window.app_handle());
+                    }
                 }
                 _ => {}
             }
@@ -1130,7 +1204,18 @@ pub fn run() {
             browser_panel_open,
             browser_panel_close,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running hermix-desktop");
+        // `run(closure)` 而不是 `.run(context)`：`RunEvent` 是**所有**退出
+        // 路径的必经点（窗口全关、`app.exit()`、注销、关机），窗口
+        // `Destroyed` 不是（`app.exit()` 根本不触发它）。退出清理收口在此。
+        .build(tauri::generate_context!())
+        .expect("error while building hermix-desktop")
+        .run(|app, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                shutdown::cleanup(app);
+            }
+        });
 }
 

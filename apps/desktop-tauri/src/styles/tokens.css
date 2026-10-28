@@ -47,6 +47,18 @@
      中文负字距是负优化，hero 保持 0 字距。 */
   --text-hero: 28px;
 
+  /* ── Tailwind 原生刻度收编（2026-10-27）──────────────────────
+     组件里还有 100+ 处 `text-xs / text-sm / text-lg` 这类原生刻度类，
+     而它们的默认值与七档不是一套（xs=12、sm=14、base=16、lg=18）。
+     于是"用类名写"成了绕过档位的第二条路：设置左导航 14px（本该 13）、
+     面板标题 18px（本该 16）都从这条缝里长出来。
+     这里把原生刻度钉到七档值上 —— 无论写令牌还是写刻度，落点同一档。 */
+  --text-xs: 12px;      /* = meta */
+  --text-sm: 13px;      /* = ui（Tailwind 默认 14） */
+  --text-base: 14px;    /* = body（默认 16） */
+  --text-lg: 16px;      /* = title（默认 18） */
+  --text-xl: 20px;      /* = display */
+
   /* 旧名别名 —— 仅供 var(--font-size-*) 引用，禁止新代码使用 */
   --font-size-display: 20px;
   --font-size-h1: 16px;
@@ -162,8 +174,11 @@
   --radius-md: 10px;    /* 控件（按钮 / 输入） */
   --radius-lg: 13px;    /* 内层卡片 */
   --radius-xl: 17px;    /* 卡片 / 页面区块 */
-  --radius-2xl: 20px;   /* 输入框（composer） */
+  --radius-2xl: 20px;   /* 大卡片 / 消息气泡外角 */
   --radius-3xl: 24px;   /* 弹窗 */
+  /* 输入框专用圆角：比同主题的卡片档更圆（6px 的方正外框是"老式输入框"的
+     来源），又不至于变成胶囊。各主题按自己的尺度覆盖。 */
+  --radius-composer: 20px;
   --radius-full: 9999px;
   /* Motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -272,6 +287,9 @@
   --color-bg-secondary: #f5f5f5;   /* 案·侧栏 / 顶栏 */
   --color-bg-inset: #f5f5f5;
   --color-bg-input: #f6f6f6;
+  /* 输入框卡面：比 bg-input 再亮一档（亮色 = 纸白），让 composer 是"白卡"
+     而不是"一块灰"——底栏垫更深一档，两块靠材质差分层，不靠横线切割。 */
+  --color-bg-composer: #ffffff;
   --color-bg-card-hover: #ededed;
   --color-bg-tertiary: #ededed;    /* 案·深一档：分隔区 / chip */
   --color-bg-hover: #ededed;

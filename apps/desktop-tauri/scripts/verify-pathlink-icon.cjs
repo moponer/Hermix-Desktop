@@ -6,14 +6,14 @@
  * 样式环境里渲染，量出 link / icon / 文字基线的真实像素关系，并留截图。
  *
  * 跑法：cd apps/desktop-tauri && node scripts/verify-pathlink-icon.cjs
- * 前置：dev server 已在 [::1]:1420 运行（npm run dev）。
+ * 前置：dev server 已在 127.0.0.1:1420 运行（npm run dev）。
  */
 
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
 
-const DEV_URL = process.env.PV_DEV_URL || "http://[::1]:1420";
+const DEV_URL = process.env.PV_DEV_URL || "http://127.0.0.1:1420";
 const OUT_DIR = path.resolve(__dirname, "..", "..", "..", "outputs", "pathlink-icon");
 
 // 复刻主人截图里那段 LLM 输出：行内 code 的 IP/端口 + 正文里的裸文件名。

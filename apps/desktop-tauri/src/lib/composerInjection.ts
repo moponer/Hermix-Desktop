@@ -15,7 +15,7 @@ export type InjectionMode = "replace" | "append" | "at-caret";
 export interface InjectionRequest {
   id: string;
   /** 来源，仅用于调试与将来做撤销分组。 */
-  source: "prefill" | "quote" | "edit" | "voice" | "polish" | "enhance" | "file" | "manual";
+  source: "prefill" | "quote" | "edit" | "voice" | "enhance" | "file" | "manual";
   text: string;
   mode: InjectionMode;
   /** 注入后是否聚焦并把光标放到插入末尾，默认 true。 */

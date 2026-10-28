@@ -799,11 +799,11 @@
         sp.persist_session("sess-1", &[Message::user("hi"), Message::assistant("yo")], Some("gpt-4o"), None, None, None, None, None, None).unwrap();
         sp.persist_session("sess-2", &[Message::user("hi"), Message::assistant("yo")], Some("claude"), None, None, None, None, None, None).unwrap();
 
-        sp.persist_token_usage("sess-1", "gpt-4o", &usage(100, 50, Some(0.001)))
+        sp.persist_token_usage("sess-1", "gpt-4o", &usage(100, 50, Some(0.001)), false)
             .unwrap();
-        sp.persist_token_usage("sess-1", "gpt-4o", &usage(200, 80, Some(0.002)))
+        sp.persist_token_usage("sess-1", "gpt-4o", &usage(200, 80, Some(0.002)), false)
             .unwrap();
-        sp.persist_token_usage("sess-2", "claude", &usage(50, 30, None))
+        sp.persist_token_usage("sess-2", "claude", &usage(50, 30, None), false)
             .unwrap();
 
         let agg = sp.aggregate_usage(30).unwrap();
@@ -825,6 +825,7 @@
             "0af0a30b::subagent-6a3998a9",
             "minimax",
             &usage(1_000, 200, Some(0.01)),
+            false,
         )
         .expect("subagent token usage must persist without a saved session");
 
@@ -841,8 +842,71 @@
         assert_eq!(rows, 1, "占位会话行必须存在，否则 FK 仍会失败");
 
         // 重复调用必须幂等（INSERT OR IGNORE），不能报唯一约束冲突。
-        sp.persist_token_usage("0af0a30b::subagent-6a3998a9", "minimax", &usage(10, 5, None))
+        sp.persist_token_usage("0af0a30b::subagent-6a3998a9", "minimax", &usage(10, 5, None), false)
             .expect("second insert must be idempotent");
+    }
+
+    #[test]
+    fn session_usage_sums_only_this_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        sp.persist_session("s-a", &[Message::user("hi"), Message::assistant("yo")], Some("m"), None, None, None, None, None, None).unwrap();
+        sp.persist_session("s-b", &[Message::user("hi"), Message::assistant("yo")], Some("m"), None, None, None, None, None, None).unwrap();
+
+        sp.persist_token_usage("s-a", "m", &usage_with_cache(800, 100, Some(0.01), 600, 50, 20), false).unwrap();
+        sp.persist_token_usage("s-a", "m", &usage_with_cache(900, 120, Some(0.02), 700, 60, 30), true).unwrap();
+        sp.persist_token_usage("s-b", "m", &usage_with_cache(1_000, 10, Some(9.0), 0, 0, 0), false).unwrap();
+
+        let a = sp.session_usage("s-a").unwrap();
+        assert_eq!(a.prompt_tokens, 1_700);
+        assert_eq!(a.completion_tokens, 220);
+        assert_eq!(a.cache_read_tokens, 1_300);
+        assert_eq!(a.cache_creation_tokens, 110);
+        assert_eq!(a.reasoning_tokens, 50);
+        assert_eq!(a.calls, 2);
+        assert_eq!(a.untrusted_calls, 1);
+        assert!((a.estimated_cost - 0.03).abs() < 1e-9);
+
+        // 空会话：全 0，不报错
+        let empty = sp.session_usage("never-used").unwrap();
+        assert_eq!(empty.calls, 0);
+        assert_eq!(empty.prompt_tokens, 0);
+    }
+
+    #[test]
+    fn p1_3_untrusted_flag_flows_through_aggregate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        sp.persist_session(
+            "sess-ut",
+            &[Message::user("hi"), Message::assistant("yo")],
+            Some("kilo:minimax/minimax-m3"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        sp.persist_token_usage("sess-ut", "kilo:minimax/minimax-m3", &usage(100, 50, None), false)
+            .unwrap();
+        // cumulative-counter garbage already replaced upstream; the row
+        // carries the replacement flag
+        sp.persist_token_usage("sess-ut", "kilo:minimax/minimax-m3", &usage(2_800_000, 40, None), true)
+            .unwrap();
+
+        let agg = sp.aggregate_usage(30).unwrap();
+        assert_eq!(agg.total_untrusted_calls, 1);
+        let row = agg
+            .by_model
+            .iter()
+            .find(|m| m.model == "kilo:minimax/minimax-m3")
+            .expect("kilo model row");
+        assert_eq!(row.untrusted_calls, 1);
+        // tokens still summed from the (replaced) values
+        assert_eq!(row.input_tokens, 2_800_100);
     }
 
     #[test]
@@ -853,7 +917,7 @@
 
         // Insert one row at "today" (whatever that is). Daily curve
         // should have `days + 1` entries; today filled, others zero.
-        sp.persist_token_usage("sess-today", "gpt-4o", &usage(10, 5, None))
+        sp.persist_token_usage("sess-today", "gpt-4o", &usage(10, 5, None), false)
             .unwrap();
 
         let agg = sp.aggregate_usage(7).unwrap();
@@ -1042,9 +1106,9 @@
             .unwrap();
         sp.persist_session("sess-b", &messages, Some("claude"), None, None, None, None, None, None)
             .unwrap();
-        sp.persist_token_usage("sess-a", "gpt-4o", &usage(1000, 200, Some(0.01)))
+        sp.persist_token_usage("sess-a", "gpt-4o", &usage(1000, 200, Some(0.01)), false)
             .unwrap();
-        sp.persist_token_usage("sess-b", "claude", &usage(500, 100, Some(0.005)))
+        sp.persist_token_usage("sess-b", "claude", &usage(500, 100, Some(0.005)), false)
             .unwrap();
 
         let agg = sp.aggregate_usage(30).unwrap();
@@ -1087,12 +1151,14 @@
             "cache-sess",
             "claude-opus-4",
             &usage_with_cache(800, 100, Some(0.012), 600, 100, 200),
+            false,
         )
         .unwrap();
         sp.persist_token_usage(
             "cache-sess",
             "claude-opus-4",
             &usage_with_cache(900, 120, Some(0.014), 700, 80, 150),
+            false,
         )
         .unwrap();
 
@@ -1143,6 +1209,7 @@
             "hit-rate",
             "claude-opus-4",
             &usage_with_cache(1000, 50, Some(0.01), 500, 0, 0),
+            false,
         )
         .unwrap();
 

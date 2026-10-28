@@ -1,0 +1,258 @@
+/* ════════════════════════════════════════════════════════════════════
+   welcome-night.css — 欢迎页「夜航」面板
+   ──────────────────────────────────────────────────────────────────
+   2026-10-27：欢迎页重设计，用户定的方向是 A · 夜航（暗底）。
+
+   为什么是局部暗底而不是给全局加一套暗色主题：
+     · 全局主题是「换值」，欢迎页是「换版式」—— 用户要的是这块
+       入口页的气质，不是全 app 换皮。全局加暗色主题会让聊天、
+       代码面板、设置页全变成暗的，那是另一个量级的决定。
+     · 因此这里用**局部作用域变量**：.night-panel 之下重新声明一组
+       --night-* 令牌，所有内部元素只读这一组。全局主题令牌
+       （--color-text-primary 等）一概不碰，浅色主题下这块面板
+       依然是暗的，与主题切换无关。
+
+   参照的样机（design-previews/2026-10-27-welcome-v2）里的三个特征：
+     1. 锚点是**一句承诺**（"把想法变成能跑的东西"），不是产品名字标
+        —— HERMIX 退到角落做署名，字号降到 10.5px。
+     2. **插画**撑起高级感：右侧一张吉祥物，透明底 PNG 直接压暗底。
+     3. 工具图标行在输入框**外面**：输入区因此是干净的纯文字面。
+
+   约束：
+     · 无渐变（P-41）。
+     · 描边一律走 box-shadow 发丝环，禁 border（G11）。
+     · 字号只用七档令牌（--text-*），禁半档（check-theme-tokens 硬门禁）。
+     · 所有颜色来自本文件顶部的一组局部变量，不写字面色值
+       （check-theme-tokens 的 css-bare-color 检查会报）。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 局部夜航令牌 ───────────────────────────────────────────────
+   这组变量只声明一次，作用域限定在 .night-panel 之下。
+   数值对应样机里的暖调近黑底：不是纯黑（纯黑会让插画边缘发硬），
+   也不是冷灰（冷灰读不出"夜"）。 */
+.night-panel {
+  /* 面阶：画布最深 → 卡面 → 输入面 → 内嵌面 */
+  --night-bg: #131211;
+  --night-surface: #1b1918;
+  --night-surface-input: #242120;
+  --night-surface-hover: #2b2827;
+
+  /* 墨阶 */
+  --night-ink: #f3f0ec;
+  --night-ink-soft: rgba(243, 240, 236, 0.72);
+  --night-ink-dim: rgba(243, 240, 236, 0.58);
+  --night-ink-faint: rgba(243, 240, 236, 0.42);
+
+  /* 强调：暖橙（与吉祥物耳麦同族，让插画与标题成一体） */
+  --night-accent: #f08a3c;
+  --night-accent-soft: rgba(240, 138, 60, 0.14);
+
+  /* 发丝环（不用 border） */
+  --night-ring: rgba(255, 255, 255, 0.09);
+  --night-ring-strong: rgba(255, 255, 255, 0.16);
+
+  /* 投影：面板从浅色聊天区里浮起来的那层 */
+  --night-shadow-hair: rgba(0, 0, 0, 0.04);
+  --night-shadow-lift: rgba(0, 0, 0, 0.22);
+  /* 插画轮廓光晕：把吉祥物从近黑底上托出来 */
+  --night-mascot-halo: rgba(240, 138, 60, 0.16);
+
+  /* 状态点 */
+  --night-ok: #6fae7c;
+
+  /* 署名色 / 列表圆点：从主墨往下再退两档 */
+  --night-ink-signature: #7d7871;
+  --night-dot: #6d6760;
+
+  background: var(--night-bg);
+  color: var(--night-ink);
+  font-family: var(--font-sans);
+  border-radius: var(--radius-3xl);
+  padding: 26px 30px 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* 面板自身给一圈外投影，让它从浅色聊天区里"浮"起来 —— 暗底块
+     贴在浅底上，没有这层投影会像贴纸。 */
+  box-shadow:
+    0 0 0 1px var(--night-shadow-hair),
+    0 18px 48px var(--night-shadow-lift);
+}
+
+/* ── 署名（HERMIX）────────────────────────────────────────────
+   角标不是主角：10.5px、宽字距、低对比。它只回答"这是什么产品"，
+   主锚点交给下面的承诺句。 */
+.night-mark {
+  font-size: var(--text-meta);
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  /* letter-spacing 会在末字后留一份空白，左侧补一份保持视觉居中 */
+  padding-left: 0.3em;
+  color: var(--night-ink-signature);
+  text-align: center;
+}
+
+/* ── 承诺句（视觉锚点）────────────────────────────────────────
+   一屏一主角：这行是全块最大最亮的字，其余都往下退。 */
+.night-title {
+  margin: 11px 0 0;
+  font-size: var(--text-hero);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-align: center;
+  color: var(--night-ink);
+  max-width: 24ch;
+}
+.night-title em {
+  font-style: normal;
+  color: var(--night-accent);
+}
+
+/* ── 副标题 ───────────────────────────────────────────────────
+   一句话说明它会做什么，把承诺落到具体产出上。 */
+.night-sub {
+  margin: 8px 0 0;
+  font-size: var(--text-ui);
+  line-height: 1.6;
+  color: var(--night-ink-dim);
+  text-align: center;
+  max-width: 52ch;
+}
+
+/* ── 插画卡 ───────────────────────────────────────────────────
+   左文右图：文案说"今天可以做的"，右边吉祥物开口。
+   高级感有一半来自这张图 —— 纯排版撑不出参考图那种质感。 */
+.night-card {
+  width: 100%;
+  max-width: 540px;
+  margin-top: 16px;
+  background: var(--night-surface);
+  box-shadow: 0 0 0 1px var(--night-ring);
+  border-radius: var(--radius-xl);
+  padding: 13px 14px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.night-card-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 卡内小标题：带一枚发光图标 */
+.night-card-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-ui);
+  font-weight: 600;
+  color: var(--night-accent);
+}
+.night-card-label svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  flex: none;
+}
+
+.night-card-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* 这三条**可点**：点一下把对应诉求填进输入框。
+   为什么不做成药丸行 —— 药丸只给名字（"独立应用"），点之前不知道
+   会发生什么；写成一句完整场景（"把快递台账统计做成能双击打开的
+   小应用"）之后，用户扫一眼就知道点下去会得到什么。 */
+.night-task {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--text-meta);
+  line-height: 1.45;
+  color: var(--night-ink-soft);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+.night-task:hover {
+  color: var(--night-ink);
+}
+.night-task:focus-visible {
+  outline: 2px solid var(--night-accent);
+  outline-offset: 2px;
+}
+/* 圆点用伪元素，不给 li 加 list-style（那会挤掉 flex 布局的间距） */
+.night-task::before {
+  content: "";
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--night-dot);
+  margin-top: 7px;
+  flex: none;
+}
+.night-task:hover::before {
+  background: var(--night-accent);
+}
+.night-task svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  flex: none;
+  margin-top: 3px;
+  opacity: 0.6;
+}
+.night-task:hover svg {
+  opacity: 1;
+}
+
+/* 吉祥物：透明底 PNG 直接压暗底。它本身有黑描边（#1a1a1a 附近），
+   在近黑底上会糊成一团 —— 所以给一圈极淡的暖色光晕把轮廓托出来。 */
+.night-mascot {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  flex: none;
+  filter: drop-shadow(0 0 10px var(--night-mascot-halo));
+}
+
+/* ── 窄屏：栅格塌成单列，插画缩到 72px ───────────────────────
+   三列场景行在窄窗口里每列只有 90px，文字会被截成省略号，
+   读不出"点什么会发生什么" —— 单列更稳。 */
+@media (max-width: 560px) {
+  .night-panel {
+    padding: 20px 16px 18px;
+  }
+  .night-mascot {
+    width: 72px;
+    height: 72px;
+  }
+  .night-card {
+    padding: 11px 12px;
+    gap: 10px;
+  }
+}
+
+/* 降低动效偏好：去掉过渡 */
+@media (prefers-reduced-motion: reduce) {
+  .night-task {
+    transition: none;
+  }
+}

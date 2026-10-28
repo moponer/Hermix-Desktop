@@ -16,6 +16,12 @@ export default defineConfig({
   clearScreen: false,
   base: "./",
   server: {
+    // 必须显式绑 IPv4 回环（2026-10-27）。默认 host 是 `localhost`，而 Node 17+
+    // 的 DNS 顺序是 verbatim（localhost 优先解析成 ::1），vite 因此只监听
+    // `[::1]:1420`；src-tauri/src/lib.rs 的 dev_server_reachable() 探的是
+    // `127.0.0.1:1420`（= tauri.conf.json 的 devUrl）→ 永远不通 → 启动必弹
+    // 「前端 dev server 没有运行」。写死 IPv4 后两端同源，不再依赖解析顺序。
+    host: "127.0.0.1",
     port: 1420,
     strictPort: true,
   },

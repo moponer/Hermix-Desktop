@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
 import { useStreamChatContext } from "../context/StreamChatContext";
 import { IM_SOURCE_LABEL, imSourceOf, type ImSource } from "../utils/time";
-import { PanelRight, PanelLeftOpen, Search, ArrowUp, AlertTriangle, AppWindow, Workflow, FileText, PenLine, Image as ImageIcon } from "lucide-react";
+import { PanelRight, PanelLeftOpen, Search, ArrowUp, AlertTriangle } from "lucide-react";
 import { SidebarRevealRow } from "./SidebarRevealRow";
 import { resolveSessionSelectedModel } from "../utils/sessionModel";
 import type {
@@ -22,13 +22,14 @@ import type { AcuiState } from "../acui/types";
 import type { AcuiDecisionBus } from "../acui/AcuiRegistry";
 import { AcuiPanel } from "../acui/AcuiPanel";
 import { StreamErrorCard, type ErrorKind } from "./StreamErrorBanner";
-import { WelcomeHero } from "./WelcomeHero";
+import { WelcomeNight } from "./WelcomeNight";
 import { useModelSelector } from "./ModelSelector";
 import { useContextWindows } from "../hooks/useContextWindows";
 import { toastError, toastInfo } from "../hooks/useToast";
 import { injectIntoComposer, subscribeComposerInjection } from "../lib/composerInjection";
 import { useChannelsStatus } from "../hooks/useChannelsStatus";
 import { Composer } from "./Composer";
+import { TokenUsagePopover } from "./TokenUsagePopover";
 import { ApprovalDrawer, type PendingApprovals } from "./ApprovalDrawer";
 import { MessageList, type MessageListHandle, type StreamRow } from "./MessageList";
 import { useCustomApps } from "../hooks/useCustomApps";
@@ -165,17 +166,6 @@ const MAX_DOC_BYTES = MAX_DOC_MB * 1024 * 1024;
 // ── 欢迎页快捷入口 ──────────────────────────────────────────
 /* 2026-10-27：输入框下方的四条「建议行」已移除（用户要求去掉），
    欢迎页只保留字标 + 能力 chip + 输入框。 */
-
-/** 能力 chip 行（墨与纸 v4）：对应真实能力，点击填入能力专属 prompt 模板。
- *  独立应用=对话式创建桌面应用；工作流=自动化工作流；代码开发=差异审查；
- *  PDF转换=文档解析；文档编写=纪要整理；图片处理=图像任务。 */
-const WELCOME_CAPABILITIES: Array<{ label: string; icon: typeof AppWindow; prompt: string }> = [
-  { label: "独立应用", icon: AppWindow, prompt: "帮我做一个桌面小应用：" },
-  { label: "工作流", icon: Workflow, prompt: "帮我搭一个自动化工作流，触发条件和步骤是：" },
-  { label: "PDF 转换", icon: FileText, prompt: "把这份 PDF 里的表格和数据提取出来，整理成结构化表格" },
-  { label: "文档编写", icon: PenLine, prompt: "把以下内容整理成一页纸纪要：" },
-  { label: "图片处理", icon: ImageIcon, prompt: "帮我处理这张图片，要求是：" },
-];
 
 interface ChatViewProps {
   session: Session | null;
@@ -1100,32 +1090,20 @@ export const ChatView = memo(function ChatView({
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center">
         <div className="w-full max-w-3xl flex flex-col items-center py-12">
           {!isWorkbenchChat && (
-            <>
-              {/* 字标：欢迎页的视觉锚点（逐字上浮，见 WelcomeHero） */}
-              <WelcomeHero />
-              {/* 能力 chip 行：点击加载能力专属 prompt 模板。
-                  场景切换（办公 / 开发）不在这里重复一遍 —— 输入框工具条上
-                  已有同一个开关，两处两行同样式的药丸只会让人分不清哪行是模式。 */}
-              <div className="flex flex-wrap justify-center gap-2 mb-5">
-                {WELCOME_CAPABILITIES.map((c) => (
-                  <button
-                    key={c.label}
-                    type="button"
-                    onClick={() => {
-                      setInput(c.prompt);
-                      textareaRef.current?.focus();
-                    }}
-                    className="chip-flat chip-flat--md"
-                  >
-                    <c.icon className="icon-sm" /> {c.label}
-                  </button>
-                ))}
-              </div>
-            </>
+            /* 欢迎页 = 夜航面板（2026-10-27 A 方向）。
+               锚点是一句承诺 + 吉祥物插画，能力入口是可读的场景句
+               （点之前就知道会发生什么），不再是同款灰药丸塞隐藏 prompt。 */
+            <WelcomeNight
+              onPickScene={(prompt) => {
+                setInput(prompt);
+                textareaRef.current?.focus();
+              }}
+            />
           )}
           <div className="w-full relative">
             <Composer
               variant={isWorkbenchChat ? "workbench" : "default"}
+              surface={isWorkbenchChat ? "default" : "night"}
               input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit} customApps={customApps}
               textareaRef={textareaRef} sending={sending} isStreaming={false}
               activeWorkspace={activeWorkspace} workspaces={workspaces} workspaceLocked={workspaceLocked}
@@ -1141,6 +1119,7 @@ export const ChatView = memo(function ChatView({
               models={models} byProvider={byProvider} selectedModel={selectedModel} setSelectedModel={setSelectedModelAndPersist}
               onSwitchModel={onSwitchModel}
               currentDisplay={currentDisplay}
+              defaultModel={defaultModel}
               contextWindows={contextWindows}
               supportsReasoning={supportsReasoning}
               enableThinking={currentEnableThinking}
@@ -1280,39 +1259,13 @@ export const ChatView = memo(function ChatView({
               />
             )}
 
-          {stream.contextUsage && stream.contextUsage.maxTokens > 0 ? (
-            <div className="mb-1.5 flex justify-end px-1">
-              {(() => {
-                const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n);
-                const pct = Math.min(100, (stream.contextUsage.usedTokens / stream.contextUsage.maxTokens) * 100);
-                const dotColor = pct >= 95 ? "bg-error" : pct >= 85 ? "bg-warning" : "bg-success";
-                const textColor = pct >= 95 ? "text-text-error" : pct >= 85 ? "text-text-warning" : "text-text-secondary";
-                let cacheInfo = "";
-                if (stream.usageSnapshot) {
-                  const cacheRead = stream.usageSnapshot.cacheReadTokens;
-                  const uncached = stream.usageSnapshot.promptTokens;
-                  const total = cacheRead + uncached;
-                  if (total > 0) {
-                    const rate = Math.round((cacheRead / total) * 100);
-                    cacheInfo = ` | 缓存 ${rate}%`;
-                  }
-                }
-                return (
-                  <span
-                    className={`inline-flex items-center gap-1.5 tabular-nums text-[length:var(--text-meta)] ${textColor} cursor-default`}
-                    title={`${fmt(stream.contextUsage.usedTokens)} / ${fmt(stream.contextUsage.maxTokens)} tokens (${Math.round(pct)}%)${cacheInfo}`}
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
-                    {Math.round(pct)}%
-                  </span>
-                );
-              })()}
-            </div>
-          ) : !isStreaming && (
-            <div className="mb-1.5 flex justify-end px-1">
-              <span className="text-[length:var(--text-meta)] text-text-faint">—</span>
-            </div>
-          )}
+          {/* Token 消耗明细入口：图标悬停/聚焦弹出输入/输出/缓存/上下文卡片，
+              替代原先只塞进 title 的「缓存 N%」。上下文 % 仍在行内保留。 */}
+          <TokenUsagePopover
+            sessionId={sessionId}
+            contextUsage={stream.contextUsage}
+            isStreaming={isStreaming}
+          />
 
           <div className="w-full relative">
             <ApprovalDrawer
@@ -1340,6 +1293,7 @@ export const ChatView = memo(function ChatView({
             models={models} byProvider={byProvider} selectedModel={selectedModel} setSelectedModel={setSelectedModelAndPersist}
             onSwitchModel={onSwitchModel}
             currentDisplay={currentDisplay}
+            defaultModel={defaultModel}
             contextWindows={contextWindows}
             supportsReasoning={supportsReasoning}
             enableThinking={currentEnableThinking}

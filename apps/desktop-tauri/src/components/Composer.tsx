@@ -7,7 +7,6 @@ import { InlineExpertPanel } from "./InlineExpertPanel";
 import { QueueItemRow } from "./ChatIndicators";
 import { VoiceButton } from "./VoiceButton";
 import { VisionButton } from "./VisionButton";
-import { PolishButton } from "./PolishButton";
 import { EnhanceButton } from "./EnhanceButton";
 import { ProviderIcon } from "@hermix/preview/ProviderIcon";
 import { Badge, Switch } from "./ui";
@@ -47,6 +46,9 @@ export interface ComposerProps {
   setSelectedModel: (id: string) => void;
   currentDisplay: string;
   byProvider: ModelGroup[];
+  /** 后端权威的默认模型（`provider:model`）。弹层里给这一行挂「默认」标，
+   *  否则用户只能从设置页的星标反推「新会话 / 阿黎 / 自动化用的是哪个」。 */
+  defaultModel?: string;
   expert: ExpertDef | null;
   setExpert: (id: string | null) => void;
   recentExperts: ExpertDef[];
@@ -69,6 +71,12 @@ export interface ComposerProps {
   setKeepOriginalImage?: (v: boolean) => void;
   /** workbench = 工作台右栏：隐藏专家/目录等主对话专属 chip（工作台有自己的 skill 与代码目录，选这些是噪音）。 */
   variant?: "default" | "workbench";
+  /** night = 欢迎页「夜航」面板（局部暗底，2026-10-27 A 方向）。
+   *  与 default 的结构差异：**工具行从输入面内部移到输入面外面**（在上方），
+   *  输入面因此是干净的纯文字块；底栏留在下方。三层靠面阶差分层。
+   *  颜色不由这里决定 —— .composer--night 作用域内重定义了主题令牌，
+   *  工具类里的 var(--color-text-*) 自动落到夜航值。 */
+  surface?: "default" | "night";
   onStop?: (sessionId?: string) => boolean;
   /** Identifier of the session this Composer is rendered for. Threaded
    *  into the stop-button click so the stream-chat hook can verify
@@ -147,7 +155,8 @@ export function Composer(p: ComposerProps) {
 
   return (
     <div
-      className="composer transition-colors relative"
+      className={`composer transition-colors relative${p.surface === "night" ? " composer--night" : ""}`}
+      data-surface={p.surface ?? "default"}
       style={{ overflow: "visible" }}
       onMouseDown={(e) => {
         // 视觉上的"整块面"就是输入区：点空白处也要进输入态。此前只有顶部
@@ -366,10 +375,9 @@ export function Composer(p: ComposerProps) {
         placeholder={p.placeholder}
         onFilesAttach={p.onFilesAttach}
       />
-
       <div
         ref={toolbarRef}
-        className="px-3 pb-3 pt-1 flex flex-wrap items-center gap-x-1 gap-y-1"
+        className="composer-toolrail px-3 pt-2 pb-2 flex flex-wrap items-center gap-x-1 gap-y-1"
         data-compact={toolbarCompact ? "true" : "false"}
       >
         {/* 工作台右栏（variant="workbench"）没有专家/目录概念 —— skill 常驻、
@@ -442,7 +450,13 @@ export function Composer(p: ComposerProps) {
                   ? "text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer"
                   : "text-[color:var(--color-chip-permission-fg)] hover:bg-error-soft cursor-pointer"
               }`}
-              title={(p.byProvider && p.byProvider.length > 0) ? "切换模型" : "未配置模型，点击直达 设置 → 模型配置"}
+              title={
+                p.byProvider && p.byProvider.length > 0
+                  ? p.defaultModel
+                    ? `切换模型 · 默认 ${p.models.find((m) => m.id === p.defaultModel)?.name ?? p.defaultModel}`
+                    : "切换模型"
+                  : "未配置模型，点击直达 设置 → 模型配置"
+              }
             >
               <ProviderIcon providerId={p.selectedModel?.split(":")[0] || "custom"} className="icon-md" title={p.selectedModel} />
               <span className="truncate">{p.currentDisplay}</span>
@@ -506,6 +520,14 @@ export function Composer(p: ComposerProps) {
                                 <ProviderIcon providerId={m.provider} size={14} className="shrink-0" title={m.provider} />
                               )}
                               <span className="min-w-0 flex-1 truncate text-[length:var(--text-ui)]">{m.name}</span>
+                              {/* 默认模型标在列表里：这是「新会话 / 阿黎 /
+                                  自动化」实际会用的那条，跟「当前这轮选中的」
+                                  是两件事，必须能分开看。 */}
+                              {p.defaultModel === m.id && (
+                                <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-accent">
+                                  默认
+                                </span>
+                              )}
                               {m.info?.supports_reasoning && (
                                 <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
                                   思考
@@ -583,16 +605,9 @@ export function Composer(p: ComposerProps) {
           </div>
           <VisionButton onFilesAttach={(files) => p.onFilesAttach?.(files)} />
           <VoiceButton onTranscribe={(text) => injectIntoComposer({ source: "voice", text, mode: "at-caret" })} />
-          <PolishButton
-            draft={p.input}
-            onResult={(polished) => injectIntoComposer({ source: "polish", text: polished, mode: "replace" })}
-            recentTurns={recentTurns}
-            hasAttachments={hasAttachments}
-            disabled={p.sending || p.isStreaming}
-            compact={toolbarCompact}
-          />
           <EnhanceButton
             draft={p.input}
+            model={p.selectedModel}
             onResult={(enhanced) => injectIntoComposer({ source: "enhance", text: enhanced, mode: "replace" })}
             recentTurns={recentTurns}
             hasAttachments={hasAttachments}
@@ -666,7 +681,7 @@ export function Composer(p: ComposerProps) {
                 projToggle();
               }}
               disabled={p.workspaceLocked}
-              className={`flex items-center shrink-0 text-ui transition-colors rounded-md ${
+              className={`flex items-center shrink-0 text-meta transition-colors rounded-md ${
                 toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[160px]"
               } ${
                 p.workspaceLocked
@@ -742,7 +757,7 @@ export function Composer(p: ComposerProps) {
             <button
               ref={permTriggerRef as React.RefObject<HTMLButtonElement>}
               onClick={permToggle}
-              className={`flex items-center shrink-0 text-ui transition-colors rounded-md ${
+              className={`flex items-center shrink-0 text-meta transition-colors rounded-md ${
                 toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[160px]"
               } ${
                 p.permissionLevel === "full"

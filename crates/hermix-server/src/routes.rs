@@ -958,6 +958,30 @@ pub(crate) async fn delete_session(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// `GET /v1/sessions/{id}/usage` — cumulative token usage for one
+/// session: prompt/output totals plus the cache-hit / cache-write /
+/// reasoning breakdown the composer's token card renders. Backed by
+/// `token_usage` (one row per API call). Runs on the blocking pool — a
+/// full-session SUM is a sync SQLite call and must not pin a tokio
+/// worker.
+pub(crate) async fn get_session_usage(
+    State(state): State<HttpServerState>,
+    Path(session_id): Path<String>,
+) -> Result<Json<hermix_agent::session_persistence::SessionUsageTotals>, StatusCode> {
+    let persistence = state.session_persistence.clone();
+    match tokio::task::spawn_blocking(move || persistence.session_usage(&session_id)).await {
+        Ok(Ok(totals)) => Ok(Json(totals)),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "get_session_usage: aggregation failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "get_session_usage: blocking task failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 /// `GET /v1/sessions/{id}/archive-refs` — return every [`ArchiveRef`]
 /// the agent loop has written for this session.
 /// backing storage is a JSONL file at

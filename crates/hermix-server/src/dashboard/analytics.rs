@@ -74,6 +74,7 @@ pub async fn get_usage(
                 estimate_cache_for_model(&m.model, config)
             };
             AnalyticsModelEntry {
+                cost_known: hermix_intelligence::has_known_pricing(&m.model, None, None),
                 model: m.model,
                 input_tokens: m.input_tokens,
                 output_tokens: m.output_tokens,
@@ -82,6 +83,7 @@ pub async fn get_usage(
                 reasoning_tokens: m.reasoning_tokens,
                 sessions: m.sessions.max(0) as u32,
                 estimated_cost: m.estimated_cost,
+                untrusted_calls: m.untrusted_calls,
                 estimated_cache_hit_rate: est,
             }
         })
@@ -139,6 +141,10 @@ pub async fn get_usage(
         by_model.iter().find_map(|m| m.estimated_cache_hit_rate)
     };
 
+    // Any model with known pricing ⇒ the totals cost figure means
+    // something; all-unknown ⇒ the UI shows "—" instead of $0.0000.
+    let totals_cost_known = by_model.iter().any(|m| m.cost_known);
+
     Ok(Json(AnalyticsResponse {
         daily,
         by_model,
@@ -151,6 +157,8 @@ pub async fn get_usage(
             total_estimated_cost: agg.total_estimated_cost,
             total_actual_cost: 0.0,
             total_sessions: agg.total_sessions.max(0) as u32,
+            total_untrusted_calls: agg.total_untrusted_calls,
+            cost_known: totals_cost_known,
             total_compactions: agg.total_compactions.max(0) as u32,
             total_archived_turns: agg.total_archived_turns,
             estimated_cache_hit_rate: totals_est,

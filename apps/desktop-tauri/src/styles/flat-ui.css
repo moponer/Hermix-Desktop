@@ -99,6 +99,14 @@
   color: var(--color-btn-primary-text);
 }
 .chip-flat--on:hover { background: var(--color-btn-primary-hover); }
+/* 异常态药丸（后端未连接等）：软底 + **文字安全档**语义色（原始
+   `--color-error` 在浅面上只有 3.7:1，12px 小字不可用）。 */
+.chip-flat--error {
+  background: var(--color-error-soft);
+  color: var(--color-text-error);
+}
+.chip-flat--error:hover { background: var(--color-error-soft); color: var(--color-text-error); }
+.chip-flat--error:disabled { opacity: 0.6; cursor: default; }
 
 /* 大一号药丸（32px 档）：欢迎页的场景切换与能力 chip。
    此前那里是手写的 h-7(28px) 组合 —— 28 不在控件高度档（24/32/40/44）里，
@@ -145,10 +153,15 @@
   border: 2px dashed color-mix(in srgb, var(--color-chip-workspace-fg) 55%, transparent);
 }
 
-/* 发送钮两态。inverse-surface / bg-quaternary 这对组合只在发送钮上出现，
-   且 Tailwind 未为 inverse-* 生成原子类（全仓 0 处使用），所以这里显式给类。 */
+/* 发送钮两态。inverse-surface / bg-composer 这对组合只在发送钮上出现，
+   且 Tailwind 未为 inverse-* 生成原子类（全仓 0 处使用），所以这里显式给类。
+   待发态用卡面色而非 quaternary：发送钮站在底栏托盘（quaternary）上，
+   同色会让这颗按钮整个消失。 */
 .send-btn--ready { background: var(--color-inverse-surface); color: var(--color-inverse-on-surface); }
-.send-btn--idle  { background: var(--color-bg-quaternary); color: var(--color-text-faint); }
+.send-btn--idle  {
+  background: var(--color-bg-composer, var(--color-bg-quaternary));
+  color: var(--color-text-faint);
+}
 
 /* 代码块「展开」遮罩：渐变必须收在代码块底色上，是唯一依赖 --color-bg-code
    的渐变。放进 CSS 而不是内联，是因为它同时是颜色 + 高度 + 定位三件事。 */

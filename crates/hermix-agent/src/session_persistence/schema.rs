@@ -571,6 +571,12 @@ impl SessionPersistence {
                 cache_read_tokens INTEGER NOT NULL DEFAULT 0,
                 cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
                 reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+                -- 1 = the provider's reported prompt/completion counts for
+                -- this call failed the local-anchor sanity check and were
+                -- replaced by the local CJK-aware estimate. Aggregates use
+                -- the (already replaced) values; this flag drives the UI
+                -- "上报口径异常" badge.
+                untrusted INTEGER NOT NULL DEFAULT 0,
                 estimated_cost REAL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
@@ -678,6 +684,7 @@ impl SessionPersistence {
             ("cache_read_tokens", "INTEGER NOT NULL DEFAULT 0"),
             ("cache_creation_tokens", "INTEGER NOT NULL DEFAULT 0"),
             ("reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"),
+            ("untrusted", "INTEGER NOT NULL DEFAULT 0"),
         ] {
             let sql = format!("ALTER TABLE token_usage ADD COLUMN {col} {decl}");
             if let Err(e) = conn.execute(&sql, []) {

@@ -1,9 +1,8 @@
-//! POST /api/polish/{chat, automation, enhance} — stateless LLM-driven
-//! text rewriting for the desktop "润色" / "改写" / "增强" affordances.
+//! POST /api/polish/{automation, enhance} — stateless LLM-driven
+//! text rewriting for the desktop "改写" / "增强" affordances.
 //!
-//! The web side (`apps/desktop-tauri/src/api/polish.ts`) already calls these
-//! endpoints; before this commit the fetch fell through to a
-//! whitespace-only fallback because the backend returned 404.
+//! The web side (`apps/desktop-tauri/src/api/polish.ts`) calls these
+//! endpoints over the stdio bridge.
 //!
 //! Design:
 //! - Reuse `agent_service.send_message` against an *ephemeral*
@@ -12,24 +11,26 @@
 //!   immediately after the reply to free the in-memory cache (and any
 //!   SQLite row the persistence layer wrote).
 //! - Override `system_prompt` with one of the template constants
-//!   ([`CHAT_POLISH_PROMPT`], [`AUTOMATION_POLISH_PROMPT`],
-//!   [`ENHANCE_PROMPT`]) and force `tools = Some(vec![])` so the model
-//!   can't reach for a tool while rewriting user text.
+//!   ([`AUTOMATION_POLISH_PROMPT`], [`ENHANCE_PROMPT`]) and force
+//!   `tools = Some(vec![])` so the model can't reach for a tool while
+//!   rewriting user text.
 //! - `PermissionLevel::Full` since there are no tools to gate and no
 //!   side-effecting actions to guard against.
-//! - Wrap the entire call in a 12-second `tokio::time::timeout` — the
-//!   frontend already gives the user a "polishing…" spinner; a stalled
-//!   LLM should fall back to the local whitespace collapse rather than
-//!   hold the UI hostage.
+//! - Wrap the entire call in a [`POLISH_TIMEOUT`] `tokio::time::timeout`.
+//!   The budget has to cover a *whole* non-streaming generation: 增强
+//!   asks for 150-600 字 of structured prompt, so a few-second budget
+//!   guarantees a timeout on any provider slower than ~60 tok/s. The
+//!   frontend passes the same budget as its own client deadline — it
+//!   must never be the shorter of the two, otherwise the user sees
+//!   "request timed out" while the backend was still working.
 //!
-//! Failure modes intentionally return `502` / `504` with `{ok: false,
-//! error: ...}` so the frontend can decide its own degradation
-//! strategy (today: collapse whitespace; tomorrow: surface a toast).
+//! Failure modes intentionally return `502` with `{ok: false,
+//! error: ...}` so the frontend can surface a toast.
 //!
-//! The three endpoints share one LLM-call shell ([`run_with_prompt`]);
+//! Both endpoints share one LLM-call shell ([`run_with_prompt`]);
 //! they differ only in the system prompt and how the user message is
-//! assembled (chat/automation fold a free-form `ctx` JSON, enhance
-//! builds typed paragraphs).
+//! assembled (automation folds a free-form `ctx` JSON, enhance builds
+//! typed paragraphs).
 
 use std::time::Duration;
 
@@ -45,10 +46,15 @@ use hermix_core::traits::{AgentOverrides, PermissionLevel};
 
 use crate::HttpServerState;
 
-/// Max wall-clock time for a single polish call. Anything longer and
-/// the frontend already gave up on the spinner — surface a 504 so it
-/// can fall back to its local whitespace collapse.
-const POLISH_TIMEOUT: Duration = Duration::from_secs(12);
+/// Max wall-clock time for a single polish/enhance call.
+///
+/// 12s (the previous value) was shorter than a normal generation: 增强
+/// returns 150-600 字, i.e. several hundred tokens, so slow or cold
+/// providers blew the budget every time and the user only ever saw an
+/// error. The frontend mirrors this number as its client-side deadline
+/// (`api/polish.ts`); the stdio bridge allows 120s, so 90s stays inside
+/// the transport budget.
+const POLISH_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Session id prefix for ephemeral polish sessions. Easy to grep for
 /// in the SQLite dump if a regression accidentally persists them.
@@ -106,11 +112,16 @@ async fn run_with_prompt(
     state: &HttpServerState,
     system_prompt: &'static str,
     user_message: &str,
+    model: Option<&str>,
 ) -> Result<String, PolishError> {
     let session_id = format!("{POLISH_SESSION_PREFIX}{}", Uuid::new_v4());
 
     let overrides = AgentOverrides {
         system_prompt: Some(system_prompt.to_string()),
+        // 前端带上用户此刻选中的模型（`provider:model`）。不带就落到
+        // `config.yaml` 的全局默认——而那个默认可能早就失效（换过 key /
+        // 模型下架），聊天还能用、改写却一直报错的错位就是从这来的。
+        model: model.map(|m| m.to_string()),
         // No tools — this is a pure rewrite, the model should not
         // reach for terminal / file_read / etc.
         tools: Some(Vec::new()),
@@ -154,13 +165,11 @@ async fn run_with_prompt(
     Ok(text)
 }
 
-/// Drive one stateless polish call for the rewrite endpoints
-/// (`/api/polish/chat`, `/api/polish/automation`).
+/// Drive one stateless polish call for `/api/polish/automation`.
 ///
-/// `system_prompt` MUST be one of the two PR-approved templates —
-/// callers in this module pass them verbatim. The user message is
-/// the raw draft plus the free-form `ctx` JSON, exactly as before
-/// this function was split out of [`run_with_prompt`].
+/// `system_prompt` MUST be one of the module's template constants —
+/// callers pass them verbatim. The user message is the raw draft plus
+/// the free-form `ctx` JSON.
 async fn run_polish(
     state: &HttpServerState,
     system_prompt: &'static str,
@@ -182,29 +191,7 @@ async fn run_polish(
         }
     }
 
-    run_with_prompt(state, system_prompt, &user_message).await
-}
-
-/// POST /api/polish/chat
-///
-/// Rewrites the user's draft for a natural-language chat turn.
-/// Backed by the `CHAT_POLISH_PROMPT` template
-/// (`apps/desktop-tauri/src/prompts/polish.chat.ts`).
-pub async fn post_polish_chat(
-    State(state): State<HttpServerState>,
-    Json(req): Json<PolishRequest>,
-) -> Result<JsonResponse<PolishResponse>, (StatusCode, JsonResponse<PolishError>)> {
-    match run_polish(&state, CHAT_POLISH_PROMPT, &req.draft, req.ctx.as_ref()).await {
-        Ok(text) => Ok(JsonResponse(PolishResponse {
-            ok: true,
-            text,
-            error: None,
-        })),
-        Err(e) => Err((
-            StatusCode::BAD_GATEWAY,
-            JsonResponse(PolishError::new(e.error)),
-        )),
-    }
+    run_with_prompt(state, system_prompt, &user_message, None).await
 }
 
 /// POST /api/polish/automation
@@ -256,6 +243,9 @@ pub async fn post_polish_automation(
 #[serde(rename_all = "camelCase")]
 pub struct EnhanceRequest {
     pub draft: String,
+    /// 用户此刻选中的模型（`provider:model`）。缺省 → 后端全局默认模型。
+    #[serde(default)]
+    pub model: Option<String>,
     /// 最近 1-2 轮对话，用于让增强出的提示词接得上上下文。
     #[serde(default)]
     pub recent_turns: Option<String>,
@@ -300,7 +290,7 @@ pub async fn post_polish_enhance(
 
     let user_message = build_enhance_user_message(&req);
 
-    match run_with_prompt(&state, ENHANCE_PROMPT, &user_message).await {
+    match run_with_prompt(&state, ENHANCE_PROMPT, &user_message, req.model.as_deref()).await {
         Ok(text) => Ok(JsonResponse(PolishResponse {
             ok: true,
             text,
@@ -315,51 +305,14 @@ pub async fn post_polish_enhance(
 
 // ---------------------------------------------------------------------------
 // Prompt templates — keep verbatim in sync with the front-end TypeScript
-// copies in `apps/desktop-tauri/src/prompts/polish.{chat,automation}.ts`.
+// copy in `apps/desktop-tauri/src/prompts/polish.automation.ts`.
 //
-// The front-end keeps an inlined `POLISH_PROMPTS_FOR_DEBUG` export for
-// inspection; the server copy is the actual one the LLM is fed so it
-// doesn't depend on the desktop bundle being shipped. If the templates
-// ever drift, the front-end copy becomes a stale read-only mirror and
-// `callPolishEndpoint` calls into the same prompt.
+// The server copy is the actual one the LLM is fed so it doesn't depend
+// on the desktop bundle being shipped.
 //
 // `ENHANCE_PROMPT` **没有**前端副本：它只存在于本文件，前端拿不到也
 // 不需要（增强走的是类型化请求 + 服务端模板）。少一份副本 = 少一类漂移。
 // ---------------------------------------------------------------------------
-
-/// Mirror of `CHAT_POLISH_PROMPT`
-/// (apps/desktop-tauri/src/prompts/polish.chat.ts).
-const CHAT_POLISH_PROMPT: &str = "你是一名对话润色专家。\
-用户给出一段\"草稿原文\"，你要把它改写为一段直接可发送的对话内容。\n\
-\n\
-# 目标\n\
-- 让对方一眼看懂用户在问什么、想做什么\n\
-- 表达流畅、不啰嗦、避免重复\n\
-- 保持用户的语气（如果原话很口语化，不要突然文绉绉）\n\
-\n\
-# 输入\n\
-<draft>\n\
-{{draft}}\n\
-</draft>\n\
-{{#ctx.recentTurns}}\n\
-<recent_turns>\n\
-{{ctx.recentTurns}}\n\
-</recent_turns>\n\
-{{/ctx.recentTurns}}\n\
-{{#ctx.hasAttachments}}\n\
-注：用户已附加文件/图片，无需在文字里复述文件名。\n\
-{{/ctx.hasAttachments}}\n\
-\n\
-# 输出要求\n\
-1. **只输出润色后的内容本身**，不要加\"润色后：\"等前缀、不要加任何解释\n\
-2. **保留用户的核心意图**，不要替用户做主张\n\
-3. **如果原文很清晰**，润色后可以与原文几乎一致\n\
-4. **如果原文重复、啰嗦或矛盾**，去掉冗余、保留要点\n\
-5. **不要编造**用户没说的内容\n\
-6. **不要使用 markdown 包装**（不要加 # / - / ** 等），保持纯对话文本\n\
-7. **长度**控制在原文 0.7-1.3 倍，除非原文明显需要扩写\n\
-\n\
-# 接下来输出润色结果：\n";
 
 /// Mirror of `AUTOMATION_POLISH_PROMPT`
 /// (apps/desktop-tauri/src/prompts/polish.automation.ts).
@@ -413,10 +366,8 @@ PROMPT 接收的变量与数据源。**保留用户原文里的 `{{变量名}}` 
 
 /// 增强提示词模板（**唯一副本**，前端无镜像）。
 ///
-/// 与 `CHAT_POLISH_PROMPT` 的关键差异：
-/// - 润色是同义替换（长度 0.7-1.3 倍、禁 markdown），增强是**扩写**；
-/// - 产出物是**提示词本身**，所以这里用 Markdown 分段是刻意的
-///   （「## 角色」这类标题属于提示词文本，不是给人看的说明）。
+/// 产出物是**提示词本身**，所以这里用 Markdown 分段是刻意的
+/// （「## 角色」这类标题属于提示词文本，不是给人看的说明）。
 ///
 /// 刻意不用 ASCII 双引号与反引号：正文一律用「」，raw string 不会被
 /// `"#` 提前截断，将来若要加前端镜像也能逐字节对齐。
@@ -475,54 +426,15 @@ SWOT：S/W/O/T各3-5条(具体到可验证) / 交叉结论(SO·WO·ST·WT各一�
 mod tests {
     use super::*;
 
-    /// The two mirrored prompt templates must remain byte-for-byte
-    /// identical to the front-end TypeScript copies. The end-to-end
-    /// `polish.ts → /api/polish/* → LLM` round trip depends on that;
-    /// if they drift, the front-end `POLISH_PROMPTS_FOR_DEBUG`
-    /// export becomes a stale read-only mirror while the live call
-    /// uses the server copy (or vice-versa), and the user-visible
-    /// rewrite quality regresses without an obvious error.
+    /// The mirrored automation template must remain byte-for-byte
+    /// identical to the front-end TypeScript copy. The end-to-end
+    /// `polish.ts → /api/polish/automation → LLM` round trip depends on
+    /// that; if they drift, the front-end copy becomes a stale
+    /// read-only mirror while the live call uses the server copy (or
+    /// vice-versa), and the user-visible rewrite quality regresses
+    /// without an obvious error.
     /// If the snapshot tests in `apps/desktop-tauri` ever fail in
     /// CI, edit both copies in the same PR — never one side only.
-    #[test]
-    fn chat_prompt_template_locked() {
-        // Snapshots live next to the front-end copies. We embed
-        // the canonical strings as `assert_eq!` markers so a diff
-        // shows up in CI without any file-globbing.
-        const CANONICAL: &str = "你是一名对话润色专家。\
-用户给出一段\"草稿原文\"，你要把它改写为一段直接可发送的对话内容。\n\
-\n\
-# 目标\n\
-- 让对方一眼看懂用户在问什么、想做什么\n\
-- 表达流畅、不啰嗦、避免重复\n\
-- 保持用户的语气（如果原话很口语化，不要突然文绉绉）\n\
-\n\
-# 输入\n\
-<draft>\n\
-{{draft}}\n\
-</draft>\n\
-{{#ctx.recentTurns}}\n\
-<recent_turns>\n\
-{{ctx.recentTurns}}\n\
-</recent_turns>\n\
-{{/ctx.recentTurns}}\n\
-{{#ctx.hasAttachments}}\n\
-注：用户已附加文件/图片，无需在文字里复述文件名。\n\
-{{/ctx.hasAttachments}}\n\
-\n\
-# 输出要求\n\
-1. **只输出润色后的内容本身**，不要加\"润色后：\"等前缀、不要加任何解释\n\
-2. **保留用户的核心意图**，不要替用户做主张\n\
-3. **如果原文很清晰**，润色后可以与原文几乎一致\n\
-4. **如果原文重复、啰嗦或矛盾**，去掉冗余、保留要点\n\
-5. **不要编造**用户没说的内容\n\
-6. **不要使用 markdown 包装**（不要加 # / - / ** 等），保持纯对话文本\n\
-7. **长度**控制在原文 0.7-1.3 倍，除非原文明显需要扩写\n\
-\n\
-# 接下来输出润色结果：\n";
-        assert_eq!(CHAT_POLISH_PROMPT, CANONICAL);
-    }
-
     #[test]
     fn automation_prompt_template_locked() {
         const CANONICAL: &str = "你是一名\"自动化 PROMPT 编写专家\"。\
@@ -673,6 +585,7 @@ PROMPT 接收的变量与数据源。**保留用户原文里的 `{{变量名}}` 
         let v: EnhanceRequest =
             serde_json::from_str(r#"{"draft":"帮我写个周报"}"#).expect("must parse");
         assert_eq!(v.draft, "帮我写个周报");
+        assert!(v.model.is_none());
         assert!(v.recent_turns.is_none());
         assert!(v.has_attachments.is_none());
     }
@@ -686,9 +599,10 @@ PROMPT 接收的变量与数据源。**保留用户原文里的 `{{变量名}}` 
     #[test]
     fn enhance_request_parses_camel_case_wire_format() {
         let v: EnhanceRequest = serde_json::from_str(
-            r#"{"draft":"写个周报","recentTurns":"用户：上个季度的数据在哪","hasAttachments":true}"#,
+            r#"{"draft":"写个周报","model":"minimax:MiniMax-M3.1-flash","recentTurns":"用户：上个季度的数据在哪","hasAttachments":true}"#,
         )
         .expect("must parse");
+        assert_eq!(v.model.as_deref(), Some("minimax:MiniMax-M3.1-flash"));
         assert_eq!(v.recent_turns.as_deref(), Some("用户：上个季度的数据在哪"));
         assert_eq!(v.has_attachments, Some(true));
     }
@@ -699,6 +613,7 @@ PROMPT 接收的变量与数据源。**保留用户原文里的 `{{变量名}}` 
     fn enhance_user_message_contains_all_sections() {
         let req = EnhanceRequest {
             draft: "写个周报".to_string(),
+            model: None,
             recent_turns: Some("用户：上个季度的数据在哪".to_string()),
             has_attachments: Some(true),
         };
@@ -714,6 +629,7 @@ PROMPT 接收的变量与数据源。**保留用户原文里的 `{{变量名}}` 
     fn enhance_user_message_omits_empty_sections() {
         let req = EnhanceRequest {
             draft: "写个周报".to_string(),
+            model: None,
             recent_turns: Some("   ".to_string()),
             has_attachments: Some(false),
         };

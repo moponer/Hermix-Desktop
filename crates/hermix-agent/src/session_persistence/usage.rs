@@ -6,6 +6,41 @@ use hermix_core::AgentError;
 use super::*;
 
 impl SessionPersistence {
+    /// Cumulative token usage for ONE session (all API calls recorded
+    /// against it). Backs `GET /v1/sessions/{id}/usage` — the composer's
+    /// token-detail card. `idx_token_usage_session` covers the filter.
+    pub fn session_usage(&self, session_id: &str) -> Result<SessionUsageTotals, AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        conn.query_row(
+            "SELECT
+                COALESCE(SUM(prompt_tokens), 0),
+                COALESCE(SUM(completion_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0),
+                COALESCE(SUM(cache_creation_tokens), 0),
+                COALESCE(SUM(reasoning_tokens), 0),
+                COALESCE(SUM(COALESCE(estimated_cost, 0)), 0.0),
+                COUNT(*),
+                COALESCE(SUM(COALESCE(untrusted, 0)), 0)
+             FROM token_usage
+             WHERE session_id = ?1",
+            rusqlite::params![session_id],
+            |row| {
+                Ok(SessionUsageTotals {
+                    prompt_tokens: row.get::<_, i64>(0)?.max(0) as u64,
+                    completion_tokens: row.get::<_, i64>(1)?.max(0) as u64,
+                    cache_read_tokens: row.get::<_, i64>(2)?.max(0) as u64,
+                    cache_creation_tokens: row.get::<_, i64>(3)?.max(0) as u64,
+                    reasoning_tokens: row.get::<_, i64>(4)?.max(0) as u64,
+                    estimated_cost: row.get::<_, f64>(5).unwrap_or(0.0),
+                    calls: row.get::<_, i64>(6)?.max(0) as u64,
+                    untrusted_calls: row.get::<_, i64>(7)?.max(0) as u64,
+                })
+            },
+        )
+        .map_err(|e| AgentError::Io(format!("Failed to sum session token_usage: {e}")))
+    }
+
     /// Aggregate real session / message / model counts over the last `days` days.
     /// also sums token usage from `token_usage` and
     /// derives a daily curve + per-tool breakdown from
@@ -61,7 +96,8 @@ impl SessionPersistence {
                     COALESCE(SUM(COALESCE(t.cache_read_tokens, 0)), 0) AS cache_read_sum,
                     COALESCE(SUM(COALESCE(t.cache_creation_tokens, 0)), 0) AS cache_creation_sum,
                     COALESCE(SUM(COALESCE(t.reasoning_tokens, 0)), 0) AS reasoning_sum,
-                    COALESCE(SUM(COALESCE(t.estimated_cost, 0)), 0.0) AS cost_sum
+                    COALESCE(SUM(COALESCE(t.estimated_cost, 0)), 0.0) AS cost_sum,
+                    COALESCE(SUM(COALESCE(t.untrusted, 0)), 0) AS untrusted_sum
                  FROM sessions s
                  LEFT JOIN token_usage t
                     ON t.session_id = s.id AND t.created_at >= ?1
@@ -82,6 +118,7 @@ impl SessionPersistence {
                     cache_creation_tokens: row.get::<_, i64>(6)?.max(0) as u64,
                     reasoning_tokens: row.get::<_, i64>(7)?.max(0) as u64,
                     estimated_cost: row.get::<_, f64>(8).unwrap_or(0.0),
+                    untrusted_calls: row.get::<_, i64>(9)?.max(0) as u64,
                 })
             })
             .map_err(|e| AgentError::Io(format!("Failed to query by_model: {e}")))?
@@ -123,7 +160,8 @@ impl SessionPersistence {
             total_cache_creation,
             total_reasoning,
             mut total_cost,
-        ): (i64, i64, i64, i64, i64, f64) = conn
+            total_untrusted,
+        ): (i64, i64, i64, i64, i64, f64, i64) = conn
             .query_row(
                 "SELECT
                     COALESCE(SUM(prompt_tokens), 0),
@@ -131,11 +169,22 @@ impl SessionPersistence {
                     COALESCE(SUM(cache_read_tokens), 0),
                     COALESCE(SUM(cache_creation_tokens), 0),
                     COALESCE(SUM(reasoning_tokens), 0),
-                    COALESCE(SUM(COALESCE(estimated_cost, 0)), 0.0)
+                    COALESCE(SUM(COALESCE(estimated_cost, 0)), 0.0),
+                    COALESCE(SUM(COALESCE(untrusted, 0)), 0)
                  FROM token_usage
                  WHERE created_at >= ?1",
                 rusqlite::params![cutoff_str],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get::<_, i64>(6)?.max(0),
+                    ))
+                },
             )
             .map_err(|e| AgentError::Io(format!("Failed to sum token_usage: {e}")))?;
 
@@ -317,6 +366,7 @@ impl SessionPersistence {
             total_compactions: total_compactions.max(0) as u64,
             total_archived_turns: total_archived_turns.max(0) as u64,
             total_estimated_cost: total_cost,
+            total_untrusted_calls: total_untrusted.max(0) as u64,
             daily,
             by_tool,
             skills,
@@ -607,6 +657,7 @@ impl SessionPersistence {
                 slot.output_tokens += out;
             } else {
                 by_model.push(ModelUsageRow {
+                    untrusted_calls: 0,
                     model,
                     sessions: 0,
                     message_count: 0,

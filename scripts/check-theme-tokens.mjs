@@ -268,21 +268,51 @@ if (cssColorHits.length) {
   console.log("[css-bare-color] CSS 层无裸色 ✓");
 }
 
-/* ---------- Check 3c: CSS 层 px 字号（WARN） ---------- */
-const cssTypeRx = /font-size:\s*(\d+(?:\.\d+)?)px/g;
+/* ---------- Check 3c: CSS 层字号（HARD） ----------
+   只允许 `font-size: var(--text-*)`（七档）与继承类关键字。px 与 em/rem
+   一律阻断，两条都是实测踩过的坑：
+   · px 硬编码让"半档"与令牌长期并存 —— 全仓曾有 12 套实际字号
+     （11 / 11.5 / 12 / 12.5 / 13 / 13.5 / 14 / 15 …），七档形同虚设；
+   · em 相对阶梯按"父级实际字号"二次换算 —— notion-prose 的 1.875em 把
+     h1 撑到 26.25px（比七档的 20 大 31%），而按 px 扫的旧规则一个字都
+     报不出来。
+   白名单只放"不是文字"的尺寸：图标字形、公式缩放、装饰符号。 */
+const TYPE_ALLOW = new Map([
+  ["styles/base.css", new Set(["48px"])], // 错误页大图标字形
+  ["styles/components-helpers.css", new Set(["24px"])], // 弹窗头图标字形
+  ["styles/components-prose.css", new Set(["1.02em", "1.05em"])], // KaTeX 公式微调
+  ["styles/inline-approval-card.css", new Set(["9px"])], // ▸ 装饰三角
+  ["styles/inline-thinking-dot.css", new Set(["0.85em"])], // 闪烁点
+]);
+const TEXT_TOKEN_RX = /^var\(--text-(micro|tiny|meta|ui|body|title|display|hero)\)$/;
+const INHERIT_RX = /^(inherit|unset|revert|revert-layer|initial|100%)$/;
+const fontDeclRx = /font-size:\s*([^;]+);/g;
 const cssTypeHits = [];
 for (const file of CSS_SCAN) {
   const rel = relative(SRC, file).split(sep).join("/");
   if (allowedFiles.has(rel)) continue;
-  const hits = [...read(file).matchAll(cssTypeRx)].map((m) => m[1]);
-  if (hits.length) cssTypeHits.push(`  ${rel}: ${hits.length} 处（${[...new Set(hits)].join("/")}px）`);
+  const allow = TYPE_ALLOW.get(rel) ?? new Set();
+  const lines = read(file).split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    for (const m of lines[i].matchAll(fontDeclRx)) {
+      const v = m[1].trim();
+      if (TEXT_TOKEN_RX.test(v) || INHERIT_RX.test(v) || allow.has(v)) continue;
+      cssTypeHits.push(`  ${rel}:${i + 1}  font-size: ${v}`);
+    }
+  }
 }
 if (cssTypeHits.length) {
-  console.warn(`[css-type-debt] CSS 层 px 字号（WARN，改用 --text-* 七档）:`);
-  for (const h of cssTypeHits) console.warn(h);
+  failures++;
+  console.error(`[css-type] CSS 层字号越档（${cssTypeHits.length} 处，只允许 var(--text-*) 七档）:`);
+  for (const h of cssTypeHits.slice(0, 20)) console.error(h);
+  if (cssTypeHits.length > 20) console.error(`  … 另有 ${cssTypeHits.length - 20} 处`);
 } else {
-  console.log("[css-type-debt] CSS 层无 px 字号 ✓");
+  console.log("[css-type] CSS 层字号全部在七档内 ✓");
 }
+
+/* ---------- Check 3c-2: TSX 层字号（HARD，已有规则见 type-debt） ---------- */
+/* Tailwind 原生刻度（text-xs/sm/base/lg/xl）已在 tokens.css 的 @theme 里
+   钉到七档值，所以"用类名"不再能绕过档位；这里只拦任意值。 */
 
 /* ---------- Check 3d: CSS 层暗色字面量兜底（HARD） ----------
    `var(--x, #1e293b)` 形态把「暗色」写死为默认值：令牌缺失时静默

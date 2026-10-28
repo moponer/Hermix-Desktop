@@ -1,4 +1,18 @@
-/* 文件搜索小窗（#/file-search）——独立窗口小图，不与主应用共用样式。 */
+/* 文件搜索小窗（#/file-search）——独立窗口小图，不与主应用共用样式。
+ *
+ * 独立窗口不加载 globals.css / tokens.css，`var(--text-*)` 在这里本来是
+ * 未定义（整条 font-size 声明被丢弃、回退到继承的 16px）。所以这份小图
+ * 自带一档字号令牌，取值与主应用七档完全一致 —— 改主应用档位时同步这里。
+ * （颜色仍为窗口自有深色系，不参与主题。） */
+:root {
+  --text-micro: 10px;
+  --text-tiny: 12px;
+  --text-meta: 12px;
+  --text-ui: 13px;
+  --text-body: 14px;
+  --text-title: 16px;
+  --text-display: 20px;
+}
 
 .fsw-root {
   display: flex;
@@ -6,7 +20,7 @@
   height: 100vh;
   background: #141416;
   color: #e8e8e6;
-  font-size: 13px;
+  font-size: var(--text-ui);
   overflow: hidden;
   border: 1px solid #2a2a2e;
   box-sizing: border-box;
@@ -28,7 +42,7 @@
   letter-spacing: 0.5px;
 }
 .fsw-hotkey-chip {
-  font-size: 11px;
+  font-size: var(--text-tiny);
   color: #b5d4f4;
   background: rgba(133, 183, 235, 0.12);
   border: 1px solid rgba(133, 183, 235, 0.25);
@@ -48,7 +62,7 @@
   color: #a0a09a;
   border-radius: 5px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--text-body);
 }
 .fsw-icon-btn:hover {
   background: #2a2a2e;
@@ -75,7 +89,7 @@
   border-radius: 7px;
   color: #e8e8e6;
   padding: 0 12px;
-  font-size: 14px;
+  font-size: var(--text-body);
   outline: none;
 }
 .fsw-input:focus {
@@ -86,7 +100,7 @@
 }
 .fsw-count {
   color: #8a8a84;
-  font-size: 12px;
+  font-size: var(--text-meta);
   white-space: nowrap;
 }
 
@@ -103,7 +117,7 @@
   color: #a0a09a;
   border-radius: 999px;
   padding: 3px 12px;
-  font-size: 12px;
+  font-size: var(--text-meta);
   cursor: pointer;
 }
 .fsw-chip:hover {
@@ -130,7 +144,7 @@
   gap: 10px;
   margin-bottom: 8px;
   color: #a0a09a;
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 .fsw-setting-row > span:first-child {
   width: 210px;
@@ -145,7 +159,7 @@
   border-radius: 5px;
   color: #e8e8e6;
   padding: 0 8px;
-  font-size: 12px;
+  font-size: var(--text-meta);
   outline: none;
 }
 .fsw-setting-input:focus {
@@ -156,7 +170,7 @@
 }
 .fsw-setting-note {
   color: #6f6f6a;
-  font-size: 11px;
+  font-size: var(--text-tiny);
   margin: 4px 0 8px;
 }
 .fsw-save-btn {
@@ -186,7 +200,7 @@
 .fsw-header-row {
   padding: 4px 14px;
   color: #8a8a84;
-  font-size: 11px;
+  font-size: var(--text-tiny);
   border-bottom: 1px solid #232327;
   flex-shrink: 0;
 }
@@ -200,7 +214,7 @@
 .fsw-hint {
   padding: 18px 14px;
   color: #8a8a84;
-  font-size: 12px;
+  font-size: var(--text-meta);
   line-height: 1.7;
 }
 .fsw-hint-error {
@@ -225,7 +239,7 @@
 }
 .fsw-icon {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 .fsw-name-text {
   overflow: hidden;
@@ -242,7 +256,7 @@
 .fsw-col-size,
 .fsw-col-time {
   color: #a0a09a;
-  font-size: 12px;
+  font-size: var(--text-meta);
   white-space: nowrap;
 }
 
@@ -255,7 +269,7 @@
   padding: 0 14px;
   background: #1f1f23;
   border-top: 1px solid #232327;
-  font-size: 11px;
+  font-size: var(--text-tiny);
   color: #a0a09a;
   flex-shrink: 0;
 }

@@ -5,6 +5,8 @@ import * as api from "../api";
 interface VoiceButtonProps {
   onTranscribe: (text: string) => void;
   disabled?: boolean;
+  /** 只留图标（欢迎页「夜航」态的图标工具行用）。 */
+  compact?: boolean;
 }
 
 /**
@@ -70,7 +72,7 @@ async function webmBlobToPcmBase64(blob: Blob): Promise<string> {
   }
 }
 
-export function VoiceButton({ onTranscribe, disabled }: VoiceButtonProps) {
+export function VoiceButton({ onTranscribe, disabled, compact }: VoiceButtonProps) {
   const [active, setActive] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -130,14 +132,16 @@ export function VoiceButton({ onTranscribe, disabled }: VoiceButtonProps) {
       onClick={toggle}
       disabled={disabled}
       title={active ? "停止录音" : "语音输入"}
-      className={`flex items-center gap-1 px-2 py-1 rounded transition-colors text-[length:var(--text-meta)] ${
+      className={`flex items-center rounded transition-colors text-[length:var(--text-meta)] ${
+        compact ? "w-7 h-7 justify-center" : "gap-1 px-2 py-1"
+      } ${
         active
           ? "bg-error text-white animate-pulse"
           : "text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
       } disabled:opacity-30`}
     >
       <Mic className="icon-sm" />
-      <span>{active ? "停止" : "语音"}</span>
+      {!compact && <span>{active ? "停止" : "语音"}</span>}
     </button>
   );
 }

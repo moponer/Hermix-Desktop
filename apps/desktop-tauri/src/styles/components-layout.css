@@ -248,7 +248,7 @@
 /* 墨与纸 v4：titlebar-logo（吉祥物图版）已移除，品牌 = 纯文字。
    名字升为 text-primary 满对比（WorkBuddy 文字 logo 规律）。 */
 .titlebar-title {
-  font-size: var(--font-size-body);
+  font-size: var(--text-body);
   font-weight: 600;
   color: var(--color-text-primary);
   /* 2026-09-30：负字距对中文小字是负优化（字面粘连）。改 0。 */
@@ -274,7 +274,7 @@
    不需要参与视觉竞争，扫一眼能找到即可。空占位保持右侧按钮靠右。 */
 .sidebar-head-version {
   font-family: var(--font-mono);
-  font-size: var(--font-size-tiny);
+  font-size: var(--text-tiny);
   color: var(--color-text-faint);
   white-space: nowrap;
 }
@@ -404,7 +404,7 @@
   border-radius: var(--radius-md);
   /* 2026-10-15：ui(13) → body(14)。导航是侧栏的主操作行，对照参考侧栏
      偏小；会话标题同步升到 ui(13)，meta 时间戳保持 tiny(11) —— 一屏 3 档。 */
-  font-size: var(--text-body, 14px);
+  font-size: var(--text-body);
   font-weight: 500;
   /* 2026-10-23：secondary → primary。功能入口是侧栏的**主操作**（它们是
      页面的入口，等同于按钮），不是次级说明；#565656 压在 #f5f5f5 上虽有
@@ -449,7 +449,7 @@
   padding: 0 4px;
   /* 2026-09-29：抄 cc-haha 分区标签 —— 11px 更小的字、更宽的 tracking，
    * 视觉上是纯标签，不会和内容行抢注意力。 */
-  font-size: var(--text-meta, 11px);
+  font-size: var(--text-meta);
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--color-text-faint);
@@ -467,7 +467,7 @@
      右侧形成一个小色块，和 cc-haha 的纯文字计数差一个量级。降为 tiny 档
      弱化文字，保留 tabular-nums 防跳动。 */
   font-family: var(--font-sans);
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   color: var(--color-text-faint);
   margin-left: auto;
   font-variant-numeric: tabular-nums;
@@ -630,7 +630,7 @@
   justify-content: flex-start;
   min-height: 26px;
   padding: 2px 4px;
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   font-weight: 600;
   color: var(--color-text-secondary);
   letter-spacing: 0.02em;
@@ -675,7 +675,7 @@
   border-radius: 0;
 }
 .sidebar-project-name {
-font-size: var(--text-meta, 12px);
+font-size: var(--text-meta);
 font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -705,7 +705,7 @@ font-weight: 500;
   border-radius: var(--radius-md);
   cursor: pointer;
   font-family: inherit;
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   color: var(--color-text-secondary);
   text-align: left;
   transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
@@ -768,7 +768,7 @@ font-weight: 500;
   border-radius: calc(var(--radius-lg) - 3px);
   background: transparent;
   font-family: inherit;
-  font-size: var(--text-ui, 13px); /* 2026-10-15：裸 12px 换令牌并升一档，与导航/会话行对齐 */
+  font-size: var(--text-ui); /* 2026-10-15：裸 12px 换令牌并升一档，与导航/会话行对齐 */
   /* 2026-10-23：muted → secondary（5.86:1 → 6.73:1）。这两个 tab 是视图
      切换，属于"次级但可读"的层级——比会话标题弱一档，比分组标签强一档。 */
   color: var(--color-text-secondary);
@@ -838,7 +838,7 @@ font-weight: 500;
   justify-content: flex-start;
   min-height: 26px;
   padding: 3px 6px;
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   font-weight: 600;
   color: var(--color-text-muted);
   letter-spacing: 0.03em;
@@ -910,7 +910,7 @@ height: 26px;
   background: transparent;
   color: var(--color-text-primary);
   font-family: inherit;
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   text-align: left;
   cursor: pointer;
   transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
@@ -959,7 +959,7 @@ height: 26px;
   border: 0;
   background: transparent;
   color: var(--color-text-muted);
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   text-align: left;
   cursor: pointer;
   border-radius: var(--radius-sm);
@@ -1028,7 +1028,7 @@ height: 26px;
   font-family: inherit;
   /* 2026-10-15：meta(12) → ui(13)。会话标题是侧栏的正文，12px 对照参考
      明显偏小；时间戳保持 tiny(11)，主次关系不变。 */
-  font-size: var(--text-ui, 13px);
+  font-size: var(--text-ui);
   text-align: left;
   border-radius: var(--radius-sm);
   transition: background var(--duration-fast) ease, transform var(--duration-fast) ease;
@@ -1053,7 +1053,7 @@ height: 26px;
 .sidebar-row:focus-within .sidebar-row-actions { opacity: 1; }
 
 .sidebar-row-meta {
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   color: var(--color-text-muted);
   flex-shrink: 0;
 }
@@ -1204,7 +1204,7 @@ height: 26px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   color: var(--color-text-muted);
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -1241,13 +1241,13 @@ height: 26px;
   gap: 6px;
   padding: 16px;
   color: var(--color-text-muted);
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   text-align: center;
 }
 
 /* 空态 = 入口卡片，不是一句"暂无内容"。 */
 .preview-bar__empty-title {
-  font-size: var(--text-title, 16px);
+  font-size: var(--text-title);
   font-weight: 600;
   color: var(--color-text-primary);
 }
@@ -1269,7 +1269,7 @@ height: 26px;
   border-radius: var(--radius-lg);
   background: var(--color-bg-secondary);
   color: var(--color-text-primary);
-  font-size: var(--text-ui, 13px);
+  font-size: var(--text-ui);
   cursor: pointer;
   transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
 }
@@ -1278,7 +1278,7 @@ height: 26px;
   border-color: var(--color-border);
 }
 .preview-bar__card-sub {
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   color: var(--color-text-faint);
   text-align: center;
   line-height: 1.4;
@@ -1302,7 +1302,7 @@ height: 26px;
   flex-shrink: 0;
   padding: 6px 10px;
   background: var(--color-bg-secondary);
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   color: var(--color-text-muted);
 }
 .subagent-list__running { color: var(--color-accent); }
@@ -1318,7 +1318,7 @@ height: 26px;
   border: 0;
   background: transparent;
   color: var(--color-text-primary);
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   text-align: left;
   cursor: pointer;
 }
@@ -1326,7 +1326,7 @@ height: 26px;
 .review-row__name { flex: 1; min-width: 0; }
 .review-row__hits {
   flex-shrink: 0;
-  font-size: var(--text-micro, 10px);
+  font-size: var(--text-micro);
   color: var(--color-text-faint);
 }
 .review-row__tag {
@@ -1336,7 +1336,7 @@ height: 26px;
   flex-shrink: 0;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
-  font-size: var(--text-micro, 10px);
+  font-size: var(--text-micro);
   font-weight: var(--font-weight-semibold, 600);
 }
 .review-row__tag.is-created { background: var(--color-success-soft); color: var(--color-success); }
@@ -1358,7 +1358,7 @@ height: 26px;
 }
 .review-empty__title,
 .subagent-empty__title {
-  font-size: var(--text-ui, 13px);
+  font-size: var(--text-ui);
   font-weight: 600;
   color: var(--color-text-muted);
 }
@@ -1382,7 +1382,7 @@ height: 26px;
 .subagent-card__task {
   flex: 1;
   min-width: 0;
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1401,7 +1401,7 @@ height: 26px;
   flex-shrink: 0;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
-  font-size: var(--text-micro, 10px);
+  font-size: var(--text-micro);
   font-weight: var(--font-weight-semibold, 600);
 }
 .subagent-card__phase.is-spawned,
@@ -1415,7 +1415,7 @@ height: 26px;
   display: flex;
   gap: 10px;
   padding: 0 10px 6px;
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   color: var(--color-text-muted);
 }
 .subagent-card__error {
@@ -1427,7 +1427,7 @@ height: 26px;
   border-radius: var(--radius-sm);
   background: var(--color-error-soft);
   color: var(--color-error);
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   line-height: 1.5;
 }
 .subagent-steps {
@@ -1442,7 +1442,7 @@ height: 26px;
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   color: var(--color-text-muted);
   line-height: 1.5;
 }
@@ -1535,7 +1535,7 @@ height: 26px;
   width: 100%;
   padding: 7px 10px;
   border-radius: var(--radius-sm);
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   color: var(--color-text-secondary);
   background: transparent;
   border: none;
@@ -1578,7 +1578,7 @@ height: 26px;
   background: var(--color-bg-tertiary);
   color: var(--color-text-faint);
   font-family: inherit;
-  font-size: var(--text-ui, 13px);
+  font-size: var(--text-ui);
   cursor: pointer;
   transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
 }
@@ -1589,7 +1589,7 @@ height: 26px;
 .sidebar-search-label { flex: 1; text-align: left; }
 .sidebar-search-kbd {
   font-family: var(--font-sans);
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   color: var(--color-text-faint);
   opacity: 0.8;
 }

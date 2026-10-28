@@ -186,6 +186,20 @@ async function mainEntry() {
     setTimeout(() => safeDismiss(false), 600);
   });
 
+  // 托盘图标建不起来：关窗拦截随之失效（点 X 直接退出），这个差异必须说出来，
+  // 否则用户会以为程序"藏进了托盘"，而托盘里根本没有它。
+  listen<string>("hermix:tray-error", (event) => {
+    toastWarning(event.payload || "托盘图标创建失败");
+  });
+
+  // 后端**起不来**的真实原因（二进制缺失 / 被杀软拦 / 库被占）。此前启动
+  // 失败完全静默，用户只能等 20s 探测超时后看到一句"未就绪"，没有任何线索。
+  listen<string>("hermix:backend-error", (event) => {
+    const reason = (event.payload ?? "").trim();
+    toastError(reason ? `本地服务启动失败：${reason}` : "本地服务启动失败");
+    safeDismiss(false);
+  });
+
   // 启动阶段文案：Rust setup 的每个真实步骤都会 emit `hermix:boot-stage`。
   // setup 可能早于前端 listen，所以挂载后回查一次当前阶段补上丢失的事件。
   // 收到即推进阶段；Rust 端最后一步 emit 的文案含"就绪"——此时全阶段点亮

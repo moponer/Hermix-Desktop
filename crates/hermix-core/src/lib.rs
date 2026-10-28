@@ -45,7 +45,7 @@ pub use types::{
     CommandOutput, FunctionCall, FunctionCallDelta, LlmResponse, Message, MessageRole,
     PtySessionInfo, PtySessionOutput, ReasoningContent, ReasoningFormat, Skill, SkillMeta,
     StreamChunk, StreamDelta, ToolCall, ToolCallDelta, ToolErrorRecord, ToolResult, UsageStats,
-    BUDGET_CONFIG_MAX_CHARS,
+    estimate_messages_tokens, estimate_prompt_tokens, BUDGET_CONFIG_MAX_CHARS,
 };
 
 //Re-export Orchestration Engine types

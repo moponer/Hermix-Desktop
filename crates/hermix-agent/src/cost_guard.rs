@@ -73,9 +73,9 @@ pub(crate) fn default_model_cost_per_million(model: &str) -> Option<(f64, f64)> 
 }
 
 /// Estimate the USD cost of one turn's `UsageStats` given the model
-/// and pricing config. Returns `Some(0.0+)` when pricing is known;
-/// `None` only when neither config nor the fallback table has an
-/// entry (provider returned no usage AND model is unknown).
+/// and pricing config. Returns `Some(0.0+)` when pricing is known
+/// (including free proxies, which bill $0); `None` only when neither
+/// config, the pricing DB, nor the fallback table has an entry.
 pub(crate) fn estimate_usage_cost_usd(
     usage: &UsageStats,
     model: &str,
@@ -84,16 +84,44 @@ pub(crate) fn estimate_usage_cost_usd(
     if let Some(v) = usage.estimated_cost {
         return Some(v.max(0.0));
     }
-    let (in_pm, out_pm) = match (
+    // User-pinned per-token rates win over every table.
+    if let (Some(i), Some(o)) = (
         config.prompt_cost_per_million_usd,
         config.completion_cost_per_million_usd,
     ) {
-        (Some(i), Some(o)) => (i, o),
-        _ => default_model_cost_per_million(model)?,
+        let prompt_cost = (usage.prompt_tokens as f64 / 1_000_000.0) * i;
+        let completion_cost = (usage.completion_tokens as f64 / 1_000_000.0) * o;
+        return Some(prompt_cost + completion_cost);
+    }
+    // Rich per-model pricing DB (cache-aware, free-proxy aware,
+    // prefix-tolerant). OpenAI-compatible providers include cache hits
+    // in `prompt_tokens`; Anthropic-native parses report uncached input
+    // there. Subtracting cache reads is exact for the former and a
+    // slight underestimate for the latter — acceptable for a number
+    // labeled "预估".
+    let canonical = hermix_intelligence::CanonicalUsage {
+        input_tokens: usage.prompt_tokens.saturating_sub(usage.cache_read_tokens),
+        output_tokens: usage.completion_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_write_tokens: usage.cache_creation_tokens,
+        reasoning_tokens: usage.reasoning_tokens,
+        request_count: 0,
     };
-    let prompt_cost = (usage.prompt_tokens as f64 / 1_000_000.0) * in_pm;
-    let completion_cost = (usage.completion_tokens as f64 / 1_000_000.0) * out_pm;
-    Some(prompt_cost + completion_cost)
+    let result = hermix_intelligence::calculate_cost(
+        model,
+        &canonical,
+        config.provider.as_deref(),
+        None, // AgentConfig carries no base_url; provider name suffices for routing
+    );
+    match result.status {
+        hermix_intelligence::CostStatus::Unknown => {
+            default_model_cost_per_million(model).map(|(in_pm, out_pm)| {
+                (usage.prompt_tokens as f64 / 1_000_000.0) * in_pm
+                    + (usage.completion_tokens as f64 / 1_000_000.0) * out_pm
+            })
+        }
+        _ => result.amount_usd,
+    }
 }
 
 /// Merge two UsageStats, summing token counts and keeping the latest cost estimate.

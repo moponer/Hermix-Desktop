@@ -1,8 +1,10 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "../ipc";
-import { Minus, Square, X, MessageSquare, Camera, FolderTree } from "lucide-react";
+import { Minus, Square, X, MessageSquare, Camera, FolderTree, WifiOff } from "lucide-react";
 import { useCallback } from "react";
 import { toastWarning } from "../hooks/useToast";
+import { useBackendConnectionContext } from "../context/BackendConnectionContext";
+import { TitleBarConnectionIndicator } from "./TitleBarConnectionIndicator";
 import { CLOSE } from "./strings";
 
 /** 标题栏按**三栏**排布，与下方 .app-body 的三列共用同一组列宽变量
@@ -19,6 +21,11 @@ import { CLOSE } from "./strings";
  *
  *  侧栏折叠 / 搜索是「内容」层级动作，已在侧栏头部与 ChatView 头部，不在此。 */
 export function TitleBar({ title }: { title?: string }) {
+  const { state, restarting, gaveUp, restart } = useBackendConnectionContext();
+  // 只在**已经确知离线**时占用中栏：connecting 是启动过程，splash 盖着，
+  // 过早显示"未连接"是误报。gaveUp = 自动重启失败，仍按离线呈现。
+  const offline = state === "offline" || gaveUp;
+
   const handleMinimize = useCallback(() => {
     try {
       void getCurrentWindow().minimize();
@@ -72,15 +79,32 @@ export function TitleBar({ title }: { title?: string }) {
       </div>
 
       {/* ② 中栏 —— 与主列同宽。会话标题是这一列的主语，标题栏是它的唯一出口：
-          ChatView 的头部不再重复渲染标题（那处只剩左右动作按钮）。 */}
+          ChatView 的头部不再重复渲染标题（那处只剩左右动作按钮）。
+          后端断开时中栏改为状态 + 重试入口：这是全窗口**唯一常驻**的位置，
+          会话标题在这时本来也没意义（点任何东西都会失败）。 */}
       <div className="titlebar-zone titlebar-zone--center">
-        {title && (
-          <>
-            <MessageSquare className="icon-sm titlebar-doc-icon" aria-hidden="true" />
-            <span className="titlebar-doc" title={title}>
-              {title}
-            </span>
-          </>
+        {offline ? (
+          <button
+            type="button"
+            className="chip-flat chip-flat--error no-drag"
+            data-tauri-no-drag
+            onClick={() => void restart()}
+            disabled={restarting}
+            aria-label="本地后端未连接，点击重启后端服务"
+            title={gaveUp ? "自动重启失败，点击重试" : "本地后端未连接，点击重启"}
+          >
+            <WifiOff className="icon-xs" aria-hidden="true" />
+            <span>{restarting ? "正在重启后端…" : "后端未连接 · 重启"}</span>
+          </button>
+        ) : (
+          title && (
+            <>
+              <MessageSquare className="icon-sm titlebar-doc-icon" aria-hidden="true" />
+              <span className="titlebar-doc" title={title}>
+                {title}
+              </span>
+            </>
+          )
         )}
       </div>
 
@@ -91,6 +115,9 @@ export function TitleBar({ title }: { title?: string }) {
           import order — belt and braces, since a swallowed click here
           would leave the window undraggable-but-unclosable. */}
       <div className="titlebar-zone titlebar-zone--right">
+        {/* 连接状态点常驻：此前它只存在于侧栏底部，侧栏一折叠/一收起就
+            完全看不见，用户只能靠"点东西报错"发现后端没了。 */}
+        <TitleBarConnectionIndicator />
         <button
           type="button"
           onClick={handleFileManager}

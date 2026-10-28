@@ -9,7 +9,7 @@
   gap: 6px;
   padding: 6px 12px;
   border-radius: var(--radius-md);
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   font-weight: 500;
   font-family: inherit;
   border: 1px solid transparent;
@@ -93,7 +93,7 @@
 .select {
   width: 100%;
   padding: 7px 10px;
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   color: var(--color-text-primary);
   background: var(--color-bg-primary);
   border-radius: var(--radius-md);
@@ -144,7 +144,7 @@
   gap: 4px;
   padding: 2px 8px;
   border-radius: var(--radius-sm);
-  font-size: var(--text-micro, 10px);
+  font-size: var(--text-micro);
   font-weight: 500;
   font-family: var(--font-mono);
   background: var(--color-bg-tertiary);
@@ -186,14 +186,14 @@
    ════════════════════════════════════════════════════════════════════ */
 
 .composer {
-  border-radius: var(--radius-xl);
-  /* 墨与纸 v4：输入区用 bg-input —— 与画布拉开一档，composer 是独立面
-     而非"画布上的描边框"。但这一档在 notion 下近乎不可见：bg-input 是
-     #f7f7f5（纸面 #fff，亮度比 1.05:1），而 --shadow-paper 在 notion 是
-     `0 0 0 1px rgba(55,53,47,.04)` —— 4% alpha 的 1px 环，等于没有
-     （2026-10-27 用户实测"完全看不出输入位置"）。故补一圈 1px 发丝环把面
-     勾出来：环走 box-shadow，不写 border（G11 禁结构框线）。 */
-  background: var(--color-bg-input);
+  border-radius: var(--radius-composer, var(--radius-2xl));
+  /* 墨与纸 v4：输入框是"卡面"而不是"画布上的描边框"。
+     面用 --color-bg-composer（亮色纸白 / 暗色比纸亮一档），底栏再垫深一档 ——
+     两块靠材质差分层。单靠面上那一档不够：notion 的 --shadow-paper 是
+     `0 0 0 1px rgba(55,53,47,.04)`，4% alpha 的 1px 环等于没有
+     （2026-10-27 用户实测"完全看不出输入位置"），所以再补一圈 1px 发丝环。
+     环走 box-shadow，不写 border（G11 禁结构框线）。 */
+  background: var(--color-bg-composer, var(--color-bg-input));
   box-shadow: var(--shadow-paper), 0 0 0 1px var(--color-border-secondary);
   overflow: visible;
   transition: box-shadow var(--duration-fast) ease;
@@ -207,24 +207,27 @@
     0 0 0 1px var(--color-border-secondary),
     0 0 0 4px color-mix(in srgb, var(--color-text-primary) 12%, transparent);
 }
-/* Composer 三层材质 · ③ 底部副条（墨与纸 v4）：渐变贴底而非平涂，
-   顶部分隔线与外框描边共用同一 token（--color-border-primary）——
-   内部层次与外部轮廓共用一根线（WorkBuddy 规律 6）。 */
+/* Composer 两段式：白卡（输入区）/ 灰底栏（工具行 + 会话设置）。
+   底栏是一整条托盘，与卡面只隔一根发丝；托盘内部靠字号与字色的重量
+   递减分层（13px secondary → 12px muted），不再用第二条横线切出三条灰带。 */
+.composer-deck {
+  /* 托盘只比卡面深一档（不是最深一档）：底栏已经占了卡片近一半高度，
+     压到 quaternary 会让下半张卡显成"页脚"。层次交给顶线 + 字号递减。 */
+  background: var(--color-bg-tertiary);
+  box-shadow: inset 0 1px 0 var(--color-border-secondary);
+  /* 托盘贴容器底边，必须内收 1px 跟随圆角，否则直角会从圆角容器里戳出来 */
+  border-radius: 0 0 calc(var(--radius-composer, var(--radius-2xl)) - 1px)
+    calc(var(--radius-composer, var(--radius-2xl)) - 1px);
+}
+
+/* 会话设置行：底栏的第二层，字号/字色都比工具行低一档，无独立底色。 */
 .composer-subbar {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 0 10px;
-  height: 38px;
+  height: 34px;
   flex-shrink: 0;
-  /* 副条用 tertiary→quaternary 渐变（浅 #ededed→#e3e3e3、暗 #292929→#313131）：
-     与输入区（#f6f6f6 / #1f1f1f）相差一整个明度档，可感知地分开——
-     此前 mix(app) 只差 2%，用户实测"输入框背景与下面的一样"。
-     暗色向下渐亮恰好与 WorkBuddy 副条（#212121→#272727）同向。 */
-  background: linear-gradient(180deg, var(--color-bg-tertiary), var(--color-bg-quaternary));
-  /* 副条贴着容器底边，必须内收 1px 跟随容器圆角，否则直角会从
-     圆角容器里戳出来（用户实测截图问题 ①） */
-  border-radius: 0 0 calc(var(--radius-xl) - 1px) calc(var(--radius-xl) - 1px);
 }
 
 

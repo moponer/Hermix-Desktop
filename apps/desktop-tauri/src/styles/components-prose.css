@@ -501,7 +501,7 @@
   gap: 8px;
   padding: 4px 10px 4px 8px;
   border-radius: 999px;
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   font-weight: 500;
   color: var(--color-text-secondary);
   background: var(--color-bg-secondary);
@@ -540,7 +540,7 @@
 .wait-for-input-label {
   /* 2026-10-01 用户反馈：与操作条一起从 tiny(11px) 提到 meta(12px)——
      同一条提示行上的元素要一个视觉档位。italic 保留（轻量提示语义）。 */
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   color: var(--color-text-faint);
   font-weight: 400;
   letter-spacing: 0.02em;
@@ -696,7 +696,7 @@
 }
 .fcx-stat {
   font-family: var(--font-mono);
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   font-variant-numeric: tabular-nums;
 }
 .fcx-stat--add { color: var(--color-success); }
@@ -762,7 +762,7 @@
   min-width: 0;
   color: var(--color-text-faint);
   font-family: var(--font-mono);
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1100,14 +1100,14 @@
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--color-text-primary);
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   line-height: 1.55;
   letter-spacing: 0.01em;
 }
 .stream-error-card__tip {
   min-width: 0;
   color: var(--color-text-faint);
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   line-height: 1.55;
   letter-spacing: 0.015em;
   margin-top: 1px;
@@ -1182,7 +1182,7 @@
   border-radius: var(--radius-sm, 4px);
   background: color-mix(in srgb, var(--color-warning) 10%, transparent);
   color: var(--color-text-primary);
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   font-weight: 500;
   line-height: 1.3;
   cursor: pointer;

@@ -528,7 +528,7 @@
   padding: 4px 10px;
   border-radius: 5px;
   background: color-mix(in srgb, var(--color-bg-tertiary) 100%, transparent);
-  font-size: var(--text-tiny, 11px);
+  font-size: var(--text-tiny);
   line-height: 1.4;
   overflow-x: auto;
   white-space: nowrap;
@@ -623,7 +623,7 @@
   border-radius: 4px;
   cursor: pointer;
   transition: background 120ms ease;
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-meta);
   color: var(--color-text-primary);
   /* 列表行不可选中：双击文件名时浏览器会选中文本（高亮块），
      表现为"双击后文件名变色"。系统资源管理器同样不允许在列表里选文本。 */
@@ -663,7 +663,7 @@
   align-items: center;
   gap: 0;
   padding: 6px 8px 4px;
-  font-size: var(--text-micro, 10px);
+  font-size: var(--text-micro);
   font-weight: 600;
   color: var(--color-text-muted);
   letter-spacing: 0.03em;
@@ -765,7 +765,7 @@
   height: 22px;
   padding: 0 10px;
   background: color-mix(in srgb, var(--color-bg-primary) 94%, var(--color-bg-tertiary));
-  font-size: var(--text-micro, 10px);
+  font-size: var(--text-micro);
   color: var(--color-text-muted);
   flex-shrink: 0;
 }

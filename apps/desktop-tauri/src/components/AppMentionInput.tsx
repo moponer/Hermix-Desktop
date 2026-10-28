@@ -192,7 +192,7 @@ function AppMentionInputImpl({
   const panelTitle = `自定义应用 · ${apps.length}`;
 
   return (
-    <div className="relative">
+    <div className="relative mention-input">
       {/* 滚动容器：长文本时由它滚动，textarea 自身保持不滚动。 */}
       <div
         ref={scrollHostRef}
@@ -204,7 +204,7 @@ function AppMentionInputImpl({
           <div
             ref={backdropRef}
             aria-hidden
-            className="absolute inset-0 pointer-events-none overflow-hidden whitespace-pre-wrap break-words px-4 pt-3.5 pb-1.5 text-text-primary"
+            className="absolute inset-0 pointer-events-none overflow-hidden whitespace-pre-wrap break-words px-4 pt-4 pb-3 text-text-primary"
             style={{
               fontSize: "var(--font-size-body)",
               lineHeight: 1.5,
@@ -240,7 +240,7 @@ function AppMentionInputImpl({
             disabled={disabled}
             placeholder={isStreaming ? "输入消息加入队列…" : placeholder}
             data-no-border
-            className="relative z-[1] w-full bg-transparent resize-none outline-none px-4 pt-3.5 pb-1.5 min-h-[72px]"
+            className="relative z-[1] w-full bg-transparent resize-none outline-none px-4 pt-4 pb-3 min-h-[76px]"
             style={{
               fontSize: "var(--font-size-body)",
               lineHeight: 1.5,

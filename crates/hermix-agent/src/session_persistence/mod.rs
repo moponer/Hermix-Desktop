@@ -424,6 +424,9 @@ pub struct UsageAggregate {
     /// a concrete number: how much history compression kept.
     pub total_archived_turns: u64,
     pub total_estimated_cost: f64,
+    /// Calls whose provider-reported counts failed the local-anchor
+    /// sanity check (values replaced by the local estimate).
+    pub total_untrusted_calls: u64,
     /// per-day breakdown for the time-curve SVG on `/insights`.
     /// Length is `days + 1` covering the full window (today inclusive).
     pub daily: Vec<DailyUsageRow>,
@@ -450,6 +453,30 @@ pub struct ModelUsageRow {
     pub cache_creation_tokens: u64,
     pub reasoning_tokens: u64,
     pub estimated_cost: f64,
+    /// Rows in this model bucket whose reported counts failed the
+    /// local-anchor sanity check (values already replaced by the local
+    /// estimate upstream) — drives the UI "上报口径异常" badge.
+    pub untrusted_calls: u64,
+}
+
+/// Per-session cumulative token usage — what the chat composer's
+/// token-detail card shows. One `token_usage` row per API call now, so
+/// the sums are true billed-equivalent totals for this conversation.
+/// `prompt_tokens` includes cache hits (OpenAI-compatible semantics):
+/// the UI derives uncached input as `prompt - cache_read`.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUsageTotals {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub estimated_cost: f64,
+    /// Number of API calls recorded for this session.
+    pub calls: u64,
+    /// Calls whose provider report failed the local anchor check.
+    pub untrusted_calls: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

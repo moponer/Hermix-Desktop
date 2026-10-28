@@ -83,6 +83,8 @@ windows = { version = "0.58", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   # 原生幕布窗（backdrop.rs）：GetModuleHandleW（窗口类注册）
   "Win32_System_LibraryLoader",
+  # desktop_log.rs：GUI 子系统没有控制台，stderr 句柄必须自己指到日志文件
+  "Win32_System_Console",
 ] }
 
 [target.windows.dependencies]
@@ -109,6 +111,6 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [features]
 # 生产构建（release.sh）必须开：tauri-build 见不到 CARGO_FEATURE_CUSTOM_PROTOCOL
 # 就发 cfg(dev)，generate_context! 不嵌前端资产、窗口直接导航 devUrl
-# （localhost:1420）——用户机器上表现为「localhost 拒绝连接」错误页。
+# （127.0.0.1:1420）——用户机器上表现为「拒绝连接」错误页。
 # dev 工作流（cargo run）不开此 feature，走 devUrl 热更新，互不干扰。
 custom-protocol = ["tauri/custom-protocol"]

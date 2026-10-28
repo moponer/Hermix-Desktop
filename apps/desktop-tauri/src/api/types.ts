@@ -311,6 +311,19 @@ export interface AnalyticsDailyEntry {
   estimated_cache_hit_rate?: number;
 }
 
+/** 单会话累计用量（GET /v1/sessions/{id}/usage）。`promptTokens` 含缓存
+ *  命中部分（OpenAI 兼容口径）：未命中 = promptTokens − cacheReadTokens。 */
+export interface SessionUsageTotals {
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  reasoningTokens: number;
+  estimatedCost: number;
+  calls: number;
+  untrustedCalls: number;
+}
+
 export interface AnalyticsModelEntry {
   model: string;
   input_tokens: number;
@@ -320,6 +333,12 @@ export interface AnalyticsModelEntry {
   reasoning_tokens: number;
   estimated_cost: number;
   sessions: number;
+  /** calls whose provider-reported counts failed the local sanity
+   *  check (values already replaced by the local estimate). */
+  untrusted_calls?: number;
+  /** true when the pricing DB knows this model (or routes it as
+   *  subscription-included); false ⇒ show "—" instead of $0.0000. */
+  cost_known?: boolean;
   /** estimated cache hit rate (0..100) when real cache reads are 0. */
   estimated_cache_hit_rate?: number;
 }
@@ -335,6 +354,10 @@ export interface AnalyticsTotals {
   total_sessions: number;
   total_compactions: number;
   total_archived_turns: number;
+  /** provider reports that failed the local sanity check. */
+  total_untrusted_calls?: number;
+  /** true when at least one model has known pricing. */
+  cost_known?: boolean;
   /** estimated overall cache hit rate (0..100) when real cache
    *  reads are 0; `undefined` means use the real `total_cache_read`. */
   estimated_cache_hit_rate?: number;

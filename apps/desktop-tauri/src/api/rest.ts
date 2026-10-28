@@ -21,6 +21,7 @@ import type {
   RestoredContextUsage,
   SessionMessagesResult,
   SessionSummary,
+  SessionUsageTotals,
   SkillContent,
   SkillInfo,
   TickLoopStatus,
@@ -92,6 +93,7 @@ export async function apiInvoke(
   path: string,
   body?: unknown,
   signal?: AbortSignal,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<ApiReply> {
   // 调用点传入的 body 已经是 JSON 文本（fetchJSON 里 JSON.stringify 的产物）。
   // 这里绝不能再 stringify 一次：字符串会被再包一层引号，server 端把该文本
@@ -103,7 +105,7 @@ export async function apiInvoke(
       : typeof body === "string"
         ? body
         : JSON.stringify(body);
-  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const combined = signal
     ? AbortSignal.any([signal, timeoutSignal])
     : timeoutSignal;
@@ -126,7 +128,7 @@ export async function apiInvoke(
       reject(
         new DOMException(
           combined.reason?.name === "TimeoutError"
-            ? `request timed out after ${REQUEST_TIMEOUT_MS}ms`
+            ? `request timed out after ${timeoutMs}ms`
             : "request aborted",
           combined.reason?.name === "TimeoutError" ? "TimeoutError" : "AbortError",
         ),
@@ -148,10 +150,34 @@ export async function apiInvoke(
   return JSON.parse(raw) as ApiReply;
 }
 
+/** 单次请求的可选参数（与 `RequestInit` 分开：`timeoutMs` 不是 fetch 字段，
+ *  塞进 `init` 会被当真发给桥）。 */
+export interface FetchOptions {
+  /** 覆盖默认的 10s 客户端死线。用于**非流式的一整轮 LLM 生成**这类
+   *  天然超过 10s 的调用（增强提示词 = 150-600 字，90s）。 */
+  timeoutMs?: number;
+}
+
+/** 桥层 503 "backend offline" 的统一文案。
+ *
+ *  Rust 侧 `backend_http_request` 在桥不在位/该代已死时返回
+ *  `{"status":503,"body":"backend offline"}` 信封（commands.rs）。此前这行
+ *  英文字符串一路冒到 toast 里 —— 用户看到的是 "HTTP 503: backend offline"
+ *  这类协议黑话，而真正该说的是「后端没连上」。 */
+function offlineMessage(status: number, body: string): string | null {
+  return status === 503 && /backend offline/i.test(body)
+    ? "本地后端未连接（服务未启动或正在重启）"
+    : null;
+}
+
 /** JSON fetch over the stdio bridge. Throws on non-2xx, mirroring
  *  the old `fetch()` semantics so call sites keep their
  *  `try { ... } catch { return null }` shape. */
-export async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+export async function fetchJSON<T>(
+  path: string,
+  init?: RequestInit,
+  opts?: FetchOptions,
+): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const body =
     init?.body == null
@@ -170,8 +196,16 @@ export async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T>
   // go through raw `fetch()` — see `api/polish.ts` — because silently
   // dropping it here is exactly the failure mode this note exists to
   // prevent.
-  const reply = await apiInvoke(method, path, body, init?.signal ?? undefined);
+  const reply = await apiInvoke(
+    method,
+    path,
+    body,
+    init?.signal ?? undefined,
+    opts?.timeoutMs,
+  );
   if (reply.status < 200 || reply.status >= 300) {
+    const offline = offlineMessage(reply.status, reply.body);
+    if (offline) throw new Error(offline);
     const message = reply.enc === "utf8"
       ? (() => {
           try {
@@ -239,7 +273,7 @@ async function fetchVoid(path: string, init?: RequestInit): Promise<void> {
         : JSON.stringify(init.body);
   const reply = await apiInvoke(method, path, body, init?.signal ?? undefined);
   if (reply.status < 200 || reply.status >= 300) {
-    throw new Error(`HTTP ${reply.status}: ${reply.body}`);
+    throw new Error(offlineMessage(reply.status, reply.body) ?? `HTTP ${reply.status}: ${reply.body}`);
   }
 }
 
@@ -557,6 +591,11 @@ export const getSessionMessages = async (
     totalMessages: res.total_messages ?? messages.length,
   };
 };
+
+/** 单个会话的累计 token 用量（输入/输出/缓存/思考），供输入框上方的
+ *  Token 消耗卡片使用。后端按 `token_usage`（一行 = 一次 API 调用）求和。 */
+export const getSessionUsage = async (id: string): Promise<SessionUsageTotals> =>
+  fetchJSON<SessionUsageTotals>(`/v1/sessions/${encodeURIComponent(id)}/usage`);
 
 // sendMessage（REST 版 POST /v1/sessions/{id}/messages）于 2026-10-18
 // 移除：消息发送已全面走 stream:<sid> WS 通道（useStreamChat），REST

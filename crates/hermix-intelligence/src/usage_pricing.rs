@@ -222,51 +222,88 @@ fn official_pricing_db() -> HashMap<(&'static str, &'static str), PricingEntry> 
         None,
     );
 
-    // DeepSeek
-    add(&mut db, "deepseek", "deepseek-chat", 0.14, 0.28, None, None);
+    // DeepSeek — official pricing snapshot (api-docs.deepseek.com,
+    // 2026-08-17 峰谷调价后). `input` below is the PEAK cache-miss rate
+    // (upper bound for an estimate; off-peak is half). Cache-hit input
+    // goes into cache_read_cost_per_million. `deepseek-chat` /
+    // `deepseek-reasoner` are legacy aliases routed to
+    // DeepSeek-V4.1-Flash by the provider — priced the same.
+    add(
+        &mut db,
+        "deepseek",
+        "deepseek-flash",
+        0.30,
+        1.20,
+        Some(0.006),
+        None,
+    );
+    add(
+        &mut db,
+        "deepseek",
+        "deepseek-v4-flash",
+        0.30,
+        1.20,
+        Some(0.006),
+        None,
+    );
+    add(
+        &mut db,
+        "deepseek",
+        "deepseek-chat",
+        0.30,
+        1.20,
+        Some(0.006),
+        None,
+    );
     add(
         &mut db,
         "deepseek",
         "deepseek-reasoner",
+        0.30,
+        1.20,
+        Some(0.006),
+        None,
+    );
+    add(
+        &mut db,
+        "deepseek",
+        "deepseek-v4-pro",
+        1.32,
+        3.96,
+        Some(0.044),
+        None,
+    );
+
+    // MiniMax — official/cross-platform snapshot (pricepertoken.com,
+    // 2026-10-26; cross-checked against MiniMax 官方按量页 2026-10).
+    // Cache write is not billed separately (None). M2.7 deliberately
+    // omitted: its listed input/output price is $0.000 (promo or data
+    // anomaly) — guessing would be worse than showing "—".
+    add(
+        &mut db,
+        "minimax",
+        "minimax-m3",
+        0.224,
+        0.88,
+        Some(0.0448),
+        None,
+    );
+    add(
+        &mut db,
+        "minimax",
+        "minimax-m3.1-flash",
+        0.10,
         0.55,
-        2.19,
-        None,
-        None,
-    );
-    add(
-        &mut db,
-        "deepseek",
-        "deepseek-v4-flash",
-        0.14,
-        0.28,
-        None,
+        Some(0.01),
         None,
     );
     add(
         &mut db,
-        "deepseek",
-        "deepseek-v4-pro",
-        1.74,
-        3.48,
-        None,
-        None,
-    );
-    add(
-        &mut db,
-        "deepseek",
-        "deepseek-v4-flash",
-        0.14,
-        0.28,
-        Some(0.028),
-        None,
-    );
-    add(
-        &mut db,
-        "deepseek",
-        "deepseek-v4-pro",
-        1.74,
-        3.48,
-        Some(0.145),
+        "minimax",
+        "minimax-m2.5",
+        0.27,
+        0.95,
+        Some(0.027),
         None,
     );
 
@@ -278,6 +315,14 @@ fn official_pricing_db() -> HashMap<(&'static str, &'static str), PricingEntry> 
 // ---------------------------------------------------------------------------
 
 /// Resolve billing route from model/provider/base_url.
+///
+/// Model strings arrive in several shapes depending on how the agent
+/// was configured: bare (`MiniMax-M3`), provider-prefixed
+/// (`minimax:MiniMax-M3`), or proxy-prefixed
+/// (`kilo:minimax/minimax-m3`). The prefix before the first `:` (when
+/// present) is treated as the provider when none was given explicitly,
+/// and any remaining `vendor/` segment is stripped before the DB
+/// lookup — so all three shapes resolve to the same pricing entry.
 pub fn resolve_billing_route(
     model_name: &str,
     provider: Option<&str>,
@@ -285,8 +330,45 @@ pub fn resolve_billing_route(
 ) -> BillingRoute {
     let provider_name = provider.unwrap_or("").trim().to_lowercase();
     let base = base_url.unwrap_or("").trim().to_lowercase();
-    let model = model_name.trim().to_string();
+    let raw_model = model_name.trim();
 
+    // Strip a `prefix:` provider tag; adopt it as the provider when the
+    // caller didn't supply one.
+    let (effective_provider, model_body) = match raw_model.split_once(':') {
+        Some((prefix, rest)) if !prefix.is_empty() && !rest.is_empty() => (
+            if provider_name.is_empty() {
+                prefix.to_lowercase()
+            } else {
+                provider_name
+            },
+            rest,
+        ),
+        _ => (provider_name, raw_model),
+    };
+
+    // Free proxies bill nothing to the user ("custom-free:…" hermix
+    // model ids, OpenRouter `…:free` variants). Checked after prefix
+    // extraction so the marker inside the prefix isn't hidden.
+    if effective_provider.contains("free") || raw_model.to_lowercase().contains(":free") {
+        return BillingRoute {
+            provider: if effective_provider.is_empty() {
+                "free-proxy".into()
+            } else {
+                effective_provider
+            },
+            model: raw_model.to_string(),
+            base_url: base,
+            billing_mode: BillingMode::SubscriptionIncluded,
+        };
+    }
+
+    let model = model_body
+        .split('/')
+        .next_back()
+        .unwrap_or(model_body)
+        .to_string();
+
+    let provider_name = effective_provider;
     if provider_name == "openai-codex" {
         return BillingRoute {
             provider: "openai-codex".into(),
@@ -365,6 +447,20 @@ pub fn get_pricing_entry(
     let mut candidates: Vec<_> = db
         .iter()
         .filter(|((p, m), _)| *p == route.provider.as_str() && model_lower.contains(*m))
+        .collect();
+    candidates.sort_by_key(|b| std::cmp::Reverse(b.0 .1.len()));
+    if let Some(entry) = candidates.first() {
+        return Some((*entry).1.clone());
+    }
+
+    // Global substring fallback: the model string may carry a proxy
+    // tag we couldn't attribute to a provider ("kilo:minimax/…") or
+    // the route resolution may have produced an unknown provider. The
+    // model name itself is usually distinctive enough to find the
+    // entry anyway.
+    let mut candidates: Vec<_> = db
+        .iter()
+        .filter(|((_, m), _)| model_lower.contains(*m))
         .collect();
     candidates.sort_by_key(|b| std::cmp::Reverse(b.0 .1.len()));
     candidates.first().map(|(_, entry)| (*entry).clone())
@@ -613,6 +709,63 @@ mod tests {
         let result = calculate_cost("gpt-4o", &usage, Some("openai-codex"), None);
         assert_eq!(result.status, CostStatus::Included);
         assert_eq!(result.amount_usd, Some(0.0));
+    }
+
+    #[test]
+    fn free_proxy_prefix_routes_as_included() {
+        // hermix custom free proxy model id
+        let route = resolve_billing_route("custom-free:kilo:minimax/minimax-m3", None, None);
+        assert_eq!(route.billing_mode, BillingMode::SubscriptionIncluded);
+        let usage = CanonicalUsage {
+            input_tokens: 1_000_000.0 as u64,
+            output_tokens: 100_000,
+            ..Default::default()
+        };
+        let result = calculate_cost("custom-free:kilo:minimax/minimax-m3", &usage, None, None);
+        assert_eq!(result.status, CostStatus::Included);
+        assert_eq!(result.amount_usd, Some(0.0));
+    }
+
+    #[test]
+    fn provider_prefix_is_stripped_and_adopted() {
+        // "minimax:MiniMax-M3" → provider "minimax", model "minimax-m3"
+        let route = resolve_billing_route("minimax:MiniMax-M3", None, None);
+        assert_eq!(route.provider, "minimax");
+        let entry = get_pricing_entry("minimax:MiniMax-M3", None, None).expect("minimax-m3 entry");
+        assert_eq!(entry.input_cost_per_million, Some(0.224));
+        assert_eq!(entry.output_cost_per_million, Some(0.88));
+        assert_eq!(entry.cache_read_cost_per_million, Some(0.0448));
+    }
+
+    #[test]
+    fn global_substring_fallback_finds_proxy_tagged_model() {
+        // provider tag "kilo" is not in the DB; the model name is.
+        let entry = get_pricing_entry("kilo:minimax/minimax-m3.1-flash", None, None)
+            .expect("global fallback finds minimax-m3.1-flash");
+        assert_eq!(entry.input_cost_per_million, Some(0.10));
+    }
+
+    #[test]
+    fn deepseek_2026_pricing_with_cache_hit() {
+        let usage = CanonicalUsage {
+            input_tokens: 400_000, // cache miss
+            cache_read_tokens: 600_000,
+            output_tokens: 100_000,
+            ..Default::default()
+        };
+        let result = calculate_cost("deepseek:deepseek-chat", &usage, None, None);
+        assert_eq!(result.status, CostStatus::Estimated);
+        // 0.4 × $0.30 + 0.6 × $0.006 + 0.1 × $1.20
+        let expected = 0.4 * 0.30 + 0.6 * 0.006 + 0.1 * 1.20;
+        assert!((result.amount_usd.unwrap() - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unknown_model_stays_unknown() {
+        let usage = CanonicalUsage::default();
+        let result = calculate_cost("totally-unknown-model-xyz", &usage, None, None);
+        assert_eq!(result.status, CostStatus::Unknown);
+        assert_eq!(result.amount_usd, None);
     }
 
     #[test]

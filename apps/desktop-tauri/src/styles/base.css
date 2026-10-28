@@ -12,7 +12,7 @@ body {
      并不相同（多了 Source Han Sans CN / Noto Sans CJK SC / Roboto /
      Helvetica Neue，少了 Segoe UI Variable）。现在统一引用唯一真相源。 */
   font-family: var(--font-sans);
-  font-size: var(--font-size-body);
+  font-size: var(--text-body);
   line-height: 1.5;
   /* 2026-10-02：禁用**合成**粗体 / 斜体。
    *
@@ -188,7 +188,7 @@ select:focus-visible {
   color: var(--color-text-primary);
   pointer-events: auto;
   cursor: pointer;
-  font-size: var(--font-size-meta);
+  font-size: var(--text-meta);
   animation: toast-in 0.18s var(--ease-out);
   transition:
     box-shadow var(--duration-fast) ease,
