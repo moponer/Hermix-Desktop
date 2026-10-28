@@ -699,6 +699,10 @@ impl LocalAgentService {
             session_id: session_id.to_string(),
             workspace: agent_config.workspace.clone().map(std::path::PathBuf::from),
             approval_ctx: hermix_tools::TerminalApprovalContext {
+                // 本轮的权限级别必须随上下文下发：工具内部的 Caution 确认
+                // （terminal 的命令风险判断）不看派发层的 `Full` 直通，
+                // 少了这个字段，放手模式仍会一命令一弹卡（2026-10-28 实报）。
+                permission: agent_config.permission.unwrap_or(PermissionLevel::Default),
                 session_id: session_id.to_string(),
                 requester: effective_overrides.approval_requester.clone(),
                 on_event: effective_overrides.on_event.clone(),
@@ -1968,7 +1972,15 @@ impl AgentService for LocalAgentService {
                     let guard = profile_arc_for_dispatch
                         .lock()
                         .expect("profile_arc poisoned");
-                    if let Some(resource) = Self::resource_guard(tc, &guard, &raw_params) {
+                    // 放手模式下资源门也不问：用户已声明「所有操作直接执行」，
+                    // 越界删除再弹一张授权卡与「放手」自相矛盾。
+                    // L0 硬底线仍在 decide_pre_tool_dispatch 里先跑，绕不过。
+                    let resource = if permission == PermissionLevel::Full {
+                        None
+                    } else {
+                        Self::resource_guard(tc, &guard, &raw_params)
+                    };
+                    if let Some(resource) = resource {
                         drop(guard);
                         // Schema-required gate before the approval raise —
                         // same rationale as `decide_pre_tool_dispatch`.

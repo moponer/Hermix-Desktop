@@ -10,20 +10,13 @@
 // 设计纪律：颜色/字号只走令牌类；验收状态用语义色文字（--color-text-*）
 // 不做色条；无轮询假进度——运行中的卡片只展示已发生的状态字段。
 import { useCallback, useMemo, useState } from "react";
-import {
-  Bot,
-  CheckCircle2,
-  CircleAlert,
-  Gauge,
-  KanbanSquare,
-  PauseCircle,
-  ScrollText,
-} from "lucide-react";
+import { Bot, Gauge, KanbanSquare, PauseCircle, ScrollText } from "lucide-react";
 import { fetchJSON } from "../api/rest";
 import type { IconTone } from "../lib/categoryTone";
 import { EmptyState, IconTile, Modal, PageHeader, SegmentedControl, SkeletonCard } from "./ui";
 import { toastError } from "../hooks/useToast";
 import { usePolling } from "../hooks/usePolling";
+import { pad2 } from "../lib/readout";
 
 type BoardTab = "tickets" | "team" | "resource";
 
@@ -86,23 +79,33 @@ const ROLE_TONE: Record<string, IconTone> = {
 };
 const FALLBACK_TONE: IconTone = "slate";
 
+/** 从 `Error: xxx` 里抽出可读错误码：去前缀、只留首行、限长。 */
+function errCode(text: string): string {
+  const line = (text || "后端没有响应").replace(/^Error:\s*/i, "").split("\n")[0].trim();
+  return line.length > 72 ? `${line.slice(0, 70)}…` : line;
+}
+
 /** 拉取失败的就地面板：说清**哪一路**失败（各路独立后这是必需的），
- *  给手动重试；60s 自动轮询照旧，恢复后自动回到正常渲染。 */
+ *  给手动重连；自动轮询照旧，恢复后自动回到正常渲染。
+ *
+ *  2026-10-28 重做：原来是一整块 `bg-error-soft` 淡红底 + 红字大段说明，
+ *  在纸面上非常刺眼（用户实测「多难看」），而且和「资源闸门」「角色解析
+ *  失败」各写一套。现在统一成观测台的状态行：
+ *  一枚灯 + 等宽错误码 + 一行说明 —— 颜色只出现在灯与错误码上，
+ *  纸面保持中性，扫一眼就知道「哪条链路断了、断在哪」。 */
 function LoadError({ what, text, onRetry }: { what: string; text: string; onRetry: () => void }) {
   return (
-    <div className="rounded-[var(--radius-md)] bg-error-soft p-4 text-[length:var(--text-ui)] text-text-error">
-      <p className="flex items-start gap-1.5">
-        <CircleAlert className="icon-md mt-0.5 shrink-0" />
-        <span>
-          {what}暂时加载不出来：{text || "后端没有响应"}。下面可以重试，或等它自动再试。
-        </span>
-      </p>
-      <button
-        type="button"
-        className="mt-2 rounded-[var(--radius-sm)] px-3 py-1.5 text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-tertiary hover:text-text-primary"
-        onClick={onRetry}
-      >
-        重试
+    <div className="mboard-fault" role="alert">
+      <span className="mboard-fault__led" aria-hidden />
+      <div className="mboard-fault__body">
+        <p className="mboard-fault__line">
+          <span className="mboard-fault__what">{what} · 链路中断</span>
+          <code className="mboard-fault__code">{errCode(text)}</code>
+        </p>
+        <p className="mboard-fault__hint">会自动重连，也可以现在手动重试。</p>
+      </div>
+      <button type="button" className="mboard-fault__retry" onClick={onRetry}>
+        重连
       </button>
     </div>
   );
@@ -393,13 +396,16 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
             ) : (
               <>
                 {roleErrors.length > 0 && (
-                  <div className="mb-4 rounded-[var(--radius-md)] bg-warning-soft p-3 text-[length:var(--text-ui)] text-text-warning">
-                    {roleErrors.length} 个角色文件解析失败（已跳过）：
-                    {roleErrors.map((e) => (
-                      <p key={e.file} className="mt-1 text-[length:var(--text-meta)]">
-                        {e.file} — {e.error}
-                      </p>
-                    ))}
+                  <div className="mboard-stat mb-4" data-tone="warning">
+                    <span className="mboard-stat__led" aria-hidden />
+                    <span className="mboard-stat__text">
+                      <b>{roleErrors.length}</b> 个角色文件解析失败（已跳过）
+                      {roleErrors.map((e) => (
+                        <span key={e.file} className="mboard-stat__detail">
+                          {e.file} — {e.error}
+                        </span>
+                      ))}
+                    </span>
                   </div>
                 )}
                 <div className="flex flex-col gap-2">
@@ -446,16 +452,17 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
             ) : (
               <div className="flex flex-col gap-3">
                 {patrol.dispatch_blocked ? (
-                  <div className="flex items-start gap-2 rounded-[var(--radius-md)] bg-error-soft p-3 text-[length:var(--text-ui)] text-text-error">
-                    <CircleAlert className="icon-md mt-0.5 shrink-0" />
-                    <span>
-                      资源闸门越限，已停派新工单。C 盘剩余 {fmtGiB(patrol.c_drive_low_free_bytes)}；清理空间后自动恢复。
+                  <div className="mboard-stat" data-tone="error">
+                    <span className="mboard-stat__led" aria-hidden />
+                    <span className="mboard-stat__text">
+                      资源闸门越限，已停派新工单。C 盘剩余{" "}
+                      <b>{fmtGiB(patrol.c_drive_low_free_bytes)}</b>，清理空间后自动恢复。
                     </span>
                   </div>
                 ) : (
-                  <div className="flex items-start gap-2 rounded-[var(--radius-md)] bg-success-soft p-3 text-[length:var(--text-ui)] text-text-success">
-                    <CheckCircle2 className="icon-md mt-0.5 shrink-0" />
-                    <span>资源正常，工单派发放行中。</span>
+                  <div className="mboard-stat" data-tone="ok">
+                    <span className="mboard-stat__led" aria-hidden />
+                    <span className="mboard-stat__text">资源正常，工单派发放行中。</span>
                   </div>
                 )}
                 <div className="rounded-[var(--radius-md)] border border-border-subtle bg-bg-secondary p-4">
@@ -584,22 +591,37 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
   );
 
   if (embedded) {
-    // 阿黎值守页中轴「任务」页签：窄容器、自带分段条与滚动。
+    // 阿黎值守页中轴「任务」页签：窄容器、自带通道页签与滚动。
+    //
+    // 2026-10-28：这里原本是通用分段控件（胶囊白底），与同一屏里的
+    // 「对话 / 数据 / 任务」通道页签是两种语言 —— 一屏两套页签形态，
+    // 看起来就像两个不同的产品拼在一起。改为同族的通道页签：
+    // 编号 + 标签 + 等宽计数，选中项靠 2px 实心底线与淡底（不位移）。
+    const tabs: Array<{ key: BoardTab; label: string; n: number | null }> = [
+      { key: "tickets", label: "工单", n: members ? members.length : null },
+      { key: "team", label: "团队", n: roles ? roles.length : null },
+      { key: "resource", label: "资源", n: null },
+    ];
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex h-10 shrink-0 items-center px-4">
-          <SegmentedControl
-            label="任务台视图"
-            as="tablist"
-            size="sm"
-            value={tab}
-            onChange={setTab}
-            options={[
-              { value: "tickets", label: `工单${members ? ` ${members.length}` : ""}` },
-              { value: "team", label: "团队" },
-              { value: "resource", label: "资源" },
-            ]}
-          />
+          <div className="board-tabs" role="group" aria-label="任务台视图">
+            {tabs.map((t, i) => (
+              <button
+                key={t.key}
+                type="button"
+                aria-pressed={tab === t.key}
+                className="board-tab"
+                onClick={() => setTab(t.key)}
+              >
+                <span className="board-tab__code" aria-hidden>
+                  {pad2(i + 1)}
+                </span>
+                {t.label}
+                {t.n != null ? <b className="board-tab__n">{pad2(t.n)}</b> : null}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
           <div className="mx-auto max-w-5xl">{inner}</div>

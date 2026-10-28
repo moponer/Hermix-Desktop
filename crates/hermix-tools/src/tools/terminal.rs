@@ -184,6 +184,20 @@ impl TerminalHandler {
         // lock needed. The caller (execute_inner) obtained it from
         // either the global Arc (execute path) or ctx (ContextAware
         // path), so it's already scoped to this call.
+        // ── 放手模式：不再申请权限 ──────────────────────────────────
+        // 2026-10-28 实报："切到放手模式后 terminal 还是会弹审批"。
+        // 根因：派发层的 `Full → Allow` 只手"要不要先问"，管不到工具
+        // 自己的 Caution 确认；本函数此前完全不看权限级别，于是内部
+        // 确认路径照弹。口径统一为：Full = 不问，直接执行。
+        // 硬底线不在此处放宽 —— hardline blocklist 在派发层先跑，
+        // `Full` 也绕不过（见 dispatch_policy 的 L0）。
+        if approval_ctx.permission == hermix_core::traits::PermissionLevel::Full {
+            tracing::info!(
+                command = %effective_cmd,
+                "terminal: permission=full — auto-approved without prompting"
+            );
+            return Some(ApprovalOutcome::Approved);
+        }
         if !approval_ctx.is_wired() {
             return None;
         }
@@ -1287,6 +1301,7 @@ mod tests {
             session_id: "sess-test".to_string(),
             requester: Some(requester),
             on_event: Some(on_event),
+            ..Default::default()
         };
 
         (
@@ -1294,6 +1309,36 @@ mod tests {
             reg,
             captured_event,
         )
+    }
+
+    #[tokio::test]
+    async fn full_permission_skips_prompt_and_does_not_emit_event() {
+        // 放手模式（PermissionLevel::Full）：工具内部的 Caution 确认不再弹卡。
+        // 回归 2026-10-28 实报「切到放手模式后 terminal 仍反复申请权限」。
+        let (approval_ctx, reg, captured_event) = wire_approval_ctx();
+        approval_ctx.lock().unwrap().permission = hermix_core::traits::PermissionLevel::Full;
+
+        let (backend, _cap) = make_mock();
+        let handler = TerminalHandler::new(
+            backend,
+            std::sync::Arc::new(std::sync::RwLock::new(None)),
+            approval_ctx,
+        );
+
+        // `sudo` 命中 CONFIRM 规则；Full 下应当直接执行。
+        let result = handler
+            .execute(json!({"command": "sudo apt install ripgrep"}))
+            .await;
+        result.expect("full 权限下命令必须直接执行");
+
+        assert!(
+            reg.lock().unwrap().is_empty(),
+            "full 权限下不应注册待决审批"
+        );
+        assert!(
+            captured_event.lock().unwrap().is_none(),
+            "full 权限下不应发出 request_approval 事件"
+        );
     }
 
     #[tokio::test]

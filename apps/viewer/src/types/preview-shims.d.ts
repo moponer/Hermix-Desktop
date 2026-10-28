@@ -9,6 +9,8 @@ declare module "pptx-browser" {
     constructor();
     load(source: Uint8Array | ArrayBuffer | Blob | File, onProgress?: (frac: number, label: string) => void): Promise<void>;
     slideCount: number;
+    /** 版面尺寸（EMU）：load() 之后是真实值，之前是 16:9 的默认值。 */
+    slideSize: { cx: number; cy: number };
     renderSlide(slideIndex: number, canvas: HTMLCanvasElement, width?: number): Promise<void>;
     destroy(): void;
   }

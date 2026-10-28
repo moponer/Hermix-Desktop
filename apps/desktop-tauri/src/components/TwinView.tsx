@@ -28,6 +28,7 @@ import { AlertTriangle, X } from "lucide-react";
 import * as api from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { useCurrentModel } from "../hooks/useCurrentModel";
+import { usePermissionLevel, type PermissionLevel } from "../hooks/useExpert";
 import { friendlyModelName } from "./ModelSelector";
 import type { AutomationTask, Session } from "../types";
 import { AliCharacter, type AliState } from "./twin/AliCharacter";
@@ -38,6 +39,7 @@ import {
   TRANSCRIPT_CAP,
   type TranscriptRow,
 } from "../lib/twinTranscript";
+import { dailyLine, pad2, relativeCompact } from "../lib/readout";
 
 /** 落库历史的轮询间隔。她这一轮跑着时暂停，避免轮询结果落后于屏幕造成回跳。 */
 const HISTORY_POLL_MS = 8000;
@@ -84,13 +86,29 @@ const STATUS_TEXT: Record<string, string> = {
 };
 
 /**
- * 小面板标题。大屏版不用图标：数据本身已经够密，再加图标只会和数字抢眼。
- * 一条 3px 的主色竖条 + 一行标签，是这套版面里唯一的「标题语法」。
+ * 面板标题 —— 仪表台语法（2026-10-28）。
+ *
+ * 上一版是「3px 主色竖条 + 一行标签」，读起来是网页仪表盘：竖条是装饰，
+ * 编号缺失，标签与读数之间没有刻度关系。仪表台靠三件事立住：
+ *   ① 通道编号（`01`…）—— 仪器面板都有槽位号，用户能指着说「02 那块」；
+ *   ② 一条带刻度的基线 —— 面板之间的分隔由刻度承担，不用描边；
+ *   ③ 右对齐读数 —— mono、等宽、与数字列对齐。
  */
-function BoxHead({ title, meta }: { title: string; meta?: React.ReactNode }) {
+function BoxHead({
+  code,
+  title,
+  meta,
+}: {
+  code: string;
+  title: string;
+  meta?: React.ReactNode;
+}) {
   return (
     <div className="twin-box__head">
       <span className="twin-box__bar" aria-hidden />
+      <span className="twin-box__code" aria-hidden>
+        {code}
+      </span>
       <span className="twin-box__title">{title}</span>
       <span className="twin-box__spacer" />
       {meta != null ? <span className="twin-box__meta">{meta}</span> : null}
@@ -173,7 +191,14 @@ export function TwinView({
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [level, setLevel] = useState<"default" | "full">("default");
+  /**
+   * 权限模式 —— 与主对话共用**一个**全局设置（`usePermissionLevel` 落
+   * storage）。此前这一页是本地 `useState`：在这里选了放手，主对话还在问，
+   * 换个页回来又变回默认 —— 同一个策略两个家，用户没法判断当前到底哪种。
+   */
+  const [level, setLevel] = usePermissionLevel();
+  /** 切到放手模式的二次确认（放手是不可逆后果的一侧，必须两下）。 */
+  const [permArmed, setPermArmed] = useState(false);
   /**
    * 她没有独立模型设置：`twin.send` 不下发 model，后端按
    * `overrides.model → config 默认模型` 解析，所以她跑的就是全局默认模型。
@@ -259,6 +284,39 @@ ${d.conclusions}`,
     });
   }, [tasks]);
 
+  /**
+   * 「刚才发生」的行 = 这一轮的工具流水，**唯一来源**。
+   *
+   * 此前这里还拼了工作日志的 8 天摘要，三个后果：① 同一批日志在左翼
+   * 「最近工作日志」和右翼各印一遍，而两处取的字段顺序还不一样（左翼
+   * conclusions 优先、右翼 progress 优先）→ 同一天能显示两段不同的话；
+   * ② 面板头的「3 条」数的是日志条数，屏幕上是 9 行；③ 日志是历史，
+   * 与「刚才发生」这个标题本来就不是一件事。日志归左翼，这里只放动作。
+   */
+  const happenedRows = useMemo(() => {
+    if (!twin.turn) return [];
+    const rows: { t: string; text: string; tag: string }[] = [];
+    if (twin.streaming) {
+      rows.push({
+        t: "此刻",
+        text: twin.turn.activity
+          ? `正在用 ${twin.turn.activity}`
+          : "正在跑你交代的这一轮",
+        tag: "这一轮",
+      });
+    }
+    for (const e of (twin.turn.events ?? []).slice(-6).reverse()) {
+      rows.push({
+        // 跑完之后这些是既成事实：写「刚才 / 上一轮」。此前一律写
+        // 「刚刚 / 这一轮」，静默时看起来像还在跑（用户实报截图）。
+        t: twin.streaming ? "刚刚" : "刚才",
+        text: e,
+        tag: twin.streaming ? "这一轮" : "上一轮",
+      });
+    }
+    return rows;
+  }, [twin.turn, twin.streaming]);
+
   const recentSessions = useMemo(
     () =>
       // 值守口径（2026-10-25 用户验收）：这里只显示**阿黎工作域**的会话
@@ -284,11 +342,22 @@ ${d.conclusions}`,
   const turnBusy = (twin.streaming ? 1 : 0) + (mainStreaming ? 1 : 0);
   const busy = activeRuns + turnBusy;
 
-  const stateText = twin.streaming
-    ? "正在执行 · 你刚交代的这一轮"
-    : busy > 0
-      ? `运行中 · ${busy} 个任务在跑`
-      : `静默观察 · ${enabledTasks.length} 个任务待触发`;
+  /**
+   * 「她现在什么状态」的唯一出处（顶栏与中轴都用它）。
+   *
+   * 待办排在最前（2026-10-28 修正）：此前只看 `busy`，于是同一屏上
+   * 顶栏写「静默观察 · 0 个任务待触发」、右翼写「等你决定 1 件 · 需要授权
+   * terminal」—— 她明明停在原地等人拍板，页面却说没事可做。待办是**她
+   * 停下来的原因**，比"在不在跑"更该先说。
+   */
+  const stateText =
+    pending.length > 0
+      ? `等你决定 · ${pending.length} 件待办`
+      : twin.streaming
+        ? "正在执行 · 你刚交代的这一轮"
+        : busy > 0
+          ? `运行中 · ${busy} 个任务在跑`
+          : `静默观察 · ${enabledTasks.length} 个任务待触发`;
 
   // 角色姿态与"她在干什么"是同一件事的两个表达，必须同源。
   const aliState: AliState = error
@@ -301,7 +370,9 @@ ${d.conclusions}`,
 
   const presenceLine = error
     ? "核对任务状态时出错，右翼「刚才发生」上方是原始报错"
-    : twin.streaming
+    : pending.length > 0
+      ? `有 ${pending.length} 件等你拍板，她停在这儿等`
+      : twin.streaming
       ? twin.turn?.activity
         ? `正在用 ${twin.turn.activity} 做事，回复会直接出现在中间`
         : "正在跑你刚交代的这一轮"
@@ -337,6 +408,33 @@ ${d.conclusions}`,
     setCenter("chat");
   }, []);
 
+  /**
+   * 权限模式切换。
+   *
+   * 放手模式是不可逆后果的一侧（她不再问就直接跑命令、删文件），所以
+   * 「进入」要两下：第一下把开关变成一句风险说明 + 确认钮，第二下才生效；
+   * 「退出」回到安全侧，一下即可。确认态 6s 没动作自动收回 —— 留在
+   * "待确认"会让下一次无意点击变成意外提交。
+   */
+  useEffect(() => {
+    if (!permArmed) return;
+    const t = window.setTimeout(() => setPermArmed(false), 6000);
+    return () => window.clearTimeout(t);
+  }, [permArmed]);
+
+  const pickPermission = useCallback(
+    (next: PermissionLevel) => {
+      if (next === level) return;
+      if (next === "full") {
+        setPermArmed(true);
+        return;
+      }
+      setPermArmed(false);
+      setLevel("default");
+    },
+    [level, setLevel],
+  );
+
   /** 中轴环读的都是真实量：有 max_runs 才有百分比，否则只报次数。 */
   const runningTask = useMemo(
     () => enabledTasks.find((t) => t.last_status === "running") ?? null,
@@ -371,17 +469,20 @@ ${d.conclusions}`,
   const sendDisabled = draft.trim().length === 0;
 
   return (
-    <div className="twin-screen">
+    <div className="twin-screen" data-mode={aliState}>
       {/* ── 顶栏 ───────────────────────────────────────────── */}
       <header className="twin-head">
         <div className="twin-head__main">
           <h1 className="twin-head__title">阿黎</h1>
+          {/* 状态灯的三态与 stateText 同源：有待办 = 她在等你（警告色），
+              在跑 = 值守中（强调色），都不成立才是静默。此前只有两态，
+              于是「静默」与右翼「等你决定」同时成立。 */}
           <span
-            className={`twin-head__state${busy > 0 ? " is-live" : ""}`}
+            className={`twin-head__state${pending.length > 0 ? " is-hot" : busy > 0 ? " is-live" : ""}`}
             title={stateText}
           >
             <i aria-hidden />
-            {busy > 0 ? "值守中" : "静默"}
+            {pending.length > 0 ? "待你决定" : busy > 0 ? "值守中" : "静默"}
           </span>
           <span className="twin-head__sub">{stateText}</span>
         </div>
@@ -395,33 +496,95 @@ ${d.conclusions}`,
               动画重跑一次。8s 轮询里值没变就不重建，所以"跳动"只在数字真的
               变时发生，不会成为周期性抖动。数字不可聚焦，重建不丢焦点。 */}
           <span className="twin-head__kv">
-            在跑 <b key={busy}>{busy}</b>
+            在跑 <b key={busy}>{pad2(busy)}</b>
           </span>
           <span className="twin-head__kv">
-            已启用 <b key={enabledTasks.length}>{enabledTasks.length}</b>
+            已启用 <b key={enabledTasks.length}>{pad2(enabledTasks.length)}</b>
           </span>
           <span className="twin-head__kv">
             待批 <b key={pending.length} className={pending.length > 0 ? "is-hot" : ""}>
-              {pending.length}
+              {pad2(pending.length)}
             </b>
           </span>
-          <button
-            type="button"
-            className="twin-head__perm"
-            data-level={level}
-            aria-label="切换权限级别"
-            onClick={() => setLevel((prev) => (prev === "full" ? "default" : "full"))}
-          >
-            {level === "full" ? "放手模式" : "默认权限"}
-          </button>
+          {/* 权限模式：两个选项都摆在面上（分段控件），当前那段实底上色。
+              旧版是一个会换字的按钮、默认态无色 —— 用户看不出「现在哪种」
+              「另一种是什么」。默认=成功档（有护栏），放手=警告档（无护栏）。 */}
+          <div className="twin-perm" data-level={level}>
+            {permArmed ? (
+              <>
+                <span className="twin-perm__ask">
+                  <AlertTriangle className="icon-sm" aria-hidden />
+                  放手后不再申请权限
+                </span>
+                <button
+                  type="button"
+                  className="twin-perm__opt twin-perm__opt--danger"
+                  onClick={() => {
+                    setLevel("full");
+                    setPermArmed(false);
+                  }}
+                >
+                  确认放手
+                </button>
+                <button
+                  type="button"
+                  className="twin-perm__opt"
+                  onClick={() => setPermArmed(false)}
+                >
+                  取消
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className={`twin-perm__opt${level === "default" ? " is-on" : ""}`}
+                  aria-pressed={level === "default"}
+                  title="默认模式：命令、删除、写配置等高危操作先弹卡问你"
+                  onClick={() => pickPermission("default")}
+                >
+                  默认 · 需授权
+                </button>
+                <button
+                  type="button"
+                  className={`twin-perm__opt twin-perm__opt--risk${level === "full" ? " is-on" : ""}`}
+                  aria-pressed={level === "full"}
+                  title="放手模式：她不再申请权限，命令与删除直接执行，风险由你承担"
+                  onClick={() => pickPermission("full")}
+                >
+                  放手 · 无审批
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </header>
+
+      {/* 放手模式常驻风险条：模式一旦生效，"不问就直接跑"这件事必须在视线里，
+          不能只藏在按钮的一个词里。切回默认即消失。 */}
+      {level === "full" ? (
+        <div className="twin-risk" role="status">
+          <AlertTriangle className="icon-sm" aria-hidden />
+          <b>放手模式</b>
+          <span>她不再申请权限：命令、删除、写配置都会直接执行，出错由你承担。</span>
+          <button type="button" className="chip-flat" onClick={() => setLevel("default")}>
+            切回默认
+          </button>
+        </div>
+      ) : null}
 
       <div className="twin-main">
         {/* ── 左翼：她替你看着什么 ─────────────────────────── */}
         <aside className="twin-wing">
           <section className="twin-box">
-            <BoxHead title="值守任务" meta={`${enabledTasks.length} 个`} />
+            {/* 读数写「启用 N / 共 M」而不是光秃秃的「N 个」：同一屏的 02 里有
+                「任务总数 07」，只写「0 个」会被读成"一条任务都没有"（实际是
+                7 条全停用）。 */}
+            <BoxHead
+              code="01"
+              title="值守任务"
+              meta={`启用 ${enabledTasks.length} / ${tasks.length}`}
+            />
             {error ? (
               <p className="twin-error">
                 <AlertTriangle className="icon-md" />
@@ -478,14 +641,14 @@ ${d.conclusions}`,
           </section>
 
           <section className="twin-box">
-            <BoxHead title="此刻" meta={checkedText} />
+            <BoxHead code="02" title="此刻" meta={checkedText} />
             <div className="twin-grid">
               <div>
                 <div
                   key={busy}
                   className={`twin-grid__v${busy > 0 ? " is-live" : " is-zero"}`}
                 >
-                  {busy}
+                  {pad2(busy)}
                 </div>
                 <div className="twin-grid__k">在跑</div>
               </div>
@@ -494,7 +657,7 @@ ${d.conclusions}`,
                   key={enabledTasks.length}
                   className={`twin-grid__v${enabledTasks.length > 0 ? "" : " is-zero"}`}
                 >
-                  {enabledTasks.length}
+                  {pad2(enabledTasks.length)}
                 </div>
                 <div className="twin-grid__k">已启用</div>
               </div>
@@ -503,7 +666,7 @@ ${d.conclusions}`,
                   key={pending.length}
                   className={`twin-grid__v${pending.length > 0 ? " is-hot" : " is-zero"}`}
                 >
-                  {pending.length}
+                  {pad2(pending.length)}
                 </div>
                 <div className="twin-grid__k">待批</div>
               </div>
@@ -512,32 +675,37 @@ ${d.conclusions}`,
                   key={tasks.length}
                   className={`twin-grid__v${tasks.length > 0 ? "" : " is-zero"}`}
                 >
-                  {tasks.length}
+                  {pad2(tasks.length)}
                 </div>
                 <div className="twin-grid__k">任务总数</div>
               </div>
             </div>
           </section>
 
-          <section className="twin-box twin-box--grow twin-box--quiet">
-            <BoxHead title="最近会话" meta={`${recentSessions.length} 条`} />
+          <section className="twin-box twin-box--grow">
+            <BoxHead code="03" title="最近会话" meta={`${recentSessions.length} 条`} />
             <div className="twin-rows">
               {recentSessions.length === 0 ? (
                 <p className="twin-muted">还没有会话记录。</p>
               ) : (
                 recentSessions.map((s) => (
                   <div key={s.id} className="twin-row twin-row--act">
+                    {/* 一行一个会话：标题是正文（主墨 13px），时间是元信息（弱墨，
+                        右对齐）。条数不进行内 —— 它和面板头的「N 条」同单位却
+                        不同含义（会话数 / 消息数），摆在一行里必被读错；
+                        需要时挂在 title 上。 */}
                     <button
                       type="button"
                       className="twin-row__open"
-                      title="打开这个会话"
+                      title={`${formatRelative(s.updated_at)}${
+                        typeof s.message_count === "number"
+                          ? ` · 共 ${s.message_count} 条消息`
+                          : ""
+                      }`}
                       onClick={() => onOpenSession(s.id)}
                     >
-                      <span className="twin-row__t">{formatRelative(s.updated_at)}</span>
                       <span className="twin-row__m">{s.title || "未命名会话"}</span>
-                      <span className="twin-row__k">
-                        {typeof s.message_count === "number" ? `${s.message_count} 条` : "—"}
-                      </span>
+                      <span className="twin-row__t">{relativeCompact(s.updated_at)}</span>
                     </button>
                     <button
                       type="button"
@@ -554,8 +722,8 @@ ${d.conclusions}`,
             </div>
           </section>
 
-          <section className="twin-box twin-box--quiet">
-            <BoxHead title="最近工作日志" meta={`${workDays.length} 条`} />
+          <section className="twin-box">
+            <BoxHead code="04" title="最近工作日志" meta={`${workDays.length} 条`} />
             <div className="twin-rows">
               {workDays.length === 0 ? (
                 <p className="twin-muted">还没有值守日志。</p>
@@ -563,13 +731,14 @@ ${d.conclusions}`,
                 workDays.slice(0, 3).map((d) => (
                   <div key={d.date} className="twin-row">
                     <span className="twin-row__t">{d.date.slice(5)}</span>
+                    {/* dailyLine 剥掉落库格式的前缀（`- 14:32 [automati] USER:`）
+                        —— 日期已经在行首列，时间与截断的会话 id 都是噪音。 */}
                     <span className="twin-row__m">
-                      {firstLine(d.conclusions) ||
-                        firstLine(d.progress) ||
-                        firstLine(d.goals) ||
+                      {dailyLine(d.conclusions) ||
+                        dailyLine(d.progress) ||
+                        dailyLine(d.goals) ||
                         "这天没有留下结论"}
                     </span>
-                    <span className="twin-row__k">日志</span>
                   </div>
                 ))
               )}
@@ -632,10 +801,17 @@ ${d.conclusions}`,
           {center === "chat" ? (
             <div className="twin-chat">
               <div className="twin-msgs" aria-live="polite">
+                {/* 空态：一句灰字是整页最后一个"网页"角落（2026-10-28）。
+                    换成观测台的瞄准环：圆环 + 十字 + 呼吸的中心点，
+                    下面两行读数（通道/状态 + 一句怎么做）。 */}
                 {transcript.length === 0 && !twin.streaming ? (
-                  <p className="twin-muted twin-msgs__empty">
-                    她还没有说过话 · 在下面跟她说一句
-                  </p>
+                  <div className="twin-idle">
+                    <span className="twin-idle__scope" aria-hidden />
+                    <p className="twin-idle__line">CH ALI-01 · 待输入</p>
+                    <p className="twin-idle__hint">
+                      她还没有说过话 —— 在下面说一句，这一轮直接在这台机器上执行
+                    </p>
+                  </div>
                 ) : null}
                 {transcript.map((m, i) => (
                   <div
@@ -806,17 +982,22 @@ ${d.conclusions}`,
                     stroke="var(--color-bg-tertiary)"
                     strokeWidth="14"
                   />
-                  <circle
-                    cx="160"
-                    cy="160"
-                    r={ringR}
-                    fill="none"
-                    stroke="var(--color-accent)"
-                    strokeWidth="14"
-                    strokeLinecap="round"
-                    strokeDasharray={`${ringC * (runningRatio ?? 0)} ${ringC}`}
-                    transform="rotate(-90 160 160)"
-                  />
+                  {/* 进度弧只在真有进度时画。零长度 dash 配 `strokeLinecap="round"`
+                      会在起点留下一个圆帽 —— 读数写着 00，环上 12 点方向却亮着
+                      一点，看起来像"已经在跑"（2026-10-28 截图核对）。 */}
+                  {runningRatio != null && runningRatio > 0 ? (
+                    <circle
+                      cx="160"
+                      cy="160"
+                      r={ringR}
+                      fill="none"
+                      stroke="var(--color-accent)"
+                      strokeWidth="14"
+                      strokeLinecap="round"
+                      strokeDasharray={`${ringC * runningRatio} ${ringC}`}
+                      transform="rotate(-90 160 160)"
+                    />
+                  ) : null}
                   <circle
                     cx="160"
                     cy="160"
@@ -827,24 +1008,33 @@ ${d.conclusions}`,
                     strokeDasharray="2 10"
                   />
                 </svg>
+                {/* 雷达慢扫：环上唯一常驻的动效，静默时也在转（14s 一圈），
+                    在跑时提速到 8s —— 转速本身就是状态，不需要额外指示灯。 */}
+                <span className="twin-ring__sweep" aria-hidden />
                 <div className="twin-ring__ctr">
                   <div
                     key={runningRatio != null ? Math.round(runningRatio * 100) : busy}
                     className="twin-ring__big"
                   >
-                    {runningRatio != null ? Math.round(runningRatio * 100) : busy}
+                    {runningRatio != null ? Math.round(runningRatio * 100) : pad2(busy)}
                     {runningRatio != null ? <span>%</span> : null}
                   </div>
                   <div className="twin-ring__sub">
                     {runningRatio != null ? "本轮进度" : "个任务在跑"}
                   </div>
+                  {/* 「正在用 X」必须以 streaming 为前提：`twin.turn.activity`
+                      是上一轮留下的内存态，跑完了也不会归零（流在工具中途
+                      断掉时更是永远停在最后一个工具名上）。先判 streaming
+                      才不会出现「静默 / 0 个在跑」旁边写着「她正在用 task_create」。 */}
                   <div className="twin-ring__fig">
                     {runningTask
                       ? `${runningTask.name} · 第 ${runningTask.run_count} 次`
-                      : twin.turn?.activity
-                        ? `她正在用 ${twin.turn.activity}`
-                        : twin.streaming
-                          ? "她这一轮在跑"
+                      : twin.streaming
+                        ? twin.turn?.activity
+                          ? `她正在用 ${twin.turn.activity}`
+                          : "她这一轮在跑"
+                        : pending.length > 0
+                          ? "她停下等你的决定"
                           : mainStreaming
                             ? "另一条对话在跑"
                             : "没有正在跑的任务"}
@@ -852,21 +1042,23 @@ ${d.conclusions}`,
                 </div>
               </div>
 
+              {/* 一句话只归一个地方：状态读数（stateText）的家长是顶栏，
+                  这里只说"她此刻在做什么"。此前两处都印 stateText，同一屏
+                  上下两个一模一样的「静默观察 · N 个任务待触发」。 */}
               <div className="twin-data__cap">
-                <b>{twin.streaming ? "你刚交代的这一轮在跑" : stateText}</b>
-                <span>{presenceLine}</span>
+                <b>{presenceLine}</b>
               </div>
 
               <div className="twin-strip">
                 <div>
                   <div key={busy} className="twin-strip__v">
-                    {busy}
+                    {pad2(busy)}
                   </div>
                   <div className="twin-strip__k">在跑</div>
                 </div>
                 <div>
                   <div key={enabledTasks.length} className="twin-strip__v">
-                    {enabledTasks.length}
+                    {pad2(enabledTasks.length)}
                   </div>
                   <div className="twin-strip__k">已启用</div>
                 </div>
@@ -875,13 +1067,13 @@ ${d.conclusions}`,
                     key={pending.length}
                     className={`twin-strip__v${pending.length > 0 ? " is-hot" : ""}`}
                   >
-                    {pending.length}
+                    {pad2(pending.length)}
                   </div>
                   <div className="twin-strip__k">待批</div>
                 </div>
                 <div>
                   <div key={workDays.length} className="twin-strip__v">
-                    {workDays.length}
+                    {pad2(workDays.length)}
                   </div>
                   <div className="twin-strip__k">日志天</div>
                 </div>
@@ -893,7 +1085,7 @@ ${d.conclusions}`,
         {/* ── 右翼：现在要你做什么 ─────────────────────────── */}
         <aside className="twin-wing twin-wing--r">
           <section className={`twin-box${pending.length > 0 ? " twin-box--attn" : ""}`}>
-            <BoxHead title="等你决定" meta={`${pending.length} 件`} />
+            <BoxHead code="01" title="等你决定" meta={`${pending.length} 件`} />
             {pending.length === 0 ? (
               <p className="twin-muted">队列是空的。</p>
             ) : (
@@ -938,59 +1130,35 @@ ${d.conclusions}`,
             )}
           </section>
 
-          <section className="twin-box twin-box--grow twin-box--quiet">
-            <BoxHead title="刚才发生" meta={`${workDays.length} 条`} />
+          <section className="twin-box twin-box--grow">
+            {/* 计数与行数同源：`happenedRows` 既是渲染源也是读数源，
+                不再出现「3 条」配 9 行。 */}
+            <BoxHead
+              code="02"
+              title="刚才发生"
+              meta={happenedRows.length > 0 ? `${happenedRows.length} 条` : undefined}
+            />
             <div className="twin-rows">
-              {/* 她的轮次进行中：工具流水实时置顶 —— 不等落库，这一轮做了
-                  什么当下就能看见（否则跑任务的整段时间里右翼纹丝不动）。 */}
-              {twin.turn ? (
-                <div aria-live="polite">
-                  {twin.streaming && (
-                    <div className="twin-row">
-                      <span className="twin-row__t">此刻</span>
-                      <span className="twin-row__m">
-                        {twin.turn.activity
-                          ? `正在用 ${twin.turn.activity}`
-                          : "正在跑你交代的这一轮"}
-                      </span>
-                      <span className="twin-row__k">这一轮</span>
-                    </div>
-                  )}
-                  {(twin.turn.events ?? [])
-                    .slice(-6)
-                    .reverse()
-                    .map((e, i) => (
-                      <div key={`live-${i}`} className="twin-row">
-                        <span className="twin-row__t">刚刚</span>
-                        <span className="twin-row__m">{e}</span>
-                        <span className="twin-row__k">这一轮</span>
-                      </div>
-                    ))}
-                </div>
-              ) : null}
-              {workDays.length === 0 && !twin.turn ? (
+              {happenedRows.length === 0 ? (
                 <p className="twin-muted">
-                  她还没有值守记录。派成员、跑自动化或跟她聊过后，这里会出现工作日志。
+                  这会儿没有动作。她动手时，工具流水会实时出现在这里；做完的事进左翼「最近工作日志」。
                 </p>
               ) : (
-                workDays.slice(0, 8).map((d) => (
-                  <div key={d.date} className="twin-row">
-                    <span className="twin-row__t">{d.date.slice(5)}</span>
-                    <span className="twin-row__m">
-                      {firstLine(d.progress) ||
-                        firstLine(d.conclusions) ||
-                        firstLine(d.goals) ||
-                        "这天没有留下记录"}
-                    </span>
-                    <span className="twin-row__k">日志</span>
-                  </div>
-                ))
+                <div aria-live="polite">
+                  {happenedRows.map((r, i) => (
+                    <div key={`ev-${i}`} className="twin-row">
+                      <span className="twin-row__t">{r.t}</span>
+                      <span className="twin-row__m">{r.text}</span>
+                      <span className="twin-row__k">{r.tag}</span>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </section>
 
           <section className="twin-box">
-            <BoxHead title="她" />
+            <BoxHead code="03" title="她" />
             <div className="twin-who">
               <AliCharacter state={aliState} size={36} />
               <div className="twin-who__text">
@@ -1018,7 +1186,25 @@ ${d.conclusions}`,
           <i aria-hidden />
           {twin.streaming ? "这一轮在电脑上执行中" : "在电脑上执行"}
         </span>
-        <span>会话 {TWIN_SESSION_ID}</span>
+        {/* 遥测条：仪表台的「帧头」—— 会话 / 周期 / 在跑 / 队列，全部是真值，
+            随 8s 轮询联动；末尾光标块只表示「机器在线」。
+            2026-10-28 删掉原先的 `CH ALI-01`：那是个写死的字符串，页面上没有
+            「通道」这个概念，纯装饰冒充读数 —— 仪表台的每一格都必须能对上真值。 */}
+        <span className="twin-bottom__tele">
+          <span>
+            SID <b>{TWIN_SESSION_ID}</b>
+          </span>
+          <span>
+            TICK <b>{HISTORY_POLL_MS / 1000}s</b>
+          </span>
+          <span>
+            RUN <b>{pad2(busy)}</b>
+          </span>
+          <span>
+            Q <b>{pad2(pending.length)}</b>
+          </span>
+          <i className="twin-caret" aria-hidden />
+        </span>
         <span className="twin-spacer" />
         <span>
           <kbd>Enter</kbd> 发送
@@ -1034,18 +1220,6 @@ function statusClass(status: AutomationTask["last_status"]): string {
   if (status === "running") return " is-run";
   if (status === "ok") return " is-ok";
   return " is-idle";
-}
-
-/** 取首行非空文本并裁到 80 字，把一天的三段日志压成一行。 */
-function firstLine(text: string | undefined): string {
-  if (!text) return "";
-  const line =
-    text
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .find((s) => s.length > 0) ?? "";
-  if (!line) return "";
-  return line.length > 80 ? `${line.slice(0, 78)}…` : line;
 }
 
 /** 相对时间。后端给的是 RFC3339（带 Z）。 */

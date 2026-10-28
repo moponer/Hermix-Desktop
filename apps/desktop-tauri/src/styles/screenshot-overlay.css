@@ -22,16 +22,20 @@
   --color-accent: #2f4a63;
   --color-on-accent: #ffffff;
   --color-accent-line: color-mix(in srgb, var(--color-accent) 18%, white);
+  /* 编辑态面板底色：截图编辑器恒为暗色工作台（工具条也是暗底），不随主题。
+     窗口被 Rust 兜底到最小尺寸后，图像之外的一圈由它填 —— 窗口透明，
+     没有这一层就露出活桌面。 */
+  --se-surface: #1b1b1f;
   /* 字号七档同源：独立入口不加载 tokens.css，缺了这几行 `font-size:
      var(--text-*)` 会被整条丢弃、回退到继承的 16px（2026-10-27 统一字号时
      补齐）。改主应用档位时同步这里。 */
   --text-micro: 10px;
-  --text-tiny: 11px;
-  --text-meta: 11px;
-  --text-ui: 12px;
-  --text-body: 12px;
-  --text-title: 15px;
-  --text-display: 18px;
+  --text-tiny: 12px;
+  --text-meta: 12px;
+  --text-ui: 13px;
+  --text-body: 13px;
+  --text-title: 16px;
+  --text-display: 20px;
 }
 
 html[data-theme="dark"] {
@@ -206,29 +210,55 @@ html[data-theme="dark"] {
 
 /* ── 编辑器（ScreenshotEditor.tsx）────────────────────────────── */
 
-/* 编辑态根：画布铺满整窗（窗口已被缩到选区大小），底下不垫黑底 */
+/* 编辑态根：一整块暗底面板。
+   2026-10-28 起窗口不再严格等于选区：Rust 把小选区兜底到 560×280，多出来的
+   空间必须自己带底 —— 窗口是透明的，露在外面就是活桌面（还会吃掉点击）。
+   版面：上「舞台」放图像，下工具条独占一条，两者不重叠。 */
 .se-root {
   position: fixed;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: 8px;
+  padding: 8px;
   overflow: hidden;
-  background: transparent;
+  background: var(--se-surface);
   user-select: none;
   cursor: default;
 }
 
+/* 舞台：图像的可视区域（= 窗口减内边距与工具条）。
+   画布的 CSS 尺寸由组件量本元素后内联算出（等比、1:1 为上限），
+   这里只负责居中。
+   `overflow` 必须保持 visible：画布本身永不超出舞台，但文本工具的输入框
+   （min-width 140px）是贴在点击点上的浮层，点图像右缘时它会伸到图像之外 ——
+   裁在图像边界上等于把用户正在打的字切掉（2026-10-28 实测）。窗口边界由
+   .se-root 的 overflow:hidden 兜住。 */
+.se-stage {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .se-canvas-wrap {
   position: relative;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.65);
+  /* 外圈一道 10% 白的发丝描边：截到的是一张深色图时，图像边界与暗底
+     会糊成一片，用户看不出图在哪结束。用阴影画而不是 border（层次靠
+     底色差 + 阴影，结构描边进门禁）。 */
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 8px 40px rgba(0, 0, 0, 0.65);
   background: transparent;
 }
 
 .se-canvas {
   display: block;
   cursor: crosshair;
-  /* 宽高由组件内联精确指定（JS 等比适配窗内空间）。
+  /* 宽高由组件内联精确指定（JS 按舞台尺寸等比适配）。
      禁用 max-width 或 object-fit 之类的 letterbox 兜底——
      盒子与内容不同形时 getBoundingClientRect 坐标映射全错。 */
 }
@@ -236,11 +266,17 @@ html[data-theme="dark"] {
   cursor: text;
 }
 
-/* 文本工具的浮动输入框（逻辑坐标定位，样式模拟画布文字） */
+/* 文本工具的浮动输入框（逻辑坐标定位，样式模拟画布文字）。
+   固定 220×30：尺寸必须与组件里的 TEXT_INPUT_W/H 一致 —— 组件靠它算
+   「这一侧放不放得下」，放不下就把框翻到点击点的左/上侧。
+   不写 min-width 让它按内容变宽：input 默认宽度约 20 字符，点画布右半边
+   就会顶出窗口，正在打的字被窗口边缘切掉。 */
 .se-text-input {
   position: absolute;
-  min-width: 140px;
-  padding: 1px 4px;
+  width: 220px;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 6px;
   background: rgba(255, 255, 255, 0.94);
   border: 1px dashed rgba(0, 0, 0, 0.55);
   outline: 2px solid var(--color-accent-line);
@@ -249,47 +285,45 @@ html[data-theme="dark"] {
   z-index: 5;
 }
 
-/* 提交失败提示（工具条上方悬浮） */
+/* 提交失败提示：流内一条（工具条上方），不覆盖工具条也不覆盖图像 */
 .se-err {
-  position: fixed;
-  bottom: 88px;
-  left: 50%;
-  transform: translateX(-50%);
+  flex: 0 0 auto;
+  align-self: center;
   padding: 6px 14px;
   border-radius: 8px;
   background: rgba(120, 20, 20, 0.92);
   color: #fff;
   font-size: var(--text-ui);
   z-index: 20;
-  max-width: 70vw;
+  max-width: 100%;
   word-break: break-all;
 }
 
-/* 编辑工具条：底部居中悬浮。
-   窗口 = 选区大小，工具条可能比窗口宽 —— 此前按钮默认可压缩（flex-shrink:1），
-   窄窗下每个按钮被压成「一列一个字」，中文标签逐字竖排（见 2026-10-26 截图）。
-   修法三条同时成立才有效：
-     ① 按钮 flex:0 0 auto —— 不许被压缩；
-     ② 标签 white-space:nowrap —— 不许逐字换行；
-     ③ 工具条 flex-wrap:wrap —— 装不下就换行，而不是压扁。
+/* 编辑工具条：面板底部一条，独占空间、不压图像。
+   2026-10-28 从 `position: fixed` 悬浮改成 flex 流内元素（窗口有了最小尺寸，
+   工具条不再需要靠浮层去挤位置）；`.se-stage` 吃掉剩余高度，工具条多高
+   （窄窗下会换行）图像区域就自动让出多少。
+   按钮仍 `flex:0 0 auto` + 标签 `white-space:nowrap`，装不下就换行——
+   这三条是 2026-10-26 修「中文标签逐字竖排」的成果，不能回退。
    分组靠底色差（.se-group）分隔，不画分隔线。 */
 .se-toolbar {
-  position: fixed;
-  bottom: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  /* `left:50%` 会把「可用宽度」砍成视口的一半（收缩盒的可用空间 = 100% − left），
-     工具条因此永远只有窗口的一半宽 → 内容被压扁成竖排字（2026-10-26 实测：
-     1200px 视口下工具条只有 600px）。显式 width:max-content 才能拿回整幅宽度，
+  flex: 0 0 auto;
+  align-self: center;
+  /* 不设 `left:50%`：它会把收缩盒的可用宽度砍成一半（2026-10-26 实测：
+     1200px 视口下工具条只有 600px）。width:max-content 拿满自然宽度，
      max-width 再负责封顶。 */
   width: max-content;
+  max-width: 100%;
+  /* 本仓库没有全局 border-box（覆盖窗只加载本文件），content-box 下
+     max-width:100% 只约束内容盒，6px 内边距会额外顶出去 12px —— 实测
+     560px 窗口里工具条 556px 宽，两侧各只剩 2px。 */
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
   gap: 6px;
   row-gap: 6px;
-  max-width: calc(100% - 16px);
   padding: 6px;
   border-radius: 12px;
   background: rgba(24, 24, 28, 0.94);

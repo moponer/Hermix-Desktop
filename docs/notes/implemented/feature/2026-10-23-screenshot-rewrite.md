@@ -59,6 +59,10 @@ per-monitor DPI **未必一致**，猜错就是「照片和屏幕对不齐」的
 （`PhysicalPosition`/`PhysicalSize`，物理像素），编辑器只显示选中的那部分，
 底下不再垫黑底。缩放换算交给 `devicePixelRatio`，物理 1:1。
 
+窗口尺寸此后有了下限（560×280，CSS 逻辑像素）：小选区把窗口缩成几十像素时
+工具条无处可站，见
+[2026-10-28-screenshot-editor-min-window.md](../bug-fix/2026-10-28-screenshot-editor-min-window.md)。
+
 ### ⑥ 窗口自动吸附：默认常驻 + 绿色边框
 
 旧实现的窗口识别藏在「窗口模式」里，要按 Tab 切过去。现在**鼠标移动即查询光标下的

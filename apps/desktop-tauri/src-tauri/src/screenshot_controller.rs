@@ -25,6 +25,13 @@
 //    （原点 + 尺寸 + seq），JPEG/base64/dataURL/编码线程整体删除。
 // ⑥ 编辑态在编辑器渲染完成后由页面调 screenshot_backdrop_hide 收掉
 //    幕布——编辑器画布与幕布是同一块像素，切换无缝，没有黑帧。
+//
+// 2026-10-28 编辑态窗口下限：
+// ⑦ 窗口不再严格等于选区，而是**不小于** EDIT_MIN_*（以选区为中心外扩，
+//    贴边时夹回虚拟桌面内）。理由是工具条自然宽度 ~764px，小选区下窗口
+//    跟着缩成几十像素时工具条会被挤进图像区域、按钮压成竖排字。窗口放大
+//    后多出来的空间由编辑器自带暗底（screenshot-overlay.css 的 .se-root），
+//    图像在工具条上方的舞台区域内等比适配。
 
 use crate::backdrop;
 use crate::hotkey::{HotkeySlot, HotkeyStatus};
@@ -38,6 +45,15 @@ const OVERLAY_LABEL: &str = "screenshot-overlay";
 const SESSION_EVENT: &str = "hermix:screenshot-session";
 /// 会话总兜底：正常以秒计，30s 没就绪即判异常收尾。
 const SESSION_FALLBACK_SECS: u64 = 30;
+
+/// 编辑态窗口最小尺寸（CSS 逻辑像素）。
+///
+/// 工具条自然宽度 ~764px（6 个工具 + 6 个色板 + 3 档笔宽 + 3 个动作），
+/// 宽度降到 520~700 档会换行成两行（高度 ~82px）。没有下限时窗口跟着
+/// 小选区缩成几十像素，工具条被挤进图像区域、中文标签压成竖排字。
+/// 560×280 正好容纳「两行工具条 + 一块还能看清内容的图像区域」。
+const EDIT_MIN_W_CSS: f64 = 560.0;
+const EDIT_MIN_H_CSS: f64 = 280.0;
 
 /// 截图功能开关（设置 → 图像）。默认开；false 时热键与标题栏入口都拒绝。
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -251,6 +267,26 @@ fn place_window(win: &tauri::WebviewWindow, x: i32, y: i32, w: u32, h: u32) {
     let _ = win.set_size(tauri::PhysicalSize::new(w, h));
 }
 
+/// 编辑态窗口矩形：以选区为中心外扩到最小尺寸，且不越出虚拟桌面。
+///
+/// 入参与返回值都是物理像素的 `(x, y, w, h)`。外扩是为了给工具条腾地方；
+/// 夹边是因为窗口一旦探出桌面，多出来的部分既看不见也点不到（覆盖窗
+/// 不可穿透，露在外面的部分是死区）。桌面比下限还小时只能贴桌面左上角。
+fn edit_window_rect(
+    sel: (i32, i32, i32, i32),
+    bounds: (i32, i32, i32, i32),
+    min: (i32, i32),
+) -> (i32, i32, i32, i32) {
+    let (sx, sy, sw, sh) = sel;
+    let (bx, by, bw, bh) = bounds;
+    let w = sw.max(min.0);
+    let h = sh.max(min.1);
+    // 左右（上下）各摊一半；clamp 的上界先与下界求 max，保证区间合法。
+    let x = (sx - (w - sw) / 2).clamp(bx, (bx + bw - w).max(bx));
+    let y = (sy - (h - sh) / 2).clamp(by, (by + bh - h).max(by));
+    (x, y, w, h)
+}
+
 fn set_failed(app: &tauri::AppHandle, error: &str) {
     let st = SessionState::Failed {
         error: error.to_string(),
@@ -404,9 +440,20 @@ pub fn screenshot_select(
     let png = screenshot::encode_png(&rgba, cw as u32, ch as u32)?;
     drop(guard);
 
-    // 窗口缩到选区：编辑态只显示选中的那部分，底下没有黑底。
+    // 窗口缩到选区，但**不小于编辑下限**：小选区也要留出工具条的位置。
+    // 多出来的空间由编辑器自带暗底填，图像在工具条上方的舞台里等比适配。
     if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
-        place_window(&win, cx0, cy0, cw as u32, ch as u32);
+        let scale = win.scale_factor().unwrap_or(1.0);
+        let min = (
+            (EDIT_MIN_W_CSS * scale).round() as i32,
+            (EDIT_MIN_H_CSS * scale).round() as i32,
+        );
+        let (wx, wy, ww, wh) = edit_window_rect(
+            (cx0, cy0, cw, ch),
+            (bx0, by0, bx1 - bx0, by1 - by0),
+            min,
+        );
+        place_window(&win, wx, wy, ww as u32, wh as u32);
     }
 
     Ok(format!(
@@ -546,4 +593,63 @@ pub fn prewarm(app: &tauri::AppHandle) {
 /// 幕布窗预热（幂等；失败不致命，首帧 paint 会自愈重试）。
 fn ensure_backdrop() -> Result<(), String> {
     backdrop::ensure_created()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 1920×1080 单屏，原点 (0,0)；下限按 100% 缩放取整。
+    const DESKTOP: (i32, i32, i32, i32) = (0, 0, 1920, 1080);
+    const MIN: (i32, i32) = (560, 280);
+
+    // 选区大于下限：窗口严等于选区，位置不动（原来的行为不变）。
+    #[test]
+    fn keeps_selection_when_larger_than_min() {
+        let r = edit_window_rect((300, 200, 900, 600), DESKTOP, MIN);
+        assert_eq!(r, (300, 200, 900, 600));
+    }
+
+    // 选区小于下限：以选区为中心外扩，多出来的空间左右/上下对半分。
+    #[test]
+    fn grows_small_selection_around_its_center() {
+        // 40×30 @ (860,400)：宽扩 520 → 左边各 260；高扩 250 → 上边各 125。
+        let r = edit_window_rect((860, 400, 40, 30), DESKTOP, MIN);
+        assert_eq!(r, (600, 275, 560, 280));
+    }
+
+    // 贴右下角：外扩部分被夹回桌面内，窗口仍在下限尺寸。
+    #[test]
+    fn clamps_into_desktop_at_bottom_right() {
+        let r = edit_window_rect((1900, 1060, 20, 20), DESKTOP, MIN);
+        assert_eq!(r, (1360, 800, 560, 280));
+    }
+
+    // 负坐标副屏（主屏左侧）同样成立。
+    #[test]
+    fn works_on_negative_origin_monitor() {
+        let desktop = (-1920, 0, 3840, 1080);
+        let r = edit_window_rect((-1900, 10, 20, 20), desktop, MIN);
+        assert_eq!(r, (-1920, 0, 560, 280));
+    }
+
+    // 桌面比下限还小：窗口取下限尺寸并贴左上（不再有可夹的余量）。
+    #[test]
+    fn desktop_smaller_than_min_pins_to_top_left() {
+        let tiny = (0, 0, 320, 200);
+        let r = edit_window_rect((10, 10, 20, 20), tiny, MIN);
+        assert_eq!(r, (0, 0, 560, 280));
+    }
+
+    // 缩放下限按屏幕缩放折算（150% → 840×420 物理像素）。
+    #[test]
+    fn min_scales_with_dpi() {
+        let scale = 1.5f64;
+        let min = (
+            (EDIT_MIN_W_CSS * scale).round() as i32,
+            (EDIT_MIN_H_CSS * scale).round() as i32,
+        );
+        let r = edit_window_rect((800, 500, 60, 40), DESKTOP, min);
+        assert_eq!((r.2, r.3), (840, 420));
+    }
 }

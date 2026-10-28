@@ -604,11 +604,9 @@
 
 /* ── 竖向容器：工具条固定，画布区吃掉剩余高度 ────────────────── */
 .preview-pane .preview-pdf,
-.preview-pane .preview-pptx,
 .preview-pane .preview-docx,
 .preview-pane .preview-image,
 .preview-fullscreen .preview-pdf,
-.preview-fullscreen .preview-pptx,
 .preview-fullscreen .preview-docx,
 .preview-fullscreen .preview-image {
   display: flex;
@@ -644,11 +642,9 @@
   flex: 1 1 auto;
 }
 
-/* ── 画布舞台（PDF / PPTX） ─────────────────────────────────── */
+/* ── 画布舞台（PDF / PPTX 共用） ────────────────────────────── */
 .preview-pane .preview-pdf-stage,
-.preview-pane .preview-pptx-stage,
-.preview-fullscreen .preview-pdf-stage,
-.preview-fullscreen .preview-pptx-stage {
+.preview-fullscreen .preview-pdf-stage {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
@@ -658,8 +654,7 @@
   padding: 16px;
   background: var(--color-bg-code);
 }
-.preview-pdf-stage canvas,
-.preview-pptx-stage canvas {
+.preview-pdf-stage canvas {
   display: block;
   background: #fff;
   border-radius: 4px;
@@ -672,15 +667,15 @@
   opacity: 0.6;
 }
 
-/* ── PDF 连续滚动：缩略图侧栏 + 纵向页列（2026-10-28） ──────────
+/* ── 连续滚动文档：缩略图侧栏 + 纵向页列（2026-10-28） ──────────
    一页一页翻的旧形态换成连续滚动：所有页铺成一列，正文区自己滚，
-   左侧缩略图是可选侧栏。 */
-.preview-pdf-body {
+   左侧缩略图是可选侧栏。PDF / PPTX / Word 共用这一套类名。 */
+.docpager-body {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
 }
-.preview-pdf-thumbs {
+.docpager-thumbs {
   flex: none;
   width: 136px;
   overflow-y: auto;
@@ -691,7 +686,7 @@
   background: var(--color-bg-code);
   border-right: 1px solid var(--color-border-secondary);
 }
-.preview-pdf-thumb {
+.docpager-thumb {
   flex: none;
   display: flex;
   flex-direction: column;
@@ -706,15 +701,25 @@
   font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
-.preview-pdf-thumb:hover { background: var(--color-bg-hover); }
-.preview-pdf-thumb.is-active {
+.docpager-thumb:hover { background: var(--color-bg-hover); }
+.docpager-thumb.is-active {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
   box-shadow: inset 0 0 0 1px var(--color-accent);
 }
-.preview-pdf-thumb .preview-pdf-sheet { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2); }
-.preview-pdf-thumb-no { line-height: 1; }
-.preview-pdf-pages {
+/* 缩略图"槽"：尺寸先占好，内容滚到才画（见 NearSlot）。 */
+.docpager-thumb-slot {
+  display: block;
+  overflow: hidden;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.docpager-thumb-slot canvas { display: block; }
+/* Word 的缩略图是缩放克隆，纸张底色由节自己带，别叠第二层白。 */
+.docpager-docx-thumb { width: 100%; height: 100%; background: #fff; }
+.docpager-thumb-no { line-height: 1; }
+.docpager-pages {
   position: relative;
   margin: 0 auto;
   display: flex;
@@ -724,7 +729,7 @@
   padding-bottom: 16px;
 }
 /* 纸面外壳承担投影，canvas 只负责画内容。 */
-.preview-pdf-sheet {
+.docpager-sheet {
   flex: none;
   position: relative;
   overflow: hidden;
@@ -734,10 +739,12 @@
     0 4px 12px rgba(0, 0, 0, 0.18),
     0 1px 3px rgba(0, 0, 0, 0.12);
 }
-.preview-pdf-sheet canvas { border-radius: 0; box-shadow: none; }
+.docpager-sheet canvas { border-radius: 0; box-shadow: none; }
 /* 页列居中交给 margin:auto：放大到超宽时 flex 居中会把左半截裁掉，
    auto 边距会退化为 0，横向滚动才看得见左边。 */
-.preview-pdf-body .preview-pdf-stage { justify-content: flex-start; }
+.docpager-body .preview-pdf-stage { justify-content: flex-start; }
+/* Word 的舞台是 .docx-scroll：在侧栏旁边要能收缩，不然窄栏里被挤成一条。 */
+.docpager-body .docx-scroll { min-width: 0; }
 
 /* ── 图片：居中 + 棋盘格背景显示透明通道 ──────────────────────
    舞台是 flex 居中容器，图片才有"在整栏正中"的位置；没有这条时

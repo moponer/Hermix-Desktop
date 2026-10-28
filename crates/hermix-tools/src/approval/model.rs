@@ -30,6 +30,13 @@ pub enum ApprovalDecision {
 /// any client-side change.
 #[derive(Default, Clone)]
 pub struct TerminalApprovalContext {
+    /// 本轮的权限级别（放手模式 = `Full`）。
+    ///
+    /// 工具内部的 Caution 确认（命令风险判断）原本完全不看这个值，于是切到
+    /// 放手模式后 `terminal` 仍反复弹审批 —— 派发层的 `Full` 直通只管
+    /// "Dangerous 工具要不要先问"，管不到工具自己的确认流程。带上它之后，
+    /// 两条路径对 `Full` 的口径一致：不问，直接执行。
+    pub permission: hermix_core::traits::PermissionLevel,
     /// Session id forwarded to the `requester` closure. The terminal
     /// tool itself doesn't know its session id (the dispatcher is the
     /// agent service), so the caller writes it here when wiring the

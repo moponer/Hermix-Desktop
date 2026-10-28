@@ -9,8 +9,13 @@
    浅色 / 深色两套主题自动跟随，新增主题也不用改这里。
 
    禁止：字面色值、var(--x, #hex) 兜底、side-tab（≥2px 单侧色条）、
-   装饰性脉冲与无限滚动（设计门禁判为假活力）。
-   ════════════════════════════════════════════════════════════════════ */
+   以及**没有信息含义**的循环（纯装饰脉冲 / 跑马灯）。
+
+   2026-10-28 修订：这一页的目标从「信息面板」改为「太空仪器观察台」，
+   依用户明确要求允许**常驻环境动效**（雷达扫描、遥测光标、待机灯、方点
+   LED）——判据从"是否循环"改为"是否绑定真实量"，清单与成本见文件末尾
+   「太空仪器观察台」段。
+    ════════════════════════════════════════════════════════════════════ */
 
 /* ── 令牌别名（接入后要换肤只改这一段） ───────────────────────────── */
 
@@ -1251,6 +1256,14 @@
 .twin-head__state.is-live i {
   background: var(--color-accent);
 }
+/* 第三态：她在等你（有待批/待答）。语义色走「文字安全档」而非原始 warning，
+   12~13px 的字在浅底上后者过不了 4.5:1。 */
+.twin-head__state.is-hot {
+  color: var(--color-text-warning);
+}
+.twin-head__state.is-hot i {
+  background: var(--color-warning);
+}
 .twin-head__sub {
   font-size: var(--text-meta);
   color: var(--color-text-faint);
@@ -1281,17 +1294,101 @@
   white-space: nowrap;
   vertical-align: bottom;
 }
-.twin-head__perm {
+/* ── 权限模式开关（分段控件，2026-10-28） ─────────────────────────
+   为什么不是一颗会换字的按钮：默认态没有任何颜色，"现在哪种模式"只能靠
+   读文字反推，"还有另一种"更是看不见。分段控件把两个选项同时摆在面上，
+   当前那段实底上色，另一段是纸面 —— 状态与可切换性一次说清。
+   颜色语义（全页只用在这一个控件上）：
+     默认 = 成功档（有护栏：高危操作先问）
+     放手 = 警告档（无护栏：直接执行，风险自担）
+   两档都走「文字安全档」令牌，12px 的小字在各自 -soft 底上 ≥4.5:1。 */
+.twin-perm {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   height: 26px;
-  padding: 0 10px;
-  font-size: var(--text-tiny);
-  color: var(--color-text-secondary);
+  padding: 2px;
   border-radius: 999px;
   background: var(--color-bg-tertiary);
 }
-.twin-head__perm:hover {
+.twin-perm__opt {
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: var(--text-tiny);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.twin-perm__opt:hover {
   color: var(--color-text-primary);
-  border-color: var(--color-border-secondary);
+}
+/* 当前模式：实底 + 加粗。默认档给绿，放手档给橙 —— 放手那一档的底色恒为
+   警告色（无论是否选中都带一丝），因为它代表"没有护栏"这件事本身。 */
+.twin-perm__opt.is-on {
+  background: var(--color-bg-primary);
+  color: var(--color-text-success);
+  font-weight: var(--font-weight-semibold);
+}
+.twin-perm[data-level="full"] .twin-perm__opt.is-on {
+  background: var(--color-warning-soft);
+  color: var(--color-text-warning);
+}
+/* 未选中的放手档：常驻提示它是"危险的那一侧"，但弱到不抢当前状态。 */
+.twin-perm__opt--risk:not(.is-on) {
+  color: var(--color-text-warning);
+  opacity: 0.7;
+}
+/* 二次确认态：整条换成警告底 + 一句风险说明 + 确认/取消。 */
+.twin-perm__ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: var(--text-tiny);
+  color: var(--color-text-warning);
+  white-space: nowrap;
+}
+/* 确认钮：实底。底色取「文字安全档」的深琥珀而不是 --color-warning ——
+   后者配白字只有 4.0:1，12px 小字过不了本仓库的 4.5:1 硬线。 */
+.twin-perm__opt--danger {
+  background: var(--color-text-warning);
+  color: var(--color-on-tone);
+  font-weight: var(--font-weight-semibold);
+}
+.twin-perm__opt--danger:hover {
+  color: var(--color-on-tone);
+}
+
+/* ── 放手模式常驻风险条 ───────────────────────────────────────────
+   模式生效后，"她不再问"必须在视线里：只写进按钮的一个词，用户滑过去就
+   忘了。切回默认即消失，所以它不是长期装饰。 */
+.twin-risk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-soft);
+  color: var(--color-text-warning);
+  font-size: var(--text-tiny);
+}
+.twin-risk b {
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+}
+.twin-risk span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.twin-risk .chip-flat {
+  margin-left: auto;
+  flex: none;
 }
 
 /* ── 三栏 ── */
@@ -1321,11 +1418,10 @@
 .twin-box--attn {
   background: var(--color-warning-soft);
 }
-/* 次要信息（最近会话/工作日志/刚才发生）：去底色纯列表，把视觉预算
-   让给状态与待办。 */
-.twin-box--quiet {
-  background: transparent;
-}
+/* 2026-10-28：次要信息面板「去底色」的变体（.twin-box--quiet）已删除。
+   透明面板底下就是页面底的点阵 —— 读起来是"文字浮在网格上、面板没有边界"，
+   而同一翼里 01/02 是实心卡：一列面板一半有纸一半没纸，像没画完。
+   主次改由字重与墨色承担，纸面统一。 */
 .twin-box--grow {
   flex: 1 1 auto;
   min-height: 96px;
@@ -1516,37 +1612,54 @@
   color: var(--color-text-faint);
   font-variant-numeric: tabular-nums;
 }
-/* 可操作的会话行（「最近会话」）：主行点开正文，尾随删除钮。
-   主行铺满、按钮挤到行尾悬停才显色——不与标题抢注意力。 */
+/* 可操作的会话行（「最近会话」）：一行 = 标题 + 时间 + 删除钮。
+   语法与主侧栏的 .sidebar-row 一致（13px 主墨标题、12px 弱墨时间、悬停铺
+   一层淡底、圆角）—— 同一类数据在整个应用里只该有一种长相。
+   `margin: 0 -6px` 让悬停底色铺到面板内边距上，文字位置一像素不动。 */
 .twin-row--act {
-  display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   padding: 0;
+  margin: 0 -6px;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+.twin-row--act:hover,
+.twin-row--act:focus-within {
+  background: var(--color-bg-hover-subtle);
 }
 .twin-row--act .twin-row__open {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: baseline;
-  gap: 9px;
-  padding: 5px 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
   text-align: left;
   border-radius: var(--radius-sm);
   color: inherit;
   cursor: pointer;
 }
-.twin-row--act .twin-row__open:hover .twin-row__m,
-.twin-row--act .twin-row__open:focus-visible .twin-row__m {
-  color: var(--color-text-secondary);
+/* 会话标题是这一栏的正文（用户在这里找对话），不是元信息：主墨 + 13px。
+   此前是 12px 的 secondary，整块读成一张灰表格。 */
+.twin-row--act .twin-row__m {
+  font-size: var(--text-ui);
+  color: var(--color-text-primary);
+}
+/* 时间从行首列改成行尾读数：它不是"列"（每条都不同），占着左列只会把标题
+   整体右推、还让整块读成对齐的灰度表。 */
+.twin-row--act .twin-row__t {
+  flex: none;
+  width: auto;
+  text-align: right;
 }
 .twin-row--act .twin-row__del {
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: var(--radius-sm);
   color: var(--color-text-faint);
   cursor: pointer;
@@ -1959,7 +2072,8 @@
    4. **一种入场形**：上浮 6px + 淡入。距离统一 —— 4px 看不出在动，
       10px 像掉下来；两个组件位移不同距离时，眼睛会以为它们来自两处。
    5. **循环只给状态，不给装饰。** 呼吸只出现在「在跑 / 异常 / 等待」这类
-      真实状态上；静默（idle）时全页完全静止，包括她那滴墨。
+      真实状态上。（2026-10-28 修订：静默不再"全页静止"——观察台必须一直
+      通电。新增的常驻动效全部绑定真实量，见文件末尾「太空仪器观察台」。）
 
    角色分配 —— 每个组件只有**一种**动作，这是「各自有性格、整体不打架」
    的唯一做法（同一种动作 + 不同的触发时机 = 一套语言）：
@@ -2077,27 +2191,14 @@
 }
 
 /* ⑦ 列表行：hover 只换底色。
-   **不改几何**：行内加 padding 会把文字挤离面板标题的竖线，负外边距又会被
-   滚动容器的 overflow 裁掉 —— 两种都换不来"圆角内缩的高亮带"。所以这里只
-   叠一层底色，文字位置一像素不动（密列表里任何位置变化都会被读成抖动）。 */
+   **不改几何**：行内加 padding 会把文字挤离面板标题的竖线 —— 换不来"圆角
+   内缩的高亮带"，只换来一次抖动。只读行（日志/流水）整行铺底；会话行铺在
+   行容器上（`margin: 0 -6px` 让底色吃到面板内边距，文字位置仍不动）。 */
 .twin-row:not(.twin-row--act) {
   transition: background-color var(--duration-fast) var(--ease-out);
 }
 .twin-row:not(.twin-row--act):hover {
   background: var(--color-bg-secondary);
-}
-.twin-row--act .twin-row__open {
-  transition: background-color var(--duration-fast) var(--ease-out);
-}
-.twin-row--act .twin-row__open:hover,
-.twin-row--act .twin-row__open:focus-visible {
-  background: var(--color-bg-secondary);
-}
-/* 可点行的悬停反馈此前写成 secondary → secondary（同一个值），等于没有反馈。
-   悬停时标题提一档到满墨，与「这是一条可点的记录」对齐。 */
-.twin-row--act .twin-row__open:hover .twin-row__m,
-.twin-row--act .twin-row__open:focus-visible .twin-row__m {
-  color: var(--color-text-primary);
 }
 /* 删除钮：常驻可见（淡墨）→ 悬停整行提一档 → 悬停它自己才变红。
    三级递进的作用是"先看见、再确认、才危险"：常驻红色会让一屏三条记录
@@ -2228,4 +2329,328 @@
 /* ⑭ 底条：只有在跑时心跳（静止的圆点无法说明"这一轮还在执行"）。 */
 .twin-bottom.is-live .twin-bottom__live i {
   animation: m-breathe 1.6s var(--ease-out) infinite;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   太空仪器观察台（2026-10-28）
+   ──────────────────────────────────────────────────────────────────
+   目标换了：不是「信息面板」，是**一直通电的观察台**。静默也在动。
+
+   判据从「是否循环」改成「是否绑定真实量」：
+     · 有信息含义 → 允许常驻（扫描转速 = 在跑数，遥测值 = 轮询结果，
+       光标块 = 在线，待机灯 = 未断线）；
+     · 没有信息含义 → 仍然禁止（随机闪烁、跑马灯、无源呼吸）。
+
+   常驻合成层的预算：**全屏最多 2 层** —— 角标（静态，0 成本）与雷达扇区
+   （320×320，rotate）；待机灯 / 光标块 / 方点 LED 都是 5~6px 的纯 opacity
+   动画，不额外占层。其余动效仍是一次性的。频率：雷达空闲 14s·在跑 8s、
+   待机灯 3.2s、光标 1.2s，都落在人眼"注意但不刺眼"的下限之上。
+
+   语言替换（"面板 → 仪器"，这是本次的核心，不是加装饰）：
+
+     网页仪表盘                        观察台
+     ─────────────────────────────────────────────────────────────
+     3px 主色竖条                     5×5 方点 LED + 通道号 01/02
+     圆角卡片 + 大数字                定宽等宽读数 00 + 刻度基线
+     平滑进度条                       分段刻度 / 雷达扇区
+     「会话 twin:ali」一行字          底部遥测帧头 CH/SID/TICK/RUN/Q
+     静态数据环                       常驻慢扫扇区（转速 = 状态）
+     面板边框                         四角 L 形角标 + 点阵地板
+
+   主题：全部走令牌合成（--color-text-primary 混透明 / --color-accent），
+   暗色主题下点阵与角标自动变成冷灰、浅色主题下变成墨灰 —— 不需要第二套
+   配色，也就不存在"深色看不见 / 浅色糊一片"。
+   ════════════════════════════════════════════════════════════════════ */
+
+.twin-screen {
+  position: relative;
+  /* HUD 三档线：soft = 点阵与刻度，hud = 角标，hud-strong = 状态色角标 */
+  --twin-hud-soft: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  --twin-hud: color-mix(in srgb, var(--color-text-primary) 15%, transparent);
+  --twin-hud-strong: color-mix(in srgb, var(--color-text-primary) 30%, transparent);
+  --twin-sweep: color-mix(in srgb, var(--color-accent) 26%, transparent);
+  /* 点阵地板：18px 网格，只在缝隙与数据态可见（面板是不透明的纸） */
+  background-color: var(--color-bg-app);
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    var(--twin-hud-soft) 1px,
+    transparent 0
+  );
+  background-size: 18px 18px;
+}
+
+/* 角标随整机状态换色：这是"同一台机器在变"的记号，不是装饰脉冲。 */
+.twin-screen[data-mode="running"] {
+  --twin-hud-strong: color-mix(in srgb, var(--color-accent) 62%, transparent);
+}
+.twin-screen[data-mode="alert"] {
+  --twin-hud-strong: color-mix(in srgb, var(--color-warning) 62%, transparent);
+}
+
+/* ── 四角 L 形角标：8 条 1px 短线，静态、零成本 ─────────────────── */
+.twin-screen::before {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  z-index: 6;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--twin-hud-strong), var(--twin-hud-strong)) left top / 14px 1px
+      no-repeat,
+    linear-gradient(var(--twin-hud-strong), var(--twin-hud-strong)) left top / 1px 14px
+      no-repeat,
+    linear-gradient(var(--twin-hud-strong), var(--twin-hud-strong)) right top / 14px 1px
+      no-repeat,
+    linear-gradient(var(--twin-hud-strong), var(--twin-hud-strong)) right top / 1px 14px
+      no-repeat,
+    linear-gradient(var(--twin-hud-strong), var(--twin-hud-strong)) left bottom / 14px 1px
+      no-repeat,
+    linear-gradient(var(--twin-hud-strong), var(--twin-hud-strong)) left bottom / 1px 14px
+      no-repeat,
+    linear-gradient(var(--twin-hud-strong), var(--twin-hud-strong)) right bottom / 14px 1px
+      no-repeat,
+    linear-gradient(var(--twin-hud-strong), var(--twin-hud-strong)) right bottom / 1px 14px
+      no-repeat;
+}
+
+/* （全屏扫描线 2026-10-28 按用户观感删除：1px 线扫过正文时会打断阅读，
+   留在屏上只剩"干扰"没有"通电"的感觉。通电感由角标 + 雷达 + 遥测承担。） */
+
+/* ── 面板头：通道号 + 方点 LED + 刻度基线 ───────────────────────
+   刻度画在**面板头自己的背景**上，而不是绝对定位伪元素的色条上：
+   单侧伪元素色条正是 impeccable 的 side-tab 反模式（无论多细都会被判），
+   而背景层是"面板自己的纸面刻度"，语义与判定都干净。 */
+.twin-box__head {
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  background-image:
+    repeating-linear-gradient(90deg, var(--twin-hud) 0 1px, transparent 1px 15px),
+    linear-gradient(var(--twin-hud), var(--twin-hud));
+  background-size:
+    100% 3px,
+    100% 1px;
+  background-position:
+    left bottom,
+    left bottom;
+  background-repeat: no-repeat;
+}
+/* 方点 LED 取代 3px 竖条：竖条是"网页卡片"的标记，方点是仪器面板的标记。 */
+.twin-box__bar {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 30%, transparent);
+  animation: twin-led 4s steps(1, end) infinite;
+}
+@keyframes twin-led {
+  0%,
+  90% {
+    opacity: 1;
+  }
+  91%,
+  100% {
+    opacity: 0.45;
+  }
+}
+.twin-box__code {
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  letter-spacing: 0.1em;
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 读数：全页数字改用等宽 + 定宽（00），并给指标格加刻度尺 ──── */
+.twin-head__kv b,
+.twin-grid__v,
+.twin-strip__v,
+.twin-ring__big,
+.twin-box__meta,
+.twin-bottom__tele {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.twin-grid > div {
+  position: relative;
+  padding-bottom: 13px;
+}
+/* 指标格底部刻度：静态 8px 一格的量程尺，给数字一个"被测量"的框 */
+.twin-grid > div::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 6px;
+  height: 3px;
+  opacity: 0.7;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--twin-hud) 0 1px,
+    transparent 1px 8px
+  );
+}
+
+/* ── 行首时间列：定宽 + 不换行 ─────────────────────────────────
+   此前是「36px 定宽且无 nowrap」：`18 小时前` 在中文断行规则下折成
+   「18 小 / 时前」两行，整行被顶高、基线全乱（用户实测截图）。
+   现在显示走紧凑写法（18h / 5m / 3d / 刚），完整时间挂在 title 上。 */
+.twin-row__t {
+  width: 34px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── 待机灯：静默不等于断电，状态点每 3.2s 掉一次亮度 ─────────── */
+
+@keyframes twin-standby {
+  0%,
+  84% {
+    opacity: 1;
+  }
+  85%,
+  100% {
+    opacity: 0.3;
+  }
+}
+.twin-head__state i {
+  animation: twin-standby 3.2s steps(1, end) infinite;
+}
+
+/* ── 雷达扇区：环上常驻慢扫，转速即状态 ─────────────────────────
+   conic-gradient 做扇区、radial-gradient 做遮罩只留环带（57% 以外）；
+   旋转走合成层，扇区本身只栅格化一次。 */
+@keyframes twin-radar {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.twin-ring__sweep {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  background: conic-gradient(from 0deg, var(--twin-sweep), transparent 32%);
+  mask-image: radial-gradient(circle at 50% 50%, transparent 0 56%, currentColor 57%);
+  -webkit-mask-image: radial-gradient(
+    circle at 50% 50%,
+    transparent 0 56%,
+    currentColor 57%
+  );
+  animation: twin-radar 14s linear infinite;
+  opacity: 0.5;
+}
+.twin-screen[data-mode="running"] .twin-ring__sweep {
+  animation-duration: 8s;
+  opacity: 0.75;
+}
+.twin-screen[data-mode="alert"] .twin-ring__sweep {
+  animation-duration: 5s;
+  opacity: 0.9;
+}
+
+/* ── 数据态地板：点阵更疏一档，给雷达一个"测量面" ─────────────── */
+.twin-data {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    var(--twin-hud-soft) 1px,
+    transparent 0
+  );
+  background-size: 22px 22px;
+}
+
+/* ── 对话空态：瞄准环（圆环 + 十字 + 呼吸中心点）───────────────
+   此前是一句灰字居中（"她还没有说过话 · 在下面跟她说一句"）——
+   居中灰字是"网页空列表"的通用写法，和观察台的语言完全不同。
+   这里换成光学瞄准/雷达视标的形态：所有线条都是 1px 背景渐变或 inset
+   发丝环，没有 border；中心点用 accent 呼吸，表示"在等你输入"。 */
+.twin-idle {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  padding: 8px 16px;
+}
+
+.twin-idle__scope {
+  position: relative;
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  /* 圆环（inset 发丝，不占布局）+ 十字准线（两条 1px 背景线） */
+  box-shadow: inset 0 0 0 1px var(--twin-hud);
+  background-image:
+    linear-gradient(var(--twin-hud), var(--twin-hud)),
+    linear-gradient(var(--twin-hud), var(--twin-hud));
+  background-size:
+    64% 1px,
+    1px 64%;
+  background-position:
+    center,
+    center;
+  background-repeat: no-repeat;
+}
+
+/* 中心点：仪器的"心跳"位。慢呼吸而不是闪烁，静默时也活着。 */
+.twin-idle__scope::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 18%, transparent);
+  animation: m-breathe 2.8s var(--ease-out) infinite;
+}
+
+.twin-idle__line {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  letter-spacing: 0.08em;
+  color: var(--color-text-secondary);
+}
+
+.twin-idle__hint {
+  max-width: 34ch;
+  font-size: var(--text-meta);
+  line-height: 1.7;
+  color: var(--color-text-faint);
+}
+
+/* ── 底条遥测：CH / SID / TICK / RUN / Q，末尾光标块表示在线 ──── */
+.twin-bottom__tele {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: var(--text-micro);
+  letter-spacing: 0.06em;
+  color: var(--color-text-faint);
+}
+.twin-bottom__tele b {
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+@keyframes twin-caret-blink {
+  0%,
+  55% {
+    opacity: 1;
+  }
+  56%,
+  100% {
+    opacity: 0;
+  }
+}
+.twin-caret {
+  width: 5px;
+  height: 9px;
+  flex: none;
+  background: var(--color-accent);
+  animation: twin-caret-blink 1.2s steps(1, end) infinite;
 }

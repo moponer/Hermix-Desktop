@@ -74,13 +74,21 @@ describe("mergeTranscript", () => {
   });
 
   it("超出上限时只留尾部", () => {
-    const history = Array.from({ length: 10 }, (_, i) => row("user", `m${i}`));
-    const live = [row("user", "m9"), row("assistant", "reply")];
+    // 真实的落库历史一定是成对的（user/assistant 交替）；此前这条用例拿
+    // 10 条连续 user 当输入，撞上"裁掉尾部孤儿提问"的规则后一条都不剩，
+    // 断言的是病态输入下的巧合而不是 cap 本身。
+    const history = Array.from({ length: 5 }, (_, i) => [
+      row("user", `q${i}`),
+      row("assistant", `a${i}`),
+    ]).flat();
+    const live = [row("user", "新问题"), row("assistant", "reply")];
     const merged = mergeTranscript(history, live);
     expect(merged).toHaveLength(TRANSCRIPT_CAP);
     expect(merged[merged.length - 1]).toEqual(row("assistant", "reply"));
   });
 
+  /// 2026-10-28：本轮只剩一条错误提示（live 里没有 user 行）时，历史尾部
+  /// 的提问曾被"裁孤儿"一起裁掉 —— 面板上只剩一句无头无尾的「出错了」。
   it("live 里没有 user 行（比如只有一条错误提示）时全部接在历史后", () => {
     const history = [row("user", "早")];
     const live = [row("assistant", "出错了")];

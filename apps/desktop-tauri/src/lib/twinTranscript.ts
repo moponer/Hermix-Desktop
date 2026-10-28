@@ -68,33 +68,46 @@ export function toTranscriptRows(
 /**
  * 合并落库历史与内存中的本轮。
  *
- * - 先裁掉 history 尾部「没人回复的提问」：上一轮被打断（停止 / 崩溃 /
- *   断连）时 early-persist 已经把提问落库，回复却没写回，库里就留下孤儿
- *   提问。她不回答它，摆出来是两条连续的用户气泡，看起来像「她答错了题」
- *   （2026-10-27 实报：历史尾部 `[user(旧), user(新)]`）。
- * - live 为空：纯用裁过的 history 尾部。
- * - live 非空：在 history 里找最后一条与 live 最后一条 user 相同的行，
- *   该行之前的部分接上 live，再统一裁到 `TRANSCRIPT_CAP`。
+ * - live 为空：裁掉 history 尾部「没人回复的提问」再取尾。
+ *   上一轮被打断（停止 / 崩溃 / 断连）时 early-persist 已经把提问落库，
+ *   回复却没写回，库里就留下孤儿提问 —— 摆出来是两条连续的用户气泡，
+ *   看起来像「她答错了题」（2026-10-27 实报 `[user(旧), user(新)]`）。
+ * - live 非空且带 user 行：在 history 里找最后一条与它同文的提问，连同
+ *   它前面紧挨着的连续用户行（被打断的孤儿）一起交给 live 顶替。
+ * - live 非空但没有 user 行：历史原样保留。
+ *
+ * 最后一条是 2026-10-28 修的：此前无论 live 有没有 user 行都先裁历史尾部，
+ * 于是本轮只剩一条错误提示时（`live = [assistant("出错了")]`），连刚才问
+ * 的那句话都被裁掉了 —— 面板上一条无头无尾的「出错了」。
  */
 export function mergeTranscript(
   history: TranscriptRow[],
   live: TranscriptRow[],
   cap: number = TRANSCRIPT_CAP,
 ): TranscriptRow[] {
-  let end = history.length;
-  while (end > 0 && history[end - 1].role === "user") end -= 1;
-  const trimmed = history.slice(0, end);
+  if (live.length === 0) return trimOrphanTail(history).slice(-cap);
 
-  if (live.length === 0) return trimmed.slice(-cap);
   const lastUser = [...live].reverse().find((r) => r.role === "user")?.text;
-  let cut = trimmed.length;
-  if (lastUser) {
-    for (let i = trimmed.length - 1; i >= 0; i--) {
-      if (trimmed[i].role === "user" && trimmed[i].text === lastUser) {
-        cut = i;
-        break;
-      }
+  if (!lastUser) return [...history, ...live].slice(-cap);
+
+  let hit = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === "user" && history[i].text === lastUser) {
+      hit = i;
+      break;
     }
   }
-  return [...trimmed.slice(0, cut), ...live].slice(-cap);
+  // 本轮还没落库：整段历史接在本轮前面。
+  if (hit < 0) return [...history, ...live].slice(-cap);
+
+  let start = hit;
+  while (start > 0 && history[start - 1].role === "user") start -= 1;
+  return [...history.slice(0, start), ...live].slice(-cap);
+}
+
+/** 去掉尾部连续的用户行（无人回复的提问）。 */
+function trimOrphanTail(history: TranscriptRow[]): TranscriptRow[] {
+  let end = history.length;
+  while (end > 0 && history[end - 1].role === "user") end -= 1;
+  return history.slice(0, end);
 }

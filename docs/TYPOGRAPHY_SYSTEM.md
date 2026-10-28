@@ -84,12 +84,12 @@ text-tiny / text-meta / text-body / text-h1 / text-h2 / text-display
 | 令牌 | 值 | 唯一用途 | 当前使用处数 |
 |---|---|---|---|
 | `--text-micro` | 10px | 角标、计数徽标 | 已迁移 |
-| `--text-tiny` | 11px | 元信息：时间、计数、路径、参数预览 —— **与 `meta` 同值，仅作过渡别名**，新代码直接用 `meta` | 别名 |
-| `--text-meta` | 11px | 工具名、chip、命令输出、区块标题 | 已迁移 |
-| `--text-ui` | 12px | 界面文本：按钮、列表项、表单标签、**思考正文** | 已迁移 |
-| `--text-body` | 12px | **对话正文（全局唯一正文字号，与 `ui` 同值）** | 已迁移 |
-| `--text-title` | 15px | 小标题：区块、弹窗 | 已迁移 |
-| `--text-display` | 18px | 页面标题 / 空态（一次性） | 已迁移 |
+| `--text-tiny` | 12px | 元信息：时间、计数、路径、参数预览 —— **与 `meta` 同值，仅作过渡别名**，新代码直接用 `meta` | 别名 |
+| `--text-meta` | 12px | 工具名、chip、命令输出、区块标题 | 已迁移 |
+| `--text-ui` | 13px | 界面文本：按钮、列表项、表单标签、**思考正文** | 已迁移 |
+| `--text-body` | 13px | **对话正文（全局唯一正文字号，与 `ui` 同值）** | 已迁移 |
+| `--text-title` | 16px | 小标题：区块、弹窗 | 已迁移 |
+| `--text-display` | 20px | 页面标题 / 空态（一次性） | 已迁移 |
 
 旧名 `--font-size-*` 保留为别名供 `var()` 引用，注释已标注"禁止新代码使用"。
 
@@ -153,7 +153,7 @@ text-tiny / text-meta / text-body / text-h1 / text-h2 / text-display
 3. **Tailwind 原生刻度 — 在 `tokens.css` 的 `@theme` 钉到七档**
    组件里还有 100+ 处 `text-xs / text-sm / text-lg`，它们的默认值（sm=14、base=16、lg=18）
    与七档不是一套，等于绕过档位的第二条路。已在 `@theme` 覆盖：
-   `--text-xs:11px / --text-sm:12px / --text-base:12px / --text-lg:15px / --text-xl:18px`，
+   `--text-xs:12px / --text-sm:13px / --text-base:13px / --text-lg:16px / --text-xl:20px`，
    落点与七档一致。新代码优先写语义令牌，原生刻度作为兼容保留。
 
 4. **独立窗口自带令牌层**
@@ -171,18 +171,18 @@ text-tiny / text-meta / text-body / text-h1 / text-h2 / text-display
 
 | 内容 | 字号 | 字重 | 颜色 | 行高 |
 |---|---|---|---|---|
-| 对话正文 | `body` 12 | 400 | `text-primary` | 1.75 |
-| 用户气泡 | `body` 12 | 400 | `text-primary` | 1.68 |
-| **思考正文** | `ui` 12 | 400 | **`text-thinking`** | 1.75 |
-| 轮次摘要行 | `meta` 11 | 500 | `text-secondary` | 1.4 |
-| 工具名 | `meta` 11 mono | 500 | `text-primary` | 1.4 |
-| 参数 / 路径 | `tiny` 11 mono | 400 | `text-tertiary` | 1.4 |
-| 命令输出 | `meta` 11 mono | 400 | `text-secondary` | 1.6 |
-| 时间 / 计数 | `tiny` 11 | 400 | `text-tertiary` | 1.4 |
-| 区块标题 | `meta` 11 | 600 | `text-tertiary` + 字距 .04em | 1.4 |
-| chip 文本 | `meta` 11 | 500 | `text-secondary` | 1.4 |
-| 按钮 | `ui` 12 | 500 | `text-primary` | 1.4 |
-| 占位 / 禁用 | `tiny` 11 | 400 | `text-faint` | 1.4 |
+| 对话正文 | `body` 13 | 400 | `text-primary` | 1.75 |
+| 用户气泡 | `body` 13 | 400 | `text-primary` | 1.68 |
+| **思考正文** | `ui` 13 | 400 | **`text-thinking`** | 1.75 |
+| 轮次摘要行 | `meta` 12 | 500 | `text-secondary` | 1.4 |
+| 工具名 | `meta` 12 mono | 500 | `text-primary` | 1.4 |
+| 参数 / 路径 | `tiny` 12 mono | 400 | `text-tertiary` | 1.4 |
+| 命令输出 | `meta` 12 mono | 400 | `text-secondary` | 1.6 |
+| 时间 / 计数 | `tiny` 12 | 400 | `text-tertiary` | 1.4 |
+| 区块标题 | `meta` 12 | 600 | `text-tertiary` + 字距 .04em | 1.4 |
+| chip 文本 | `meta` 12 | 500 | `text-secondary` | 1.4 |
+| 按钮 | `ui` 13 | 500 | `text-primary` | 1.4 |
+| 占位 / 禁用 | `tiny` 12 | 400 | `text-faint` | 1.4 |
 
 ---
 

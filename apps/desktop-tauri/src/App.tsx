@@ -73,6 +73,7 @@ import { sendNotification, setKeepAwake, KEEP_AWAKE_CHANGED_EVENT, setTrayTaskCo
 import { applyScale, readScale, UI_SCALE_EVENT } from "./utils/uiScale";
 import { CLOSE, NEW_CHAT } from "./components/strings";
 import { reportError } from "./lib/reportError";
+import { cleanSessionTitle } from "./lib/sessionTitle";
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
 
@@ -150,6 +151,13 @@ function computeLeftMin(vw: number): number {
 // 这样 setup 时窗口已确定，能拿到实际视口宽度。
 // eslint-disable-next-line prefer-const
 // (上面保留 computeMainMinWidth / computeLeftMin 供 typing 引用)
+
+/**
+ * 「不是工具的工具名」。`tool_call` 是 stream_collect 在模型没给出工具名时
+ * 的桥接占位名（见 `stream_collect.rs` 的 bridge tool），`tool` / `function`
+ * 是解析兜底值 —— 它们进「刚才发生」只会在流水里留下几行同名的废话。
+ */
+const BRIDGE_TOOL_NAMES = new Set(["tool", "tool_call", "function", ""]);
 
 export default function App() {
   const [page, setPageRaw] = useState<NavPage>("chat");
@@ -596,6 +604,8 @@ setPage("chat");
   const twinChat = useStreamChat(TWIN_SESSION_ID);
   const [twinTurn, setTwinTurn] = useState<TwinTurn | null>(null);
   const [twinPending, setTwinPending] = useState<TwinPendingDecision[]>([]);
+  /** 本轮序号 —— 结算后作废，用来丢弃迟到帧（见 sendToTwin）。 */
+  const twinTurnSeq = useRef(0);
   const twinApprovalResolvers = useRef(
     new Map<string, (v: { decision: "approved" | "denied"; remember?: boolean }) => void>(),
   );
@@ -629,72 +639,72 @@ setPage("chat");
       if (twinChat.streaming) return false;
       setTwinPending([]);
       setTwinTurn({ user: text, reply: "", activity: null, error: null, events: [] });
+      // 本轮序号：结算之后（await 返回）才到的迟到帧一律丢弃。流被停止/断流
+      // 时曾有 tool_start、approval_request 在结算后才送达，于是在「静默」的
+      // 屏幕上留下「她正在用 task_create」和一张已经没人等待的审批卡。
+      const seq = ++twinTurnSeq.current;
+      const alive = () => twinTurnSeq.current === seq;
+      const patch = (fn: (t: TwinTurn) => TwinTurn) =>
+        setTwinTurn((t) => (t && alive() ? fn(t) : t));
+      const pushPending = (item: TwinPendingDecision) => {
+        if (!alive()) return;
+        setTwinPending((prev) => [...prev, item]);
+      };
       try {
         await twinChat.send(
           TWIN_SESSION_ID,
           text,
           {
-            onChunk: (chunk) =>
-              setTwinTurn((t) => (t ? { ...t, reply: t.reply + chunk } : t)),
-            onToolStart: (info) =>
-              setTwinTurn((t) =>
-                t
-                  ? {
-                      ...t,
-                      activity: info.tool,
-                      // 工具流水：值守页「刚才发生」实时体现这一轮做了什么。
-                      events: [...(t.events ?? []), info.tool].slice(-30),
-                    }
-                  : t,
-              ),
-            onToolComplete: () =>
-              setTwinTurn((t) => (t ? { ...t, activity: null } : t)),
+            onChunk: (chunk) => patch((t) => ({ ...t, reply: t.reply + chunk })),
+            onToolStart: (info) => {
+              // 桥接占位名（`tool_call`）不是用户认识的工具：既不记流水，
+              // 也不拿它当"正在用 X"的 X（见 stream_collect.rs 的 bridge tool）。
+              const name = BRIDGE_TOOL_NAMES.has(info.tool) ? null : info.tool;
+              patch((t) => ({
+                ...t,
+                activity: name,
+                // 工具流水：值守页「刚才发生」实时体现这一轮做了什么。
+                events: name ? [...(t.events ?? []), name].slice(-30) : t.events,
+              }));
+            },
+            onToolComplete: () => patch((t) => ({ ...t, activity: null })),
             onApprovalRequest: (req) =>
               new Promise<{ decision: "approved" | "denied"; remember?: boolean }>((resolve) => {
                 twinApprovalResolvers.current.set(req.requestId, resolve);
-                setTwinPending((prev) => [
-                  ...prev,
-                  {
-                    id: req.requestId,
-                    kind: "approval",
-                    tool: req.tool,
-                    reason: req.reason ?? null,
-                  },
-                ]);
+                pushPending({
+                  id: req.requestId,
+                  kind: "approval",
+                  tool: req.tool,
+                  reason: req.reason ?? null,
+                });
               }),
             // 批量审批：一次点击结算整批，与后端「一个决策应用到所有项」一致。
             onApprovalBatchRequest: (req) =>
               new Promise<{ decision: "approved" | "denied"; remember?: boolean }>((resolve) => {
                 twinApprovalResolvers.current.set(req.batchId, resolve);
-                setTwinPending((prev) => [
-                  ...prev,
-                  {
-                    id: req.batchId,
-                    kind: "approval",
-                    tool: req.items.map((i) => i.tool).join(" / "),
-                    reason: null,
-                  },
-                ]);
+                pushPending({
+                  id: req.batchId,
+                  kind: "approval",
+                  tool: req.items.map((i) => i.tool).join(" / "),
+                  reason: null,
+                });
               }),
             onClarifyRequest: (req) =>
               new Promise<{ answer: string }>((resolve) => {
                 twinClarifyResolvers.current.set(req.requestId, resolve);
-                setTwinPending((prev) => [
-                  ...prev,
-                  {
-                    id: req.requestId,
-                    kind: "clarify",
-                    question: req.question,
-                    choices: req.choices ?? [],
-                  },
-                ]);
+                pushPending({
+                  id: req.requestId,
+                  kind: "clarify",
+                  question: req.question,
+                  choices: req.choices ?? [],
+                });
               }),
             onDone: (full) => {
-              setTwinTurn((t) => (t ? { ...t, reply: full || t.reply, activity: null } : t));
+              patch((t) => ({ ...t, reply: full || t.reply, activity: null }));
               setTwinPending([]);
             },
             onError: (msg) => {
-              setTwinTurn((t) => (t ? { ...t, error: msg, activity: null } : t));
+              patch((t) => ({ ...t, error: msg, activity: null }));
               setTwinPending([]);
             },
           },
@@ -707,9 +717,12 @@ setPage("chat");
         return true;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        setTwinTurn((t) => (t ? { ...t, error: msg, activity: null } : t));
+        patch((t) => ({ ...t, error: msg, activity: null }));
         setTwinPending([]);
         return false;
+      } finally {
+        // 结算即作废本轮：此后到达的帧不再写进面板。
+        twinTurnSeq.current += 1;
       }
     },
     [twinChat],
@@ -720,12 +733,54 @@ setPage("chat");
       send: sendToTwin,
       stop: stopTwin,
       streaming: twinChat.streaming,
-      turn: twinTurn,
+      // `activity` 只在跑的时候有意义：流在工具中途断掉时 `onToolComplete`
+      // 不会再来，于是「正在用 X」会永远挂在屏幕上（顶栏却写着静默）。
+      // 在出口归一，消费侧不必各自防。
+      turn: twinTurn && !twinChat.streaming ? { ...twinTurn, activity: null } : twinTurn,
       pending: twinPending,
       resolve: resolveTwin,
     }),
     [sendToTwin, stopTwin, twinChat.streaming, twinTurn, twinPending, resolveTwin],
   );
+
+  /**
+   * 会话表只在启动时全量拉一次（`getSessions()` 那条 effect 的依赖是 `[]`），
+   * 于是值守页「最近会话」在她跑完一轮后仍是**启动那一刻的快照**：标题、
+   * 相对时间、消息条数全都停在旧值（2026-10-28 截图核对：面板写
+   * 「New chat · 19h · 2 条」，同一屏的工具流水明明正在跑）。
+   *
+   * 这里在她每轮结束时补一次元信息：只覆盖 title / message_count /
+   * updated_at，并追加服务端新出现的会话行；已载入的 `messages` 一律不碰
+   * （清空会触发主对话重新拉取，流式期间更是灾难）。
+   */
+  const refreshSessionMeta = useCallback(async () => {
+    try {
+      const list = await api.getSessions();
+      setSessions((prev) => {
+        const byId = new Map(list.map((s) => [s.id, s]));
+        const merged = prev.map((s) => {
+          const fresh = byId.get(s.id);
+          if (!fresh) return s;
+          return {
+            ...s,
+            title: fresh.title,
+            message_count: fresh.message_count,
+            updated_at: fresh.updated_at,
+          };
+        });
+        const known = new Set(prev.map((s) => s.id));
+        return [...merged, ...list.filter((s) => !known.has(s.id))];
+      });
+    } catch {
+      /* 保留旧快照：刷不到不该把列表清空 */
+    }
+  }, []);
+
+  const twinWasStreaming = useRef(false);
+  useEffect(() => {
+    if (twinWasStreaming.current && !twinChat.streaming) void refreshSessionMeta();
+    twinWasStreaming.current = twinChat.streaming;
+  }, [twinChat.streaming, refreshSessionMeta]);
 
   // Session message eviction — clear the *previous* session's
   // messages array (keeping message_count) when switching away. This solves
@@ -1453,7 +1508,9 @@ setPage("chat");
     if (!isPlaceholder) return s.title;
     const firstUserMsg = s.messages.find((m) => m.role === "user");
     const raw = firstUserMsg?.content ?? fallbackContent;
-    const text = raw.replace(/\s+/g, " ").trim();
+    // 首条消息有时是 LLM 产物（自动化/值守流程把推理原文带 JSON 外壳发进来），
+    // 不洗就会把 `<think>…` 原文当标题存库（2026-10-28 删除确认卡实报）。
+    const text = cleanSessionTitle(raw) || raw.replace(/\s+/g, " ").trim();
     return text.slice(0, 28) + (text.length > 28 ? "…" : "");
   };
 
@@ -2146,7 +2203,9 @@ setPage("chat");
       // running (or hermix.exe failed to spawn — see sidecar.rs
       // path resolution) it throws. Wrap it so the user sees a
       // visible error instead of a click that "did nothing".
-      const title = content.slice(0, 40) + (content.length > 40 ? "..." : "");
+      // 建会话时的种子标题同样要洗：这是脏标题入库的第一现场。
+      const cleaned = cleanSessionTitle(content) || content.replace(/\s+/g, " ").trim();
+      const title = cleaned.slice(0, 40) + (cleaned.length > 40 ? "..." : "");
       let session;
       try {
         // pass the welcome-state draft workspace so the

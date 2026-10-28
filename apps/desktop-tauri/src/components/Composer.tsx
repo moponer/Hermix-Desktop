@@ -125,12 +125,20 @@ export function Composer(p: ComposerProps) {
   useEffect(() => {
     const el = toolbarRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
+
+    /* 2026-10-28：**观测对象必须是宽度不受 compact 影响的祖先**。
+       原先观察工具行自身：compact 打开 → 底栏变窄 → 工具行相对变宽 →
+       越过 700 阈值 → compact 关闭 → 底栏变宽 → 工具行又跌破 700 →
+       无限来回（实测宽度在 614 / 706 之间每秒翻转数次，整条底栏跟着抖）。
+       改成观察它的父级（.composer-footer，宽度只由卡片决定），阈值也按
+       父级宽度定：父级 < 700 才收成图标。 */
+    const host = el.parentElement ?? el;
     const calc = () => {
-      setToolbarCompact(el.clientWidth < 700);
+      setToolbarCompact(host.clientWidth < 700);
     };
     calc();
     const ro = new ResizeObserver(calc);
-    ro.observe(el);
+    ro.observe(host);
     return () => ro.disconnect();
   }, []);
 
@@ -771,7 +779,7 @@ export function Composer(p: ComposerProps) {
               <span
                 className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
               >
-                {p.permissionLevel === "full" ? "完全访问" : "默认权限"}
+                {p.permissionLevel === "full" ? "放手模式" : "默认模式"}
               </span>
             </button>
             {permOpen && (

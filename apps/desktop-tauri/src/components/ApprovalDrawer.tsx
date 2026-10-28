@@ -204,7 +204,7 @@ export function ApprovalDrawer({
     { key: "1", label: single ? "允许这一次" : "允许全部", desc: "只放行本次调用，下次相同操作仍会确认", run: "once" },
     { key: "2", label: single ? "始终允许此命令" : "始终允许全部", desc: "记入允许列表，相同命令以后不再询问", run: "always" },
     ...(onFullAccess
-      ? [{ key: "3", label: "完全访问", desc: "切到完全访问权限，后续工具调用自动放行", run: "full" as Action }]
+      ? [{ key: "3", label: "放手模式", desc: "切到放手模式：后续工具调用不再申请权限", run: "full" as Action }]
       : []),
     { key: "4", label: single ? "拒绝" : "全部拒绝", desc: "否决本次调用（Esc）", run: "deny" as Action },
     { key: "5", label: "告诉模型接下来应该怎么做…", desc: "说明会回给模型，让它换方案而不是重试被拒的调用", run: "note" as Action },

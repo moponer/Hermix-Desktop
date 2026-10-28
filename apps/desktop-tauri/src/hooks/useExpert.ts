@@ -48,18 +48,26 @@ export interface PermissionMeta {
   examples: string[];
 }
 
+/**
+ * 权限两档的**唯一命名来源**。
+ *
+ * 2026-10-28 统一：此前同一个设置在三处叫三个名字（「默认权限 / 完全权限」在
+ * 这里、「完全访问」在输入栏与审批抽屉、值守页干脆只有一颗换字的按钮）。
+ * 一个概念一个名字：默认模式 = 有护栏（高危先问），放手模式 = 无护栏
+ * （不再申请权限，后果自担）。
+ */
 export const PERMISSION_LEVELS: PermissionMeta[] = [
   {
     id: "default",
-    label: "默认权限",
-    description: "高危操作需弹窗确认",
+    label: "默认模式",
+    description: "高危操作先弹卡问你",
     examples: ["写文件 / 改配置", "执行命令", "网络请求", "删除操作"],
   },
   {
     id: "full",
-    label: "完全权限",
-    description: "所有操作允许，无需确认",
-    examples: ["所有操作直接执行", "适合批量自动化任务", "出错风险由用户承担"],
+    label: "放手模式",
+    description: "不再申请权限，直接执行（风险自担）",
+    examples: ["命令、删除、写配置直接执行", "适合批量自动化任务", "出错由你承担"],
   },
 ];
 

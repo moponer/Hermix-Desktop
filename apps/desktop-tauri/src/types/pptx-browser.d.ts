@@ -5,6 +5,8 @@ declare module "pptx-browser" {
   export class PptxRenderer {
     /** 幻灯片总数，load() 之后可用。 */
     slideCount: number;
+    /** 版面尺寸（EMU）：load() 之后是真实值，之前是 16:9 的默认值。 */
+    slideSize: { cx: number; cy: number };
     load(
       source: File | Blob | ArrayBuffer | Uint8Array,
       onProgress?: (progress: number, message: string) => void,

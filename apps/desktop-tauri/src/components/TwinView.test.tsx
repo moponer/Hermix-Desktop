@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // MarkdownBody 的 markdown→hast 在 jsdom 下缺 ArrayBuffer 依赖
@@ -8,6 +8,7 @@ vi.mock("./MarkdownBody", () => ({
 }));
 import { TwinView } from "./TwinView";
 import type { TwinInlineApi } from "../app/routes";
+import * as api from "../api";
 
 // 页面挂载时会拉三项真实数据；测试只关心对话部分，全部给空。
 vi.mock("../api", () => ({
@@ -44,6 +45,8 @@ function renderTwin(twin: TwinInlineApi, onOpenChat = vi.fn()) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // 权限模式落在 storage 里：不清会把上一个用例的 full 带进下一个。
+  window.localStorage.clear();
 });
 
 describe("TwinView 内联对话", () => {
@@ -116,5 +119,109 @@ describe("TwinView 内联对话", () => {
       }),
     );
     expect(screen.getByRole("alert")).toHaveTextContent("API key 无效");
+  });
+});
+
+describe("TwinView 权限模式", () => {
+  it("两档常驻可见，默认态选中「默认 · 需授权」，且不显示风险条", () => {
+    renderTwin(makeTwin());
+    expect(screen.getByRole("button", { name: "默认 · 需授权" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "放手 · 无审批" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.queryByText(/都会直接执行/)).toBeNull();
+  });
+
+  it("进放手模式要两下：第一下只说明代价，第二下才生效并挂风险条", async () => {
+    const twin = makeTwin();
+    renderTwin(twin);
+
+    fireEvent.click(screen.getByRole("button", { name: "放手 · 无审批" }));
+    // 第一下不生效：选项被换成"风险 + 确认"。
+    expect(screen.getByText("放手后不再申请权限")).toBeInTheDocument();
+    expect(screen.queryByText(/都会直接执行/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认放手" }));
+    expect(await screen.findByText(/都会直接执行/)).toBeInTheDocument();
+
+    // 生效后这一轮下发 full —— 这就是"不再申请权限"的开关。
+    const input = screen.getByLabelText("给助手阿黎发消息");
+    fireEvent.change(input, { target: { value: "跑一下" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() =>
+      expect(twin.send).toHaveBeenCalledWith(
+        "跑一下",
+        expect.objectContaining({ permissionLevel: "full" }),
+      ),
+    );
+  });
+
+  it("确认态可以取消，取消后仍是默认模式", () => {
+    renderTwin(makeTwin());
+    fireEvent.click(screen.getByRole("button", { name: "放手 · 无审批" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.getByRole("button", { name: "默认 · 需授权" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByText(/都会直接执行/)).toBeNull();
+  });
+
+  it("风险条上的「切回默认」一键回安全侧", async () => {
+    renderTwin(makeTwin());
+    fireEvent.click(screen.getByRole("button", { name: "放手 · 无审批" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认放手" }));
+    await screen.findByText(/都会直接执行/);
+
+    fireEvent.click(screen.getByRole("button", { name: "切回默认" }));
+    await waitFor(() => expect(screen.queryByText(/都会直接执行/)).toBeNull());
+    expect(screen.getByRole("button", { name: "默认 · 需授权" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+});
+
+describe("TwinView 数据态的环", () => {
+  // 环上有四道弧：外框 / 轨道 / 进度 / 内圈虚线。没有进度时只该有三道 ——
+  // `strokeDasharray="0 C"` 配 `strokeLinecap="round"` 会在起点留下一个圆帽，
+  // 于是读数写着 00、环上 12 点方向却亮着一点，看起来像"已经在跑"。
+  const circles = () => document.querySelectorAll(".twin-ring svg circle").length;
+
+  afterEach(() => {
+    vi.mocked(api.getAutomationTasks).mockResolvedValue([]);
+  });
+
+  it("没有在跑的任务：不画进度弧（0% 不留圆点）", async () => {
+    renderTwin(makeTwin());
+    fireEvent.click(screen.getByText("数据"));
+    await waitFor(() => expect(circles()).toBe(3));
+  });
+
+  it("有在跑的任务：进度弧按 run_count / max_runs 出现", async () => {
+    vi.mocked(api.getAutomationTasks).mockResolvedValue([
+      {
+        id: "t1",
+        name: "盘前简报",
+        prompt: "跑一遍",
+        schedule: "0 8 * * *",
+        enabled: true,
+        run_count: 1,
+        max_runs: 4,
+        last_status: "running",
+        history: [],
+        created_at: "2026-10-01T00:00:00Z",
+        updated_at: "2026-10-01T00:00:00Z",
+      },
+    ]);
+    renderTwin(makeTwin());
+    fireEvent.click(screen.getByText("数据"));
+    await waitFor(() => expect(circles()).toBe(4));
+    expect(document.querySelector(".twin-ring__big")?.textContent).toBe("25%"); // 1/4
+    expect(screen.getByText("本轮进度")).toBeInTheDocument();
   });
 });
