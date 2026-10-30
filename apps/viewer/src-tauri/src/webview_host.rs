@@ -11,8 +11,10 @@
 //!   - 只放行 http / https（`javascript:` / `file:` / `ms-msdt:` 一律拒），
 //!     页面内跳转同样受限（`on_navigation`）——这是 WebView2 已知攻击面的
 //!     入口（`ms-msdt:` 之类）。
-//!   - 子 webview 走**独立的 WebView2 数据目录** → 远程站点的 cookie /
-//!     localStorage 不落进主窗口的 profile，两次启动之间也不残留。
+//!   - 子 webview 与**主窗口共用同一份** WebView2 user data folder：同一进程里
+//!     WebView2 不允许分叉（另设 `data_directory` 会报 0x8007139F），隔离靠的是
+//!     Chromium 按源划分 cookie / localStorage + 子 webview 不配置 IPC
+//!     （capabilities 只覆盖 main）→ 远程站点读写不到主窗口的数据。
 //!   - capabilities 只覆盖 main 窗口 → 子 webview 拿不到我们的 IPC，
 //!     远程页面无法调用本地命令（也不配 `remote.urls`）。
 //!
@@ -23,6 +25,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use tauri::webview::WebviewBuilder;
 use tauri::{
@@ -33,6 +36,36 @@ use tauri::{
 const WEB_LABEL: &str = "webview";
 /// 主窗口 label。
 const MAIN_LABEL: &str = "main";
+
+/// 查看器的 WebView2 用户数据目录（**唯一出处**，主窗口与子 webview 共用）。
+///
+/// 读环境变量而不是每次重算路径：`prepare_user_data_folder()` 在 `main()` 里
+/// 已经钉死它，读回来才能保证「谁用谁一致」（CDP 端口文件也在这个目录下）。
+pub fn user_data_folder() -> PathBuf {
+    std::env::var_os("WEBVIEW2_USER_DATA_FOLDER")
+        .map(PathBuf::from)
+        .unwrap_or_else(default_user_data_folder)
+}
+
+fn default_user_data_folder() -> PathBuf {
+    hermix_config::paths::hermix_home().join("viewer-webview")
+}
+
+/// 启动时把 `WEBVIEW2_USER_DATA_FOLDER` 钉到查看器自己的目录（幂等）。
+///
+/// **必须在第一个 webview 创建之前调用**：WebView2 在创建第一个环境时才读这个
+/// 变量，之后再设等于没设。
+///
+/// 为什么要覆盖父进程传进来的值：桌面主程序把它自己的 `webview-cache` 设进了
+/// 环境变量，子进程（本查看器）会原样继承。若不覆盖，查看器主窗口就和桌面主
+/// 窗口抢同一份用户数据（跨进程锁冲突），而子 webview 无论设不设
+/// `data_directory` 都会失败（`0x8007139F` / `ERROR_INVALID_STATE`）。
+pub fn prepare_user_data_folder() -> PathBuf {
+    let udf = default_user_data_folder();
+    let _ = std::fs::create_dir_all(&udf);
+    std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &udf);
+    udf
+}
 
 /// 网址归一 + 协议白名单：只放行 http / https。
 pub fn normalize_url(raw: &str) -> Result<tauri::Url, String> {
@@ -49,11 +82,6 @@ pub fn normalize_url(raw: &str) -> Result<tauri::Url, String> {
         "http" | "https" => Ok(url),
         other => Err(format!("不支持的协议：{other}")),
     }
-}
-
-/// 子 webview 的独立数据目录（与主窗口 profile 隔离）。
-fn profile_dir() -> PathBuf {
-    hermix_config::paths::hermix_home().join("webview-profile")
 }
 
 /// 找当前活动的子 webview。
@@ -108,9 +136,20 @@ pub async fn web_open(
     open_sync(&app, &url, x, y, w, h)
 }
 
+/// 建视图的串行闸。
+///
+/// MCP 是 HTTP 端点，**每条连接一个线程**：两个客户端同时 `web_open` 会对同一个
+/// label 并发 `add_child` → WebView2 环境创建与 UI 线程互相等死（用户看到的是
+/// 「界面正忙」，整个查看器不可用，比"视图开不了"严重得多）。
+static OPEN_LOCK: Mutex<()> = Mutex::new(());
+
 /// 真正开视图的同步实现（异步命令与 MCP 工具共用）。
 ///
 /// MCP 工具也在非主线程上跑（HTTP 端点每条连接一个线程），所以同样安全。
+///
+/// 三条纪律（2026-10-30）：**串行**（见 `OPEN_LOCK`）、**幂等**（同一个 URL 已经
+/// 在看就不动它）、**等旧视图真的销毁再建**（`close()` 是异步的，同 label 抢先
+/// 重建会 `ERROR_INVALID_STATE`）。
 pub fn open_sync(
     app: &AppHandle,
     url: &str,
@@ -120,12 +159,34 @@ pub fn open_sync(
     h: f64,
 ) -> Result<(), String> {
     let target = normalize_url(url)?;
+    let _guard = OPEN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // 幂等：同一个页面不销毁重建 —— 重建会丢登录态、滚动位置和表单内容，
+    // 而 `web_open` 在自动化流程里会被反复调用（每轮导航前一次）。
+    if let Some(webview) = active_webview(app) {
+        let same = webview
+            .url()
+            .map(|u| u.as_str() == target.as_str())
+            .unwrap_or(false);
+        if same {
+            remember_bounds(x, y, w, h);
+            return Ok(());
+        }
+    }
+
     close_webview(app);
+    // `Webview::close()` 只是发销毁请求，`window.webviews()` 要等 Destroyed 才更新。
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while active_webview(app).is_some() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
 
     let emitter = app.clone();
     let builder = WebviewBuilder::new(WEB_LABEL, WebviewUrl::External(target))
-        // 独立 profile：远程站点不留痕，也不与主窗口共享 cookie。
-        .data_directory(profile_dir())
+        // **不开独立 data_directory**：同一进程里所有 WebView2 必须共用同一个
+        // user data folder，子 webview 若另设 data_directory 会报
+        // 0x8007139F（ERROR_INVALID_STATE）。主窗口用的是启动时固定的
+        // WEBVIEW2_USER_DATA_FOLDER（查看器自己的目录），子 webview 继承同一份即可。
         // **开调试端口**（端口写 0 = 让浏览器进程自己挑，真实端口写进 profile 的
         // DevToolsActivePort）：这是 agent 能驱动「用户正在看的那块预览区」的
         // 关键 —— 用户与 agent 看到的是同一个页面、同一个登录态。
@@ -146,12 +207,32 @@ pub fn open_sync(
             PhysicalPosition::new(x as i32, y as i32),
             PhysicalSize::new(w.max(1.0) as u32, h.max(1.0) as u32),
         )
-        .map_err(|e| format!("内嵌网页视图创建失败：{e}"))?;
+        .map_err(|e| create_error(&e))?;
     remember_bounds(x, y, w, h);
     // 告诉前端「有个网页视图开了」→ 前端开对应的网页标签（否则用户看到的是
     // 一块没有标签的网页浮在界面上）。
     let _ = app.emit("web-opened", url.to_string());
     Ok(())
+}
+
+/// 建视图失败的错误体：带足够事实，让调用方不必再猜。
+///
+/// 2026-10-30 之前的错误只有 `内嵌网页视图创建失败：{HRESULT}`，于是同一类故障
+/// 被反复误判成"UDF 名字不对 / 内核不对 / 拉起方式不对"。
+fn create_error(err: &dyn std::fmt::Display) -> String {
+    let text = err.to_string();
+    let hint = if text.contains("0x8007139F") || text.contains("8007139F") {
+        "本进程存在第二套 WebView2 用户数据目录：检查是否给子视图设了 data_directory，\
+         或别处改写了 WEBVIEW2_USER_DATA_FOLDER（一个进程只允许一套 UDF）"
+    } else if text.contains("0x80070005") || text.contains("拒绝访问") {
+        "UDF 目录被另一个进程占用：确认没有第二个查看器进程（不要删 profile，里面是登录态）"
+    } else {
+        "先稍后重试一次；仍失败就重启查看器（不要删 profile，里面是登录态）"
+    };
+    format!(
+        "内嵌网页视图创建失败：{text} | code=create_failed | udf={} | hint={hint}",
+        user_data_folder().display()
+    )
 }
 
 /// 最近一次的视图位置（物理像素）——agent 侧开视图时用它摆位。

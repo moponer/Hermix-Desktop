@@ -12,6 +12,7 @@
 //! 用户自己的浏览器）。子 webview 用**独立的 WebView2 数据目录** → 它就是
 //! 独立的浏览器进程 → 端口天然跟主窗口隔离。
 
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -22,45 +23,101 @@ use crate::cdp::{evaluate, Cdp};
 /// 等调试端口就绪的上限。
 const PORT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// 内嵌网页视图的 WebView2 数据目录（与 `webview_host` 共用）。
-fn profile_dir() -> PathBuf {
-    hermix_config::paths::hermix_home().join("webview-profile")
-}
-
 /// 读 `DevToolsActivePort` → (端口, ws 路径)。端口没就绪就等一会儿。
 ///
 /// **路径要试两处**：WebView2 把用户数据放在 UDF 的 `EBWebView` 子目录里
 /// （`DevToolsActivePort` 在那里面），而系统浏览器（Edge/Chrome）是把文件
 /// 直接写在 UDF 根下。两处都找，才不会因为引擎不同而读不到端口。
 fn devtools_endpoint() -> Result<(u16, String), String> {
-    devtools_endpoint_in(&profile_dir(), PORT_TIMEOUT)
+    devtools_endpoint_in(&crate::webview_host::user_data_folder(), PORT_TIMEOUT)
+}
+
+/// 两处候选端口文件（顺序：UDF 根 → `EBWebView` 子目录）。
+fn endpoint_candidates(base: &Path) -> [PathBuf; 2] {
+    [
+        base.join("DevToolsActivePort"),
+        base.join("EBWebView").join("DevToolsActivePort"),
+    ]
+}
+
+/// 清掉上一轮进程留下的 `DevToolsActivePort`。
+///
+/// WebView2 只在**本次进程**创建了网页视图之后才写这个文件；崩溃或正常退出都会
+/// 把上一轮的端口留在原处，读到它就等于连一个没人听的端口（10061）。
+///
+/// **只允许持有单实例互斥的进程调用**：第二个实例若也清，会把活实例正在用的
+/// 端口文件删掉（查看器的 `--mcp` 模式在上游已提前返回，不会走到这里）。
+pub fn discard_stale_endpoint() {
+    for file in endpoint_candidates(&crate::webview_host::user_data_folder()) {
+        if file.exists() {
+            let _ = std::fs::remove_file(&file);
+        }
+    }
+}
+
+/// 端口是否真的有进程在听。**文件存在 ≠ 端口活着**。
+fn port_is_live(port: u16) -> bool {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+}
+
+/// 解析端口文件的前两行 → (端口, ws 路径)。
+fn read_endpoint(file: &Path) -> Option<(u16, String)> {
+    let text = std::fs::read_to_string(file).ok()?;
+    let mut lines = text.lines();
+    let port = lines.next()?.trim().parse::<u16>().ok()?;
+    let path = lines.next()?.trim();
+    (!path.is_empty()).then(|| (port, path.to_string()))
 }
 
 /// 同上，但**基目录与超时都显式传入** —— 测试要用一个空的临时目录，
 /// 否则本机只要开着内嵌视图，真实 profile 里就有 `DevToolsActivePort`，
 /// 测试的前提（"没开视图"）根本不成立。
 fn devtools_endpoint_in(base: &Path, timeout: Duration) -> Result<(u16, String), String> {
-    let candidates = [
-        base.join("DevToolsActivePort"),
-        base.join("EBWebView").join("DevToolsActivePort"),
-    ];
+    let candidates = endpoint_candidates(base);
     let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
+    loop {
         for file in &candidates {
-            if let Ok(text) = std::fs::read_to_string(file) {
-                let mut lines = text.lines();
-                if let (Some(port), Some(path)) = (lines.next(), lines.next()) {
-                    if let Ok(port) = port.trim().parse::<u16>() {
-                        if !path.trim().is_empty() {
-                            return Ok((port, path.trim().to_string()));
-                        }
-                    }
-                }
+            let Some((port, path)) = read_endpoint(file) else {
+                continue;
+            };
+            if port_is_live(port) {
+                return Ok((port, path));
             }
+            // 连不上 = 上一轮的残留（WebView2 只在环境就绪后才写这个文件）。
+            // 删掉它，否则每一轮都会立刻采信同一个死端口、立刻失败。
+            let _ = std::fs::remove_file(file);
+        }
+        if Instant::now() >= deadline {
+            return Err(endpoint_error(base, &candidates));
         }
         std::thread::sleep(Duration::from_millis(120));
     }
-    Err("内嵌网页视图的调试端口还没就绪（视图是否已打开？）".to_string())
+}
+
+/// 端口不可用时的错误体：把判断依据一起给出来（否则调用方只能猜）。
+fn endpoint_error(base: &Path, candidates: &[PathBuf]) -> String {
+    let present: Vec<String> = candidates
+        .iter()
+        .filter(|p| p.exists())
+        .map(|p| p.display().to_string())
+        .collect();
+    let view_exists = crate::webview_host::active_webview_url().is_some();
+    let hint = if view_exists {
+        "视图在但端口没就绪：稍后重试一次；持续失败就重启查看器（不要删 profile，里面是登录态）"
+    } else {
+        "先用 web_open 打开一个页面（这一步才会创建视图并写端口）"
+    };
+    format!(
+        "内嵌网页视图的调试端口不可用 | code=no_live_endpoint | udf={} | port_file={} | \
+         port_reachable=false | view_exists={view_exists} | hint={hint}",
+        base.display(),
+        if present.is_empty() {
+            "none".to_string()
+        } else {
+            present.join(";")
+        }
+    )
 }
 
 /// 连上内嵌网页视图的页面 target，返回 (连接, 会话 id)。
@@ -70,7 +127,15 @@ fn devtools_endpoint_in(base: &Path, timeout: Duration) -> Result<(u16, String),
 /// 页面级命令全落到错的 target 上（表现为「找不到 iframe」）。
 fn connect_page() -> Result<(Cdp, String), String> {
     let (port, ws_path) = devtools_endpoint()?;
-    let mut cdp = Cdp::connect(port, &ws_path)?;
+    // 端口刚才探活过还是失败 → 视图进程在两次调用之间退出了（或环境正在重建）。
+    // 把这一点写进错误里，否则上层只能看到"连接调试端口失败"。
+    let mut cdp = Cdp::connect(port, &ws_path).map_err(|e| {
+        format!(
+            "{e} | code=connect_failed | port={port} | udf={} | hint=视图进程刚退出：\
+             重新 web_open 一次（这会重建视图并写新的端口）",
+            crate::webview_host::user_data_folder().display()
+        )
+    })?;
     let targets = cdp.targets()?;
     let current = crate::webview_host::active_webview_url();
 
@@ -361,6 +426,50 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let err = devtools_endpoint_in(&dir, Duration::from_millis(50)).unwrap_err();
         assert!(err.contains("调试端口"), "实际错误：{err}");
+        // 错误里要带足判断依据：哪个目录、端口文件在不在、视图在不在。
+        assert!(err.contains("code=no_live_endpoint"), "实际错误：{err}");
+        assert!(err.contains("port_file=none"), "实际错误：{err}");
+        assert!(err.contains("view_exists="), "实际错误：{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_port_file_is_discarded_instead_of_connected() {
+        // 崩溃后 `DevToolsActivePort` 留在盘上，端口没人听。旧实现会立刻采信它
+        // → 上层拿到 10061，把"视图没开"误诊成"连接坏了"。
+        let dir = std::env::temp_dir().join("hermix-cdp-stale-port-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("EBWebView")).unwrap();
+        // 1 端口几乎肯定没人监听。
+        std::fs::write(dir.join("EBWebView").join("DevToolsActivePort"), "1\n/devtools/browser/x").unwrap();
+
+        let err = devtools_endpoint_in(&dir, Duration::from_millis(50)).unwrap_err();
+        assert!(err.contains("code=no_live_endpoint"), "实际错误：{err}");
+        assert!(
+            !dir.join("EBWebView").join("DevToolsActivePort").exists(),
+            "死端口文件必须被删掉，否则每一轮都会立刻采信它"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn live_port_file_is_accepted() {
+        // 反向用例：端口真的有进程在听 → 必须采信，且返回文件里的路径。
+        let dir = std::env::temp_dir().join("hermix-cdp-live-port-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("EBWebView")).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::fs::write(
+            dir.join("EBWebView").join("DevToolsActivePort"),
+            format!("{port}\n/devtools/browser/abc"),
+        )
+        .unwrap();
+
+        let got = devtools_endpoint_in(&dir, Duration::from_millis(50)).unwrap();
+        assert_eq!(got.0, port);
+        assert_eq!(got.1, "/devtools/browser/abc");
+        drop(listener);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

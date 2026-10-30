@@ -173,6 +173,15 @@ fn keep_resize_border(window: &tauri::Window) {
 pub fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
+    // WebView2 在同一进程里所有 webview 必须共用同一个 user data folder。
+    // 桌面主程序拉起查看器时会把 `WEBVIEW2_USER_DATA_FOLDER`（它自己的
+    // `webview-cache`）随环境变量漏进来；若不覆盖，查看器主窗口会去抢同一份
+    // 用户数据（跨进程锁冲突），而内嵌子 webview 无论设不设 data_directory 都会
+    // 报 0x8007139F（ERROR_INVALID_STATE）。路径与写入都收口在
+    // `webview_host::prepare_user_data_folder`（唯一出处）。
+    // 必须在 `.run()` 之前设置——WebView2 在创建第一个 webview 时才读这个变量。
+    webview_host::prepare_user_data_folder();
+
     // ── MCP 服务模式 ──
     // stdin/stdout 就是协议通道，**不开窗口**。放在最前面判断：MCP 模式下
     // 单实例互斥体、待开队列、监听端口全都不该起（外部 AI 要的是工具，
@@ -228,6 +237,12 @@ pub fn main() {
     let init_args = args;
     #[cfg(not(windows))]
     let init_args = args;
+
+    // 上一轮进程可能留下了 `DevToolsActivePort`（死端口）→ `webview_*` 会一律报
+    // 10061，把"视图没开"伪装成"连接坏了"。**只由持有单实例互斥的进程清**：
+    // 第二个实例若也清，会把活实例正在用的端口文件删掉。`--mcp` 模式在上面已
+    // 提前返回（不开窗口、不建视图），走不到这里。
+    webview_cdp::discard_stale_endpoint();
 
     Builder::default()
         .manage(commands::ViewerState::default())

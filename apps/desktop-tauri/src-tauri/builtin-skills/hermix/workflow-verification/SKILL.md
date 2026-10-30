@@ -38,6 +38,27 @@ Match the level to the claim: a UI claim needs a rendering/screenshot or a DOM
 probe; a performance claim needs numbers; a "no regressions" claim needs the
 full suite result for the affected crates, not one green test.
 
+## 完成判据：中间量不是结果量
+
+一项工作进"已完成"，凭的是**验收条件对应的外部事实**。下面三种常见"看起来完成了"
+的东西都不是事实，2026-10-30 的一轮真实交付里三条同时出现过：
+
+| 中间量 | 为什么不算 | 结果量长什么样 |
+|---|---|---|
+| 播放器 `ended=true` / 进度条到头 | 只是客户端播放状态，平台是否入账是另一回事 | 服务端进度 N/N、任务点状态、结果页字段 |
+| "脚本已修好" / "bug 已改" / "矩阵已就绪" | 改动 ≠ 验证；没跑的脚本等于没修 | 同一个脚本跑通后的输出行 |
+| 一次成功 / 单个用例通过 | 可能只是这一次的偶然状态 | 可重复：同配置重跑仍成立，或说清它为什么可能不复现 |
+
+配套三条纪律：
+
+- **部分成果不得混进"已完成"**：只要该项还有"未回查 / 未重跑 / 未跑完"的字样，整条记为
+  `blocked` 或 `pending`，并且和已完成项**物理分开**（不同标题、不同表），不靠一句
+  "不粉饰成已完成"来免责。
+- **外部阻断不是完成**：工具被禁用、权限不足、环境缺失可以正当停止，但阻断前就未验证的
+  项，不能因为阻断而被重新归类成完成。
+- **计划不是交付**：收尾里出现"下一步：…"，说明本轮目标未达成；此时正确的状态是
+  pending/blocked，而不是带计划的总结。
+
 ## Checklist before saying "done"
 
 - [ ] The exact command(s) you ran are listed, with their result lines.
