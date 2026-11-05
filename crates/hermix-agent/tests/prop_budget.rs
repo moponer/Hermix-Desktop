@@ -34,6 +34,7 @@ fn arb_tool_result() -> impl Strategy<Value = ToolResult> {
                 content,
                 is_error,
                 denial_kind: None,
+                state: None,
             }
         })
 }

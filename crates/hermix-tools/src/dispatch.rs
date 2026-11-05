@@ -67,6 +67,8 @@ pub struct DispatchedResult {
     /// when constructed outside a real `JoinSet` (tests, callers that
     /// build `DispatchedResult` by hand).
     pub task_id: Option<tokio::task::Id>,
+    /// 调用之后的可观测世界状态签名（见 `crate::tool_state`）。
+    pub state: Option<String>,
 }
 
 impl From<DispatchedResult> for ToolResult {
@@ -76,6 +78,7 @@ impl From<DispatchedResult> for ToolResult {
             content: dr.content,
             is_error: dr.is_error,
             denial_kind: None,
+            state: dr.state,
         }
     }
 }
@@ -136,6 +139,11 @@ pub fn per_tool_budget(tool: &str) -> Duration {
         "image_generate" | "gpt_image_generate" | "video_generate" | "tts" => {
             Duration::from_secs(600)
         }
+        // 浏览器自动化：7 个 `browser_*` 工具的 schema 允许 `timeout_ms` 到
+        // 120s（等待选择器、懒加载页面、滚动加载），而这里此前落到默认 60s ——
+        // 工具自报可跑 120s、外层 60s 先砍，用户看到的是"工具超时"而不是
+        // "页面加载慢"。给 1.5 倍余量。
+        t if t.starts_with("browser_") => Duration::from_secs(180),
         _ => Duration::from_secs(60),
     }
 }
@@ -228,6 +236,7 @@ pub async fn dispatch_tools(
                         is_error: true,
                         duration_ms: 0,
                         task_id: None,
+                        state: None,
                     };
                 }
             };
@@ -274,13 +283,21 @@ pub async fn dispatch_tools(
             // the previous starts_with heuristic mis-flagged.
             let is_error = is_error_json(&result);
 
+            // 世界状态：MCP 工具带结构化信封（正文 + state 分离），先剥开；
+            // 其余工具在执行出口按族探测（文件 stat 路径来自参数）。
+            let (content, explicit) = crate::tool_state::unwrap_envelope(&result);
+            let state = explicit.or_else(|| {
+                crate::tool_state::signature(&call.function.name, &call.function.arguments, &content)
+            });
+
             DispatchedResult {
                 tool_call_id: call.id,
                 tool_name: call.function.name,
-                content: result,
+                content,
                 is_error,
                 duration_ms,
                 task_id: Some(tokio::task::id()),
+                state,
             }
         });
         task_to_index.insert(abort_handle.id(), index);
@@ -339,6 +356,7 @@ pub async fn dispatch_tools(
                     content,
                     is_error: dr.is_error,
                     denial_kind: None,
+                    state: dr.state,
                 });
             }
             Ok(Some(Err(join_err))) => {
@@ -405,6 +423,7 @@ pub async fn dispatch_single(
                 .to_string(),
                 is_error: true,
                 denial_kind: None,
+                state: None,
             };
         }
     };
@@ -412,15 +431,21 @@ pub async fn dispatch_single(
 
     let is_error = is_error_json(&result);
 
-    let content = if result.chars().count() > max_result_size_chars {
-        let head = truncate_chars(&result, max_result_size_chars);
-        let removed = result.chars().count() - max_result_size_chars;
+    // 先剥 MCP 的结构化信封（截断会破坏 JSON），再按批预算截断正文。
+    let (raw_content, explicit) = crate::tool_state::unwrap_envelope(&result);
+    let state = explicit.or_else(|| {
+        crate::tool_state::signature(&call.function.name, &call.function.arguments, &raw_content)
+    });
+
+    let content = if raw_content.chars().count() > max_result_size_chars {
+        let head = truncate_chars(&raw_content, max_result_size_chars);
+        let removed = raw_content.chars().count() - max_result_size_chars;
         format!(
             "{}\n\n[... truncated {} characters ...]",
             head, removed
         )
     } else {
-        result
+        raw_content
     };
 
     ToolResult {
@@ -428,12 +453,33 @@ pub async fn dispatch_single(
         content,
         is_error,
         denial_kind: None,
+        state,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 浏览器的 `timeout_ms` 上限是 120s（见 `os_auto/browser/mod.rs` 的
+    /// schema）。外层预算必须大于它，否则工具自己声明的等待时间永远跑不满。
+    #[test]
+    fn browser_budget_exceeds_its_own_schema_ceiling() {
+        for tool in [
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_click",
+            "browser_type",
+            "browser_screenshot",
+            "browser_wait",
+            "browser_scroll",
+        ] {
+            assert!(
+                per_tool_budget(tool) > Duration::from_secs(120),
+                "{tool} 的外层预算必须 > 其 schema 允许的 120s"
+            );
+        }
+    }
 
     #[test]
     fn test_dispatched_result_conversion() {
@@ -444,6 +490,7 @@ mod tests {
             is_error: false,
             duration_ms: 100,
             task_id: None,
+            state: None,
         };
         let tr: ToolResult = dr.into();
         assert_eq!(tr.tool_call_id, "call_1");

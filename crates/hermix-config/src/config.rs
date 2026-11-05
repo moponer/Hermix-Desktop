@@ -153,6 +153,10 @@ pub struct GatewayConfig {
     /// 安全中心配置（自动备份等）。覆盖写前把旧版本存入备份目录。
     #[serde(default)]
     pub security: SecurityConfig,
+
+    /// 存储生命周期（`token_usage` 保留期）。默认关闭 —— 删数据是产品决策。
+    #[serde(default)]
+    pub storage: StorageConfig,
 }
 
 impl Default for GatewayConfig {
@@ -186,6 +190,7 @@ impl Default for GatewayConfig {
             model_selector: None,
             permission_profile: PermissionProfile::default(),
             security: SecurityConfig::default(),
+            storage: StorageConfig::default(),
         }
     }
 }
@@ -196,10 +201,11 @@ impl GatewayConfig {
     pub fn validate(&self) -> Vec<String> {
         let mut warnings = Vec::new();
 
-        // Validate max_turns
-        if self.max_turns == 0 {
-            warnings.push("max_turns is 0 — agent will be unable to complete any task".to_string());
-        } else if self.max_turns > 1000 {
+        // Validate max_turns. `0` is the agent loop's "no cap" value (it runs
+        // until the model stops, the cost guard trips, or RepeatGuard /
+        // ErrorLoop catches a stuck loop) — warning about it here made the
+        // UI tell users their valid "run to completion" setting was broken.
+        if self.max_turns > 1000 {
             warnings.push(format!(
                 "max_turns is {} (very high) — consider lowering to prevent unbounded loops",
                 self.max_turns
@@ -1020,6 +1026,31 @@ fn default_security_auto_backup() -> bool {
 
 fn default_backup_max_mb() -> u64 {
     512
+}
+
+// ---------------------------------------------------------------------------
+// StorageConfig（存储生命周期）
+// ---------------------------------------------------------------------------
+
+/// 存储生命周期。**默认全部关闭**：删数据是产品决策，这里只提供开关。
+///
+/// 范围刻意收窄：只清**指标数据**（`token_usage`，一行 = 一次 API 调用，
+/// 线性增长且无回看价值）。聊天内容（messages / compression_archives /
+/// sessions）**永远不由这里删** —— 那类保留期必须显式做成独立决策，
+/// 并带上"删了什么、还能不能找回"的用户沟通。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageConfig {
+    /// `token_usage` 保留天数。`0` = 永不清理（默认）。
+    #[serde(default)]
+    pub metrics_retention_days: u32,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            metrics_retention_days: 0,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -402,12 +402,128 @@ pub fn screenshot(clip: Option<(f64, f64, f64, f64)>, scale: f64) -> Result<(Str
     crate::cdp::save_and_thumbnail(&png, "in-app-webview")
 }
 
-/// 在内嵌网页视图里跳转。
-pub fn navigate(url: &str) -> Result<String, String> {
+/// 导航后回读到的**实际落点**。
+struct Landing {
+    url: String,
+    title: String,
+    text: String,
+    /// `document.readyState !== "loading"`（页面不再加载中）。
+    ready: bool,
+}
+
+/// 读页面落点（URL / 标题 / 正文前 240 字 / 是否已加载完）。
+fn read_landing(cdp: &mut Cdp, sid: &str) -> Landing {
+    let js = "JSON.stringify({url: location.href, title: document.title, \
+              text: ((document.body && document.body.innerText) || '').slice(0, 240), \
+              ready: document.readyState !== 'loading'})";
+    let raw = evaluate(cdp, sid, js).unwrap_or_default();
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(v) => Landing {
+            url: v.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            title: v.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            text: v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            ready: v.get("ready").and_then(|x| x.as_bool()).unwrap_or(false),
+        },
+        Err(_) => Landing {
+            url: String::new(),
+            title: String::new(),
+            text: String::new(),
+            ready: false,
+        },
+    }
+}
+
+/// 等页面稳定后回读落点。
+///
+/// 为什么必须等：`Page.navigate` 只是把请求发出去。服务端 302 到登录页时，
+/// 立刻读 `location.href` 拿到的还是**上一个**地址 —— 看起来像导航成功。
+/// 先给服务端跳转留 600ms，再等 `readyState` 离开 loading（上限 7s）。
+fn wait_landing(cdp: &mut Cdp, sid: &str) -> Landing {
+    std::thread::sleep(Duration::from_millis(600));
+    let deadline = Instant::now() + Duration::from_secs(7);
+    loop {
+        let landing = read_landing(cdp, sid);
+        if landing.url.is_empty() || landing.ready || Instant::now() >= deadline {
+            return landing;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// 落点是否像「登录页 / 提示页」而不是目标页；返回命中依据。
+///
+/// 这是「工具必须如实回报」的一部分（2026-11-05）：此前 `navigate` 直接把
+/// **请求的 URL** 当结果返回，页面被重定向到登录页时 agent 收到的仍是它请求
+/// 的那个地址 → 每一轮都「成功」，于是在同一入口上连续空转 18 轮。
+pub(crate) fn gate_reason(url: &str, title: &str, text: &str) -> Option<String> {
+    let u = url.to_ascii_lowercase();
+    for marker in ["passport", "/login", "signin", "/sso", "cas/", "authserver"] {
+        if u.contains(marker) {
+            return Some(format!("URL 含 `{marker}`"));
+        }
+    }
+    for marker in [
+        "请重新登录",
+        "重新登录",
+        "登录已失效",
+        "登录超时",
+        "请先登录",
+        "账号登录",
+        "扫码登录",
+        "请输入密码",
+        "温馨提示",
+        "id被禁用",
+    ] {
+        if title.contains(marker) || text.contains(marker) {
+            return Some(format!("页面文案含「{marker}」"));
+        }
+    }
+    None
+}
+
+/// 把落点描述成给模型看的文本（含「未到达目标页」的明确结论）。
+fn describe_landing(requested: &str, landing: &Landing) -> String {
+    let landed = if landing.url.is_empty() {
+        requested
+    } else {
+        landing.url.as_str()
+    };
+    let mut out = format!("已导航到 {landed}");
+    if !landing.title.is_empty() {
+        out.push_str(&format!("\n页面标题：{}", landing.title));
+    }
+    if let Some(why) = gate_reason(&landing.url, &landing.title, &landing.text) {
+        out.push_str(&format!(
+            "\n⚠ 未到达目标页：落点像登录/提示页（依据：{why}）。请求的是 {requested}。\
+             \n这不等于导航成功——多半是登录态失效。不要在同一个入口上反复重试；\
+             先解决登录（让用户在这块预览区里手动登录，或用 browser_open + 持久 profile），再回来继续。"
+        ));
+        if !landing.text.is_empty() {
+            let snippet: String = landing.text.chars().take(120).collect();
+            out.push_str(&format!("\n页面正文开头：{}", snippet.replace('\n', " ")));
+        }
+    }
+    out
+}
+
+/// 在内嵌网页视图里跳转，并**回报实际落点**（不是假定落点）。
+///
+/// 返回 `(给模型看的报告, 世界状态签名)`。签名不塞进正文让模型去解析 ——
+/// 它走 MCP 的 `_meta` 扩展位（结构化），agent 的零推进账本只认那个字段。
+pub fn navigate(url: &str) -> Result<(String, String), String> {
     let target = crate::webview_host::normalize_url(url)?;
     let (mut cdp, sid) = connect_page()?;
     cdp.call("Page.navigate", json!({ "url": target.as_str() }), Some(&sid))?;
-    Ok(target.as_str().to_string())
+    let landing = wait_landing(&mut cdp, &sid);
+    let landed = if landing.url.is_empty() {
+        target.as_str()
+    } else {
+        landing.url.as_str()
+    };
+    Ok((
+        describe_landing(target.as_str(), &landing),
+        format!("url={landed} | title={}", landing.title),
+    ))
 }
 
 #[cfg(test)]
@@ -471,5 +587,38 @@ mod tests {
         assert_eq!(got.1, "/devtools/browser/abc");
         drop(listener);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn login_page_is_recognised_from_url_or_copy() {
+        assert!(gate_reason("https://passport.chaoxing.com/x", "", "").is_some());
+        assert!(gate_reason("https://a.example.com/login?next=/x", "", "").is_some());
+        assert!(gate_reason("https://a.example.com/base", "温馨提示", "").is_some());
+        assert!(gate_reason("", "", "您的登录已失效，请重新登录").is_some());
+        // 正常页不得误报：普通正文提到「登录」不算。
+        assert!(gate_reason("https://a.example.com/base", "课程列表", "退出登录").is_none());
+    }
+
+    #[test]
+    fn navigation_report_names_the_landing_and_warns_on_gate() {
+        let gated = Landing {
+            url: "https://i.chaoxing.com/base?ws=1".into(),
+            title: "温馨提示".into(),
+            text: "请重新登录".into(),
+            ready: true,
+        };
+        let report = describe_landing("https://mooc1.chaoxing.com/mooc-ans/x", &gated);
+        assert!(report.contains("i.chaoxing.com"), "必须回报实际落点");
+        assert!(report.contains("未到达目标页"), "必须明确否掉「成功」");
+        assert!(report.contains("mooc1.chaoxing.com"), "要带上请求的地址作对照");
+
+        let ok = Landing {
+            url: "https://mooc1.chaoxing.com/mooc-ans/x".into(),
+            title: "课程".into(),
+            text: "第一章".into(),
+            ready: true,
+        };
+        let report = describe_landing("https://mooc1.chaoxing.com/mooc-ans/x", &ok);
+        assert!(!report.contains("未到达目标页"));
     }
 }

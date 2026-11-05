@@ -111,11 +111,25 @@ impl AgentLoop {
             }
         }
 
+        // 落盘只在本轮确实有结果超过它**自己那一档**的上限时才准备 —— 分档
+        // 之后最小的一档是 3 K（`list_files`），仍用固定的 20 K 判据会让
+        // 3–20 K 的结果既超出上限又拿不到取回指针。
+        let smallest_cap = tool_calls
+            .iter()
+            .map(|tc| hermix_tools::result_budget::model_visible_cap(&tc.function.name))
+            .min()
+            .unwrap_or(spill::SPILL_INLINE_CHARS)
+            .min(spill::SPILL_INLINE_CHARS);
         let spill_sink = results
             .iter()
-            .any(|r| r.content.chars().count() > spill::SPILL_INLINE_CHARS)
+            .any(|r| r.content.chars().count() > smallest_cap)
             .then(spill::SpillSink::default_dir);
-        budget::enforce_budget_with_spill(&mut results, &self.config.budget, spill_sink.as_ref());
+        budget::enforce_budget_with_spill(
+            &mut results,
+            &self.config.budget,
+            spill_sink.as_ref(),
+            tool_calls,
+        );
 
         // Removed verification notes injection and budget
         // pressure injection into tool results. These were polluting the
@@ -338,22 +352,23 @@ impl AgentLoop {
 
         self.emit_background_review_metrics(state.total_turns, ctx);
 
-        // Continuous tool-result roll-up: drain stale tool bodies every
-        // turn so context pressure doesn't spike to the compression
-        // threshold. Idempotent + cheap; Pass1 inside compress() stays
-        // as the final safety net. Originals are appended to the
-        // per-session evidence log BEFORE they vanish from ctx so the
-        // one-line summaries stay backed by recoverable full text.
-        let rolled =
-            crate::compression::rollup_tool_results(ctx.get_messages_mut(), 30, 8_000);
-        if !rolled.is_empty() {
-            crate::archive::append_rollup_archive(
-                &hermix_config::paths::hermix_home(),
-                self.config.session_id.as_deref(),
-                &rolled,
-            );
-            ctx.recompute_total_tokens();
-        }
+        // NOTE: no per-round tool-result roll-up here.
+        //
+        // This used to call `rollup_tool_results(ctx, 30, 8_000)` on every
+        // tool round. Its predicate is **distance from the tail**, so as new
+        // messages arrive one more already-sent tool result crosses the
+        // frontier and gets rewritten in the middle of the history. Provider
+        // prefix caches (MiniMax/DeepSeek/Anthropic/OpenAI) match on bytes
+        // from position 0, so rewriting one mid-history row invalidates
+        // everything after it — measured cost was the whole last-30-message
+        // window (~15-40K tokens) re-billed on **every** call, which pinned
+        // the cache hit rate at ~77% no matter how long the session ran.
+        //
+        // Content already sent once is therefore frozen: context is only
+        // shrunk at insertion time (tool-result budget) or by a deliberate
+        // compression event (`compression_ops`, which pays one cache reset
+        // and is rare). Pass1 inside `compress()` still rolls stale bodies
+        // up as the final safety net, and archives them there.
 
         // Context pressure check
         let total_tokens = ctx.total_tokens();
@@ -631,6 +646,32 @@ impl AgentLoop {
             }
         }
 
+        // --- 零推进诊断（L2，认知层，不停止）---
+        // 判据是「这一轮有没有产生**新的世界状态**」：签名在工具执行出口由
+        // `hermix_tools::tool_state` 写进 `ToolResult::state`（文件 stat /
+        // 命令+输出 / 页面落点），这里只消费字段，不再解析文本。与工具是否
+        // 报错、是否同一工具、模型有没有写正文都无关。2026-11-05 实测：同一块
+        // 登录页上连续 18 轮 navigate + eval，每轮 errors=0、结果逐字不同，
+        // ErrorLoop 与 RepeatGuard 都没反应。
+        {
+            let observed: Vec<String> = results
+                .iter()
+                .filter_map(|r| r.state.clone())
+                .collect();
+            if let Some(text) = state.progress_ledger.observe_batch(&observed) {
+                tracing::info!(
+                    turn = total_turns,
+                    zero_progress_streak = crate::progress_ledger::ZERO_PROGRESS_STREAK,
+                    "zero new world state for several turns — injecting progress diagnosis"
+                );
+                self.emit_status(
+                    "lifecycle",
+                    "连续多轮没有拿到新的世界状态——已把卡点分析交给模型换路径。",
+                );
+                ctx.add_message(Message::system(text));
+            }
+        }
+
         // --- post-tool execution ---
         tracing::debug!(
             phase = %LoopPhase::PostToolExec,
@@ -727,8 +768,15 @@ impl AgentLoop {
                     .map(|tc| tc.function.name.as_str())
             })
             .collect();
+        // 「本轮有没有输出」要连思考一起算：thinking 模型（MiniMax
+        // M3.1-Flash 等）把推演写进 `reasoning_content`、正文留空，而前端
+        // 是把这段思考原样渲染给用户的。只认 `content` 等于把「用户正在读
+        // 它的思考」记成「它什么都没说」，累计 18 轮就触发
+        // NoProgressWithTools 硬停（2026-11-05 实测：22 轮的课程目录探查
+        // 被砍在半路）。真空转由 `RepeatGuard`（工具结果逐字重复）兜底。
+        let produced_output = crate::message_helpers::assistant_produced_output(&response.message);
         let convergence_signal = state.convergence_detector.check(
-            has_visible,
+            produced_output,
             tool_calls.len(),
             genuine_error_count,
             visible_text_this_turn,
@@ -745,6 +793,15 @@ impl AgentLoop {
                     consecutive = consecutive_count,
                     "convergence detected (hard stop) — concluding run"
                 );
+                // 硬停必须自己解释（2026-11-05）：以前这里直接 finalize，
+                // 一条用户可见的话都不留 —— 界面停在「正在回复…」，用户
+                // 只能手动发一句「继续」才知道为什么停。只在本轮没有任何
+                // 正文时补，避免盖掉模型刚说过的话。
+                if !has_visible {
+                    let note = convergence_wrap_up(&reason, consecutive_count);
+                    self.emit_status("lifecycle", &note);
+                    ctx.add_message(hermix_core::Message::assistant(note));
+                }
                 // Harness²：**收敛停止本身就是最值得跨会话留存的教训**
                 // （"这条路走不通"）。在这里就地记录，而不是等 finalize——
                 // finalize 的入参里没有 convergence reason，要传它得改
@@ -832,7 +889,28 @@ impl AgentLoop {
                 .as_ref()
                 .map(|u| u.completion_tokens)
                 .unwrap_or(0),
+            // 前缀缓存命中数必须与 prompt 同排出现，否则「这一轮是冷启动
+            // 还是正常命中」只能事后翻库（2026-10-30 实测：冷启动的
+            // cache_read 恒为 184，而 prompt 是 22 万）。
+            cache_read_tokens: response
+                .usage
+                .as_ref()
+                .map(|u| u.cache_read_tokens)
+                .unwrap_or(0),
+            cache_creation_tokens: response
+                .usage
+                .as_ref()
+                .map(|u| u.cache_creation_tokens)
+                .unwrap_or(0),
             context_tokens: ctx.total_tokens() as u64,
+            context_max_tokens: ctx.max_context_tokens() as u64,
+            // 压缩阈值：与 `context_tokens` 一起看，才知道「离压缩还有多远」。
+            // 长窗口模型上这个值可能是 94 万，于是 22 万的会话永远不压缩 ——
+            // 这正是 2026-10-30 观测到的上下文膨胀形态。
+            context_threshold_tokens: ctx.pressure_threshold_tokens() as u64,
+            // provider 回显的模型：与 `config.model` 不一致时，能一眼看出是
+            // 会话覆盖 / 路由 / 归一化中的哪一环。
+            model: response.model.clone(),
             outcome: crate::turn_report::TurnOutcome::Continue,
             mode: None,
             task_id: None,
@@ -841,4 +919,31 @@ impl AgentLoop {
 
         ToolTurnOutcome::Continue
     }
+}
+
+/// 收敛硬停时写给用户看的一句话：为什么停、怎么接着走。
+///
+/// 硬停以前完全静默：`finalize_agent_result` 只带已有消息，最后一条
+/// assistant 正文往往是空的，界面就停在「正在回复…」，用户唯一的知情
+/// 途径是手动发一句「继续」去问。这条消息把答案直接放进对话里。
+fn convergence_wrap_up(
+    reason: &crate::convergence_detector::ConvergenceReason,
+    count: u32,
+) -> String {
+    use crate::convergence_detector::ConvergenceReason;
+    let head = match reason {
+        ConvergenceReason::NoProgressWithTools => format!(
+            "我停在这里了：连续 {count} 轮只在调用工具、没有向你汇报，触发了「无进展」保护。"
+        ),
+        ConvergenceReason::ErrorLoop => format!(
+            "我停在这里了：连续 {count} 轮工具调用全部失败，触发了「死循环」保护。"
+        ),
+        ConvergenceReason::SimilarContent => format!(
+            "我停在这里了：连续 {count} 轮输出高度重复，触发了「重复内容」保护。"
+        ),
+    };
+    format!(
+        "{head}\n要接着做，回一句「继续」就行（或直接说下一步方向）；\
+         上面工具卡里是已经完成的部分。"
+    )
 }

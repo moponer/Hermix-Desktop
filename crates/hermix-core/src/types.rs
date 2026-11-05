@@ -504,6 +504,19 @@ pub struct ToolResult {
     /// happened" system note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub denial_kind: Option<String>,
+    /// 这次调用**之后世界是什么样**的可观测签名，由工具执行层填写。
+    ///
+    /// 例：`fs:D:\a.txt;exists=true;size=1203;mtime=1730…`（磁盘 `stat`）、
+    /// `sh:git status|a3f2…`（命令 + 输出指纹）、
+    /// `web:url=https://…;title=温馨提示`（页面落点）。
+    ///
+    /// 为什么放在结果上、而不是让 agent 从 `content` 里猜：状态是**工具执行
+    /// 的事实**，不是文本解析的副产物。agent 的零推进账本
+    /// （`hermix_agent::progress_ledger`）只读这个字段，按「本 run 是否见过
+    /// 这个签名」判定空转。`None` 表示该工具不改变可观测的外部世界
+    /// （memory / todo / delegate 等），不参与判定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
 
 impl ToolResult {
@@ -514,6 +527,7 @@ impl ToolResult {
             content: content.into(),
             is_error: false,
             denial_kind: None,
+            state: None,
         }
     }
 
@@ -524,6 +538,7 @@ impl ToolResult {
             content: content.into(),
             is_error: true,
             denial_kind: None,
+            state: None,
         }
     }
 
@@ -541,7 +556,16 @@ impl ToolResult {
             content: content.into(),
             is_error: true,
             denial_kind: Some(kind.into()),
+            state: None,
         }
+    }
+
+    /// 附带这次调用之后的世界状态签名（见 [`Self::state`]）。
+    ///
+    /// 传 `None` 是正常情况：探测规则未覆盖的工具不参与零推进判定。
+    pub fn with_state(mut self, state: Option<String>) -> Self {
+        self.state = state;
+        self
     }
 
     /// True when this result is an *infrastructure* denial — the call
@@ -935,8 +959,12 @@ impl Default for BudgetConfig {
             // 成败（头尾保留：头部是命令开头、尾部是 exit code 与错误行），
             // 细节按需 read_file 落盘文件即可。
             max_result_size_chars: 16_000,
-            // 一轮全部结果的合计上限。旧值 1_000_000 同样远超任何真实需要。
-            max_aggregate_chars: 120_000,
+            // 一轮全部结果的合计上限。旧值 1_000_000 同样远超任何真实需要；
+            // 后来收到 120_000，但实测一轮并行 3–4 个工具就能到 48–64 K 字符
+            // （≈12–16 K tokens 只花在一个 turn 的工具输出上）。48_000 刚好是
+            // 「3 条 16 K 不用裁」的位置，第 4 条起才按比例压 —— 超额部分会先
+            // 落盘再压，模型拿得到取回路径。
+            max_aggregate_chars: 48_000,
         }
     }
 }
@@ -1363,7 +1391,7 @@ mod tests {
     fn test_budget_config_default() {
         let bc = BudgetConfig::default();
         assert_eq!(bc.max_result_size_chars, 16_000);
-        assert_eq!(bc.max_aggregate_chars, 120_000);
+        assert_eq!(bc.max_aggregate_chars, 48_000);
     }
 
     #[test]

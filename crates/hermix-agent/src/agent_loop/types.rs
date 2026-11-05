@@ -86,6 +86,13 @@ pub(crate) struct PreparedRun {
 pub(crate) struct LoopState {
     /// Total turns completed so far in this run.
     pub(crate) total_turns: u32,
+    /// 连续多少次「撞到 max_turns 且收尾摘要调用失败」。
+    ///
+    /// 撞上限后 `total_turns` 归零重跑是设计（长任务不截断），但如果收尾摘要
+    /// 本身不可用（模型 id 400 / 配额），模型永远读不到"停止探索、汇报"的
+    /// 指令，就会在同一个工具循环里一轮接一轮地空转 —— 2026-11-05 实机跑了
+    /// 229 轮、25 分钟，期间桌面 UI 全站卡死。到阈值就如实停机，不再自动续跑。
+    pub(crate) max_turns_summary_failures: u32,
     /// Per-run API + tool wall-clock accumulators. :
     /// extracted from 2 inline `u64` fields to a [`TurnTimings`] struct
     /// so `publish_from` shrinks by 2 args and the `record_api` /
@@ -149,6 +156,9 @@ pub(crate) struct LoopState {
     /// 零新信息守卫：连续几轮工具结果与历史某批逐字相同，就取消后续
     /// 轮次的工具 schema，逼模型收尾（每轮一次 LLM 往返，实测占比 88%）。
     pub(crate) repeat_guard: RepeatGuard,
+    /// 世界状态推进账本（见 `progress_ledger`）：连续多轮拿到的都是已见过
+    /// 的世界状态时，注入零推进诊断；不停止 run。
+    pub(crate) progress_ledger: crate::progress_ledger::ProgressLedger,
 }
 
 impl LoopState {

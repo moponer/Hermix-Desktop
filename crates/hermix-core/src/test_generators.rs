@@ -115,6 +115,7 @@ pub fn arb_tool_result() -> impl Strategy<Value = ToolResult> {
         proptest::option::of(proptest::string::string_regex("[a-z_]{2,20}").unwrap()),
     )
         .prop_map(|(tool_call_id, content, is_error, denial_kind)| ToolResult {
+            state: None,
             tool_call_id,
             content,
             is_error,

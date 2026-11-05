@@ -429,7 +429,25 @@ impl McpClient {
                     }
                 })
                 .collect();
+            // 世界状态签名走 MCP 的 `_meta` 扩展位（结构化），不塞进正文。
+            // 有它时返回一个带唯一键的信封，由 agent 侧
+            // `hermix_tools::tool_state::unwrap_envelope` 剥开 —— 模型只看
+            // `content`，零推进账本只看 `state`。
+            let state = result
+                .get("_meta")
+                .and_then(|m| m.get("hermixState"))
+                .and_then(|s| s.as_str());
+            // 只在有文本正文时信封化：截图这类「只有 image 块」的结果必须
+            // 原样返回 `result`，否则图片内容会被信封吞掉。
             if !texts.is_empty() {
+                if let Some(state) = state {
+                    return Ok(serde_json::json!({
+                        "hermix_tool_result": {
+                            "content": texts.join("\n"),
+                            "state": state,
+                        }
+                    }));
+                }
                 return Ok(serde_json::json!(texts.join("\n")));
             }
         }

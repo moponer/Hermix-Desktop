@@ -92,8 +92,12 @@ pub mod stream_collect;
 pub mod steer;
 pub mod sub_agent_orchestrator;
 pub mod tool_result_processor;
+pub mod tool_result_reclaim;
 pub mod tool_call_validator;
 pub mod convergence_detector;
+/// 进展账本（L2）：以「世界状态有没有推进」为唯一判据的防空转机制。
+/// 状态签名由工具执行层写进 `ToolResult::state`（见 `hermix_tools::tool_state`）。
+pub mod progress_ledger;
 pub mod turn_report;
 pub mod terminal_filter;
 pub mod tool_dispatch;

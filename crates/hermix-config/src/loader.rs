@@ -1115,16 +1115,18 @@ pub fn auto_correct_model(config: &mut GatewayConfig) -> Option<AutoCorrectRepor
 
 /// Validate a fully-loaded configuration.
 /// Checks:
-/// - max_turns > 0
 /// - SessionResetPolicy::Daily at_hour in 0..=23
 /// - All LLM providers with an api_key set have a non-empty value
 /// - Terminal timeout > 0
+///
+/// `max_turns: 0` is **valid** and means "no turn cap" — that is the agent
+/// loop's own semantics (`run_loop.rs`: `max_turns != 0 && total_turns >=
+/// max_turns`). This validator used to reject 0, which silently made the
+/// documented default unreachable: `~/.hermix/config.yaml` could not express
+/// "run until the work is done", so long tasks were cut at the configured cap.
+/// The brakes for an uncapped run are the cost guard, `RepeatGuard`
+/// (identical tool results) and `ErrorLoop` — not an arbitrary turn count.
 pub fn validate_config(config: &GatewayConfig) -> Result<(), ConfigError> {
-    if config.max_turns == 0 {
-        return Err(ConfigError::ValidationError(
-            "max_turns must be greater than 0".into(),
-        ));
-    }
 
     if config.terminal.timeout == 0 {
         return Err(ConfigError::ValidationError(
@@ -1192,10 +1194,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_zero_max_turns() {
+    fn validate_zero_max_turns_means_unlimited() {
+        // 0 is the agent loop's "no cap" value, so the loader must accept it.
         let mut config = GatewayConfig::default();
         config.max_turns = 0;
-        assert!(validate_config(&config).is_err());
+        assert!(
+            validate_config(&config).is_ok(),
+            "max_turns: 0 means unlimited, not invalid"
+        );
     }
 
     #[test]

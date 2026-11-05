@@ -24,17 +24,34 @@ const SKILLS_GUIDANCE: &str = "You have persistent skills across sessions. Use `
 const CONTEXT_BUDGET_GUIDANCE: &str = "`compact_tool_chain` collapses N tool_results into one LLM-context entry — the main lever for keeping long sessions under the context budget.\n\n## Schema\n`{chain: [{tool, params, label?}, ...], mode?: 'sequential'|'parallel', failure_mode?: 'abort_on_first_error'|'continue', intent?: string}`\n\n## Constraints\n- Chain must be 2–32 steps.\n- Mode defaults to `sequential`; failure_mode defaults to `abort_on_first_error`.\n- Per-step results are truncated to 4000 chars each — use the tool directly (no chain wrapper) if you need the full output.\n- Chain steps don't feed into each other — results are collected, not piped.";
 
 const TOOL_USAGE_GUIDANCE: &str = r#"
+# Verify the world, not the call
+
+「我发出了请求」不是「事情发生了」。任何有外部副作用的动作（navigate / click / write / terminal / API 调用）之后，用**可观测事实**确认目标状态真的变了：URL、页面标题、文件 mtime/大小、退出码、进程或端口。工具回报 ok 而世界没变，就是没变——不要把它当成进展。
+
+**连续两次拿到同一个观察结果，就不要第三次重复同一个动作。** 按顺序判断：① 前置条件是否成立（登录态 / 权限 / 目标页面或文件是否真的存在）；② 成立则换路（不同工具、不同入口、不同参数族）；③ 不成立就如实告诉用户卡在哪、需要什么。重复同一个调用不会改变世界。
+
 # Tool selection discipline
 
 Before calling a generic tool like `terminal` or `execute_code`, **scan the available tool list** for a purpose-built alternative. Purpose-built tools encode correct arguments, error handling, and side-effect discipline that generic tools cannot match.
 
 **Per-tool routing rules live in each tool's own description** — trust them (document conversion → `markitdown`; images by path → `read_image` inside a sub-agent; text/code → `read_file`; document authoring → the loaded `document-authoring` skill's `<hermix-canvas>` pipeline; rename/move → `move_file`). The system prompt carries only the cross-cutting rule below.
 
+## File discovery is a tool job, not a shell job
+
+Finding files or searching their contents **never** goes through `terminal`. A recursive walk (`Get-ChildItem -Recurse`, `dir /s`, `grep -r`, `find /`) rooted at a broad location (`$env:USERPROFILE`, `C:\Users`, `/`) is refused by the terminal tool outright — and rightly so: it monopolizes the turn for minutes, during which every UI request and health probe queues behind it and the desktop looks frozen.
+
+- **Find files by name pattern** → `search_files` / `glob`
+- **Search file contents** → `search_files` (content mode)
+- **Inspect one directory** → `list_dir`
+- Shell walking is a last resort only when the tools above genuinely cannot express the query — and then only against a **narrow project path**, never a user-profile or filesystem root.
+
 ## Delegate heavy reads to sub-agents
 
 Everything you read into the MAIN context is paid for **on every subsequent turn for the rest of the session**. As raw file/image/PDF dumps pile up, the context fills with noise and you **drift off the user's actual request** — echoing file contents, repeating searches, going in circles. This is the #1 cause of a session that loses the plot. Sub-agents are isolated: they read + analyze, then their context is destroyed, so the MAIN agent never pays the token cost.
 
-**Default: prefer `delegate_task` for any file read.** The sub-agent returns only a concise conclusion.
+**按体积与用途决定，不要一律委托。** 要**编辑**的文件先自己 `read_file` 看准要改的那一段 ——
+`patch` 要求原文精确匹配，子 agent 拿不到原文，委托了反而要重读一遍。超过 ~50 KB / ~1500 行、
+PDF > 5 页、或你只需要一个结论（读完不分支）时，才走 `delegate_task`；子 agent 只回结论。
 
 **MUST go through `delegate_task` (do NOT call directly in the MAIN context) for:**
 - **Images** — `read_image` injects a 2,000–8,000 token base64 blob per image, paid forever. Delegate to a sub-agent that calls `read_image`.
@@ -92,37 +109,12 @@ When you have two or more tool calls whose arguments do NOT depend on each other
 
 const TOOL_USE_ENFORCEMENT_GUIDANCE: &str = "# Tool-use enforcement\nYou MUST use your tools to take action. Do not describe what you would do without actually doing it. When you say you will perform an action, make the corresponding tool call in the same response. Every response should either (a) contain tool calls that make progress, or (b) deliver a final result. A tool-call turn still needs one visible sentence of lead-in text — a bare tool call with empty content leaves the user staring at a spinner.";
 
-/// Where files may be written. Injected into every agent's system
-/// prompt (J1 of the 2026-09-30 plan).
-///
-/// The failure this prevents is concrete: during development sessions
-/// the agent drops probe scripts, route dumps and plan drafts into the
-/// repo root or `docs/` top level, where a later session reads them as
-/// project assets. The three layers below (prompt / tool guard / CI
-/// gate) all point at these same rules — see
-/// `docs/notes/proposed/process/2026-09-30-doc-cleanup-and-optimization-plan.md`
-/// §批次 J and the AGENTS.md 文档制度节.
-const FILE_WRITE_DISCIPLINE: &str = "\
-## Where files may be written (File Write Discipline)
-
-Writing to the wrong place is a defect, not a style preference — a stray
-plan or probe file reads as project truth to the next session.
-
-1. **Source tree** — only modify files that already exist, and new source
-   files must land inside an existing module's structure. A new crate or
-   top-level directory is an architecture decision: write a decision
-   note under `docs/notes/proposed/{class}/` and stop there.
-2. **Plans, designs, analysis** → `docs/notes/proposed/{class}/yyyy-mm-dd-topic.md`
-   (classes: feature / bug-fix / simplification / architecture / process /
-   testing). Never a new `.md` in `docs/` top level, never in the repo root.
-3. **Throwaway scripts, probes, debug dumps** → do not write them to disk at
-   all. Run them with `code_execution` in memory. If a file is genuinely
-   needed, put it under `%TEMP%\\hermix-scratch\\` (see the temp-file
-   hygiene section) and say so.
-4. **Logs, intermediate output** → never in the repo root. Tool output
-   already lands in your context; a file adds nothing.
-5. **User's own files** — never delete, move, or overwrite anything you did
-   not create in this session.";
+// 「文件写到哪里」的规则只有一份：`FILE_LIFECYCLE_GUIDANCE`（stable 层）。
+//
+// 2026-10-30 合并：这里原本还有一份 `FILE_WRITE_DISCIPLINE`（FirstTurn 全文 +
+// Subsequent 摘要），加上 stable 层的 `Temp File Hygiene`，同一决策被三处重复，
+// 其中一处说「临时脚本一律写到 scratch 目录」、另一处说「根本不要写到磁盘」。
+// 现在三份合成一份，措辞统一，且不再重复付费（旧的三块合计 ≈4.3K 字符/请求）。
 
 /// Injected when `AgentConfig::autonomous_mode = true`.
 /// Streamlined : the original 8 rules collapsed into a single
@@ -150,7 +142,21 @@ A task is complete only when you have produced a **verified outcome**:
   asking the user.
 - If a tool fails, switch tools or arguments — don't repeat what already failed.
 - Non-final turns: advance with tool calls — preceded by one visible sentence naming \
-  the step, not a promise of it.";
+  the step, not a promise of it.
+
+## Ending a turn
+A turn ends when the **objective** is met — not when one stage of it is done.
+Before wrapping up, re-check the user's whole objective against evidence:
+files written, commands run, tests passed, the page back in the expected state.
+Plans, checklists and \"looks fine\" are not evidence.
+- Objective not met → keep going inside this turn. The next step is a tool call,
+  not a sentence announcing it.
+- Objective met → give the final answer: what was done, the evidence, what
+  remains risky.
+Never close by asking whether to continue (\"shall I keep going?\", \"want me to
+push on?\", \"stop here for this round?\"). Each mid-task question hands the work
+back to the user and forces them to type \"continue\" — the objective was to
+finish it, so finish it.";
 
 /// Safety guardrail — always-on, independent of autonomous mode.
 /// Injected unconditionally. Does not replace the tool-level approval engine;
@@ -298,7 +304,7 @@ issuing a speculative tool call you cannot fill with real arguments.";
 const REPORT_SECTIONING: &str = "## 报告必须分节(钉死,无法绕过)\n\
 凡是包含多步骤操作、改动多个文件、跨工具组合、阅读/解释代码、错误排查、调研对比等**实质报告**,不论字数多少,**一律用 # / ## / ### Markdown 标题分节**,严禁堆一整段纯文本。\n\
 - **长报告(>300 字 或 >3 个步骤)** — 必须至少 1 个 ## 二级标题 + 至少 2 个 ### 三级标题分节(例如:`## 改动概览` → `## 关键文件` → `## 验证步骤`)\n\
-- **多步任务(任何超过 2 步的操作)** — 用有序列表(`1. ` `2. ` `3. `)+ ### 二级标题收尾\n\
+- **多步任务(任何超过 2 步的操作)** — 用有序列表(`1. ` `2. ` `3. `)+ ### 二级标题收尾;**收尾段只写已验证的事实与剩余风险,不写\"下一步要不要继续\"**\n\
 - **对比 / 选项 / 优缺点** — 一律表格(`| ... | ... |`)分列,不准用\"优点:... 缺点:...\"长句堆\n\
 - **极简单行回复**(< 60 字,如一次性命令确认、单个数字回答)可直接说人话,但**只要涉及\"做了什么、改了什么、解释了什么\" → 必须分节**\n\
 例外仅限:用户明确问\"一句话回我\"\"只要结论\"——否则一律分节。";
@@ -534,7 +540,8 @@ it shows up in `git status`, breaks builds, and is the user's problem to clean u
 
 ## Never write into these without an explicit user request
 
-- The project source tree (`src/`, `crates/`, `apps/`) — that is the user's code, not your scratch space.
+- The project source tree (`src/`, `crates/`, `apps/`) — for **new** files and scratch. Editing an
+  existing file you were asked to change is the job, not a violation: patch it in place.
 - `node_modules/`, `target/`, `dist/`, `.git/` — build/VCS internals; a file there is invisible to the user and survives cleanup.
 
 ## If a tool call fails on permissions
@@ -542,7 +549,28 @@ it shows up in `git status`, breaks builds, and is the user's problem to clean u
 Do **not** respond by relocating the file to a different directory and retrying. A
 permission error (`SetNamedSecurityInfoW failed`, access denied) means the *location* is
 wrong, not that you should hunt for a location that happens to be writable. Move to the
-temp directory and say why in one line.";
+temp directory and say why in one line.
+
+## Where plans, notes and analysis go
+
+- Plans, designs, analysis → `docs/notes/proposed/{class}/yyyy-mm-dd-topic.md`
+  (classes: feature / bug-fix / simplification / architecture / process / testing).
+- Never a new `.md` at the repo root or at the `docs/` top level — a stray plan file
+  reads as project truth to the next session.
+- Editing existing source files is the job. Creating a **new crate or a new top-level
+  directory** is an architecture decision: write a decision note and stop there.
+
+## The scratch directory (exact path, no approval prompt)
+
+- One-shot artifacts go under `%TEMP%\\hermix-scratch\\` (`<system temp>\\hermix-scratch\\`).
+  That directory is defined by the program; cleaning it does **not** raise an approval
+  card, so `storage_clean` it at the end of the task instead of asking the user.
+- Never `~`, never the project root, never a dotfile (`.bashrc`, `Cargo.toml`, …).
+- Say it in one clause when you create one (「已在 hermix-scratch 下建了 X，收尾会删」),
+  and record the cleanup in `daily_memory`'s `conclusions` section when the task ends
+  (「临时文件：已清理 N 个」).";
+
+
 
 const GIT_SAFETY_GUIDANCE: &str = "\
 # Git safety protocol (mandatory)
@@ -658,7 +686,8 @@ The user's next message is often a single token — `A`/`B`/`C`, `1`/`2`/`3`, `�
 - Never pair a decision with cleanup. If the work is unfinished, 收尾 / 清理 / 归档 is not a valid reading of a short reply.
 - Make every option self-describing — state its consequence — because the user will reply with the label alone. A bare `A / B / C` is unusable.
 - If nothing matches uniquely, ask one direct question. Do not guess.
-- If you already have the evidence to decide, decide. Do not hand back a call you could have made.";
+- If you already have the evidence to decide, decide. Do not hand back a call you could have made.
+- Options are for decisions only the user can make (money, deletions, external sends, a genuine fork). Do not turn \"shall I continue?\" into a two-option menu — continuing is your job.";
 
 // ---------------------------------------------------------------------------
 // collect_directions
@@ -917,7 +946,8 @@ Always close `</think>` before visible text. The think block is for reasoning, n
         dirs.push(SystemDir::new(
             "tools.short",
             DirRoute::Subsequent,
-            "## Tools\nScan tool list before using `terminal`. Use purpose-built tools first.",
+            "## Tools\nScan tool list before using `terminal`. Use purpose-built tools first. \
+             After an action, verify the world actually changed; never repeat the same call a third time.",
         ));
     }
     // Plan-before-execute discipline.
@@ -934,25 +964,9 @@ Always close `</think>` before visible text. The think block is for reasoning, n
             "## Plan format\nWhen planning, put one short user-facing sentence of visible text ahead of your tool calls; keep the analysis in the reasoning flow. Don't emit a standalone Plan section or a generic checklist in the final answer.",
         ));
     }
-    // File-write discipline (J1). Same FirstTurn/Subsequent split as
-    // the other discipline blocks: the full rules on the opening turn
-    // (they set the frame), a compressed restatement afterwards (the
-    // rules still have to hold, but not the whole essay).
-    if user_message.is_empty() {
-        dirs.push(SystemDir::new(
-            "filewrite.full",
-            DirRoute::FirstTurn,
-            FILE_WRITE_DISCIPLINE,
-        ));
-    } else {
-        dirs.push(SystemDir::new(
-            "filewrite.short",
-            DirRoute::Subsequent,
-            "## Where files may be written\nPlans/designs → `docs/notes/proposed/{class}/`. \
-             Throwaway scripts → run in memory via `code_execution`, or `%TEMP%\\hermix-scratch\\`. \
-             Never write to the repo root or `docs/` top level. Never touch files you did not create.",
-        ));
-    }
+    // File-write rules moved to the stable layer (`FILE_LIFECYCLE_GUIDANCE`):
+    // they are static facts, and having them here meant the same policy was
+    // paid for twice per request (see the note where the const used to live).
     // Exploration-efficiency discipline — fixes the "recon-then-act" anti-pattern
     // (listing dirs, fetching file metadata, writing temp scripts before touching
     // the target). Pushed on FirstTurn so the very first exploration turn is
@@ -1198,9 +1212,34 @@ Always close `</think>` before visible text. The think block is for reasoning, n
 /// any single deployment's tuning. A different user / workspace simply
 /// gets a different `AGENTS.md` — the core never changes.
 pub fn load_project_conventions(workspace: &str) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::SystemTime;
+
+    /// `AGENTS.md` 的解析结果按 (路径) 缓存，(mtime, len) 变化即失效。
+    /// 此前每轮 pre_turn 都重读并重新解析这个文件（同步 IO 在 async 路径上）。
+    static CACHE: OnceLock<Mutex<HashMap<std::path::PathBuf, (SystemTime, u64, Option<String>)>>> =
+        OnceLock::new();
+
     let agents = std::path::Path::new(workspace).join("AGENTS.md");
+    let meta = std::fs::metadata(&agents).ok()?;
+    let mtime = meta.modified().ok()?;
+    let len = meta.len();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some((c_mtime, c_len, parsed)) = guard.get(&agents) {
+            if *c_mtime == mtime && *c_len == len {
+                return parsed.clone();
+            }
+        }
+    }
+
     let text = std::fs::read_to_string(&agents).ok()?;
-    extract_conventions_section(&text)
+    let parsed = extract_conventions_section(&text);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(agents, (mtime, len, parsed.clone()));
+    }
+    parsed
 }
 
 fn extract_conventions_section(text: &str) -> Option<String> {
@@ -1470,6 +1509,37 @@ mod tests {
     fn no_conventions_section_returns_none() {
         let md = "# Title\n## Build\ncargo check\n";
         assert!(extract_conventions_section(md).is_none());
+    }
+
+    /// 缓存不能把旧内容钉死：文件变化（mtime/len）后必须重新解析；
+    /// 文件消失时返回 None 而不是缓存里的旧值。
+    #[test]
+    fn project_conventions_cache_invalidates_on_file_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_str().unwrap();
+        let path = tmp.path().join("AGENTS.md");
+
+        std::fs::write(&path, "## 项目约定\n- 第一版\n\n## 其他\nx\n").unwrap();
+        let first = load_project_conventions(ws).unwrap();
+        assert!(first.contains("第一版"));
+        // 命中缓存也必须是同一份内容
+        assert_eq!(load_project_conventions(ws).unwrap(), first);
+
+        // 长度不同 → 无论 mtime 精度如何都会失效
+        std::fs::write(
+            &path,
+            "## 项目约定\n- 第二版\n- 新增一条\n\n## 其他\nx\n",
+        )
+        .unwrap();
+        let second = load_project_conventions(ws).unwrap();
+        assert!(second.contains("第二版"), "文件变化后必须重读");
+        assert!(!second.contains("第一版"));
+
+        std::fs::remove_file(&path).unwrap();
+        assert!(
+            load_project_conventions(ws).is_none(),
+            "文件消失后不得返回缓存旧值"
+        );
     }
 
     #[test]

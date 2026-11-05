@@ -46,6 +46,14 @@ use crate::agent_loop::AgentLoop;
 /// enough to avoid overwhelming external services.
 const MAX_CONCURRENT_TOOLS: usize = 5;
 
+/// 长工具的心跳间隔（2026-10-30）。
+///
+/// terminal 的单次预算是 600s，此前执行期间不发任何事件 —— UI 上就是一个
+/// 转圈，和「进程已经死了」无法区分，用户看到的就是「既不继续也不停止」。
+/// 批内每 5s 发一条 `tool` 状态（含工具名与已运行秒数），至少让"还在跑"
+/// 这件事可观测；真正的逐行 stdout 流式化是后续工作。
+const TOOL_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Meta tools that stay callable even when an activated skill declares an
 /// `allowed-tools` restriction — the model must always be able to inspect
 /// skills, manage todos, ask the user, and collect background sub-agent
@@ -107,12 +115,36 @@ fn run_tool_handler(
         }
     };
     match (entry.handler)(params) {
-        Ok(output) => ToolResult::ok(tool_call_id, output),
+        Ok(output) => {
+            // 世界状态：MCP 工具会带结构化信封（正文 + state 分离），先剥开；
+            // 其余工具在执行出口按族探测。两条路都落到同一个字段
+            // `ToolResult::state` 上，模型只会看到正文。
+            let (content, explicit) = hermix_tools::tool_state::unwrap_envelope(&output);
+            let state = explicit
+                .or_else(|| hermix_tools::tool_state::signature(tool_name, raw_args, &content));
+            ToolResult::ok(tool_call_id, content).with_state(state)
+        }
         Err(e) => ToolResult::err(
             tool_call_id,
             hermix_tools::registry::enrich_param_error(tool_name, Some(&entry.schema), &e),
         ),
     }
+}
+
+/// 用户按下停止时替换工具结果的信封。
+///
+/// 必须是 error 形态：上层会把每个 `tool_call` 的结果喂回历史，缺结果就是
+/// dangling tool_call（provider 直接拒），所以取消也得变成一个明确结果。
+/// `[状态未知]` 是给模型看的 —— 同步工具被 abort 后其线程仍可能在跑，副作用
+/// 未必没发生。
+fn cancelled_result(tool_call_id: &str, tool_name: &str) -> ToolResult {
+    ToolResult::err(
+        tool_call_id,
+        format!(
+            "用户停止了当前任务，工具 '{tool_name}' 已中止。\
+             [状态未知] 它可能已部分执行，继续前请先确认其影响。"
+        ),
+    )
 }
 
 impl AgentLoop {
@@ -548,33 +580,95 @@ impl AgentLoop {
             // which put write_file / patch / terminal entirely outside the
             // per-call and batch budgets (both fire *after* this loop) — one
             // hung write silently wedged the whole turn.
-            let result = if interactive {
-                run_tool_handler(registry.as_ref(), &tool_name, &tool_call_id, &raw_args)
-            } else {
-                let budget = hermix_tools::dispatch::per_tool_budget(&tool_name);
+            // 用户按停止时必须能立刻从工具里出来。旧代码在 `interactive`
+            // 分支上同步调用 handler（clarify 等用户回答 → 整个 tokio 任务
+            // 被阻塞，连 select 的机会都没有），非交互分支只有「超时」一个
+            // 出口 —— 这正是「点了停止没反应」的主因之一。现在两条路都先
+            // spawn，再和 `wait_for_interrupt()` 竞速。
+            let interrupt = self.interrupt.clone();
+            // 预算要在 spawn 之前取：`tool_name` 会被 move 进任务。
+            let budget = hermix_tools::dispatch::per_tool_budget(&tool_name);
+            let result = {
                 let handle = tokio::spawn(async move {
                     run_tool_handler(registry.as_ref(), &tool_name, &tool_call_id, &raw_args)
                 });
-                match tokio::time::timeout(budget, handle).await {
-                    Ok(Ok(res)) => res,
-                    Ok(Err(join_err)) => ToolResult::err(
-                        &tc.id,
-                        format!(
-                            "tool '{}' panicked or was cancelled: {join_err}. \
-                             [状态未知] 该工具可能在崩溃前已部分执行，继续前请先确认其影响。",
-                            tc.function.name
-                        ),
-                    ),
-                    Err(_) => ToolResult::err(
-                        &tc.id,
-                        format!(
-                            "per-call timeout after {}s: tool '{}' did not return in time. \
-                             [请勿盲目重试][状态未知] 该工具可能仍在后台执行且副作用可能已发生，\
-                             重试前请先读取目标文件/状态确认；建议改用其他方式或告知用户该操作暂不可用。",
-                            budget.as_secs(),
-                            tc.function.name
-                        ),
-                    ),
+                let abort = handle.abort_handle();
+                if interactive {
+                    tokio::select! {
+                        biased;
+                        _ = interrupt.wait_for_interrupt() => {
+                            abort.abort();
+                            cancelled_result(&tc.id, &tc.function.name)
+                        }
+                        joined = handle => match joined {
+                            Ok(res) => res,
+                            Err(join_err) => ToolResult::err(
+                                &tc.id,
+                                format!(
+                                    "tool '{}' panicked or was cancelled: {join_err}. \
+                                     [状态未知] 该工具可能在崩溃前已部分执行，继续前请先确认其影响。",
+                                    tc.function.name
+                                ),
+                            ),
+                        },
+                    }
+                } else {
+                    // 会改状态的工具（write_file / patch / terminal）在这里串行
+                    // 执行。terminal 的预算是 600s —— 这一圈是长命令真正阻塞的
+                    // 地方，所以心跳必须在这里发；只放在后面的批收集循环里
+                    // 覆盖不到它（2026-10-30 实测 401s 的 terminal 全程零事件）。
+                    let mut handle = handle;
+                    let deadline = tokio::time::Instant::now() + budget;
+                    let mut beat = tokio::time::interval(TOOL_HEARTBEAT);
+                    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    beat.tick().await; // 首个 tick 立即就绪，先消费掉
+                    let started = std::time::Instant::now();
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = interrupt.wait_for_interrupt() => {
+                                abort.abort();
+                                break cancelled_result(&tc.id, &tc.function.name);
+                            }
+                            outcome = &mut handle => {
+                                break match outcome {
+                                    Ok(res) => res,
+                                    Err(join_err) => ToolResult::err(
+                                        &tc.id,
+                                        format!(
+                                            "tool '{}' panicked or was cancelled: {join_err}. \
+                                             [状态未知] 该工具可能在崩溃前已部分执行，继续前请先确认其影响。",
+                                            tc.function.name
+                                        ),
+                                    ),
+                                };
+                            }
+                            _ = tokio::time::sleep_until(deadline) => {
+                                break ToolResult::err(
+                                    &tc.id,
+                                    format!(
+                                        "per-call timeout after {}s: tool '{}' did not return in time. \
+                                         [请勿盲目重试][状态未知] 该工具可能仍在后台执行且副作用可能已发生，\
+                                         重试前请先读取目标文件/状态确认；建议改用其他方式或告知用户该操作暂不可用。",
+                                        budget.as_secs(),
+                                        tc.function.name
+                                    ),
+                                );
+                            }
+                            _ = beat.tick() => {
+                                let elapsed = started.elapsed().as_secs();
+                                tracing::info!(
+                                    tool = %tc.function.name,
+                                    elapsed_secs = elapsed,
+                                    "tool heartbeat: serial (state-mutating) tool still running"
+                                );
+                                self.emit_status(
+                                    "tool",
+                                    &format!("仍在执行：{} — 已 {}s", tc.function.name, elapsed),
+                                );
+                            }
+                        }
+                    }
                 }
             };
             orchestrated.push(result);
@@ -803,6 +897,13 @@ impl AgentLoop {
         );
         let deadline = std::time::Instant::now() + total_timeout;
 
+        // 并行工具同样发心跳（串行路径已在上面发了）。批收集期间可能同时在
+        // 等 N 个只读工具，任何一个卡住都要能看见。
+        let mut heartbeat = tokio::time::interval(TOOL_HEARTBEAT);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        heartbeat.tick().await; // 首个 tick 立即就绪，先消费掉
+        let batch_started = std::time::Instant::now();
+
         while ordered.iter().any(Option::is_none) {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
@@ -893,7 +994,63 @@ impl AgentLoop {
                 }
                 break;
             }
-            match tokio::time::timeout(remaining, join_set.join_next()).await {
+            // 用户按停止：放弃所有在飞任务（abort_all），把未出结果的槽位
+            // 标成「已取消」。旧代码这里只等 `join_next`，长命令 / 浏览器
+            // 调用期间点停止只能干等每个工具自己超时 —— 这就是「停止按钮
+            // 没反应」的主因。
+            let mut heartbeat_fired = false;
+            let next = {
+                let join_next = tokio::time::timeout(remaining, join_set.join_next());
+                tokio::pin!(join_next);
+                tokio::select! {
+                    biased;
+                    _ = self.interrupt.wait_for_interrupt() => None,
+                    r = &mut join_next => Some(r),
+                    _ = heartbeat.tick() => {
+                        heartbeat_fired = true;
+                        None
+                    }
+                }
+            };
+            if heartbeat_fired {
+                let pending: Vec<&str> = ordered
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, slot)| slot.is_none())
+                    .map(|(i, _)| tool_calls[i].function.name.as_str())
+                    .collect();
+                let elapsed = batch_started.elapsed().as_secs();
+                tracing::info!(
+                    pending = ?pending,
+                    elapsed_secs = elapsed,
+                    "tool heartbeat: batch still running"
+                );
+                self.emit_status(
+                    "tool",
+                    &format!("仍在执行：{} — 已 {}s", pending.join(", "), elapsed),
+                );
+                continue;
+            }
+            let Some(joined) = next else {
+                join_set.abort_all();
+                tracing::info!(
+                    "execute_tool_calls: interrupt received — aborting in-flight tool tasks"
+                );
+                for (idx, slot) in ordered.iter_mut().enumerate() {
+                    if slot.is_none() {
+                        let tc = &tool_calls[idx];
+                        let err = cancelled_result(&tc.id, &tc.function.name);
+                        tool_errors.push(ToolErrorRecord {
+                            tool_name: tc.function.name.clone(),
+                            error: err.content.clone(),
+                            turn,
+                        });
+                        *slot = Some(err);
+                    }
+                }
+                break;
+            };
+            match joined {
                 Ok(Some(Ok(tool_result))) => {
                     if tool_result.is_error {
                         let tc = tool_calls
@@ -1020,6 +1177,7 @@ impl AgentLoop {
                     content: sanitised,
                     is_error: r.is_error,
                     denial_kind: None,
+                    state: r.state,
                 }
             })
             .collect()

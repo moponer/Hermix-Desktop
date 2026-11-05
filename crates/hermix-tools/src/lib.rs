@@ -41,6 +41,9 @@ pub mod param_coercion;
 pub mod permission_guard;
 pub mod spill;
 pub mod tool_meta;
+/// 世界状态探测：执行出口把「这次调用之后的观测状态」写进
+/// `ToolResult::state`，agent 的零推进账本只读那个字段。
+pub mod tool_state;
 pub mod tools;
 pub mod toolset;
 pub mod toolset_distributions;

@@ -239,6 +239,10 @@ fn tool_defs() -> Vec<ToolDef> {
             description: "在**查看器内嵌的网页视图**里打开网址（不是系统浏览器）。\
                           页面就显示在查看器的预览区里，用户能直接看见、也能自己登录；\
                           之后用 webview_* 系列工具就能驱动这同一个页面。\
+                          **单例通道**：内嵌视图全查看器只有一个——已被占用时本工具会拒绝\
+                          （换 URL 用 web_navigate；接管先 web_close）。\
+                          多会话并行自动化任务不要抢这个通道，用 browser_open + 独立 session id\
+                          （每会话独立进程与登录态，互不干扰）。\
                           需要查看器以窗口模式运行（MCP HTTP 端点）。",
             properties: json!({
                 "url": {"type": "string", "description": "要打开的网址（http / https）"},
@@ -509,15 +513,18 @@ fn arg_clip(args: &Value) -> Option<(f64, f64, f64, f64)> {
 ///
 /// 截图类工具要同时给模型**文字**与**图片**（MCP 的 content 数组支持
 /// image 块），所以返回类型是 `ToolOutput` 而不是纯字符串。
-fn call_tool(name: &str, args: &Value) -> Result<ToolOutput, String> {
+fn call_tool(name: &str, args: &Value) -> Result<(ToolOutput, Option<String>), String> {
     if name == "browser_screenshot" {
         let session = arg_str(args, "session")?;
         let (path, data_base64, mime) = crate::browser::screenshot(&session)?;
-        return Ok(ToolOutput::TextAndImage {
-            text: format!("截图已保存：{path}"),
-            data_base64,
-            mime,
-        });
+        return Ok((
+            ToolOutput::TextAndImage {
+                text: format!("截图已保存：{path}"),
+                data_base64,
+                mime,
+            },
+            None,
+        ));
     }
     if name == "webview_screenshot" {
         let clip = arg_clip(args);
@@ -527,13 +534,23 @@ fn call_tool(name: &str, args: &Value) -> Result<ToolOutput, String> {
             Some((x, y, w, h)) => format!("（裁剪 {x},{y} {w}x{h}，{scale} 倍）"),
             None => String::new(),
         };
-        return Ok(ToolOutput::TextAndImage {
-            text: format!("内嵌网页视图截图已保存：{path}{note}"),
-            data_base64,
-            mime,
-        });
+        return Ok((
+            ToolOutput::TextAndImage {
+                text: format!("内嵌网页视图截图已保存：{path}{note}"),
+                data_base64,
+                mime,
+            },
+            None,
+        ));
     }
-    call_tool_text(name, args).map(ToolOutput::Text)
+    // 内嵌导航把「世界状态」单独交出来：走 MCP `_meta`（结构化），
+    // 不让 agent 去解析正文里的 `state:` 行。
+    if name == "webview_navigate" {
+        let url = arg_str(args, "url")?;
+        let (report, state) = crate::webview_cdp::navigate(&url)?;
+        return Ok((ToolOutput::Text(report), Some(state)));
+    }
+    call_tool_text(name, args).map(|text| (ToolOutput::Text(text), None))
 }
 
 /// 执行一个工具调用，返回给模型的文本。
@@ -727,6 +744,23 @@ fn call_tool_text(name: &str, args: &Value) -> Result<String, String> {
         // ── 内嵌网页视图（通道 A 的 agent 操控面）──
         "web_open" => {
             let url = str_arg("url")?;
+            // 单例占用检查：内嵌视图全查看器只有一个。已被占用且请求的是另一个
+            // URL 时直接拒绝——否则本次 open 会销毁重建别人的视图（open_sync 的
+            // 幂等只认同 URL），占用方后续的 webview_* 全部打在陌生页面上。
+            // 自动化并行场景请走 browser_open（独立 session id / 独立进程）。
+            if let Some(cur) = crate::webview_host::active_webview_url() {
+                let same = crate::webview_host::normalize_url(&url)
+                    .map(|t| t.as_str() == cur)
+                    .unwrap_or(false);
+                if !same {
+                    return Err(format!(
+                        "内嵌视图正被占用（当前页面：{cur}）。它是单例，本次调用会覆盖别人的页面，已拒绝。\
+                         \n- 自动化 / 多任务并行：改用 browser_open + 独立 session id（独立进程与登录态，互不影响）\
+                         \n- 同一视图换页面：用 web_navigate\
+                         \n- 确认要接管：先调 web_close 再 web_open"
+                    ));
+                }
+            }
             // 浏览器自动化任务**默认纯净模式**：预览区最大、没有资源管理器 /
             // AI 栏干扰，用户看的和 agent 操作的是同一块屏幕。切模式失败不
             // 阻断（查看器可能没开窗口）。
@@ -771,10 +805,8 @@ fn call_tool_text(name: &str, args: &Value) -> Result<String, String> {
             let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
             crate::webview_cdp::hover(x, y)
         }
-        "webview_navigate" => {
-            let url = str_arg("url")?;
-            crate::webview_cdp::navigate(&url)
-        }
+        // `webview_navigate` 在 `call_tool` 里单独处理（它要把世界状态
+        // 结构化地交出去，而不是拼进可读文本）。
         // ── 查看器自控面（AI 直接操作查看器自己的界面）──
         "viewer_ui_state" => {
             let state = crate::viewer_control::ui_state();
@@ -837,31 +869,39 @@ pub fn handle_request(request: &Value) -> Option<Value> {
                 return Some(error(id, -32602, "tools/call 缺少 name"));
             }
             let outcome = call_tool(name, &args);
-            let (content, is_error) = match outcome {
-                Ok(ToolOutput::Text(text)) => (
+            let (content, is_error, state) = match outcome {
+                Ok((ToolOutput::Text(text), state)) => (
                     json!([{"type": "text", "text": truncate_chars(&text, RESULT_CAP)}]),
                     false,
+                    state,
                 ),
-                Ok(ToolOutput::TextAndImage {
-                    text,
-                    data_base64,
-                    mime,
-                }) => (
+                Ok((
+                    ToolOutput::TextAndImage {
+                        text,
+                        data_base64,
+                        mime,
+                    },
+                    state,
+                )) => (
                     json!([
                         {"type": "text", "text": truncate_chars(&text, RESULT_CAP)},
                         {"type": "image", "data": data_base64, "mimeType": mime}
                     ]),
                     false,
+                    state,
                 ),
-                Err(message) => (json!([{"type": "text", "text": message}]), true),
+                Err(message) => (json!([{"type": "text", "text": message}]), true, None),
             };
-            Some(result(
-                id,
-                json!({
-                    "content": content,
-                    "isError": is_error,
-                }),
-            ))
+            let mut payload = json!({
+                "content": content,
+                "isError": is_error,
+            });
+            if let Some(state) = state {
+                // MCP 的 `_meta` 是规范留给实现放元数据的扩展位，客户端可忽略。
+                // 世界状态走这里而不是正文：agent 读字段，不解析文本。
+                payload["_meta"] = json!({ "hermixState": state });
+            }
+            Some(result(id, payload))
         }
         "resources/list" => Some(result(id, json!({"resources": []}))),
         "prompts/list" => Some(result(id, json!({"prompts": []}))),

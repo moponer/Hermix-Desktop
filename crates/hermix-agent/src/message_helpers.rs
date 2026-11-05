@@ -98,6 +98,21 @@ pub fn assistant_has_reasoning(m: &Message) -> bool {
         .unwrap_or(false)
 }
 
+/// True when the assistant produced anything the user can actually read this
+/// turn: body text after stripping `<think>` blocks, **or** a reasoning block.
+///
+/// 收敛判定必须用这个口径而不是只认 `content`。thinking 模型（MiniMax
+/// M3.1-Flash 等）把推演写在 `reasoning_content` 里、正文留空，而前端是把
+/// 这段思考原样渲染给用户看的。只认正文等于把「用户正在读它的思考」记成
+/// 「它什么都没说」——连续/累计 18 轮就触发 `NoProgressWithTools` 硬停，
+/// 合法长任务被砍在半路（2026-11-05 实测：22 轮的课程目录探查硬停）。
+///
+/// 真正的空转由 `RepeatGuard`（同一批工具结果逐字重复）兜底，那是「零新
+/// 信息」的硬证据；「没写正文」不是。
+pub fn assistant_produced_output(m: &Message) -> bool {
+    assistant_visible_text_after_think_blocks(m) || assistant_has_reasoning(m)
+}
+
 /// Coerce empty arguments to `"{}"` and verify the rest is valid JSON.
 /// Returns an error if the arguments string is non-empty and unparseable.
 pub fn normalize_tool_call_arguments(tc: &mut ToolCall) -> Result<(), String> {
@@ -133,4 +148,33 @@ pub fn extra_body_for_api_mode(config: &AgentConfig, api_mode: &ApiMode) -> Opti
         body["strict_api"] = Value::Bool(true);
     }
     Some(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thinking_only_turn_counts_as_output() {
+        let mut m = Message::assistant("");
+        m.reasoning_content = Some("catalog is lazily rendered; scroll .left".into());
+        assert!(!assistant_visible_text_after_think_blocks(&m));
+        assert!(
+            assistant_produced_output(&m),
+            "reasoning is rendered to the user, so it is output"
+        );
+    }
+
+    #[test]
+    fn empty_body_and_blank_reasoning_is_not_output() {
+        // `<think>` 块不算正文（它由 reasoning 通道单独承载）。
+        let mut m = Message::assistant("<think>内部推演</think>");
+        assert!(!assistant_produced_output(&m));
+
+        m.reasoning_content = Some("   \n ".into());
+        assert!(!assistant_produced_output(&m), "whitespace-only is empty");
+
+        m.content = Some("目录只渲染了 3 节".into());
+        assert!(assistant_produced_output(&m));
+    }
 }
