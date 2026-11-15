@@ -71,6 +71,9 @@ tungstenite = "0.29"
 # 系统资源管理（进程快照 / CPU 差分 / 磁盘容量）。工作区已锁定，
 # 无新增下载成本；它的 Windows 后端就是 SystemProcessInformation 全量快照。
 sysinfo = { workspace = true }
+# 老版 .doc（Word 97-2003）的 OLE 复合文档读取：抽出 WordDocument 流做
+# 尽力文本预览。纯 Rust、零 C 依赖；二进制很小，编译成本可忽略。
+cfb = "0.10"
 # 单实例互斥体（CreateMutexW：Foundation + Security 双 feature 门控）；
 # GetLastError 在 Foundation（同 updater.rs 教训：跨模块声明依赖它）。
 [target.'cfg(windows)'.dependencies]
@@ -86,6 +89,10 @@ sysinfo = { workspace = true }
 # 剪贴板文件操作（clipboard.rs）——OpenClipboard/SetClipboardData/
 # GlobalAlloc 在 DataExchange/Memory，CF_HDROP 在 Ole。
 windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_Registry", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Services", "Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse"] }
+
+[dev-dependencies]
+# legacy_doc 单测的临时文件目录。工作区其他 crate 已锁定 3.x，零新增下载。
+tempfile = "3"
 
 [[bin]]
 name = "hermix-viewer"

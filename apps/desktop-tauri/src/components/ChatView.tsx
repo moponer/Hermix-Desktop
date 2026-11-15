@@ -45,13 +45,14 @@ import {
   useRecentExperts,
   useSessionWorkspace,
   useSessionSkills,
+  type PermissionLevel,
 } from "../hooks/useExpert";
 import { useExpertCutoff } from "../hooks/useExpertCutoff";
 import { useSendKey } from "../hooks/useSendKey";
 import { useDesktopNotify } from "../hooks/useDesktopNotify";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
-import { getAvailableTools, waitForBackendReady, updateSessionMetadata, warmUpProvider, getModelInfo, type ToolDescriptor } from "../api";
+import { getAvailableTools, waitForBackendReady, updateSessionMetadata, warmUpProvider, getModelInfo, setSessionPermission, type ToolDescriptor } from "../api";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { compressImage, skipCompression, type CompressResult } from "../utils/imageCompressor";
 import { NEW_CHAT } from "./strings";
@@ -739,6 +740,24 @@ export const ChatView = memo(function ChatView({
     () => pendingApprovals.singles.length + pendingApprovals.batches.length > 0,
     [pendingApprovals],
   );
+  // 权限档切换的唯一入口（2026-10-31）：除了写本地偏好，还要立即通知后端
+  // —— 权限档在后端是按轮捕获的，不热更的话「放手模式」只对下一条消息
+  // 生效，当前轮内的后续工具调用仍会弹卡（实报缺陷）。切到放手时顺带把
+  // 已挂起的审批卡走既有 approve 结算路径清掉：后端 resolve_all 已放行
+  // 它们，WS approve 对已放行的 id 是无害 no-op（侧作用按 is_pending 跳过）。
+  const changePermissionLevel = useCallback(
+    (lvl: PermissionLevel) => {
+      setPermissionLevel(lvl);
+      if (sessionId) void setSessionPermission(sessionId, lvl);
+      if (lvl === "full") {
+        for (const s of pendingApprovals.singles) {
+          if (s.requestId) onApproveApproval?.(s.requestId);
+        }
+        for (const b of pendingApprovals.batches) onApproveBatchApproval?.(b.batchId);
+      }
+    },
+    [setPermissionLevel, sessionId, pendingApprovals, onApproveApproval, onApproveBatchApproval],
+  );
   const activeTurnMsgIds = useMemo(() => {
     const msgs = session?.messages ?? [];
     let lastUserIdx = -1;
@@ -1104,7 +1123,7 @@ export const ChatView = memo(function ChatView({
             <Composer
               variant={isWorkbenchChat ? "workbench" : "default"}
               input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit} customApps={customApps}
-              textareaRef={textareaRef} sending={sending} isStreaming={false}
+              textareaRef={textareaRef} sending={sending} isStreaming={isStreaming}
               activeWorkspace={activeWorkspace} workspaces={workspaces} workspaceLocked={workspaceLocked}
               onSelectWorkspace={(p) => setWorkspace(p)}
               onAddWorkspace={async () => {
@@ -1127,7 +1146,7 @@ export const ChatView = memo(function ChatView({
               recentExperts={recentExperts}
               experts={experts} categories={categories} byCategory={byCategory}
               onPickRecent={(id) => { markRecentUsed(id); setExpertWithCutoff(id); }}
-              permissionLevel={permissionLevel} setPermissionLevel={setPermissionLevel}
+              permissionLevel={permissionLevel} setPermissionLevel={changePermissionLevel}
               domainMode={domainMode} setDomainMode={setDomainMode}
               onOpenExperts={onOpenExperts}
               onOpenSettings={onOpenSettings}
@@ -1273,7 +1292,7 @@ export const ChatView = memo(function ChatView({
               onDeny={(id, note) => onDenyApproval?.(id, note)}
               onApproveBatch={(id, remember) => onApproveBatchApproval?.(id, remember)}
               onDenyBatch={(id, note) => onDenyBatchApproval?.(id, note)}
-              onFullAccess={() => setPermissionLevel("full")}
+              onFullAccess={() => changePermissionLevel("full")}
             />
           <Composer
             variant={isWorkbenchChat ? "workbench" : "default"}
@@ -1301,7 +1320,7 @@ export const ChatView = memo(function ChatView({
             recentExperts={recentExperts}
             experts={experts} categories={categories} byCategory={byCategory}
             onPickRecent={(id) => { markRecentUsed(id); setExpertWithCutoff(id); }}
-            permissionLevel={permissionLevel} setPermissionLevel={setPermissionLevel}
+            permissionLevel={permissionLevel} setPermissionLevel={changePermissionLevel}
             domainMode={domainMode} setDomainMode={setDomainMode}
             onOpenExperts={onOpenExperts}
             onOpenSettings={onOpenSettings}

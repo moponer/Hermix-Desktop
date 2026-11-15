@@ -305,21 +305,33 @@ impl AgentLoop {
             .config
             .stored_system_prompt
             .as_ref()
-            .map_or(false, |s| !s.trim().is_empty());
+            .map_or(false, |s| !s.trim().is_empty())
+            // 会话快照也是一份冻结：只认 `config.stored_system_prompt` 会让
+            // "记忆写入后强制重建"在桌面端整条失效（那条路径从来没人填）。
+            || crate::prompt_assembly::has_session_prompt(self.config.session_id.as_deref());
         let force_rebuild =
             has_frozen_prompt && self.stored_prompt_epoch.load(std::sync::atomic::Ordering::SeqCst) != context_epoch;
-        crate::prompt_assembly::resolve_initial_system_prompt_with_tool_errors(
-            &self.config,
-            &self.prompt_cache,
-            self.memory_router.as_deref(),
-            &self.callbacks,
-            user_message,
-            tool_schemas,
-            tool_call_count,
-            snapshot.as_ref(),
-            context_epoch,
-            force_rebuild,
-        )
+        let (prompt, restored) =
+            crate::prompt_assembly::resolve_initial_system_prompt_with_tool_errors(
+                &self.config,
+                &self.prompt_cache,
+                self.memory_router.as_deref(),
+                &self.callbacks,
+                user_message,
+                tool_schemas,
+                tool_call_count,
+                snapshot.as_ref(),
+                context_epoch,
+                force_rebuild,
+            );
+        if !restored {
+            // 本轮真的重建了 → 记下这个 epoch。此前这个原子量从初始化之后
+            // **从未被写入**，一旦存在冻结提示，`force_rebuild` 会永久为真，
+            // 于是每条用户消息都重建一次系统提示 = 每次都全量缓存失效。
+            self.stored_prompt_epoch
+                .store(context_epoch, std::sync::atomic::Ordering::SeqCst);
+        }
+        (prompt, restored)
     }
 
     /// wire: snapshot the running per-tool error counter for
@@ -379,6 +391,26 @@ impl AgentLoop {
             &self.latest_compression_archived_turns,
             &self.latest_compression_metrics,
             ctx,
+            false,
+            |msgs| self.memory_pre_compress_note(msgs),
+        )
+        .await
+    }
+
+    /// 强制压缩（2026-11-08）：供「供应商 400 上下文溢出 → 压缩后重试一次」
+    /// 的自愈路径使用。跳过阈值早退与引擎 opt-out，其余归档 / 摘要 / 指标
+    /// 流程与 [`Self::auto_compress_if_over_threshold`] 完全一致。
+    pub(crate) async fn force_compress_now(&self, ctx: &mut ContextManager) {
+        crate::compression_ops::auto_compress_if_over_threshold(
+            &self.config,
+            &self.callbacks,
+            self.compression.as_ref(),
+            &self.last_archive_refs,
+            &self.latest_compressed_summary,
+            &self.latest_compression_archived_turns,
+            &self.latest_compression_metrics,
+            ctx,
+            true,
             |msgs| self.memory_pre_compress_note(msgs),
         )
         .await

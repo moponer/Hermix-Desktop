@@ -290,6 +290,12 @@ impl ContextCompressor {
             pruned += 1;
         }
 
+        // ★ 收尾自检：上面每一遍都可能让某条 tool_result 失去配对
+        // （Pass 1.6 的语义去重删掉 assistant 锚点、Pass 3 改写参数……）。
+        // 配对修复必须在**产出**里做一次，否则孤儿会被带进此后的每一次
+        // 请求：provider 侧每轮只能把它们丢掉，模型永远看不到那些结果。
+        let result = crate::compression::engine::sanitize_tool_pairs(result, self.config.quiet_mode);
+
         (result, deduped, pruned)
     }
 }

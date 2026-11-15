@@ -6,7 +6,7 @@ use std::sync::Arc;
 use hermix_core::{traits::{PermissionMode, RiskLevel}, ToolHandler, ToolSchema};
 use indexmap::IndexMap;
 use serde_json::Value;
-use tracing::warn;
+use tracing::debug;
 
 use super::ToolRegistry;
 use super::entry::ToolEntry;
@@ -48,7 +48,11 @@ impl ToolRegistry {
                 );
                 return;
             }
-            warn!("Tool '{}' already registered; overwriting (override=true)", name);
+            // `override_existing = true` 是调用方的**明确意图**（典型用途：
+            // `register_all` 先用 Signal 占位实现，宿主随后用真实后端覆盖）。
+            // 这属于预期路径，不该按 WARN 记 —— 实机每次启动固定刷 2 条，
+            // 反而让真正的意外覆盖无迹可寻。
+            debug!("Tool '{}' already registered; overwriting (override=true)", name);
         }
         // New entries default to enabled. The Settings UI can flip
         // this later via `set_toolset_enabled` without re-registering.

@@ -156,9 +156,12 @@ pub fn render_patched_md(name: &str, body: &str) -> String {
     let mut out = String::with_capacity(body.len() + 192);
     out.push_str("---\nname: ");
     out.push_str(name);
-    out.push_str("\nkind: patch\ndescription: |\n");
-    out.push_str(body);
-    out.push_str("\n---\n\n");
+    out.push_str("\nkind: patch\ndescription: |-\n");
+    // 块标量内容必须缩进：顶格的 `## 标题` 会被 YAML 当成键，
+    // 整份 frontmatter 解析失败（与 auto skill 同一个坑，见
+    // `skill_auto_create::push_indented_block`）。
+    crate::skill_auto_create::push_indented_block(&mut out, body, "  ");
+    out.push_str("---\n\n");
     out.push_str(body);
     out
 }

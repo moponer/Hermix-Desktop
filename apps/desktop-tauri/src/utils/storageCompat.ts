@@ -159,6 +159,13 @@ export const STORAGE_KEYS = {
   // 消息赞/踩（本地缓存）。后端无 vote 端点（2026-10-18 审查确认保留为
   // 本地功能），此处登记 key 以守「canonical source」约定。
   messageVotes: "hermix.messageVotes",
+  /** 阿黎的任务面板队列（待拉取的需求，顺序 = 优先级）。见 lib/twinQueue.ts。 */
+  twinQueue: "hermix.desktop.twin_queue",
+  /**
+   * 实验开关：巡查发现异常时自动叫她看一眼（她可能自行处理）。
+   * 默认关 —— 这是唯一会让她"自己动手"的开关，成本与后果都由用户显式承担。
+   */
+  twinAutoIntervene: "hermix.desktop.twin_auto_intervene",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

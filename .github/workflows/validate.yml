@@ -54,6 +54,12 @@ jobs:
       - name: Cargo check
         run: cargo check --workspace --all-targets 2>&1
 
+      # clippy 的 correctness 类 lint 默认 deny：能挂在这一步的都是真 bug
+      # （死代码路径、错误的比较、永远为真的条件）。风格类保持 warning ——
+      # 仓库有上百条存量，直接 `-D warnings` 会立刻红，且把 PR 卡在缩进上。
+      - name: Cargo clippy (correctness gate)
+        run: cargo clippy --workspace --all-targets 2>&1
+
       - name: Cargo test (lib only — deterministic, no LLM calls)
         run: cargo test --workspace --lib 2>&1
 
@@ -78,5 +84,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # 必须直接调二进制：`pnpm tsc --noEmit` 只跑 pnpm 自己的 install 流程
+      # 就返回 0（~0.8s、输出 "Already up to date"），是一个看起来全绿的假信号。
+      # 见 AGENTS.md「Build & verify」。
       - name: TypeScript type check
-        run: pnpm tsc --noEmit
+        run: ./node_modules/.bin/tsc --noEmit

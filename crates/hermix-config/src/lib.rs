@@ -27,7 +27,8 @@ pub use config::{
     AdvancedSettingsConfig, AgentLoopBehaviorConfig, ApprovalConfig, CheapModelRouteConfig,
     CompactionConfig, FreeChannelConfig, GatewayConfig, LlmProviderConfig, McpServerEntry,
     ModelCapabilities, ModelSelectorConfig, ModelSelectorEntry, ProfileConfig,
-    ProxyConfig, SecurityConfig, SkillsSettings, SmartModelRoutingConfig, TerminalBackendType,
+    ProxyConfig, SecurityConfig, SkillsSettings, SmartModelRoutingConfig, StorageConfig,
+    TerminalBackendType,
     TerminalConfig, ToolCapabilityConfig,
 };
 pub use loader::{

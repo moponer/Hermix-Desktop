@@ -3,7 +3,7 @@
 //! Ensures that tool output doesn't overwhelm the context window by
 //! truncating individual results and enforcing aggregate size limits.
 
-use hermix_core::{BudgetConfig, ToolResult};
+use hermix_core::{BudgetConfig, ToolCall, ToolResult};
 
 /// Truncate a single result string to `max_chars`.
 ///
@@ -19,12 +19,39 @@ pub fn truncate_result(content: &str, max_chars: usize) -> String {
     hermix_tools::registry::truncate_middle_chars(content, max_chars)
 }
 
+/// 一条结果进上下文时允许保留的字符上限。
+///
+/// - 有工具名 → [`hermix_tools::result_budget::model_visible_cap`]（分档表）
+///   与配置里的全局上限取小；
+/// - 无工具名（测试、一次性调用）→ 直接沿用全局上限，保持旧语义。
+///
+/// 分档的意义：全局一刀切要么把 `terminal` 的失败尾巴掐掉，要么放任
+/// `list_files` 这种「一次列一整棵树」的工具稳定顶到上限 —— 实测该工具
+/// 5 次调用产出 43.5 K 字符（均值 8.7 K），而它重跑一次的成本几乎为零。
+fn cap_for(tool: Option<&str>, budget: &BudgetConfig) -> usize {
+    match tool {
+        Some(name) => {
+            hermix_tools::result_budget::model_visible_cap(name)
+                .min(budget.max_result_size_chars)
+        }
+        None => budget.max_result_size_chars,
+    }
+}
+
+fn tool_name_of<'a>(tool_calls: &'a [ToolCall], tool_call_id: &str) -> Option<&'a str> {
+    tool_calls
+        .iter()
+        .find(|tc| tc.id == tool_call_id)
+        .map(|tc| tc.function.name.as_str())
+}
+
 /// Enforce budget on a batch of tool results.
-/// - Each result is individually truncated to `budget.max_result_size_chars`.
+/// - Each result is individually truncated to its per-tool cap (falling back to
+///   `budget.max_result_size_chars`).
 /// - If the aggregate size exceeds `budget.max_aggregate_chars`, results are
-/// further truncated proportionally until the total fits.
+///   further truncated proportionally until the total fits.
 pub fn enforce_budget(results: &mut [ToolResult], budget: &BudgetConfig) {
-    enforce_budget_with_spill(results, budget, None);
+    enforce_budget_with_spill(results, budget, None, &[]);
 }
 
 /// Same as [`enforce_budget`], but oversized results are written to disk
@@ -34,11 +61,17 @@ pub fn enforce_budget(results: &mut [ToolResult], budget: &BudgetConfig) {
 /// Spilling happens **before** truncation: once the content is replaced by
 /// "preview + locator" it is already under the inline ceiling, so the
 /// truncation passes below become no-ops for spilled results.
+///
+/// `tool_calls` 只用于把 `tool_call_id` 映射到工具名（分档表要按工具名查）；
+/// 传空切片等价于「全部走全局上限」。
 pub fn enforce_budget_with_spill(
     results: &mut [ToolResult],
     budget: &BudgetConfig,
     spill: Option<&crate::spill::SpillSink>,
+    tool_calls: &[ToolCall],
 ) {
+    let cap_of = |tool_call_id: &str| cap_for(tool_name_of(tool_calls, tool_call_id), budget);
+
     // Step 0: spill-to-disk（可选）。未配置 sink 时行为与旧路径完全一致。
     //
     // ★ Skip results that already carry a spill pointer. The agent
@@ -48,19 +81,31 @@ pub fn enforce_budget_with_spill(
     // its own preview** — so the pointer the model was handed led
     // back to the preview instead of the missing bytes. Spilling once
     // is enough.
+    //
+    // ★ 阈值取「本工具的上限」而不是固定的 20 K：既然超出上限的中间部分
+    // 反正会被截掉，就不如直接落盘给指针 —— 模型丢了正文但拿得到取回路径。
     if let Some(sink) = spill {
         for result in results.iter_mut() {
             if crate::spill::is_spilled(&result.content) {
                 continue;
             }
+            let threshold = cap_of(&result.tool_call_id).min(crate::spill::SPILL_INLINE_CHARS);
             result.content =
-                sink.maybe_spill(&result.tool_call_id, &result.content, crate::spill::SPILL_INLINE_CHARS);
+                sink.maybe_spill(&result.tool_call_id, &result.content, threshold);
         }
     }
 
-    // Step 1: Per-result truncation
+    // Step 1: Per-result truncation.
+    //
+    // ★ 落盘过的结果跳过：它的正文已经换成「预览 + 指针」，中间截断会把
+    // 指针（在尾巴上）一起切掉，模型就只剩一段没有出处的片段。预览本身
+    // 已经按本工具的上限裁过，超出部分只是指针文案的几十个字符。
     for result in results.iter_mut() {
-        result.content = truncate_result(&result.content, budget.max_result_size_chars);
+        if crate::spill::is_spilled(&result.content) {
+            continue;
+        }
+        let cap = cap_of(&result.tool_call_id);
+        result.content = truncate_result(&result.content, cap);
     }
 
     // Step 2: Aggregate truncation (also char-safe; ratio applied to char count).
@@ -71,9 +116,19 @@ pub fn enforce_budget_with_spill(
 
     let ratio = budget.max_aggregate_chars as f64 / total_chars as f64;
 
+    // 聚合裁剪也要先落盘：这一刀是「本轮的多数结果都合格、但加起来超标」，
+    // 纯截断会把中间段丢成不可取回（注册表那层注释抱怨的正是这种丢法）。
+    // 已经带指针的结果不能再动，否则指针会被切掉。
     for result in results.iter_mut() {
+        if crate::spill::is_spilled(&result.content) {
+            continue;
+        }
         let target_len = ((result.content.chars().count() as f64) * ratio) as usize;
-        result.content = truncate_result(&result.content, target_len.max(200));
+        let target_len = target_len.max(200);
+        result.content = match spill {
+            Some(sink) => sink.maybe_spill(&result.tool_call_id, &result.content, target_len),
+            None => truncate_result(&result.content, target_len),
+        };
     }
 }
 
@@ -212,7 +267,7 @@ mod tests {
             max_result_size_chars: 1_000_000,
             max_aggregate_chars: 1_000_000,
         };
-        enforce_budget_with_spill(&mut results, &budget, Some(&sink));
+        enforce_budget_with_spill(&mut results, &budget, Some(&sink), &[]);
 
         // The context now carries a preview plus a pointer …
         assert!(

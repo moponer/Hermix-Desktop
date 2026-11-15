@@ -36,6 +36,35 @@ pub(crate) fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, AgentEr
         .map_err(|e| AgentError::Io(format!("Failed to open sessions db: {e}")))
 }
 
+/// 进程内复用的**写连接**（按 db 路径）。
+///
+/// 起因（2026-10-29）：每轮 LLM 往返都要写一行 `token_usage`，而
+/// `persist_token_usage` 每次都 `open_with_wal` —— 重新 `Connection::open` +
+/// 重设 `journal_mode` / `busy_timeout`（Windows 上单次 1–3ms），一次 run
+/// 十几次往返就是几十毫秒白付，且都发生在 async 路径上。
+///
+/// SQLite 允许多连接，但写要串行：这里一条连接配一把 `Mutex`，
+/// 读路径仍走 `open_with_wal`（各自连接、互不阻塞）。
+static WRITE_CONNS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>>>,
+> = std::sync::OnceLock::new();
+
+pub(crate) fn write_conn(
+    path: &Path,
+) -> Result<std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>, AgentError> {
+    let map = WRITE_CONNS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut guard = map.lock().map_err(|_| {
+        AgentError::Io("sessions db write-connection registry poisoned".to_string())
+    })?;
+    if let Some(existing) = guard.get(path) {
+        return Ok(existing.clone());
+    }
+    let conn = open_with_wal(path)?;
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(conn));
+    guard.insert(path.to_path_buf(), shared.clone());
+    Ok(shared)
+}
+
 /// Run a blocking persistence call without parking a runtime worker.
 ///
 /// `save_session_atomic` is synchronous SQLite + file IO, and on write
@@ -90,6 +119,10 @@ pub(crate) fn session_stem(session_id: &str) -> String {
 const WRITE_MAX_RETRIES: u32 = 15;
 const WRITE_RETRY_MIN_MS: u64 = 20;
 const WRITE_RETRY_MAX_MS: u64 = 150;
+/// 忙重试总预算：一次保存最多占住调用线程这么久。此前只有次数上限
+/// （15 × 20~150ms，最坏 ≈2.3s），并发会话多时后到者会在 worker 上
+/// 连续同步 sleep，把其它请求与健康探针一起拖慢。
+const WRITE_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_millis(2_000);
 
 fn is_busy_error(e: &AgentError) -> bool {
     // Check all variants — SQLite errors can be wrapped in any AgentError

@@ -44,7 +44,9 @@ use tauri::{
 /// 浮窗 label 前缀（capability 用 `pin-*` 通配放行）。
 const PIN_PREFIX: &str = "pin-";
 /// 同时最多几个浮窗（每个浮窗 = 一个独立 WebView2 实例，内存线性增长）。
-const MAX_PINS: usize = 6;
+/// 6→4（2026-11-06）：浮窗是用户显式钉住的对象，不做空闲自动关闭（与
+/// "钉住"语义冲突），靠上限收紧最坏内存。
+const MAX_PINS: usize = 4;
 /// 浮窗默认尺寸（逻辑像素）。
 const DEFAULT_SIZE: (f64, f64) = (760.0, 600.0);
 /// 贴边吸附阈值（逻辑像素）：拖到离边这么近就吸上去。
@@ -139,6 +141,8 @@ pub async fn pin_open(app: AppHandle, path: String) -> Result<String, String> {
     if path.trim().is_empty() {
         return Err("没有可钉住的路径".into());
     }
+    // 开浮窗 = 真实使用：预热实例不再降级退出。
+    crate::webview_host::mark_used();
     // 同一路径重复钉 = 复用既有浮窗（不刷出一堆重复窗口）。
     {
         let map = pins().lock().unwrap();

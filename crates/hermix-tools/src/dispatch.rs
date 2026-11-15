@@ -127,9 +127,10 @@ pub fn per_tool_budget(tool: &str) -> Duration {
         // terminal 自身默认 120s（tools/terminal.rs），外部预算给 5 倍余量：
         // 前台跑构建/安装是长任务的主要形态，超时提示已引导转后台。
         "terminal" => Duration::from_secs(600),
-        // 子 agent 编排有自己的预算（orchestrator，默认 1800s），
-        // 外部预算只做护栏，略微放行即可。
-        "delegate_task" => Duration::from_secs(1900),
+        // 子 agent 编排有自己的预算（orchestrator，2026-11-10 收紧到 180s），
+        // 外部护栏略放行到 190s（多 10s 供子代理自身超时消息送达）。
+        // 编排形态：长任务主 agent 拆分并行派发，或 dispatch_member 后台化。
+        "delegate_task" => Duration::from_secs(190),
         // 文档转换（Office MCP / markitdown）跑外部进程，大文件转换慢。
         // file_converter 单独给 600s：首次 Office→PDF/PDF→图片要先按需下载
         // 71MB 引擎（含解压 190MB），300s 在慢网络下会把"正在装引擎"判成超时。

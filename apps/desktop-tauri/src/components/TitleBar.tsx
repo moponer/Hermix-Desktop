@@ -1,9 +1,11 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "../ipc";
+import { IPC } from "../ipc/commands";
+import { getCurrentWindow } from "@tauri-apps/api/window";import { invoke } from "../ipc";
 import { Minus, Square, X, MessageSquare, Camera, FolderTree, WifiOff } from "lucide-react";
 import { useCallback } from "react";
 import { toastWarning } from "../hooks/useToast";
+import { reportError } from "../lib/reportError";
 import { useBackendConnectionContext } from "../context/BackendConnectionContext";
+import { describeBackendDiagnosis } from "../api";
 import { TitleBarConnectionIndicator } from "./TitleBarConnectionIndicator";
 import { CLOSE } from "./strings";
 
@@ -21,39 +23,44 @@ import { CLOSE } from "./strings";
  *
  *  侧栏折叠 / 搜索是「内容」层级动作，已在侧栏头部与 ChatView 头部，不在此。 */
 export function TitleBar({ title }: { title?: string }) {
-  const { state, restarting, gaveUp, restart } = useBackendConnectionContext();
+  const { state, restarting, gaveUp, connectStalled, restart, diagnosis } = useBackendConnectionContext();
   // 只在**已经确知离线**时占用中栏：connecting 是启动过程，splash 盖着，
   // 过早显示"未连接"是误报。gaveUp = 自动重启失败，仍按离线呈现。
-  const offline = state === "offline" || gaveUp;
+  // connectStalled = 冷启动 22s 仍连不上（splash 已撤、界面无出口），
+  // 提前亮出重启入口 —— 90s 冷启动宽限不变，慢启动不会被误判离线。
+  const offline = state === "offline" || gaveUp || connectStalled;
+  /** 离线原因的短句（进程没了 / 桥断了 / 探测超时 …）；无快照时为空串。 */
+  const diagnosisText = describeBackendDiagnosis(diagnosis);
 
+  // 窗口命令是异步 IPC：`void promise` 会把 rejection 吞进未处理 Promise，
+  // try/catch 抓不到同步调用之外的失败 —— 用户点关闭没反应时，这里原本
+  // 连一条日志都不留（生产构建 drop_console 后 console.error 也消失）。
+  // 失败必须落 frontend.log（reportError）并给可见提示，否则只能靠猜。
   const handleMinimize = useCallback(() => {
-    try {
-      void getCurrentWindow().minimize();
-    } catch (err) {
-      console.error("[TitleBar] minimize failed:", err);
-    }
+    getCurrentWindow().minimize().catch((err) => {
+      reportError("titlebar", err);
+      toastWarning("最小化失败，请重试；若持续无效请从任务栏操作。");
+    });
   }, []);
 
   const handleMaximize = useCallback(() => {
-    try {
-      void getCurrentWindow().toggleMaximize();
-    } catch (err) {
-      console.error("[TitleBar] maximize failed:", err);
-    }
+    getCurrentWindow().toggleMaximize().catch((err) => {
+      reportError("titlebar", err);
+      toastWarning("窗口切换失败，请重试；若持续无效请从任务栏操作。");
+    });
   }, []);
 
   const handleClose = useCallback(() => {
-    try {
-      void getCurrentWindow().close();
-    } catch (err) {
-      console.error("[TitleBar] close failed:", err);
-    }
+    getCurrentWindow().close().catch((err) => {
+      reportError("titlebar", err);
+      toastWarning("关闭请求未送达，请稍候重试或从任务栏关闭。");
+    });
   }, []);
 
   // 截图入口之二（热键之外）：主进程内触发，无需全局热键注册。
   // 失败要可见（功能被关/抓屏失败），不能静默——用户不知道为什么没反应。
   const handleScreenshot = useCallback(() => {
-    void invoke("start_screenshot").catch((err) => {
+    void invoke(IPC.startScreenshot).catch((err) => {
       console.error("[TitleBar] screenshot failed:", err);
       toastWarning(String(err));
     });
@@ -64,7 +71,7 @@ export function TitleBar({ title }: { title?: string }) {
   // 唯一能开到查看器的路径是右键菜单里的「在查看器中打开」——没有一级
   // 入口，用户根本不知道它存在。这里给标题栏一个常驻按钮。
   const handleFileManager = useCallback(() => {
-    void invoke("open_in_viewer", { path: null }).catch((err) => {
+    void invoke(IPC.openInViewer, { path: null }).catch((err) => {
       console.error("[TitleBar] file manager failed:", err);
       toastWarning(`文件管理器打开失败：${String(err)}`);
     });
@@ -91,7 +98,16 @@ export function TitleBar({ title }: { title?: string }) {
             onClick={() => void restart()}
             disabled={restarting}
             aria-label="本地后端未连接，点击重启后端服务"
-            title={gaveUp ? "自动重启失败，点击重试" : "本地后端未连接，点击重启"}
+            title={
+              // 悬停给出**原因**而不是同义反复：进程没了 / 桥断了 / 探测超时
+              // 三条路用户的处置完全不同（查杀软 / 重启 / 等自愈）。
+              (gaveUp
+                ? "自动重启失败，点击重试"
+                : connectStalled
+                  ? "后端启动超时，点击重启"
+                  : "本地后端未连接，点击重启") +
+              (diagnosisText ? `｜${diagnosisText}` : "")
+            }
           >
             <WifiOff className="icon-xs" aria-hidden="true" />
             <span>{restarting ? "正在重启后端…" : "后端未连接 · 重启"}</span>

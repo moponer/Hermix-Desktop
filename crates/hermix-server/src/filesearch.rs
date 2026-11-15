@@ -151,8 +151,8 @@ fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 开机自启是否已注册过（进程级一次；daemon 侧 schtasks /F 幂等）。
-static AUTOSTART_INSTALLED: std::sync::atomic::AtomicBool =
+/// 旧开机自启计划任务是否已清理过（进程级一次；daemon 侧删除幂等）。
+static AUTOSTART_CLEANED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// 单飞锁：「探活 → 拉起 → 90s 握手轮询」全程只允许一个并发。
@@ -178,12 +178,14 @@ fn unix_now() -> u64 {
 }
 
 /// 确保 helper 在跑；没跑就提权拉起并轮询 endpoint.json（覆盖 UAC 确认耗时）。
-/// 握手成功后 fire-and-forget 发一次 `installTask`（在提权的 daemon 里注册
-/// 开机自启计划任务）——索引开机即就绪，用户不必手动启动服务。
+/// 握手成功后 fire-and-forget 发一次 `removeTask`（在提权的 daemon 里删掉旧版
+/// 注册的开机自启计划任务）。2026-10-30 之前这里发的是 `installTask`：常驻
+/// 提权进程宿主杀不掉，关闭主程序后仍活着锁 exe，并让 debug 构建把计划任务
+/// 抢注到 `target/debug/`。现在 helper 只按需拉起（首次搜索弹一次 UAC）。
 pub async fn ensure_helper() -> Result<(), String> {
     if let Ok(endpoint) = read_endpoint() {
         if endpoint_alive(&endpoint).await {
-            install_autostart_once().await;
+            remove_autostart_once().await;
             return Ok(());
         }
     }
@@ -191,7 +193,7 @@ pub async fn ensure_helper() -> Result<(), String> {
     // 拿到锁后复查：前面排队的调用可能刚完成一次成功的拉起。
     if let Ok(endpoint) = read_endpoint() {
         if endpoint_alive(&endpoint).await {
-            install_autostart_once().await;
+            remove_autostart_once().await;
             return Ok(());
         }
     }
@@ -216,7 +218,7 @@ pub async fn ensure_helper() -> Result<(), String> {
         if let Ok(endpoint) = read_endpoint() {
             if endpoint_alive(&endpoint).await {
                 LAST_SPAWN_FAILURE.store(0, std::sync::atomic::Ordering::Relaxed);
-                install_autostart_once().await;
+                remove_autostart_once().await;
                 return Ok(());
             }
         }
@@ -225,17 +227,30 @@ pub async fn ensure_helper() -> Result<(), String> {
     Err("等待 hermix-filesearch 启动超时（90s）——UAC 可能未确认，或 helper 崩溃。".to_string())
 }
 
-/// 请求 daemon 注册开机自启（daemon 是提权的，schtasks 才不会拒绝）。
-/// 失败静默——自启只是体验优化，按需拉起仍然兜底。
-async fn install_autostart_once() {
+/// 启动时顺手清理旧版本留下的开机自启计划任务。
+///
+/// **不拉起 helper**：取消自启后，预热等于"每次启动主程序弹一次 UAC"。只有
+/// 当旧的提权 daemon 恰好在跑（登录任务拉起的）时，才让它删掉自己名下的任务
+/// ——删任务需要管理员权限，而它已经在提权上下文里。
+pub async fn purge_legacy_autostart() {
+    if let Ok(endpoint) = read_endpoint() {
+        if endpoint_alive(&endpoint).await {
+            remove_autostart_once().await;
+        }
+    }
+}
+
+/// 请求 daemon 删掉旧版注册的开机自启计划任务（删任务同样要管理员权限，
+/// 只有提权的 daemon 做得动）。失败静默——任务多数时候根本不存在。
+async fn remove_autostart_once() {
     use std::sync::atomic::Ordering;
-    if AUTOSTART_INSTALLED.swap(true, Ordering::AcqRel) {
+    if AUTOSTART_CLEANED.swap(true, Ordering::AcqRel) {
         return;
     }
-    if let Err(error) = request("installTask", json!({})).await {
-        tracing::debug!(error = %error, "filesearch autostart install skipped");
+    if let Err(error) = request("removeTask", json!({})).await {
+        tracing::debug!(error = %error, "filesearch autostart cleanup skipped");
         // 失败允许重试（下次 ensure 再试一次）。
-        AUTOSTART_INSTALLED.store(false, Ordering::Release);
+        AUTOSTART_CLEANED.store(false, Ordering::Release);
     }
 }
 
@@ -314,7 +329,14 @@ pub async fn filter(
     Ok(Json(result))
 }
 
-pub async fn shutdown() -> Result<impl IntoResponse, (StatusCode, String)> {
+/// 同 `/shutdown`：跨站表单 POST 是「简单请求」（无预检），必须在 handler 里
+/// 按 Origin/Referer/Sec-Fetch-Site 拒绝，否则任意网页能关掉全局搜索助手。
+pub async fn shutdown(
+    headers: axum::http::HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    if !crate::security::browser_origin_allowed(&headers) {
+        return Err((StatusCode::FORBIDDEN, "cross-site request rejected".into()));
+    }
     let result = request("shutdown", json!({})).await.map_err(api_error)?;
     let _ = std::fs::remove_file(endpoint_path());
     Ok(Json(result))

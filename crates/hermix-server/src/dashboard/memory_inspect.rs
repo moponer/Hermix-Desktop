@@ -33,6 +33,11 @@ fn md_registry() -> &'static Mutex<HashMap<String, PathBuf>> {
     MD_FILE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// `/api/memory/graph` 的 5s 缓存（key = `max_nodes`，不同上限是不同结果）。
+/// 写端点（pin / 删除）在入口处失效，保证用户操作立即可见。
+static GRAPH_CACHE: crate::ttl_cache::TtlCache<String, GraphResponse> =
+    crate::ttl_cache::TtlCache::new(std::time::Duration::from_secs(5));
+
 // ── backend handle ─────────────────────────────────────────────────
 
 /// One shared read connection, opened lazily and retried until the
@@ -92,7 +97,7 @@ pub struct MemoryOverview {
     pub per_day: Vec<(String, i64)>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct GraphResponse {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
@@ -121,8 +126,7 @@ fn truncate_chars(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         s.to_string()
     } else {
-        let head: String = s.chars().take(n).collect();
-        format!("{head}…")
+        format!("{}…", hermix_core::text_utils::truncate_chars(s, n))
     }
 }
 
@@ -260,6 +264,14 @@ pub async fn get_memory_graph(
         .and_then(|v| v.parse().ok())
         .unwrap_or(400)
         .clamp(20, 2000);
+    // 5s 缓存：这个端点是**唯一**还在「遍历所有 session 目录 + 读 memory.db +
+    // 全量重建图」的读路径，而设置页切页/刷新会连拉。key 含 `max_nodes`
+    // （不同上限是不同结果）。写端点（pin/删除）在入口处失效。
+    let cache_key = max_nodes.to_string();
+    if let Some(cached) = GRAPH_CACHE.get(&cache_key) {
+        return Ok(Json(cached));
+    }
+
     let backend = memory_backend(&state);
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
@@ -371,12 +383,14 @@ pub async fn get_memory_graph(
         );
     }
 
-    Ok(Json(GraphResponse {
+    let response = GraphResponse {
         nodes,
         edges,
         stats: overview(&state, backend.as_ref()),
         truncated,
-    }))
+    };
+    GRAPH_CACHE.put(cache_key, response.clone());
+    Ok(Json(response))
 }
 
 fn chrono_to_rfc(_t: std::time::SystemTime) -> String {
@@ -397,30 +411,40 @@ pub async fn get_memory_item(
     match kind.as_str() {
         "fact" | "turn" | "memory_tool" | "session" | "delegation"
         | "compression_backfill" | "focus" | "reflection" => {
-            resolve_db_item(&state, &kind, &id)
+            // 同步 SQLite：搬阻塞池（与 get_session_messages 一致）。
+            let state2 = state.clone();
+            let kind2 = kind.clone();
+            let id2 = id.clone();
+            tokio::task::spawn_blocking(move || resolve_db_item(&state2, &kind2, &id2))
+                .await
+                .map_err(|e| http_err(500, &format!("记忆条目读取任务失败: {e}")))?
         }
         "daily" => {
-            let date = id.strip_prefix("daily:").unwrap_or(&id);
-            let store = hermix_tools::tools::daily_memory::DailyMemoryStore::open()
-                .map_err(|e| http_err(500, &format!("打开 daily_memory 失败: {e}")))?;
-            let entry = store
-                .get(date)
-                .map_err(|e| http_err(404, &format!("当日记忆不存在: {e}")))?;
-            Ok(MemoryItemResponse {
-                id,
-                kind: "daily".into(),
-                content: serde_json::to_string_pretty(&serde_json::json!({
-                    "date": entry.date,
-                    "goals": entry.goals,
-                    "progress": entry.progress,
-                    "conclusions": entry.conclusions,
-                }))
-                .unwrap_or_default(),
-                created_at: entry.date,
-                salience: 0.0,
-                session_id: None,
-                file: None,
+            let date = id.strip_prefix("daily:").unwrap_or(&id).to_string();
+            tokio::task::spawn_blocking(move || {
+                let store = hermix_tools::tools::daily_memory::DailyMemoryStore::open()
+                    .map_err(|e| http_err(500, &format!("打开 daily_memory 失败: {e}")))?;
+                let entry = store
+                    .get(&date)
+                    .map_err(|e| http_err(404, &format!("当日记忆不存在: {e}")))?;
+                Ok(MemoryItemResponse {
+                    id,
+                    kind: "daily".into(),
+                    content: serde_json::to_string_pretty(&serde_json::json!({
+                        "date": entry.date,
+                        "goals": entry.goals,
+                        "progress": entry.progress,
+                        "conclusions": entry.conclusions,
+                    }))
+                    .unwrap_or_default(),
+                    created_at: entry.date,
+                    salience: 0.0,
+                    session_id: None,
+                    file: None,
+                })
             })
+            .await
+            .map_err(|e| http_err(500, &format!("当日记忆读取任务失败: {e}")))?
         }
         "md" => {
             // id = md:<uuid>@<index>
@@ -521,6 +545,8 @@ pub async fn delete_memory_item(
     State(state): State<HttpServerState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
+    // 写操作先失效图缓存（放在最前：即使随后失败，重读也只会看到真实状态）。
+    GRAPH_CACHE.invalidate();
     let kind = params.get("kind").cloned().unwrap_or_default();
     let id = params.get("id").cloned().unwrap_or_default();
     let backend = memory_backend(&state).ok_or_else(|| http_err(503, "memory.db 尚未创建"))?;
@@ -561,53 +587,78 @@ pub async fn search_memory(
         .and_then(|v| v.parse().ok())
         .unwrap_or(30)
         .clamp(1, 200);
+    // DB 检索 + 全 md 目录扫描都是同步 IO：整体搬阻塞池。
+    let state2 = state.clone();
+    let q2 = q.clone();
+    let results = tokio::task::spawn_blocking(move || search_memory_sync(&state2, &q2, limit))
+        .await
+        .map_err(|e| http_err(500, &format!("记忆检索任务失败: {e}")))?;
+    Ok(Json(serde_json::json!({ "results": results })))
+}
+
+/// `search_memory` 的同步体（在阻塞池里跑）。
+fn search_memory_sync(state: &HttpServerState, q: &str, limit: u32) -> Vec<GraphNode> {
     let mut results: Vec<GraphNode> = Vec::new();
-    if !q.trim().is_empty() {
-        if let Some(b) = memory_backend(&state) {
-            for row in b.ui_search(q.trim(), limit).unwrap_or_default() {
-                let prefix = if row.kind == "fact" {
-                    "fact:"
-                } else if row.kind.starts_with("reflection") {
-                    "refl:"
-                } else {
-                    "frame:"
-                };
-                results.push(row_to_graph_node(prefix, &row));
-            }
-        }
-        let ql = q.to_lowercase();
-        for (file, index, entry) in md_entries(&state) {
-            if results.len() >= limit as usize {
-                break;
-            }
-            if entry.to_lowercase().contains(&ql) {
-                let id = md_node_id(&file, index).unwrap_or_default();
-                results.push(GraphNode {
-                    label: truncate_chars(&entry, 48),
-                    preview: truncate_chars(&entry, 200),
-                    salience: 0.7,
-                    id,
-                    kind: "md".into(),
-                    created_at: String::new(),
-                    session_id: None,
-                    pinned: false,
-                });
-            }
+    if q.trim().is_empty() {
+        return results;
+    }
+    if let Some(b) = memory_backend(state) {
+        for row in b.ui_search(q.trim(), limit).unwrap_or_default() {
+            let prefix = if row.kind == "fact" {
+                "fact:"
+            } else if row.kind.starts_with("reflection") {
+                "refl:"
+            } else {
+                "frame:"
+            };
+            results.push(row_to_graph_node(prefix, &row));
         }
     }
-    Ok(Json(serde_json::json!({ "results": results })))
+    let ql = q.to_lowercase();
+    for (file, index, entry) in md_entries(state) {
+        if results.len() >= limit as usize {
+            break;
+        }
+        if entry.to_lowercase().contains(&ql) {
+            let id = md_node_id(&file, index).unwrap_or_default();
+            results.push(GraphNode {
+                label: truncate_chars(&entry, 48),
+                preview: truncate_chars(&entry, 200),
+                salience: 0.7,
+                id,
+                kind: "md".into(),
+                created_at: String::new(),
+                session_id: None,
+                pinned: false,
+            });
+        }
+    }
+    results
 }
 
 /// GET /api/memory/daily?date= 或 ?limit=60
 pub async fn get_daily_memory(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
-    let store = hermix_tools::tools::daily_memory::DailyMemoryStore::open()
-        .map_err(|e| http_err(500, &format!("打开 daily_memory 失败: {e}")))?;
+    // DailyMemoryStore 全是同步 fs：搬阻塞池。
+    tokio::task::spawn_blocking(move || get_daily_memory_sync(params))
+        .await
+        .map_err(|e| http_err(500, &format!("当日记忆读取任务失败: {e}")))?
+}
+
+fn get_daily_memory_sync(
+    params: HashMap<String, String>,
+) -> Result<Json<serde_json::Value>, HttpError> {
+    // 对外只给稳定文案，底层错误（路径/解析）只进日志。
+    let store = hermix_tools::tools::daily_memory::DailyMemoryStore::open().map_err(|e| {
+        tracing::warn!(error = %e, "daily_memory open failed");
+        http_err(500, "当日记忆存储不可用（详见 server.log）")
+    })?;
     if let Some(date) = params.get("date") {
-        let entry = store
-            .get(date)
-            .map_err(|e| http_err(404, &format!("当日记忆不存在: {e}")))?;
+        let entry = store.get(date).map_err(|e| {
+            tracing::debug!(error = %e, date = %date, "daily_memory entry missing");
+            http_err(404, "当日记忆不存在")
+        })?;
         return Ok(Json(serde_json::to_value(&entry).unwrap_or_default()));
     }
     let limit: u32 = params
@@ -615,9 +666,10 @@ pub async fn get_daily_memory(
         .and_then(|v| v.parse().ok())
         .unwrap_or(60)
         .clamp(1, 365);
-    let days = store
-        .list_days(limit)
-        .map_err(|e| http_err(500, &format!("读取 daily_memory 失败: {e}")))?;
+    let days = store.list_days(limit).map_err(|e| {
+        tracing::warn!(error = %e, "daily_memory list failed");
+        http_err(500, "读取当日记忆失败（详见 server.log）")
+    })?;
     Ok(Json(serde_json::to_value(&days).unwrap_or_default()))
 }
 
@@ -632,6 +684,7 @@ pub async fn pin_memory(
     State(state): State<HttpServerState>,
     axum::Json(body): axum::Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
+    GRAPH_CACHE.invalidate();
     let id = body.get("id").and_then(|v| v.as_str()).unwrap_or_default();
     let pinned = body.get("pinned").and_then(|v| v.as_bool()).unwrap_or(true);
     let backend = memory_backend(&state).ok_or_else(|| http_err(503, "memory.db 尚未创建"))?;

@@ -125,7 +125,12 @@ export function TokenUsagePopover({
     void load();
     // 生成中每 3s 刷新：每次 API 调用结束即落库，卡片读数始终是当前账。
     if (!isStreaming) return () => { alive = false; };
-    const timer = window.setInterval(() => void load(), 3000);
+    // 卡片看不见（窗口在后台/最小化）时不刷新：每 3s 一次后端聚合查询，
+    // 用户却根本没在看那个数字。
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      void load();
+    }, 3000);
     return () => {
       alive = false;
       window.clearInterval(timer);

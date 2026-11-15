@@ -466,9 +466,10 @@ fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
-    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
+    format!(
+        "{}…",
+        hermix_core::text_utils::truncate_chars(s, max.saturating_sub(1))
+    )
 }
 
 fn now_unix_secs() -> u64 {

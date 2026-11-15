@@ -298,5 +298,6 @@ function formatRelativeTime(iso: string): string {
   if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m 前`;
   if (deltaSec < 86400) return `${Math.floor(deltaSec / 3600)}h 前`;
   if (deltaSec < 86400 * 30) return `${Math.floor(deltaSec / 86400)}d 前`;
-  return new Date(iso).toISOString().slice(0, 10);
+  // 北京时间日期（固定 UTC+8）：直接切 UTC 日期在北京 00:00–08:00 会少一天。
+  return new Date(t + 8 * 3600 * 1000).toISOString().slice(0, 10);
 }

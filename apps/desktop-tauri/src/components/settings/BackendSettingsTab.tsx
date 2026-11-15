@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { RefreshCw, Save, Server, Activity } from "lucide-react";
+import { IPC } from "../../ipc/commands";
+import { useState, useEffect, useCallback } from "react";import { RefreshCw, Save, Server, Activity } from "lucide-react";
 import { reportError } from "../../lib/reportError";
 import * as api from "../../api";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
@@ -18,8 +18,20 @@ export function BackendTab() {
   const [tickLoopLoading, setTickLoopLoading] = useState(false);
 
   useEffect(() => {
-    api.checkBackendHealth().then(setHealth).catch((e) => { console.warn("[SettingsView] health check failed:", e); });
-    api.getTickLoopStatus().then((s) => setTickLoopRunning(s.running)).catch((e) => { console.warn("[SettingsView] tickloop status failed:", e); });
+    // 后端离线是这里最该被看见的状态：只写 console 会让设置页长期停在
+    // 「上次数值」，用户以为开关坏了而不是服务没起来。
+    api.checkBackendHealth()
+      .then(setHealth)
+      .catch((e) => {
+        setHealth(false);
+        toastError(
+          `无法连接后端服务：${e instanceof Error ? e.message : String(e)}。请确认服务已启动。`,
+        );
+        reportError("settings.backend_health", e);
+      });
+    api.getTickLoopStatus()
+      .then((s) => setTickLoopRunning(s.running))
+      .catch((e) => { reportError("settings.tickloop_status", e); });
   }, []);
 
   const handleToggleTickLoop = useCallback(
@@ -118,7 +130,7 @@ export function PythonRuntimePanel() {
       const override = overrideInput.trim() || null;
       const result = (await (window as unknown as {
         __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
-      }).__TAURI_INTERNALS__.invoke("python_detect", { overridePath: override })) as PythonProbeResult;
+      }).__TAURI_INTERNALS__.invoke(IPC.pythonDetect, { overridePath: override })) as PythonProbeResult;
       setProbe(result);
     } catch (e) {
       setProbeErr(e instanceof Error ? e.message : String(e));
@@ -141,7 +153,7 @@ export function PythonRuntimePanel() {
     try {
       await (window as unknown as {
         __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
-      }).__TAURI_INTERNALS__.invoke("set_python_override", { path: value || null });
+      }).__TAURI_INTERNALS__.invoke(IPC.setPythonOverride, { path: value || null });
       try {
         if (value) {
           storage.setItem(STORAGE_KEYS.pythonOverride, value);

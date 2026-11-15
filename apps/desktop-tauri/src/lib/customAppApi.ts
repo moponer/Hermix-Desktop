@@ -1,8 +1,8 @@
 // Custom Apps API client — communicates with the backend HTTP API
 // at /api/custom-apps/*.
 
-import { invoke } from "../ipc";
-import { fetchJSON } from "../api";
+import { IPC } from "../ipc/commands";
+import { invoke } from "../ipc";import { fetchJSON } from "../api";
 
 export interface CustomAppManifest {
   id: string;
@@ -104,7 +104,7 @@ export async function listCustomApps(): Promise<CustomAppSummary[]> {
 
 // Opens the packaged app's dist directory in the system file explorer.
 export async function openCustomAppDist(path: string): Promise<void> {
-  await invoke("open_external_url", { url: path });
+  await invoke(IPC.openExternalUrl, { url: path });
 }
 
 export async function getCustomApp(id: string): Promise<CustomAppResponse> {
@@ -198,11 +198,11 @@ export interface SmokeReport {
 // packaging. Agent development loops should call this after editing
 // app code and retry until `ok === true`.
 export async function validateCustomApp(id: string): Promise<ValidationReport> {
-  return invoke<ValidationReport>("custom_app_validate", { id });
+  return invoke<ValidationReport>(IPC.customAppValidate, { id });
 }
 
 // Launches the packaged hx-shell exe and checks if it stays alive.
 // Returns structured errors when `ok === false`.
 export async function smokeTestCustomApp(id: string): Promise<SmokeReport> {
-  return invoke<SmokeReport>("custom_app_smoke_test", { id });
+  return invoke<SmokeReport>(IPC.customAppSmokeTest, { id });
 }

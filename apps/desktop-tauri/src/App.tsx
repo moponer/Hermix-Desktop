@@ -11,6 +11,7 @@ import { PreviewBar, BROWSER_TAB_ID, REVIEW_TAB_ID, SUBAGENT_TAB_ID, CANVAS_TAB_
 import { docCanvasStore } from "@hermix/preview";
 import { TitleBar } from "./components/TitleBar";
 import { SessionPickerDialog } from "./components/SessionPickerDialog";
+import { useApprovalBridge } from "./hooks/useApprovalBridge";
 import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
 import {
@@ -31,11 +32,9 @@ import {
   classifyStreamErrorKind,
   normalizeStreamErrorKind,
   type StreamErrorKind,
-  appendTextStep,
   appendToolStep,
   applyReasoningChunk,
   closeOpenReasoning,
-  updateToolStepStdout,
 } from "./app/streamEvents";
 import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
 import type { SubAgentState, SubAgentEventPayload, MemberEventPayload, MemberTicketState } from "./types";
@@ -43,8 +42,51 @@ import { usePolling } from "./hooks/usePolling";
 import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useArtifacts } from "./hooks/useArtifacts";
-import { resetChatStateForModelSwitch, type RefLike } from "./lib/chatStateReset";
-import { patchMessageById, updateSession } from "./lib/sessionUpdates";
+import { resetChatStateForModelSwitch } from "./lib/chatStateReset";
+import {
+  acknowledgePlan,
+  appendApprovalBatchStep,
+  appendApprovalRequestStep,
+  appendAssistantChunk,
+  appendChatMessage,
+  appendNewSessions,
+  appendTimelineEvent,
+  applyToolStdoutChunks,
+  beginAssistantTurn,
+  computeAutoTitle,
+  evictSessionMessages,
+  finalizeAssistantStopReason,
+  markAssistantError,
+  mergeSessionMeta,
+  prependOlderMessages,
+  resolveClarify,
+  stampApprovalDecision,
+  stampBatchApprovalDecision,
+  stampTrailingAssistantStopReason,
+} from "./lib/sessionUpdaters";
+import { updateSession } from "./lib/sessionUpdates";
+import { toolStepLabel } from "./lib/toolStepLabel";
+import {
+  QUEUE_MAX,
+  batchPrompt,
+  enqueue as enqueueQueueTask,
+  loadQueue,
+  makeTask,
+  matchReturned,
+  moveTask as moveQueueTask,
+  returnLines,
+  saveQueue,
+  takeBatch,
+  type TwinBatch,
+  type TwinTask,
+} from "./lib/twinQueue";
+import {
+  PATROL_INTERVAL_MS,
+  patrol,
+  patrolBrief,
+  type PatrolResult,
+  type PatrolTickets,
+} from "./lib/twinPatrol";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastContainer } from "./components/ToastContainer";
 import { toastError, toastInfo } from "./hooks/useToast";
@@ -71,11 +113,32 @@ import type {
 import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
 import { sendNotification, setKeepAwake, KEEP_AWAKE_CHANGED_EVENT, setTrayTaskCount } from "./desktopBridge";
 import { applyScale, readScale, UI_SCALE_EVENT } from "./utils/uiScale";
-import { CLOSE, NEW_CHAT } from "./components/strings";
+import { CLOSE } from "./components/strings";
 import { reportError } from "./lib/reportError";
 import { cleanSessionTitle } from "./lib/sessionTitle";
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
+
+/**
+ * 阿黎从任务面板拉取需求的节奏。比这更快，用户下达后就没机会调整优先级；
+ * 更慢则"下达即可执行"的体感丢失（轮次结束时会立即接力，不等这个周期）。
+ */
+const TWIN_PULL_MS = 4_000;
+
+/**
+ * 当前权限档（现读 localStorage）。为什么不在 App 里用 hook：这一页切档只写
+ * 这个键，另一个 hook 实例收不到跨实例更新 —— 读时机 = 下发时机才是真值。
+ */
+function twinPermissionLevel(): "default" | "full" {
+  try {
+    return storage.getItem(STORAGE_KEYS.permissionLevel) === "full" ? "full" : "default";
+  } catch {
+    return "default";
+  }
+}
+
+/** 自动干预的最小间隔：她刚被叫过就别再叫（防止异常持续时每 2 分钟一次）。 */
+const TWIN_AUTO_INTERVENE_MS = 10 * 60_000;
 
 /** 后台 run 活动计数轮询间隔。保活信号丢一次无害，取值偏保守。 */
 const KEEP_AWAKE_POLL_MS = 10_000;
@@ -603,7 +666,67 @@ setPage("chat");
   // 别的页，TwinView 会卸载 —— 实例留在顶层，流不会断，回来接着看。
   const twinChat = useStreamChat(TWIN_SESSION_ID);
   const [twinTurn, setTwinTurn] = useState<TwinTurn | null>(null);
+  /** 本轮的同步镜像：失败判定要读"这一轮有没有真的动过手"。 */
+  const twinTurnRef = useRef<TwinTurn | null>(null);
+  useEffect(() => {
+    twinTurnRef.current = twinTurn;
+  }, [twinTurn]);
   const [twinPending, setTwinPending] = useState<TwinPendingDecision[]>([]);
+  /**
+   * 任务面板队列（2026-11-06 重构）。顺序 = 优先级，落 localStorage：
+   * 关窗口不该把用户刚写下的需求弄丢（她没开工的那部分）。
+   *
+   * 状态放在 App 顶层而不是 TwinView：拉取调度必须在她这一页被切走时
+   * 照常运行（用户去别的页之后她仍在值守）。
+   */
+  const [twinQueue, setTwinQueue] = useState<TwinTask[]>(() => loadQueue());
+  /** 队列的同步镜像：拉取调度在 interval 闭包里读它，不依赖渲染时机。 */
+  const twinQueueRef = useRef<TwinTask[]>(twinQueue);
+  /** 这一轮整合进来的需求批次（内存态 —— 落盘会留下永远 running 的幽灵批次）。 */
+  const [twinBatch, setTwinBatch] = useState<TwinBatch | null>(null);
+  /** 批次的同步镜像：失败判定/重投都要读"此刻"的批次，不依赖渲染时机。 */
+  const twinBatchRef = useRef<TwinBatch | null>(null);
+  useEffect(() => {
+    twinBatchRef.current = twinBatch;
+  }, [twinBatch]);
+  /** 拉取互斥：一次 tick 未结算前不许并发出第二次（否则同一批会被下发两遍）。 */
+  const twinPullingRef = useRef(false);
+  /** 心跳巡查结果（状态页展示 + 右翼建议），`null` = 还没巡查过。 */
+  const [twinPatrol, setTwinPatrol] = useState<PatrolResult | null>(null);
+  /** 上次巡查时刻；0 = 还没跑过（首 tick 立即巡查）。 */
+  const twinPatrolAtRef = useRef(0);
+  /**
+   * 实验开关：巡查发现异常时**自动叫她看一眼**（她可能自行处理）。
+   *
+   * 默认关。这是整个阿黎里唯一让她"没人叫也动手"的开关 —— 所以只在这几种
+   * 情况下触发：有 warn/alert、她空闲、没有待审批、**面板里没有待拉取的活**
+   * （有活就让 4s 快循环先走，别和它抢），且距上次自动触发 ≥ 10 分钟。
+   */
+  const [twinAutoIntervene, setTwinAutoIntervene] = useState(() => {
+    try {
+      return storage.getItem(STORAGE_KEYS.twinAutoIntervene) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const twinAutoAtRef = useRef(0);
+  const setTwinAutoIntervenePersist = useCallback((on: boolean) => {
+    setTwinAutoIntervene(on);
+    try {
+      storage.setItem(STORAGE_KEYS.twinAutoIntervene, on ? "1" : "0");
+    } catch {
+      /* 存不下只影响下次启动的默认值，不影响本次 */
+    }
+  }, []);
+  /** 巡查互斥：一轮没结算前不再开一轮（工单请求慢时不叠请求）。 */
+  const twinPatrolBusyRef = useRef(false);
+  /**
+   * 下一次拉取要捎上的「上一批情况」（巡查发现）。一次性：注入后清空，
+   * 下一轮巡查会按当时的事实重新算，不累积历史噪音。
+   */
+  const twinPatrolBriefRef = useRef<string | null>(null);
+  /** 最近一次下发的失败原因 —— 批次面板要显示真实原因，不是"见下方错误"。 */
+  const twinSendErrorRef = useRef<string | null>(null);
   /** 本轮序号 —— 结算后作废，用来丢弃迟到帧（见 sendToTwin）。 */
   const twinTurnSeq = useRef(0);
   const twinApprovalResolvers = useRef(
@@ -636,9 +759,22 @@ setPage("chat");
 
   const sendToTwin = useCallback(
     async (text: string, opts: TwinSendOptions): Promise<boolean> => {
-      if (twinChat.streaming) return false;
+      if (twinChat.streaming) {
+        // 驱动侧也会先判一次；这里是最后一道闸，失败原因要能定位。
+        twinSendErrorRef.current = "她还在跑上一轮，这一批没有下发";
+        return false;
+      }
+      twinSendErrorRef.current = null;
       setTwinPending([]);
-      setTwinTurn({ user: text, reply: "", activity: null, error: null, events: [] });
+      // 对话里显示"你说的话"，但线上消息可能是一段带编号的批次指令 ——
+      // 两者分开传（`display`），否则对话流里会出现一大段没人读的内部指令。
+      setTwinTurn({
+        user: opts.display ?? text,
+        reply: "",
+        activity: null,
+        error: null,
+        events: [],
+      });
       // 本轮序号：结算之后（await 返回）才到的迟到帧一律丢弃。流被停止/断流
       // 时曾有 tool_start、approval_request 在结算后才送达，于是在「静默」的
       // 屏幕上留下「她正在用 task_create」和一张已经没人等待的审批卡。
@@ -664,7 +800,11 @@ setPage("chat");
                 ...t,
                 activity: name,
                 // 工具流水：值守页「刚才发生」实时体现这一轮做了什么。
-                events: name ? [...(t.events ?? []), name].slice(-30) : t.events,
+                // 带参数（`terminal: <命令>`）—— 只写工具名时屏幕上三行
+                // 一模一样的 `terminal`，用户看不出跑的是什么（2026-11-06 实报）。
+                events: name
+                  ? [...(t.events ?? []), toolStepLabel(name, info.args)].slice(-30)
+                  : t.events,
               }));
             },
             onToolComplete: () => patch((t) => ({ ...t, activity: null })),
@@ -704,6 +844,7 @@ setPage("chat");
               setTwinPending([]);
             },
             onError: (msg) => {
+              twinSendErrorRef.current = msg;
               patch((t) => ({ ...t, error: msg, activity: null }));
               setTwinPending([]);
             },
@@ -717,6 +858,7 @@ setPage("chat");
         return true;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        twinSendErrorRef.current = msg;
         patch((t) => ({ ...t, error: msg, activity: null }));
         setTwinPending([]);
         return false;
@@ -728,9 +870,267 @@ setPage("chat");
     [twinChat],
   );
 
+  // ── 任务面板：入队 / 排序 / 删除 / 拉取调度 ──────────────────────────
+  // 交互模型：输入口只负责「下达需求」，她从面板按顺序拉取一批开工；
+  // 拉走的需求离开面板，进入 `twinBatch`（状态区与团队看板都读它）。
+  useEffect(() => {
+    twinQueueRef.current = twinQueue;
+    saveQueue(twinQueue);
+  }, [twinQueue]);
+
+  const enqueueTwinTask = useCallback((text: string) => {
+    const task = makeTask(text);
+    if (!task.text) return;
+    setTwinQueue((prev) => enqueueQueueTask(prev, task));
+  }, []);
+
+  const removeTwinTask = useCallback((id: string) => {
+    setTwinQueue((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const moveTwinTask = useCallback((id: string, dir: -1 | 1) => {
+    setTwinQueue((prev) => moveQueueTask(prev, id, dir));
+  }, []);
+
+  /**
+   * 从面板拉一批开工。返回是否真的发出去了。
+   *
+   * 失败处理是这里的重点：任务**放回队首**并写明原因 —— 拉走却没下发，
+   * 等于用户的指令凭空消失（旧版"这一轮没发出去（原因见下方错误）"正是
+   * 这种沉默丢单的产物）。
+   */
+  const pullTwinTasks = useCallback(async (): Promise<boolean> => {
+    if (twinPullingRef.current) return false;
+    if (twinChat.streaming) return false;
+    const queue = twinQueueRef.current;
+    if (queue.length === 0) return false;
+    twinPullingRef.current = true;
+    const { batch, rest } = takeBatch(queue);
+    const startedAt = Date.now();
+    const batchId = `b${startedAt.toString(36)}`;
+    setTwinQueue(rest);
+    twinQueueRef.current = rest;
+    setTwinBatch({ id: batchId, tasks: batch, startedAt, status: "running" });
+    // 权限档现读 localStorage：这一页切档只写这个键，App 里的 hook 实例
+    // 收不到跨实例的状态更新（读时机 = 下发时机才是真值）。
+    // 巡查有发现时先告诉她「上一批情况」，让她在这一轮里自己决定要不要调整
+    // 计划；一次性消费，避免同一个异常在每一批里重复唠叨。
+    const brief = twinPatrolBriefRef.current;
+    twinPatrolBriefRef.current = null;
+    const prompt = brief ? `${brief}\n\n${batchPrompt(batch)}` : batchPrompt(batch);
+    const ok = await sendToTwin(prompt, {
+      permissionLevel: twinPermissionLevel(),
+      display: batch.map((t) => t.text).join("；"),
+    });
+    twinPullingRef.current = false;
+    if (!ok) {
+      const reason = twinSendErrorRef.current ?? "下发失败（没有拿到原因）";
+      // 这一批到底有没有动过手：有工具流水或回复 = 做过事。删文件、发消息、
+      // 提交作业都不是幂等的 —— 这种情况**不自动回队**，只在面板上给出
+      // 「把这一批放回面板」的入口；完全没发出去/没产出时才自动放回，
+      // 避免用户的指令凭空消失。
+      const turn = twinTurnRef.current;
+      const didWork =
+        !!turn && ((turn.events?.length ?? 0) > 0 || turn.reply.trim().length > 0);
+      if (!didWork) {
+        setTwinQueue((prev) => [...batch, ...prev].slice(-QUEUE_MAX));
+      }
+      setTwinBatch((b) =>
+        b && b.id === batchId
+          ? { ...b, status: "failed", error: reason, requeued: !didWork }
+          : b,
+      );
+    }
+    return ok;
+  }, [sendToTwin, twinChat.streaming]);
+
+  /** 用户确认后，把失败批次的需求放回队首（已回队的不重复放）。 */
+  const requeueTwinBatch = useCallback(() => {
+    const b = twinBatchRef.current;
+    if (!b || b.status !== "failed" || b.requeued) return;
+    setTwinQueue((prev) => [...b.tasks, ...prev].slice(-QUEUE_MAX));
+    setTwinBatch({ ...b, requeued: true });
+  }, []);
+
+  /** 「补充」：把待补充的那条取回草稿（同时从面板移除），改完重新下达。 */
+  const reviseTwinTask = useCallback((id: string): string | null => {
+    const t = twinQueueRef.current.find((x) => x.id === id);
+    if (!t) return null;
+    setTwinQueue((prev) => prev.filter((x) => x.id !== id));
+    return t.text;
+  }, []);
+
+  // ── 心跳巡查（2 分钟，零 LLM） ─────────────────────────────────────
+  // 只做机械判定：卡住 / 待补充 / 上一批失败 / 工单出事 / 队列根本没被拉走。
+  // 不在这里叫醒模型 —— 2 分钟一次 × 一天 = 720 轮，成本与信息量都不成立。
+  //
+  // 运行时快照每帧同步一次：`lastActivityAt` 每来一个 chunk 就变，若塞进
+  // 依赖会让 interval 被反复重建（等于心跳永远从头开始计时）。
+  const twinSnapshotRef = useRef({
+    streaming: twinChat.streaming,
+    lastActivityAt: twinChat.lastActivityAt,
+    pending: twinPending.length,
+  });
+  useEffect(() => {
+    twinSnapshotRef.current = {
+      streaming: twinChat.streaming,
+      lastActivityAt: twinChat.lastActivityAt,
+      pending: twinPending.length,
+    };
+  });
+
+  const runTwinPatrol = useCallback(async () => {
+    if (twinPatrolBusyRef.current) return;
+    twinPatrolBusyRef.current = true;
+    try {
+      // 工单：**查不到就记 null**，不能当成"没有工单"（那是两句完全不同的话）。
+      let tickets: PatrolTickets | null = null;
+      try {
+        const v = await api.fetchJSON<{
+          members: Array<{ status: string; started_at: string }>;
+        }>("/api/members");
+        const since = twinBatchRef.current?.startedAt ?? 0;
+        const inWindow = (v.members ?? []).filter((m) => {
+          const t = Date.parse(m.started_at);
+          return !Number.isNaN(t) && t >= since;
+        });
+        const count = (statuses: string[]) =>
+          inWindow.filter((m) => statuses.includes(m.status)).length;
+        tickets = {
+          running: count(["running"]),
+          done: count(["completed"]),
+          failed: count(["failed", "cancelled", "timeout"]),
+        };
+      } catch {
+        tickets = null;
+      }
+
+      const queue = twinQueueRef.current;
+      const oldestQueuedAt = queue
+        .filter((t) => !t.blocked)
+        .reduce<number | null>((min, t) => {
+          const ts = Date.parse(t.createdAt);
+          if (Number.isNaN(ts)) return min;
+          return min == null || ts < min ? ts : min;
+        }, null);
+      const snap = twinSnapshotRef.current;
+      const result = patrol({
+        now: Date.now(),
+        queue,
+        batch: twinBatchRef.current,
+        streaming: snap.streaming,
+        lastActivityAt: snap.streaming ? snap.lastActivityAt : null,
+        pendingCount: snap.pending,
+        tickets,
+        oldestQueuedAt,
+      });
+      twinPatrolAtRef.current = result.at;
+      // 发现要能进到她的执行回路：压成一段「上一批情况」，由下一次拉取
+      // 捎上（一次性）。没有发现就清空 —— 不把已经解决的旧问题带进新一批。
+      twinPatrolBriefRef.current = patrolBrief(result.findings);
+      setTwinPatrol(result);
+    } finally {
+      twinPatrolBusyRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    const tick = () => {
+      if (Date.now() - twinPatrolAtRef.current < PATROL_INTERVAL_MS) return;
+      void runTwinPatrol();
+    };
+    // 首屏稍等，等启动请求落定；之后每 30s 检查是否到期 —— 窗口隐藏时
+    // Chromium 会节流定时器，恢复后下一次 tick 立刻补一次（不追求精确）。
+    const first = window.setTimeout(tick, 5_000);
+    const id = window.setInterval(tick, 30_000);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(id);
+    };
+  }, [runTwinPatrol]);
+
+  // L3（默认关）：巡查发现异常、**且她手上没活**时，单独叫她看一眼。
+  // 与「塞进下一批」（patrolBrief）分工：
+  //   有活要干 → 顺路带下去，零额外调用；
+  //   没活可干却出了异常（工单失败 / 卡住 / 待补充）→ 不叫她，这事就永远没人管。
+  useEffect(() => {
+    if (!twinAutoIntervene) return;
+    if (!twinPatrol || twinPatrol.findings.length === 0) return;
+    if (twinChat.streaming || twinPending.length > 0) return;
+    // 面板里有待拉取的活：让 4s 快循环先走，别和它抢同一条会话。
+    if (twinQueueRef.current.some((t) => !t.blocked)) return;
+    if (Date.now() - twinAutoAtRef.current < TWIN_AUTO_INTERVENE_MS) return;
+    const brief = patrolBrief(twinPatrol.findings);
+    if (!brief) return;
+    twinAutoAtRef.current = Date.now();
+    void sendToTwin(
+      `${brief}\n\n自己判断要不要处理：能就地处理的就处理（重派失败工单、把卡住的任务收尾等），不需要处理就回一句结论，不要写长文。`,
+      { permissionLevel: twinPermissionLevel(), display: "巡查：她自己看一眼" },
+    );
+  }, [twinAutoIntervene, twinPatrol, twinChat.streaming, twinPending.length, sendToTwin]);
+
+  // 定时拉取（她这一页被切走也照跑）。空闲且面板非空时开工。
+  useEffect(() => {
+    const tick = () => {
+      if (twinChat.streaming) return;
+      if (twinQueueRef.current.length === 0) return;
+      void pullTwinTasks();
+    };
+    const id = window.setInterval(tick, TWIN_PULL_MS);
+    return () => window.clearInterval(id);
+  }, [pullTwinTasks, twinChat.streaming]);
+
+  /**
+   * 轮次结束的即时接力：本批跑完立刻结算批次状态，面板里若已有新需求，
+   * 立刻拉下一批（不必等下一个 4s tick）。
+   *
+   * 「执行中拿到的新需求」只能落在**轮次边界**上：协议层没有 mid-turn
+   * 注入通道，raw 帧在流式期间发过去会被当成"重连重发"并回一个终态 Done
+   * （ws/mod.rs 的 task_in_flight 分支），会把正在看的流提前结算 —— 得不偿失。
+   * 所以新需求在面板上如实标成「等本轮结束接入」，边界一到立刻下派。
+   */
+  const twinWasStreamingRef = useRef(twinChat.streaming);
+  useEffect(() => {
+    const was = twinWasStreamingRef.current;
+    twinWasStreamingRef.current = twinChat.streaming;
+    if (!was || twinChat.streaming) return;
+
+    // 她退回的需求（缺目标、没动手）：从本批摘掉、放回面板标"待补充"。
+    // 不这么做的话，4s 一次的拉取会把它原样再拉一遍、再退一次 —— 烧钱死循环。
+    const batchNow = twinBatchRef.current;
+    const returns = returnLines(twinTurnRef.current?.reply ?? "");
+    if (batchNow && returns.length > 0) {
+      const { matched } = matchReturned(batchNow.tasks, returns);
+      if (matched.length > 0) {
+        const returnedIds = new Set(matched.map((m) => m.task.id));
+        setTwinQueue((prev) =>
+          [
+            ...matched.map((m) => ({
+              ...m.task,
+              blocked: true,
+              blockReason: m.reason,
+              returns: (m.task.returns ?? 0) + 1,
+            })),
+            ...prev,
+          ].slice(-QUEUE_MAX),
+        );
+        setTwinBatch((b) =>
+          b ? { ...b, tasks: b.tasks.filter((t) => !returnedIds.has(t.id)) } : b,
+        );
+      }
+    }
+
+    const reason = twinSendErrorRef.current;
+    setTwinBatch((b) =>
+      b && b.status === "running"
+        ? { ...b, status: reason ? "failed" : "done", error: reason ?? undefined }
+        : b,
+    );
+    if (twinQueueRef.current.length > 0) void pullTwinTasks();
+  }, [twinChat.streaming, pullTwinTasks]);
+
   const twinApi: TwinInlineApi = useMemo(
     () => ({
-      send: sendToTwin,
       stop: stopTwin,
       streaming: twinChat.streaming,
       // `activity` 只在跑的时候有意义：流在工具中途断掉时 `onToolComplete`
@@ -739,8 +1139,34 @@ setPage("chat");
       turn: twinTurn && !twinChat.streaming ? { ...twinTurn, activity: null } : twinTurn,
       pending: twinPending,
       resolve: resolveTwin,
+      queue: twinQueue,
+      enqueueTask: enqueueTwinTask,
+      removeTask: removeTwinTask,
+      moveTask: moveTwinTask,
+      batch: twinBatch,
+      requeueBatch: requeueTwinBatch,
+      reviseTask: reviseTwinTask,
+      patrol: twinPatrol,
+      autoIntervene: twinAutoIntervene,
+      setAutoIntervene: setTwinAutoIntervenePersist,
     }),
-    [sendToTwin, stopTwin, twinChat.streaming, twinTurn, twinPending, resolveTwin],
+    [
+      stopTwin,
+      twinChat.streaming,
+      twinTurn,
+      twinPending,
+      resolveTwin,
+      twinQueue,
+      enqueueTwinTask,
+      removeTwinTask,
+      moveTwinTask,
+      twinBatch,
+      requeueTwinBatch,
+      reviseTwinTask,
+      twinPatrol,
+      twinAutoIntervene,
+      setTwinAutoIntervenePersist,
+    ],
   );
 
   /**
@@ -756,21 +1182,7 @@ setPage("chat");
   const refreshSessionMeta = useCallback(async () => {
     try {
       const list = await api.getSessions();
-      setSessions((prev) => {
-        const byId = new Map(list.map((s) => [s.id, s]));
-        const merged = prev.map((s) => {
-          const fresh = byId.get(s.id);
-          if (!fresh) return s;
-          return {
-            ...s,
-            title: fresh.title,
-            message_count: fresh.message_count,
-            updated_at: fresh.updated_at,
-          };
-        });
-        const known = new Set(prev.map((s) => s.id));
-        return [...merged, ...list.filter((s) => !known.has(s.id))];
-      });
+      setSessions((prev) => mergeSessionMeta(prev, list));
     } catch {
       /* 保留旧快照：刷不到不该把列表清空 */
     }
@@ -802,15 +1214,11 @@ setPage("chat");
       return;
     }
 
-    const evict = (s: typeof sessionsRef.current[number]) =>
-      s.id === prevId && s.messages.length > 0
-        ? { ...s, messages: [], message_count: s.message_count ?? s.messages.length }
-        : s;
-    setSessions((prev) => prev.map(evict));
     // Synchronous mirror so the getSessionMessages effect (which reads
     // sessionsRef.current) sees the eviction immediately, without
     // waiting for the next render cycle's useEffect to update the ref.
-    sessionsRef.current = sessionsRef.current.map(evict);
+    setSessions((prev) => evictSessionMessages(prev, prevId));
+    sessionsRef.current = evictSessionMessages(sessionsRef.current, prevId);
   }, [activeSessionId, streamingSessionId]);
 
   // Deferred eviction: when a stream finishes (streamingSessionId → null),
@@ -822,12 +1230,8 @@ setPage("chat");
     if (pendingEvictRef.current && !streamingSessionId) {
       const evictId = pendingEvictRef.current;
       pendingEvictRef.current = null;
-      const evict = (s: typeof sessionsRef.current[number]) =>
-        s.id === evictId && s.messages.length > 0
-          ? { ...s, messages: [], message_count: s.message_count ?? s.messages.length }
-          : s;
-      setSessions((prev) => prev.map(evict));
-      sessionsRef.current = sessionsRef.current.map(evict);
+      setSessions((prev) => evictSessionMessages(prev, evictId));
+      sessionsRef.current = evictSessionMessages(sessionsRef.current, evictId);
     }
   }, [streamingSessionId]);
 
@@ -903,15 +1307,23 @@ setPage("chat");
     }
     let cancelled = false;
     const tick = () => {
+      // 窗口在后台/最小化时跳过：这条轮询只为防休眠，用户不看屏幕时
+      // 每 15s 一次 IPC + 后端查一次数据，纯白烧。
+      if (document.hidden) return;
       void api.getMobileActivity().then((on) => {
         if (!cancelled) setMobileActive(on);
       });
     };
     tick();
     const timer = window.setInterval(tick, 15_000);
+    const onVisible = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [keepAwakeEnabled]);
 
@@ -1069,39 +1481,12 @@ setPage("chat");
    * the WebSocket payload that the stream layer echoes back via
    * `approval_response`.
    */
-  const approvalResolversRef = useRef<
-    Map<
-      string,
-      (decision: Exclude<ApprovalDecision, null>, remember?: boolean, note?: string) => void
-    >
-  >(new Map());
-  // Same shape, keyed by `batch_id`. Resolves the promise returned
-  // by `onApprovalBatchRequest` when the user clicks Allow / Deny /
-  // Always on a batched card.
-  const approvalBatchResolversRef = useRef<
-    Map<
-      string,
-      (decision: Exclude<ApprovalDecision, null>, remember?: boolean, note?: string) => void
-    >
-  >(new Map());
-  // Retry timers for approval responses — cleaned up when approval is resolved
-  const approvalRetryTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
-  // Frontend timeout timers — auto-mark as "expired" when the
-  // server-emitted deadline passes without a user click. Without
-  // this the card stays "等待你的决定" forever even though the
-  // backend already auto-denied at 30s and the agent moved on.
-  const approvalTimeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  // 「静默审批」自救定时器：审批事件可能因 WebView 渲染冻结、传输中途
-  // 断链或投影目标落空而永远没变成卡片，agent 却在服务端干等到 600s
-  // 超时。到期仍未决 → REST 直查服务端注册表兜底（注册表与会话/连接
-  // 解耦，任意存活连接都能查、都能解）。
-  const approvalRescueTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   /**
-   * 记录每个待审批请求归属的 sessionId（与 agent 循环压入请求的顺序一致，
-   * JS Map 保证插入顺序）。REST 兜底 approve/deny 时用来定位正确的
-   * `/v1/sessions/<sid>/approval` 端点——请求可能属于用户已切走的 session。
+   * 审批桥接：resolver / 四类定时器 / REST 兜底簿记，已整体搬进
+   * `hooks/useApprovalBridge.ts`（App.tsx 拆分第一刀）。各表的语义注释
+   * 在 hook 里；这里是组件级单例，unmount 清理语义不变。
    */
-  const pendingApprovalSessionsRef = useRef<Map<string, string>>(new Map());
+  const approvalBridge = useApprovalBridge();
   /**
    * 工具调用被拒绝（用户拒绝 / 超时 / 连接中断）时显示的短时顶部横幅。对应
    * agent 注入的"告诉用户"系统提示给出可见反馈，让用户知道调用为何没执行。
@@ -1116,12 +1501,6 @@ setPage("chat");
    * survive unmount.
    */
   const subAgentsClearTimerRef = useRef<number | null>(null);
-  /**
-   * Pending 1s REST-fallback probes for approval decisions. Tracked so
-   * unmount clears them — otherwise the callback (and its `restSid`
-   * closure) can fire a POST after the window is tearing down.
-   */
-  const approvalRestTimersRef = useRef<Set<number>>(new Set());
   const clearSubAgentsAfter = useCallback((sessionId: string) => {
     if (subAgentsClearTimerRef.current !== null) {
       window.clearTimeout(subAgentsClearTimerRef.current);
@@ -1139,16 +1518,16 @@ setPage("chat");
   // calls setState on a torn-down window.
   useEffect(() => {
     const subTimer = subAgentsClearTimerRef;
-    const restTimers = approvalRestTimersRef;
+    const restTimers = approvalBridge.restTimers;
     return () => {
       if (subTimer.current !== null) {
         window.clearTimeout(subTimer.current);
         subTimer.current = null;
       }
-      restTimers.current.forEach((id) => window.clearTimeout(id));
-      restTimers.current.clear();
+      restTimers.forEach((id) => window.clearTimeout(id));
+      restTimers.clear();
     };
-  }, []);
+  }, [approvalBridge]);
   const showDenialBanner = useCallback((kind: string, tool: string) => {
     setDenialBanner({ kind, tool });
     if (denialBannerTimerRef.current !== null) {
@@ -1415,11 +1794,8 @@ setPage("chat");
         limit: api.HISTORY_PAGE_SIZE,
         tailSkip: session.messages.length,
       });
-      const knownIds = new Set(session.messages.map((m) => m.id));
-      const older = res.messages.filter((m) => !knownIds.has(m.id));
-      if (older.length > 0) {
-        setSessions((prev) => updateSession(prev, activeSessionId, (s) => ({ ...s, messages: [...older, ...s.messages] })));
-      }
+      // 去重在 updater 内做（以目标会话现有 messages 为准，幂等）。
+      setSessions((prev) => prependOlderMessages(prev, activeSessionId, res.messages));
       setHistoryPaging((prev) => ({ ...prev, [activeSessionId]: { hasMore: res.hasMore } }));
     } catch (e) {
       console.error(`[chat] loadOlderMessages(${activeSessionId}) failed:`, e);
@@ -1502,18 +1878,6 @@ setPage("chat");
    * (falling back to the just-sent message only for a brand-new session's
    * very first turn). Once a real title exists it is preserved across turns.
    */
-  const computeAutoTitle = (s: Session, fallbackContent: string): string => {
-    const isPlaceholder =
-      !s.title || s.title === NEW_CHAT || s.title === "新对话" || s.title === "New chat";
-    if (!isPlaceholder) return s.title;
-    const firstUserMsg = s.messages.find((m) => m.role === "user");
-    const raw = firstUserMsg?.content ?? fallbackContent;
-    // 首条消息有时是 LLM 产物（自动化/值守流程把推理原文带 JSON 外壳发进来），
-    // 不洗就会把 `<think>…` 原文当标题存库（2026-10-28 删除确认卡实报）。
-    const text = cleanSessionTitle(raw) || raw.replace(/\s+/g, " ").trim();
-    return text.slice(0, 28) + (text.length > 28 ? "…" : "");
-  };
-
   const handleNewChat = useCallback(async () => {
     // Do NOT cancel the active stream when creating a new chat.
     // The stream on the previous session should continue in the background.
@@ -1587,11 +1951,7 @@ setPage("chat");
    */
   const upsertSessions = useCallback((incoming: Session[]) => {
     if (incoming.length === 0) return;
-    setSessions((prev) => {
-      const known = new Set(prev.map((s) => s.id));
-      const added = incoming.filter((s) => !known.has(s.id));
-      return added.length > 0 ? [...prev, ...added] : prev;
-    });
+    setSessions((prev) => appendNewSessions(prev, incoming));
   }, []);
 
   const handleSelectSession = useCallback(async (id: string) => {
@@ -1678,57 +2038,25 @@ setPage("chat");
       // `kind: "approval_request"` step to the given decision. Used
       // in both the live (resolver present) and stale (resolver gone)
       // branches below.
-      const stampDecision = (
-        s: Session,
-        decision: ApprovalDecision,
-        remember?: boolean,
-      ): Session => ({
-        ...s,
-        messages: s.messages.map((m) => {
-          const steps = m.unified_steps;
-          if (!steps || steps.length === 0) return m;
-          let touched = false;
-          const next = steps.map((step): TimelineStep => {
-            if (step.kind !== "approval_request") return step;
-            if (step.meta.requestId !== requestId) return step;
-            if (step.meta.decision) {
-              // Already decided (stale click path); leave as-is.
-              return step;
-            }
-            touched = true;
-            return {
-              ...step,
-              meta: {
-                ...step.meta,
-                decision,
-                decidedAt: new Date().toISOString(),
-                ...(remember ? { remembered: true } : {}),
-              },
-            };
-          });
-          return touched ? { ...m, unified_steps: next } : m;
-        }),
-      });
-
-      const resolver = approvalResolversRef.current.get(requestId);
+      const resolver = approvalBridge.resolvers.get(requestId);
       if (resolver) {
         resolver(decision, remember, note);
-        approvalResolversRef.current.delete(requestId);
+        approvalBridge.resolvers.delete(requestId);
         // also drop the session-ownership mapping kept for the REST fallback
-        pendingApprovalSessionsRef.current.delete(requestId);
+        approvalBridge.pendingSessions.delete(requestId);
         // Clean up retry timer if approval is resolved
-        const retryTimer = approvalRetryTimersRef.current.get(requestId);
+        const retryTimer = approvalBridge.retryTimers.get(requestId);
         if (retryTimer) {
           clearInterval(retryTimer);
-          approvalRetryTimersRef.current.delete(requestId);
+          approvalBridge.retryTimers.delete(requestId);
         }
         // Clean up frontend timeout timer
-        const timeoutTimer = approvalTimeoutTimersRef.current.get(requestId);
+        const timeoutTimer = approvalBridge.timeoutTimers.get(requestId);
         if (timeoutTimer) {
           clearTimeout(timeoutTimer);
-          approvalTimeoutTimersRef.current.delete(requestId);
+          approvalBridge.timeoutTimers.delete(requestId);
         }
-        setSessions((prev) => prev.map((s) => stampDecision(s, decision, remember)));
+        setSessions((prev) => prev.map((s) => stampApprovalDecision(s, requestId, decision, remember)));
         return decision;
       }
       // Stale click — the resolver is already gone. Two very different
@@ -1773,7 +2101,7 @@ setPage("chat");
         && !card.decided
         && (!card.expiresAt || Date.now() < card.expiresAt);
       if (!live || !card) {
-        setSessions((prev) => prev.map((s) => stampDecision(s, "expired")));
+        setSessions((prev) => prev.map((s) => stampApprovalDecision(s, requestId, "expired")));
         return null;
       }
       const owningSid = card.sessionId;
@@ -1794,10 +2122,10 @@ setPage("chat");
           //                 agent resumes. Stamp the real decision.
           // matched=false → the entry was resolved between render and
           //                 click (timeout lost the race) — expired.
-          setSessions((prev) => prev.map((s) => stampDecision(s, data.matched ? decision : "expired", remember)));
+          setSessions((prev) => prev.map((s) => stampApprovalDecision(s, requestId, data.matched ? decision : "expired", remember)));
         })
         .catch(() => {
-          setSessions((prev) => prev.map((s) => stampDecision(s, "expired")));
+          setSessions((prev) => prev.map((s) => stampApprovalDecision(s, requestId, "expired")));
         });
       return null;
     },
@@ -1845,10 +2173,10 @@ setPage("chat");
         decision: remember === true ? "always" : "approved",
       };
       const restSid =
-        pendingApprovalSessionsRef.current.get(requestId) ?? activeSessionId;
+        approvalBridge.pendingSessions.get(requestId) ?? activeSessionId;
       if (restSid) {
         const t = window.setTimeout(async () => {
-          approvalRestTimersRef.current.delete(t);
+          approvalBridge.restTimers.delete(t);
           try {
             const data = await api.fetchJSON<{ matched: boolean }>(
               `/v1/sessions/${encodeURIComponent(restSid)}/approval`,
@@ -1881,7 +2209,7 @@ setPage("chat");
             console.error(`[APPROVAL-REST-FAIL] id=${requestId} error=${String(e)}`);
           }
         }, 1000);
-        approvalRestTimersRef.current.add(t);
+        approvalBridge.restTimers.add(t);
       }
 
       // Resolve the promise immediately so the UI updates
@@ -1910,10 +2238,10 @@ setPage("chat");
       // 主链路（WS 帧）在 useStreamParser 里同样带上 note。
       if (note?.trim()) restPayload.note = note.trim();
       const restSid =
-        pendingApprovalSessionsRef.current.get(requestId) ?? activeSessionId;
+        approvalBridge.pendingSessions.get(requestId) ?? activeSessionId;
       if (restSid) {
         const t = window.setTimeout(async () => {
-          approvalRestTimersRef.current.delete(t);
+          approvalBridge.restTimers.delete(t);
           try {
             const data = await api.fetchJSON<{ matched: boolean }>(
               `/v1/sessions/${encodeURIComponent(restSid)}/approval`,
@@ -1936,7 +2264,7 @@ setPage("chat");
             console.error(`[APPROVAL-DENY-REST-FAIL] id=${requestId} error=${String(e)}`);
           }
         }, 1000);
-        approvalRestTimersRef.current.add(t);
+        approvalBridge.restTimers.add(t);
       }
 
       // Resolve the promise immediately so the UI updates
@@ -1962,52 +2290,23 @@ setPage("chat");
       remember?: boolean,
       note?: string,
     ): ApprovalDecision | null => {
-      const stampBatchDecision = (
-        s: Session,
-        decision: ApprovalDecision,
-        remember?: boolean,
-      ): Session => ({
-        ...s,
-        messages: s.messages.map((m) => {
-          const steps = m.unified_steps;
-          if (!steps || steps.length === 0) return m;
-          let touched = false;
-          const next = steps.map((step): TimelineStep => {
-            if (step.kind !== "approval_request_batch") return step;
-            if (step.meta.batchId !== batchId) return step;
-            if (step.meta.decision) return step;
-            touched = true;
-            return {
-              ...step,
-              meta: {
-                ...step.meta,
-                decision,
-                decidedAt: new Date().toISOString(),
-                ...(remember ? { remembered: true } : {}),
-              },
-            };
-          });
-          return touched ? { ...m, unified_steps: next } : m;
-        }),
-      });
-
-      const resolver = approvalBatchResolversRef.current.get(batchId);
+      const resolver = approvalBridge.batchResolvers.get(batchId);
       if (resolver) {
         resolver(decision, remember, note);
-        approvalBatchResolversRef.current.delete(batchId);
-        pendingApprovalSessionsRef.current.delete(batchId);
-        const retryTimer = approvalRetryTimersRef.current.get(batchId);
+        approvalBridge.batchResolvers.delete(batchId);
+        approvalBridge.pendingSessions.delete(batchId);
+        const retryTimer = approvalBridge.retryTimers.get(batchId);
         if (retryTimer) {
           clearInterval(retryTimer);
-          approvalRetryTimersRef.current.delete(batchId);
+          approvalBridge.retryTimers.delete(batchId);
         }
-        const timeoutTimer = approvalTimeoutTimersRef.current.get(batchId);
+        const timeoutTimer = approvalBridge.timeoutTimers.get(batchId);
         if (timeoutTimer) {
           clearTimeout(timeoutTimer);
-          approvalTimeoutTimersRef.current.delete(batchId);
+          approvalBridge.timeoutTimers.delete(batchId);
         }
         setSessions((prev) =>
-          prev.map((s) => stampBatchDecision(s, decision, remember)),
+          prev.map((s) => stampBatchApprovalDecision(s, batchId, decision, remember)),
         );
         return decision;
       }
@@ -2015,7 +2314,7 @@ setPage("chat");
       // disconnect). Mark the card `expired` so the user sees the
       // honest "your click did not register" state.
       setSessions((prev) =>
-        prev.map((s) => stampBatchDecision(s, "expired")),
+        prev.map((s) => stampBatchApprovalDecision(s, batchId, "expired")),
       );
       return null;
     },
@@ -2037,10 +2336,10 @@ setPage("chat");
         decision: remember === true ? "always" : "approved",
       };
       const restSid =
-        pendingApprovalSessionsRef.current.get(batchId) ?? activeSessionId;
+        approvalBridge.pendingSessions.get(batchId) ?? activeSessionId;
       if (restSid) {
         const t = window.setTimeout(async () => {
-          approvalRestTimersRef.current.delete(t);
+          approvalBridge.restTimers.delete(t);
           try {
             const data = await api.fetchJSON<{ matched?: boolean }>(
               `/v1/sessions/${encodeURIComponent(restSid)}/approval`,
@@ -2065,7 +2364,7 @@ setPage("chat");
             );
           }
         }, 1000);
-        approvalRestTimersRef.current.add(t);
+        approvalBridge.restTimers.add(t);
       }
       resolveApprovalBatch(batchId, "approved", remember);
     },
@@ -2080,10 +2379,10 @@ setPage("chat");
       // server-side approval timeout (600s). The backend resolves
       // batch ids via the same `request_id` field.
       const restSid =
-        pendingApprovalSessionsRef.current.get(batchId) ?? activeSessionId;
+        approvalBridge.pendingSessions.get(batchId) ?? activeSessionId;
       if (restSid) {
         const t = window.setTimeout(async () => {
-          approvalRestTimersRef.current.delete(t);
+          approvalBridge.restTimers.delete(t);
           try {
             await api.fetchJSON<{ matched?: boolean }>(
               `/v1/sessions/${encodeURIComponent(restSid)}/approval`,
@@ -2103,7 +2402,7 @@ setPage("chat");
             );
           }
         }, 1000);
-        approvalRestTimersRef.current.add(t);
+        approvalBridge.restTimers.add(t);
       }
       resolveApprovalBatch(batchId, "denied", undefined, note?.trim() || undefined);
     },
@@ -2122,43 +2421,14 @@ setPage("chat");
       resolvers.forEach((resolve) => resolve(answer));
       clarifyResolversRef.current.delete(requestId);
     }
-    setSessions((prev) =>
-      prev.map((s) => ({
-        ...s,
-        messages: s.messages.map((m) => {
-          if (m.role !== "clarify" || m.clarify?.requestId !== requestId) return m;
-          return {
-            ...m,
-            clarify: {
-              ...(m.clarify ?? {
-                requestId,
-                question: m.content,
-                choices: [],
-              }),
-              answer,
-            },
-          };
-        }),
-      })),
-    );
+    setSessions((prev) => resolveClarify(prev, requestId, answer));
   }, []);
 
   // 计划确认卡「知道了」：本地置 acknowledged，卡片随即消失。
   // 后端没有计划确认回传通道（无 WsClientMessage 变体、无 agent
   // loop 等待方），所以这里不发任何上行帧。
   const handleAcknowledgePlan = useCallback((messageId: string) => {
-    setSessions((prev) =>
-      prev.map((s) => ({
-        ...s,
-        messages: s.messages.map((m) => {
-          if (m.id !== messageId || m.role !== "plan" || !m.planConfirm) return m;
-          return {
-            ...m,
-            planConfirm: { ...m.planConfirm, acknowledged: true },
-          };
-        }),
-      })),
-    );
+    setSessions((prev) => acknowledgePlan(prev, messageId));
   }, []);
 
   // ── ACUI directive state + decision bus ─────────────────────
@@ -2323,19 +2593,13 @@ streamPhaseRef.current = null;
     // 这是用户发消息瞬间的一次额外同步 commit，< 1ms 用户不可感知。
     // flushSync 不触发 strict mode 双调用（它的二次执行只针对 render）。
     flushSync(() => {
-      setSessions((prev) => updateSession(prev, sessionId, (s) => {
-        // Insert user message + empty assistant placeholder
-        return {
-          ...s,
-          messages: [
-            ...s.messages,
-            userMsg,
-            { id: assistantId, role: "assistant", content: "", timestamp: new Date().toISOString() },
-          ],
-          updated_at: new Date().toISOString(),
-          title: computeAutoTitle(s, content),
-        };
-      }));
+      // Insert user message + empty assistant placeholder（纯函数见
+      // sessionUpdaters.beginAssistantTurn；自动标题逻辑同文件）。
+      setSessions((prev) =>
+        updateSession(prev, sessionId, (s) =>
+          beginAssistantTurn(s, userMsg, assistantId, content, new Date().toISOString()),
+        ),
+      );
     });
 
     // Fold attachment-derived overrides (image bytes + file paths) into
@@ -2387,17 +2651,11 @@ streamPhaseRef.current = null;
       if (!batch) return;
       const target = currentAssistantIdRef.current;
       if (!target) return;
-      setSessions((prev) => updateSession(prev, sessionId, (s) => {
-        return {
-          ...s,
-          messages: patchMessageById(s.messages, target, (m) => ({
-            ...m,
-            content: m.content + batch,
-            unified_steps: appendTextStep(m.unified_steps, batch),
-          })),
-          updated_at: new Date().toISOString(),
-        };
-      }));
+      setSessions((prev) =>
+        updateSession(prev, sessionId, (s) =>
+          appendAssistantChunk(s, target, batch, new Date().toISOString()),
+        ),
+      );
     };
     const appendChunk = (chunk: string) => {
       streamPhaseRef.current = "text";
@@ -2438,12 +2696,19 @@ streamPhaseRef.current = null;
       reason?: string;
       sessionId: string;
     }): Promise<{ decision: ApprovalDecision; remember?: boolean }> => {
+      // 会话级放手模式（2026-10-31）：后端已在 ApprovalRegistry 直接放行
+      // （预解析 Approved，工具照常执行），这张卡永远等不到答复 —— 不渲染、
+      // 不占 resolver，直接以已批准结算。localStorage 是同步真值
+      // （usePermissionLevel 写同一键），切换的瞬间即生效。
+      if (storage.getItem(STORAGE_KEYS.permissionLevel) === "full") {
+        return Promise.resolve({ decision: "approved" as ApprovalDecision });
+      }
       // 审批等待是整条链路里唯一「agent 完全停住、零流量」的静默窗口
       //（默认 600s 后自动拒绝）。窗口失焦时抽屉/内联卡用户全看不到，
       // 感知就是「模型卡死了」——只有系统通知能把这次等待变成一次
       // 可点击的提醒。前台时不打扰（抽屉本来就可视）。
       // 仅首次到达时通知（自救重投影会再次进入本函数，不能反复弹）。
-      if (!approvalResolversRef.current.has(req.requestId) && !document.hasFocus()) {
+      if (!approvalBridge.resolvers.has(req.requestId) && !document.hasFocus()) {
         sendNotification(
           "Hermix 等待你的审批",
           `${req.tool}${req.reason ? `：${req.reason}` : ""}（未响应将在 10 分钟后自动拒绝）`,
@@ -2480,10 +2745,21 @@ streamPhaseRef.current = null;
           .find((m) => m.role === "assistant")?.id
         ?? null;
       if (!previousAssistantId) {
-        // No assistant message target — the approval step would be
-        // dropped. Keep the server blocked (never resolve the promise)
-        // so the tool doesn't run without an explicit decision.
-        return new Promise<{ decision: ApprovalDecision }>(() => {});
+        // 没有可挂卡的 assistant（会话刚切换 / 历史还没装载 / 重连后状态
+        // 已丢）：审批卡**渲染不出来**，用户永远点不到。
+        //
+        // 旧实现返回一个永不 resolve 的 promise，于是前端不回包、服务端停在
+        // 审批等待 —— 父 turn 连同调用它的会话一起永久卡死。子代理内部的
+        // terminal 审批正是这样把 delegate_task 拖死的：父等子、子等审批、
+        // 审批等一张画不出来的卡。
+        //
+        // 没有界面可决时，**默认拒绝**比无限挂起安全：拒绝是可见的（工具结果
+        // 里带原因，模型据此换方案），挂起是无声的。note 会作为拒绝理由进模型
+        // 上下文。
+        return Promise.resolve({
+          decision: "denied" as const,
+          note: "审批卡没有可承载的消息位置（会话状态已变），已按默认拒绝处理；如果仍需要执行，请重新发起。",
+        });
       }
       const meta: ApprovalMessageMeta = {
         requestId: req.requestId,
@@ -2515,27 +2791,11 @@ streamPhaseRef.current = null;
       // message keep their rendering through
       // `MessageBubble`'s backward-compat branch; new approvals
       // never create that standalone message.
-      setSessions((prev) => updateSession(prev, sessionId, (s) => {
-        const messages = s.messages.map((m) => {
-          if (m.id !== previousAssistantId) return m;
-          const existing = m.unified_steps ?? [];
-          // De-dup — both live re-emits and accidental double-fires
-          // fall through: appending another pending step for the
-          // same requestId would double the rendered card.
-          if (existing.some(
-            (x) => x.kind === "approval_request" && x.meta.requestId === req.requestId,
-          )) return m;
-          return {
-            ...m,
-            unified_steps: [...existing, step],
-          };
-        });
-        return {
-          ...s,
-          messages,
-          updated_at: new Date().toISOString(),
-        };
-      }));
+      setSessions((prev) =>
+        updateSession(prev, sessionId, (s) =>
+          appendApprovalRequestStep(s, previousAssistantId, step, req.requestId, new Date().toISOString()),
+        ),
+      );
 
     // Set a frontend timeout to auto-mark as "expired" when the
     // server-emitted deadline passes. The backend already auto-denies
@@ -2544,10 +2804,10 @@ streamPhaseRef.current = null;
     if (req.expiresAt) {
       const delay = Math.max(0, req.expiresAt - Date.now());
       const timer = setTimeout(() => {
-        approvalTimeoutTimersRef.current.delete(req.requestId);
+        approvalBridge.timeoutTimers.delete(req.requestId);
         resolveApproval(req.requestId, "expired");
       }, delay);
-      approvalTimeoutTimersRef.current.set(req.requestId, timer);
+      approvalBridge.timeoutTimers.set(req.requestId, timer);
     }
 
     // 静默丢失自救：15s 后仍未决 → 直查服务端待审批注册表。
@@ -2557,12 +2817,12 @@ streamPhaseRef.current = null;
     // 或服务端超时自动拒绝为止。不在了 → 本地标记过期，卡片不再悬挂。
     // 桥/服务端整个不可达时 fetch 会 reject —— 尽力而为，静默放弃。
     const rescueTimer = setTimeout(() => {
-      approvalRescueTimersRef.current.delete(req.requestId);
-      if (!approvalResolversRef.current.has(req.requestId)) return;
+      approvalBridge.rescueTimers.delete(req.requestId);
+      if (!approvalBridge.resolvers.has(req.requestId)) return;
       void api
         .getPendingApprovals(req.sessionId)
         .then((pending) => {
-          if (!approvalResolversRef.current.has(req.requestId)) return;
+          if (!approvalBridge.resolvers.has(req.requestId)) return;
           if (pending.some((it) => it.request_id === req.requestId)) {
             void onApprovalRequest(req);
           } else {
@@ -2571,16 +2831,16 @@ streamPhaseRef.current = null;
         })
         .catch(() => {});
     }, 15_000);
-    approvalRescueTimersRef.current.set(req.requestId, rescueTimer);
+    approvalBridge.rescueTimers.set(req.requestId, rescueTimer);
 
     return new Promise<{ decision: ApprovalDecision; remember?: boolean; note?: string }>((resolve) => {
-      approvalResolversRef.current.set(
+      approvalBridge.resolvers.set(
         req.requestId,
         (decision, remember, note) => resolve({ decision, remember, note }),
       );
       // record which session owns this request so the REST fallback hits the
       // right `/v1/sessions/<sid>/approval` endpoint
-      pendingApprovalSessionsRef.current.set(req.requestId, sessionId);
+      approvalBridge.pendingSessions.set(req.requestId, sessionId);
     });
     };
 
@@ -2600,6 +2860,13 @@ streamPhaseRef.current = null;
       items: import("./types").ApprovalRequestItem[];
       sessionId: string;
     }): Promise<{ decision: ApprovalDecision; remember?: boolean }> => {
+      // 会话级放手模式（2026-11-10）：与单卡路径（onApprovalRequest）同款
+      // 即结算。批量卡此前没有这层检查——放手模式下批量卡照样渲染并等
+      // 点击（11-09 超星验证任务实测）。后端 resolve_batch 对已由放手
+      // 预解析（Approved）的请求幂等返回 matched=false，无副作用。
+      if (storage.getItem(STORAGE_KEYS.permissionLevel) === "full") {
+        return Promise.resolve({ decision: "approved" as ApprovalDecision });
+      }
       const previousAssistantId =
         currentAssistantIdRef.current
         ?? [...(sessions.find((s) => s.id === req.sessionId)?.messages ?? [])]
@@ -2607,8 +2874,11 @@ streamPhaseRef.current = null;
           .find((m) => m.role === "assistant")?.id
         ?? null;
       if (!previousAssistantId) {
-        // No assistant target — keep the server blocked.
-        return new Promise<{ decision: ApprovalDecision }>(() => {});
+        // 同单条审批：卡片无处渲染 → 默认拒绝，绝不无限挂起。
+        return Promise.resolve({
+          decision: "denied" as const,
+          note: "批量审批没有可承载的消息位置（会话状态已变），已按默认拒绝处理。",
+        });
       }
       const batchMeta: ApprovalBatchMessageMeta = {
         batchId: req.batchId,
@@ -2625,23 +2895,11 @@ streamPhaseRef.current = null;
         toolCallId: req.items[0]?.requestId ?? req.batchId,
         createdAt: new Date().toISOString(),
       };
-      setSessions((prev) => updateSession(prev, req.sessionId, (s) => {
-        const messages = s.messages.map((m) => {
-          if (m.id !== previousAssistantId) return m;
-          const existing = m.unified_steps ?? [];
-          if (existing.some(
-            (x) =>
-              x.kind === "approval_request_batch"
-              && x.meta.batchId === req.batchId,
-          )) return m;
-          return { ...m, unified_steps: [...existing, step] };
-        });
-        return {
-          ...s,
-          messages,
-          updated_at: new Date().toISOString(),
-        };
-      }));
+      setSessions((prev) =>
+        updateSession(prev, req.sessionId, (s) =>
+          appendApprovalBatchStep(s, previousAssistantId, step, req.batchId, new Date().toISOString()),
+        ),
+      );
 
       // Frontend timeout against the EARLIEST expires_at among items —
       // if any item would auto-deny server-side, the whole batch
@@ -2655,18 +2913,18 @@ streamPhaseRef.current = null;
       if (earliestExpires !== null) {
         const delay = Math.max(0, earliestExpires - Date.now());
         const timer = setTimeout(() => {
-          approvalTimeoutTimersRef.current.delete(req.batchId);
+          approvalBridge.timeoutTimers.delete(req.batchId);
           resolveApprovalBatch(req.batchId, "expired");
         }, delay);
-        approvalTimeoutTimersRef.current.set(req.batchId, timer);
+        approvalBridge.timeoutTimers.set(req.batchId, timer);
       }
 
       return new Promise<{ decision: ApprovalDecision; remember?: boolean; note?: string }>((resolve) => {
-        approvalBatchResolversRef.current.set(
+        approvalBridge.batchResolvers.set(
           req.batchId,
           (decision, remember, note) => resolve({ decision, remember, note }),
         );
-        pendingApprovalSessionsRef.current.set(req.batchId, req.sessionId);
+        approvalBridge.pendingSessions.set(req.batchId, req.sessionId);
       });
     };
 
@@ -2705,13 +2963,11 @@ streamPhaseRef.current = null;
           },
         };
 
-        setSessions((prev) => updateSession(prev, sessionId, (s) => {
-          return {
-            ...s,
-            messages: [...s.messages, clarifyMsg],
-            updated_at: new Date().toISOString(),
-          };
-        }));
+        setSessions((prev) =>
+          updateSession(prev, sessionId, (s) =>
+            appendChatMessage(s, clarifyMsg, new Date().toISOString()),
+          ),
+        );
       }
 
       return new Promise<{ answer: string }>((resolve) => {
@@ -2743,13 +2999,11 @@ streamPhaseRef.current = null;
             acknowledged: false,
           },
         };
-        setSessions((prev) => updateSession(prev, sessionId, (s) => {
-          return {
-            ...s,
-            messages: [...s.messages, planMsg],
-            updated_at: new Date().toISOString(),
-          };
-        }));
+        setSessions((prev) =>
+          updateSession(prev, sessionId, (s) =>
+            appendChatMessage(s, planMsg, new Date().toISOString()),
+          ),
+        );
       }
     };
 
@@ -2763,46 +3017,31 @@ streamPhaseRef.current = null;
     // done/error 强制 flush，尾批 chunk 不滞留。
     const pendingToolChunks = new Map<string, string>();
     let toolChunkFlushScheduled = false;
-    const flushPendingToolChunks = () => {
-      toolChunkFlushScheduled = false;
+    // `onlyToolCallId` 只把某一个工具的待合并分片落库（见 onToolComplete：
+    // 完成事件必须排在它自己的 stdout 之后，否则分片会落进「已关闭」的
+    // 调用里，渲染成一行永远转圈的「调用工具」）。
+    const flushPendingToolChunks = (onlyToolCallId?: string) => {
+      // 整批 flush（rAF 回调 / done / error）才算把这一帧的调度消费掉；
+      // 定向 flush 不动它，否则同帧剩下的分片会失去下一帧的 flush 机会。
+      if (onlyToolCallId === undefined) toolChunkFlushScheduled = false;
       if (pendingToolChunks.size === 0) return;
-      const pending = new Map(pendingToolChunks);
-      pendingToolChunks.clear();
+      let pending: Map<string, string>;
+      if (onlyToolCallId) {
+        const buffered = pendingToolChunks.get(onlyToolCallId);
+        if (buffered === undefined) return;
+        pendingToolChunks.delete(onlyToolCallId);
+        pending = new Map([[onlyToolCallId, buffered]]);
+      } else {
+        pending = new Map(pendingToolChunks);
+        pendingToolChunks.clear();
+      }
       const target = currentAssistantIdRef.current;
       if (!target) return;
-      setSessions((prev) => updateSession(prev, sessionId, (s) => {
-        return {
-          ...s,
-          messages: s.messages.map((m) => {
-            if (m.id !== target || !m.execution_timeline) return m;
-            let timeline = m.execution_timeline;
-            let steps = m.unified_steps;
-            for (const [chunkToolCallId, chunkContent] of pending) {
-              const t = [...timeline];
-              let found = false;
-              for (let i = t.length - 1; i >= 0; i--) {
-                if (t[i].type === "tool_stdout" && t[i].tool_call_id === chunkToolCallId) {
-                  t[i] = { ...t[i], content: (t[i].content ?? "") + chunkContent };
-                  found = true;
-                  break;
-                }
-              }
-              if (!found) {
-                t.push({
-                  type: "tool_stdout",
-                  tool_call_id: chunkToolCallId,
-                  content: chunkContent,
-                  created_at: new Date().toISOString(),
-                });
-              }
-              timeline = t;
-              steps = updateToolStepStdout(steps, chunkToolCallId, chunkContent);
-            }
-            return { ...m, execution_timeline: timeline, unified_steps: steps };
-          }),
-          updated_at: new Date().toISOString(),
-        };
-      }));
+      setSessions((prev) =>
+        updateSession(prev, sessionId, (s) =>
+          applyToolStdoutChunks(s, target, pending, new Date().toISOString()),
+        ),
+      );
     };
 
     try {
@@ -2874,9 +3113,23 @@ streamPhaseRef.current = null;
             // 下架（不是限流/抖动）。抽出 id 上报后端，从免费清单里摘除——
             // 免费清单「只增不删」，不摘的话死模型永远留在下拉里，
             // 用户每次选中都 404（实测 minimax-m3.1-flash:free）。
+            //
+            // 2026-10-30 补 `unknown model 'x'`：不是所有厂商都用 404。
+            // MiniMax 报的是 400 + 错误码 2013（`invalid params, unknown
+            // model 'minimax:minimax-m3.1-flash'`），语义完全相同——provider
+            // 根本不认识这个 id。只认 404 时，小写 slug 会让**每一轮**撞
+            // 轮次预算的收尾摘要都失败（`handle_max_iterations`），而那个死
+            // 模型永远留在默认位上。
+            //
             // fire-and-forget：摘除成功广播模型配置变更，下拉立即刷新。
-            const deadModel = /404/.test(rawForFriendly)
-              ? rawForFriendly.match(/'([^']{2,120})' does not exist/i)?.[1]
+            const deadModelRaw =
+              rawForFriendly.match(/'([^']{2,120})' does not exist/i)?.[1] ??
+              rawForFriendly.match(/unknown model '([^']{2,120})'/i)?.[1];
+            // 错误串里可能带 `provider:model` 前缀，后端只认裸 model_id。
+            const deadModel = deadModelRaw
+              ? deadModelRaw.includes(":")
+                ? deadModelRaw.split(":").slice(1).join(":")
+                : deadModelRaw
               : undefined;
             if (deadModel) {
               void api
@@ -2908,17 +3161,11 @@ streamPhaseRef.current = null;
               }
             }
             setStreamPhase(null);
-            setSessions((prev) => updateSession(prev, sessionId, (s) => {
-              return {
-                ...s,
-                messages: s.messages.map((m) =>
-                  m.id === assistantIdAtError
-                    ? { ...m, content: m.content || errText, stopReason: "error" as const }
-                    : m
-                ),
-                updated_at: new Date().toISOString(),
-              };
-            }));
+            setSessions((prev) =>
+              updateSession(prev, sessionId, (s) =>
+                markAssistantError(s, assistantIdAtError ?? "", errText, new Date().toISOString()),
+              ),
+            );
             currentAssistantIdRef.current = null;
             if (sessionId === activeSessionId) {
               // Keep the friendly localized message as the primary
@@ -2965,21 +3212,11 @@ streamPhaseRef.current = null;
               created_at: new Date().toISOString(),
             };
 
-            setSessions((prev) => updateSession(prev, sessionId, (s) => {
-              return {
-                ...s,
-                messages: s.messages.map((m) =>
-                  m.id === target
-                    ? {
-                        ...m,
-                        execution_timeline: [...(m.execution_timeline ?? []), event],
-                        unified_steps: appendToolStep(m.unified_steps, event),
-                      }
-                    : m
-                ),
-                updated_at: new Date().toISOString(),
-              };
-            }));
+            setSessions((prev) =>
+              updateSession(prev, sessionId, (s) =>
+                appendTimelineEvent(s, target, event, new Date().toISOString()),
+              ),
+            );
           },
           onToolChunk: ({ toolCallId, content }) => {
             // stdout chunk 不再逐个 setSessions —— 入队等 rAF 合并
@@ -2994,7 +3231,9 @@ streamPhaseRef.current = null;
             );
             if (!toolChunkFlushScheduled) {
               toolChunkFlushScheduled = true;
-              requestAnimationFrame(flushPendingToolChunks);
+              // 包一层：rAF 回调会拿到时间戳，直接传函数会让它被当成
+              // `onlyToolCallId`。
+              requestAnimationFrame(() => flushPendingToolChunks());
             }
           },
           onToolComplete: ({ toolCallId, tool, content, denialKind, isError }) => {
@@ -3013,6 +3252,13 @@ streamPhaseRef.current = null;
             const target = currentAssistantIdRef.current;
             if (!target) return;
 
+            // 先把这个工具尚未合并的 stdout 分片落进 state，再追加
+            // `tool_complete`。分片由 rAF 合并（下一帧才应用），完成事件
+            // 却是立刻生效的 —— 不先冲掉，分片就会晚于自己的完成事件到达，
+            // 落进一个已经关闭的调用里，渲染出一行永远转圈的「调用工具」。
+            // 两次 setSessions 由 React 按调用顺序应用，顺序即保证。
+            flushPendingToolChunks(toolCallId);
+
             const event: import("./types").ExecutionTimelineEvent = {
               type: "tool_complete",
               tool_call_id: toolCallId,
@@ -3023,21 +3269,11 @@ streamPhaseRef.current = null;
               is_error: isError,
             };
 
-            setSessions((prev) => updateSession(prev, sessionId, (s) => {
-              return {
-                ...s,
-                messages: s.messages.map((m) =>
-                  m.id === target
-                    ? {
-                        ...m,
-                        execution_timeline: [...(m.execution_timeline ?? []), event],
-                        unified_steps: appendToolStep(m.unified_steps, event),
-                      }
-                    : m
-                ),
-                updated_at: new Date().toISOString(),
-              };
-            }));
+            setSessions((prev) =>
+              updateSession(prev, sessionId, (s) =>
+                appendTimelineEvent(s, target, event, new Date().toISOString()),
+              ),
+            );
           },
           onFileChange: ({ toolCallId, filePath, changeType, fileSummary }) => {
             // Append a `file_change` event to the currently-active
@@ -3305,7 +3541,7 @@ return {
           // 审批请求以 denied 否决发往后端，使 agent loop 立即解除阻塞，而非
           // 干等其 300s 审批超时。clarify 同理以空答案解除阻塞。
           onCancel: () => {
-            approvalResolversRef.current.forEach((_resolver, requestId) => {
+            approvalBridge.resolvers.forEach((_resolver, requestId) => {
               const sent = wsSendRaw(
                 JSON.stringify({
                   type: "approval_response",
@@ -3317,11 +3553,11 @@ return {
                 console.error(`[CANCEL-APPROVAL] ws not open, drop deny id=${requestId}`);
               }
             });
-            approvalResolversRef.current.clear();
+            approvalBridge.resolvers.clear();
             // Batch approvals: same "cancel ⇒ deny all" semantics
             // but wire a single batch frame so the server resolves
             // every member under that batch_id.
-            approvalBatchResolversRef.current.forEach((_resolver, batchId) => {
+            approvalBridge.batchResolvers.forEach((_resolver, batchId) => {
               const sent = wsSendRaw(
                 JSON.stringify({
                   type: "approval_responses_batch",
@@ -3333,12 +3569,12 @@ return {
                 console.error(`[CANCEL-APPROVAL-BATCH] ws not open, drop deny id=${batchId}`);
               }
             });
-            approvalBatchResolversRef.current.clear();
-            approvalRetryTimersRef.current.forEach((t) => clearInterval(t));
-            approvalRetryTimersRef.current.clear();
-            approvalTimeoutTimersRef.current.forEach((t) => clearTimeout(t));
-            approvalTimeoutTimersRef.current.clear();
-            pendingApprovalSessionsRef.current.clear();
+            approvalBridge.batchResolvers.clear();
+            approvalBridge.retryTimers.forEach((t) => clearInterval(t));
+            approvalBridge.retryTimers.clear();
+            approvalBridge.timeoutTimers.forEach((t) => clearTimeout(t));
+            approvalBridge.timeoutTimers.clear();
+            approvalBridge.pendingSessions.clear();
             // clarify：直接以空答案解除后端 tool call 阻塞（不重发 WS，
             // 由后端超时兜底；仅清 map 防泄漏）。
             clarifyResolversRef.current.forEach((resolvers) =>
@@ -3528,54 +3764,22 @@ return {
             const assistantIdAtDone = currentAssistantIdRef.current;
             const replaced = (() => {
               if (!assistantIdAtDone) return false;
-              setSessions((prev) => updateSession(prev, sessionId, (s) => {
-                const target = s.messages.find((m) => m.id === assistantIdAtDone);
-                if (!target) return s;
-                // Only use `text` as fallback if the assistant has
-                // no content from streaming (appendChunk never ran
-                // or produced empty). This covers the edge case
-                // where the LLM's entire response arrived in the
-                // done event instead of via text chunks.
-                const needsFallbackText =
-                  (!target.content || target.content.trim() === "") &&
-                  text && text.trim().length > 0;
-                if (target.stopReason === stopReason && !needsFallbackText) return s;
-                return {
-                  ...s,
-                  messages: s.messages.map((m) =>
-                    m.id === assistantIdAtDone
-                      ? {
-                          ...m,
-                          content: needsFallbackText ? text : m.content,
-                          stopReason,
-                          // Wall-clock time the LLM took
-                          // for this turn. Only set if we got a value
-                          // (live stream always does; reloaded history
-                          // never does, so we leave it undefined and
-                          // the renderer shows "已完成" without a time).
-                          ...(durationMs !== undefined ? { durationMs } : {}),
-                        }
-                      : m
-                  ),
-                  updated_at: new Date().toISOString(),
-                };
-              }));
+              setSessions((prev) =>
+                updateSession(prev, sessionId, (s) =>
+                  finalizeAssistantStopReason(s, assistantIdAtDone, stopReason, text, durationMs, new Date().toISOString()),
+                ),
+              );
               return true;
             })();
             if (!replaced) {
               // Fallback: stamp the trailing assistant row with
               // `stopReason` (preserves the old behavior when we
               // somehow don't have a target id).
-              setSessions((prev) => updateSession(prev, sessionId, (s) => {
-                const msgs = [...s.messages];
-                for (let i = msgs.length - 1; i >= 0; i--) {
-                  if (msgs[i].role === "assistant") {
-                    msgs[i] = { ...msgs[i], stopReason } as ChatMessage;
-                    break;
-                  }
-                }
-                return { ...s, messages: msgs };
-              }));
+              setSessions((prev) =>
+                updateSession(prev, sessionId, (s) =>
+                  stampTrailingAssistantStopReason(s, stopReason),
+                ),
+              );
             }
             // 持久化最终 assistant 消息的 unified_steps（前端构建的内联时间线）。
             // reload 时 resolveSteps 会优先用它在真实顺序渲染，工具不再被归到末尾。
@@ -3650,6 +3854,9 @@ return {
                     // stranded tool_call_id.
                     const now = new Date().toISOString();
                     const patched = [...timeline];
+                    // 内存态的 `unified_steps` 也要补 —— 只补 `execution_timeline`
+                    // 是「刷新后正确、当场永远转圈」：在线渲染读的是 steps。
+                    let stepsPatched = m.unified_steps;
                     for (const id of strandedIds) {
                       // Only add if there's a tool_start but no
                       // tool_complete for this tool_call_id.
@@ -3669,18 +3876,14 @@ return {
                             && e.content
                             && String(e.content).trim().length > 0
                         );
-                        // Friendly user-facing wording — keep "无完成事件"
-                        // out of the UI. The user-facing "执行已中断"
-                        // is enough; the underlying cause is already
-                        // shown via the message's stop-reason chip
-                        // ("interrupted" / "error") at the message
-                        // header. This stays a soft error (no
-                        // "[ERROR]" prefix) so it reads as "the agent
-                        // stopped before the tool reported back", not
-                        // a hard failure the user must debug.
+                        // 文案只陈述事实：**这一轮结束了，而这个工具没有回报结果**。
+                        // 旧文案「执行已中断 — 工具未汇报完成事件」把「回合结束」
+                        // 读成了「工具失败」，而真实情况常常相反（长命令仍在后端
+                        // 跑，只是前端先结算了）。根因看后端日志的 finalize 出口，
+                        // 不在卡片上，所以这里不暗示失败、也不加 [ERROR] 前缀。
                         const statusContent = hasStdout
                           ? ""
-                          : "执行已中断 — 工具未汇报完成事件";
+                          : "本轮已结束，该工具未回报结果";
                         const extraFields: Record<string, any> = {};
                         if (statusContent) {
                           extraFields.content = statusContent;
@@ -3692,10 +3895,17 @@ return {
                           created_at: now,
                           ...extraFields,
                         });
+                        stepsPatched = appendToolStep(stepsPatched, {
+                          type: "tool_complete",
+                          tool: startEv?.tool,
+                          tool_call_id: id,
+                          created_at: now,
+                          ...extraFields,
+                        });
                       }
                     }
                     if (patched.length === timeline.length) return m;
-                    return { ...m, execution_timeline: patched };
+                    return { ...m, execution_timeline: patched, unified_steps: stepsPatched };
                   }),
                   updated_at: new Date().toISOString(),
                 };
@@ -3712,24 +3922,24 @@ return {
             // happen if the agent was interrupted (cancel / ws
             // close) mid-approval — without this the resolver map
             // would leak forever.
-            approvalResolversRef.current.forEach((resolver) => resolver("denied"));
-            approvalResolversRef.current.clear();
+            approvalBridge.resolvers.forEach((resolver) => resolver("denied"));
+            approvalBridge.resolvers.clear();
             // Batch resolvers share the same lifecycle — the WS
             // already closed, so the in-flight responses are moot;
             // mark them all `denied` (stale card → `expired` via the
             // missing-resolver branch in `resolveApprovalBatch`).
-            approvalBatchResolversRef.current.forEach((resolver) => resolver("denied"));
-            approvalBatchResolversRef.current.clear();
+            approvalBridge.batchResolvers.forEach((resolver) => resolver("denied"));
+            approvalBridge.batchResolvers.clear();
             // Clean up retry timers
-            approvalRetryTimersRef.current.forEach((timer) => clearInterval(timer));
-            approvalRetryTimersRef.current.clear();
+            approvalBridge.retryTimers.forEach((timer) => clearInterval(timer));
+            approvalBridge.retryTimers.clear();
             // Clean up frontend timeout timers
-            approvalTimeoutTimersRef.current.forEach((timer) => clearTimeout(timer));
-            approvalTimeoutTimersRef.current.clear();
+            approvalBridge.timeoutTimers.forEach((timer) => clearTimeout(timer));
+            approvalBridge.timeoutTimers.clear();
             // clear the approval session-ownership map too — every pending
             // approval just got force-denied, so the REST fallback has nothing
             // to look up.
-            pendingApprovalSessionsRef.current.clear();
+            approvalBridge.pendingSessions.clear();
             // Same deal for clarify — the agent stopped mid-question
             // (cancel, ws close) so we drop any pending resolver with
             // an empty answer; the server's tool call will time out
@@ -3859,11 +4069,12 @@ return {
   // useCallback deps array can reference it without tripping TSC's
   // "used before declaration" check.
   // !streaming → call handleSendMessage directly, then drop the
-  // row from the queue. If the send throws, re-prepend
+  // row from the queue. If the send fails, re-prepend
   // so the user can retry.
-  // streaming  → drop the row, then re-prepend. The drain effect
-  // below (keyed on `[streaming, messageQueue]`) will
-  // pick it up the next tick `streaming` settles.
+  // streaming  → move the row to the head AND stop the running turn.
+  // Once the stop settles (`streaming` → false) the drain effect below
+  // (keyed on `[streaming, messageQueue, …]`) sends that head row —
+  // 「立即」是真的立即，不再是「等当前回复跑完」。
   const sendFromQueue = useCallback(
     async (id: string) => {
       const item = messageQueue.find((m) => m.id === id);
@@ -3874,19 +4085,31 @@ return {
         return;
       }
       if (streaming) {
-        // 立即发送在流式中没有"立刻"可言：移到队首 + 明确告知，
-        // 而不是取出来再放回去、让用户以为按钮坏了。
+        // 「立即发送」= 停掉当前回复，等它收尾后马上发这条。
+        // 旧实现只把条目挪到队首就返回（还得等当前回复自己跑完）——
+        // 按钮写着"立即"却毫无立即之处，用户读作「这按钮是坏的」。
         setMessageQueue((prev) => {
           const found = prev.find((m) => m.id === id);
           if (!found) return prev;
-          // 手动点发送即视为"重新排队"：清掉 failed，否则排空会因为
-          // status==="failed" 跳过它，看起来还是没反应。
+          // 手动点发送即视为"重新排队"：清掉 failed / 重试计数，
+          // 否则排空会因为 status==="failed" 或 attempts>=3 跳过它。
           return [
-            { ...found, status: "queued" as const, error: undefined },
+            { ...found, status: "queued" as const, error: undefined, attempts: 0 },
             ...prev.filter((m) => m.id !== id),
           ];
         });
-        toastInfo("当前回复结束后发送这条消息");
+        // 只有「正在跑的就是这条消息所属的会话」才停：别的会话在跑时
+        // 停它会误杀别人的轮次（cancel 本身也会因 session 不匹配拒绝）。
+        if (streamingSessionId === (activeSessionId ?? null)) {
+          const asked = cancelStream(activeSessionId ?? undefined);
+          toastInfo(
+            asked
+              ? "已停止当前回复，这条消息马上发送"
+              : "停止指令未能送达，这条消息已排到队首",
+          );
+        } else {
+          toastInfo("另一个会话正在生成，这条消息已排到队首");
+        }
         return;
       }
       setMessageQueue((prev) => prev.filter((m) => m.id !== id));
@@ -3906,7 +4129,7 @@ return {
         toastError("发送失败，消息已留在队列中");
       }
     },
-    [messageQueue, activeSessionId, streaming, handleSendMessage],
+    [messageQueue, activeSessionId, streaming, streamingSessionId, cancelStream, handleSendMessage],
   );
 
   const retryLastMessage = useCallback(async () => {
@@ -3970,12 +4193,7 @@ return {
         setSubAgents: setSubAgents as unknown as (
           updater: (prev: Record<string, unknown>) => Record<string, unknown>,
         ) => void,
-        approvalResolversRef: approvalResolversRef as unknown as RefLike<
-          Map<string, (decision: unknown) => void>
-        >,
-        approvalRetryTimersRef,
-        approvalTimeoutTimersRef,
-        pendingApprovalSessionsRef,
+        approval: approvalBridge,
         clarifyResolversRef,
         runningToolRef,
         currentAssistantIdRef,

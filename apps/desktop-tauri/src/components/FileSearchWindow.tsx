@@ -4,10 +4,10 @@
 //   搜索/筛选 → GET /v1/filesearch/search（stdio 桥转发 → 回环 TCP → helper）
 //   状态轮询  → GET /v1/filesearch/status（卷同步状态 / 跳过清单）
 //   过滤规则  → POST /v1/filesearch/filter（持久化在 localStorage，启动回放）
-//   双击打开  → invoke("open_in_viewer")（hermix-viewer.exe，单实例投递）
+//   双击打开  → invoke(IPC.openInViewer)（hermix-viewer.exe，单实例投递）
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "../ipc";
+import { IPC } from "../ipc/commands";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";import { invoke } from "../ipc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fetchJSON } from "../api";
 import { usePolling } from "../hooks/usePolling";
@@ -215,7 +215,7 @@ export function FileSearchWindow() {
   }, []);
 
   const openEntry = useCallback((entry: FileEntry) => {
-    void invoke("open_in_viewer", { path: entry.path }).catch((err) => {
+    void invoke(IPC.openInViewer, { path: entry.path }).catch((err) => {
       console.warn("[filesearch] 打开失败:", err);
     });
   }, []);
@@ -235,7 +235,7 @@ export function FileSearchWindow() {
       // Rust 侧被占用时会自动换备选键并回报 substituted —— 那不是失败，
       // 要把"现在按的是哪个键"告诉用户，否则用户以为没生效。
       const st = await invoke<{ active: string | null; substituted: boolean }>(
-        "file_search_apply_config",
+        IPC.fileSearchApplyConfig,
         { enabled: true, hotkey: hk },
       );
       if (st.substituted) {

@@ -153,6 +153,14 @@ fn containment_ratio(subset: &[String], superset: &[String]) -> f64 {
     contained as f64 / subset.len() as f64
 }
 
+/// 该消息是否持有 tool_calls（= 它后面那些 `tool` 消息的配对锚点）。
+fn has_tool_calls(msg: &Message) -> bool {
+    msg.tool_calls
+        .as_ref()
+        .map(|tcs| !tcs.is_empty())
+        .unwrap_or(false)
+}
+
 /// Run semantic deduplication on a list of messages.
 ///
 /// Returns deduplicated messages and statistics.
@@ -193,6 +201,17 @@ pub fn semantic_dedup(messages: &[Message], config: &SemanticDedupConfig) -> Sem
             continue;
         }
 
+        // ★ 携带 tool_calls 的 assistant 消息**永不参与去重**。
+        // 它是 tool_result 的唯一配对锚点：把它当"重复文本"删掉/替换，
+        // 它的 `tool` 消息就变成孤儿（provider 侧 `drop_orphan_tool_results`
+        // 判定为无配对，每轮请求都丢弃 —— 2026-11-06 实机一次丢掉 88 条，
+        // 模型从此看不到那些工具结果，反复重跑同一批工具直到 max turns）。
+        // 判据只看 `tool_calls`，不看正文长度：正文短不代表可以删。
+        if has_tool_calls(msg) {
+            result.push(msg.clone());
+            continue;
+        }
+
         let (_, ref tokens_i) = tokenized[i];
 
         // Skip short messages
@@ -207,6 +226,10 @@ pub fn semantic_dedup(messages: &[Message], config: &SemanticDedupConfig) -> Sem
 
         for j in window_start..i {
             if !keep[j] || messages[j].role != msg.role {
+                continue;
+            }
+            // 同上：不能把带 tool_calls 的 assistant 消息选为"被合并掉的旧消息"。
+            if has_tool_calls(&messages[j]) {
                 continue;
             }
 

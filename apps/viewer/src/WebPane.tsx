@@ -30,23 +30,43 @@ function physicalRect(el: HTMLElement): { x: number; y: number; w: number; h: nu
   };
 }
 
-export function WebPane({ url, chrome = true }: { url: string; chrome?: boolean }) {
+export function WebPane({
+  url,
+  webId,
+  chrome = true,
+  veiled = false,
+}: {
+  url: string;
+  /** 本标签在 Rust 侧的子 webview id（label `web-<id>`）：切标签不销毁，
+   *  各标签的视图互相独立，保活池满了由 Rust 按 LRU 淘汰。 */
+  webId: string;
+  chrome?: boolean;
+  /** 浮层让位中（网页被 hide）：占位区上一层暗面底色，读作"暂时盖住"而不是空白。 */
+  veiled?: boolean;
+}) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [current, setCurrent] = useState(url);
   const [error, setError] = useState<string | null>(null);
 
-  // 页面自己跳了别的地址 → 地址显示跟着变（Rust 侧 on_page_load 推的事件）。
+  // 页面自己跳了别的地址 → 地址显示跟着变（Rust 侧 on_page_load 推的事件，
+  // 载荷带 id，只认自己这个视图的）。
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listen<string>("web-navigated", (event) => {
-      setCurrent(event.payload);
+      try {
+        const p = JSON.parse(event.payload) as { id?: string; url?: string };
+        if (p.id === `web-${webId}` && p.url) setCurrent(p.url);
+      } catch {
+        /* 兼容旧载荷（纯 URL 字符串） */
+      }
     }).then((fn) => {
       unlisten = fn;
     });
     return () => unlisten?.();
-  }, []);
+  }, [webId]);
 
-  // 打开 / 切换网址：关掉旧的，开新的。
+  // 打开 / 切换网址：同 id 同 URL 幂等（保活的视图直接 show 回来）；
+  // 换了 URL 由 Rust 销毁重建这一个视图。
   useEffect(() => {
     let cancelled = false;
     const raf = requestAnimationFrame(() => {
@@ -55,10 +75,10 @@ export function WebPane({ url, chrome = true }: { url: string; chrome?: boolean 
       const rect = physicalRect(el);
       if (rect.w < 4 || rect.h < 4) return;
       setError(null);
-      void invoke("web_open", { url, ...rect })
+      void invoke("web_open", { id: webId, url, ...rect })
         .then(() => {
-          // 卸载发生在打开过程中 → 补一次关闭，否则网页会浮在应用上。
-          if (cancelled) void invoke("web_close").catch(() => undefined);
+          // 卸载发生在打开过程中 → 补一次收起（保活，标签还在的话切回来即恢复）。
+          if (cancelled) void invoke("web_release", { id: webId }).catch(() => undefined);
         })
         .catch((e: unknown) => {
           if (!cancelled) setError(typeof e === "string" ? e : String(e));
@@ -67,9 +87,11 @@ export function WebPane({ url, chrome = true }: { url: string; chrome?: boolean 
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
-      void invoke("web_close").catch(() => undefined);
+      // 卸载 = 切走这个标签：hide 保活（页面状态、滚动位置、登录态都保留），
+      // 标签被真正关闭时的销毁由 App 的标签对账（web_close）负责。
+      void invoke("web_release", { id: webId }).catch(() => undefined);
     };
-  }, [url]);
+  }, [url, webId]);
 
   // 位置 / 尺寸同步：窗口缩放、面板开合、预览区重排都会让占位矩形变。
   useEffect(() => {
@@ -78,7 +100,7 @@ export function WebPane({ url, chrome = true }: { url: string; chrome?: boolean 
     const sync = () => {
       const rect = physicalRect(el);
       if (rect.w < 4 || rect.h < 4) return;
-      void invoke("web_bounds", rect).catch(() => undefined);
+      void invoke("web_bounds", { id: webId, ...rect }).catch(() => undefined);
     };
     const observer = new ResizeObserver(sync);
     observer.observe(el);
@@ -89,11 +111,14 @@ export function WebPane({ url, chrome = true }: { url: string; chrome?: boolean 
       window.removeEventListener("resize", sync);
       window.clearTimeout(timer);
     };
-  }, []);
+  }, [webId]);
 
-  const run = useCallback((script: string) => {
-    void invoke("web_exec", { script }).catch(() => undefined);
-  }, []);
+  const run = useCallback(
+    (script: string) => {
+      void invoke("web_exec", { id: webId, script }).catch(() => undefined);
+    },
+    [webId],
+  );
 
   const openExternally = useCallback(() => {
     void invoke("viewer_open_with_system", { path: current }).catch(() => undefined);
@@ -149,8 +174,9 @@ export function WebPane({ url, chrome = true }: { url: string; chrome?: boolean 
         </div>
       )}
       <div className="preview-pane-inner web-pane-host">
-        {/* 占位：子 webview 正好盖在这个矩形上。 */}
-        <div className="web-pane-slot" ref={hostRef} />
+        {/* 占位：子 webview 正好盖在这个矩形上。让位期间 webview 被 hide，
+            `is-yield` 给占位一层暗面底色，避免露出突兀的空白。 */}
+        <div className={`web-pane-slot${veiled ? " is-yield" : ""}`} ref={hostRef} />
         {error && <div className="web-pane-error">{error}</div>}
       </div>
     </div>

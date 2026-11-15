@@ -1,5 +1,6 @@
 import { Cpu, Loader2, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { useBackendConnectionContext } from "../context/BackendConnectionContext";
+import { describeBackendDiagnosis } from "../api";
 import { toastError } from "../hooks/useToast";
 
 export function BackendStatus() {
@@ -8,7 +9,9 @@ export function BackendStatus() {
   //  探测通过；"offline" = 探测失败或收到 gave-up 事件）。
   // 旧实现连接中返回 null，在 hermix.exe 的 2-6s 启动窗口里看起来
   // 像界面卡死，故此处改为显式"连接中"呈现。
-  const { state, mode, restarting, gaveUp, restart } = useBackendConnectionContext();
+  const { state, mode, restarting, gaveUp, restart, diagnosis } = useBackendConnectionContext();
+  /** 离线原因短句（进程没了 / 桥断了 / 探测超时 …）。 */
+  const diagnosisText = describeBackendDiagnosis(diagnosis);
 
   const handleRestart = async () => {
     // 重启失败要给用户可见反馈，不能静默 —— 失败后 UI 只是回到离线，
@@ -36,7 +39,11 @@ export function BackendStatus() {
   if (mode === "local") {
     if (gaveUp) {
       return (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-amber-400" title="后端多次重启失败，需要手动重启">
+        <div
+          className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-amber-400"
+          title={
+            "后端多次重启失败，需要手动重启" + (diagnosisText ? `｜${diagnosisText}` : "")
+          }>
           <WifiOff className="icon-sm text-amber-400" />
           <span>重启失败</span>
           {restartBtn}
@@ -64,7 +71,9 @@ export function BackendStatus() {
     }
     if (state === "offline") {
       return (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-text-muted" title="本地模式 — 后端未连接">
+        <div
+          className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-text-muted"
+          title={"本地模式 — 后端未连接" + (diagnosisText ? `｜${diagnosisText}` : "")}>
           <WifiOff className="icon-sm text-text-muted" />
           <span>离线</span>
           {restartBtn}
@@ -86,7 +95,7 @@ export function BackendStatus() {
         state === "online"
           ? "已连接到后端"
           : state === "offline"
-            ? "后端未连接"
+            ? `后端未连接${diagnosisText ? `｜${diagnosisText}` : ""}`
             : "正在连接后端…"
       }
     >

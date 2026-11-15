@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Terminal, Globe, Wrench, Loader2,
   ChevronDown, ChevronRight,
@@ -173,6 +173,18 @@ export function groupEvents(
 
     const tool = ev.tool?.trim() || "tool";
     let idx = active.get(tool);
+    if (idx === undefined && ev.type === "tool_stdout") {
+      // 迟到的 stdout（完成事件先到、分片后到，见 App.tsx 的 rAF 合并）：
+      // 补进同名最近的一组，绝不新开一行 —— 那条事件没有工具名也没有入参，
+      // 新开出来就是一行永远转圈的「调用工具」。
+      for (let i = groups.length - 1; i >= 0; i--) {
+        if (groups[i].tool === tool) {
+          idx = i;
+          break;
+        }
+      }
+      if (idx === undefined) continue;
+    }
     const fresh = ev.type === "tool_start" || idx === undefined;
 
     if (fresh) {
@@ -518,7 +530,13 @@ function coalesceAdjacent(groups: ToolGroup[]): ToolGroup[] {
 /** Compact, WorkBuddy-style one-row-per-tool card. Mirrors the visual
  *  treatment of `ToolMessageCard` in MessageBubble.tsx so the ACUI
  *  timeline and the inline `role: "tool"` cards look identical. */
-export function ToolEventCard({ events, streamComplete = true }: ToolEventCardProps) {
+// `memo`：ACUI 时间线在流式期间每批次都重渲父级，而工具卡的内容只由
+// `events` / `streamComplete` 决定。props 引用不变时跳过整棵子树
+// （其中含多次 JSON.parse 与 groupEvents）。
+export const ToolEventCard = memo(function ToolEventCard({
+  events,
+  streamComplete = true,
+}: ToolEventCardProps) {
   const grouped = useMemo(
     () => groupEvents(events, { streamComplete }),
     [events, streamComplete],
@@ -533,7 +551,7 @@ export function ToolEventCard({ events, streamComplete = true }: ToolEventCardPr
       ))}
     </div>
   );
-}
+});
 
 function ToolRow({ group }: { group: ToolGroup }) {
   const Icon = iconFor(group.tool);

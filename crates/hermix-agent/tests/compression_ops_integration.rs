@@ -38,6 +38,7 @@ async fn below_threshold_skips_compression_entirely() {
         &latest_archived,
         &latest_metrics,
         &mut ctx,
+        false,
         |_| None,
     )
     .await;
@@ -80,6 +81,7 @@ async fn above_threshold_with_noop_engine_archives_but_does_not_compress() {
         &latest_archived,
         &latest_metrics,
         &mut ctx,
+        false,
         |_| None,
     )
     .await;

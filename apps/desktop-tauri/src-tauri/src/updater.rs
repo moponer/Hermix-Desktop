@@ -388,9 +388,20 @@ for ($i = 0; $i -lt 30; $i++) {{
     }}
 }}
 # 1b. 收掉仍占着 app 根文件锁的附属进程(预览器/随包工具)
-foreach ($procName in @('hermix-viewer','markitdown')) {{
+#     hermix-viewer 是独立进程,主程序关了它还在(用户继续看文件是正常用法),
+#     不杀它 Move-Item 整个目录会 ACCESS_DENIED(安装器那一侧的同款坑见
+#     installer/hooks.nsh)。
+foreach ($procName in @('hermix-viewer','markitdown','hx-shell')) {{
     Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
 }}
+# 索引助手是**提权进程**,Stop-Process 会被「拒绝访问」挡回来;它自带 --stop
+# (回环 shutdown 协议,刷盘后自己退出),请它走再兜底杀一次。
+$fsExe = Join-Path $appDir 'hermix-filesearch.exe'
+if (Test-Path $fsExe) {{
+    & $fsExe --stop 2>$null | Out-Null
+    Start-Sleep -Milliseconds 1500
+}}
+Stop-Process -Name 'hermix-filesearch' -Force -ErrorAction SilentlyContinue
 
 # 2. 旧目录入 backup（pending 目录留在原地，不搬）
 try {{

@@ -2454,3 +2454,108 @@
         // 顺序仍是升序：最后一条必须是全量结果的最后一条。
         assert_eq!(entry_text(&tail[4].0), Some("a9"), "尾部顺序必须升序");
     }
+
+    /// 批量子会话读取（一个连接）必须与逐个读取逐条一致：
+    /// 顺序按创建时间、正文与时间戳都不许错行。
+    #[test]
+    fn children_batch_read_matches_per_child_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        sp.persist_session(
+            "batch-parent",
+            &[Message::user("live"), Message::assistant("ack")],
+            Some("gpt-4o"),
+            None,
+            Some("P"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        for i in 0..2 {
+            let snap = CompressionSnapshot::new(
+                format!("summary {i}"),
+                vec![
+                    Message::user(format!("archived {i}")),
+                    Message::assistant(format!("reply {i}")),
+                ],
+                1,
+                2,
+                1,
+                100,
+                50,
+            )
+            .expect("non-empty snapshot");
+            sp.create_compression_child_session("batch-parent", &snap, Some("gpt-4o"), None)
+                .unwrap();
+        }
+
+        let batch = sp
+            .load_children_with_approvals_and_timestamps("batch-parent")
+            .unwrap();
+        assert_eq!(batch.len(), 2, "两个归档子会话");
+        assert_eq!(batch[0].0, "batch-parent-c1", "按创建时间升序");
+        assert_eq!(batch[1].0, "batch-parent-c2");
+
+        for (child_id, entries) in &batch {
+            let single = sp
+                .load_session_with_approvals_and_timestamps(child_id)
+                .unwrap();
+            assert_eq!(entries.len(), single.len(), "{child_id} 行数一致");
+            for (i, ((b_entry, b_ts), (s_entry, s_ts))) in
+                entries.iter().zip(single.iter()).enumerate()
+            {
+                assert_eq!(
+                    entry_text(b_entry),
+                    entry_text(s_entry),
+                    "{child_id} 第 {i} 条正文不一致"
+                );
+                assert_eq!(b_ts, s_ts, "{child_id} 第 {i} 条时间戳错行");
+            }
+        }
+    }
+
+    /// 索引是查询计划的一部分：会话树/工作台过滤必须走索引，
+    /// 而 `idx_messages_session`（与 `(session_id, active)` 左前缀重复）必须已删。
+    #[test]
+    fn sessions_db_indexes_match_the_query_shapes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        sp.persist_session(
+            "idx-1",
+            &[Message::user("hi")],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let conn = open_with_wal(&sp.db_path).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'index' AND tbl_name IN ('sessions', 'messages')",
+            )
+            .unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert!(names.iter().any(|n| n == "idx_sessions_parent"), "{names:?}");
+        assert!(
+            names.iter().any(|n| n == "idx_sessions_workbench"),
+            "{names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n == "idx_messages_session"),
+            "重复索引必须已删：{names:?}"
+        );
+    }

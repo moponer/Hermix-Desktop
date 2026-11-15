@@ -864,6 +864,19 @@ fn is_quota_error(lower: &str) -> bool {
         || lower.contains("credit balance")
         || lower.contains("plan expired")
         || lower.contains("subscription expired")
+        // 中文 provider 话术（2026-11-05 实机：minimax "已达到 Token Plan
+        // 用量上限：请升级 Token Plan 套餐或购买积分补充用量" 携 429，
+        // 旧表全是英文关键词，整条漏判 → RateLimit 白重试 3 次 + 指数退避）。
+        // 判据：额度耗尽/需升级套餐/购买积分 —— 都是"重试改变不了结果"的终态。
+        || lower.contains("用量上限")
+        || lower.contains("购买积分")
+        || lower.contains("额度不足")
+        || lower.contains("额度已用")
+        || lower.contains("配额已用")
+        || lower.contains("余额不足")
+        || lower.contains("请充值")
+        || lower.contains("请升级")
+        || lower.contains("token plan")
 }
 
 fn is_rate_limit_error(lower: &str) -> bool {
@@ -1195,6 +1208,19 @@ mod tests {
         );
         assert_eq!(
             classify_error("402 payment required — plan expired"),
+            ErrorClass::Quota
+        );
+        // 2026-11-05 实机：minimax Token Plan 配额耗尽（中文话术 + 业务码
+        // 2056），旧英文关键词表整条漏判 → RateLimit 白重试 3 次。
+        assert_eq!(
+            classify_error(
+                "LLM API error: API error 429 Too Many Requests: \
+                 已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)"
+            ),
+            ErrorClass::Quota
+        );
+        assert_eq!(
+            classify_error("429 余额不足，请充值后再试"),
             ErrorClass::Quota
         );
     }

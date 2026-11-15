@@ -23,6 +23,7 @@
 //! 而 Chromium 的 disable 列表**优先于** enable 列表 → 无法在子 webview 里
 //! 单独恢复。补偿手段是上面三条（独立 profile / 无 IPC / 协议白名单）。
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -32,10 +33,30 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Rect, Webview, WebviewUrl,
 };
 
-/// 子 webview 的 label（主窗口内唯一）。
-const WEB_LABEL: &str = "webview";
+/// 子 webview 的 label 前缀（完整 label = `web-<tabId>`，每个网页标签一个）。
+const WEB_PREFIX: &str = "web-";
 /// 主窗口 label。
 const MAIN_LABEL: &str = "main";
+/// 内嵌网页视图的**保活池上限**：每个子 webview 是一整棵 WebView2 渲染进程，
+/// 无上限保留（每个网页标签一个）内存会线性涨。最多留 3 个，LRU 淘汰——
+/// 被淘汰的标签切回来重新加载（丢页面状态），最近切换过的几个保持秒切。
+const WEB_KEEPALIVE: usize = 3;
+
+/// 本实例是否已被「真正用过」——预热（`--hidden`）空闲降级的判据。
+///
+/// 「用过」= 主窗口 show 过 / 开过子 webview / 开过钉住浮窗 / agent 让开过
+/// 文件。只要发生过一次，进程进入正常生命周期，不再自动退出。
+static USED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 标记本实例已被真正使用（各使用入口调用；幂等）。
+pub fn mark_used() {
+    USED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 是否已被真正使用。
+pub fn was_used() -> bool {
+    USED.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// 查看器的 WebView2 用户数据目录（**唯一出处**，主窗口与子 webview 共用）。
 ///
@@ -84,20 +105,97 @@ pub fn normalize_url(raw: &str) -> Result<tauri::Url, String> {
     }
 }
 
-/// 找当前活动的子 webview。
-fn active_webview(app: &AppHandle) -> Option<Webview> {
+/// 当前**活动**的子 webview label（前端正在显示的那个网页标签）。
+///
+/// agent 的 CDP / webview_* 工具都以它为目标——用户与 agent 看的是同一块。
+static ACTIVE_WEB: Mutex<Option<String>> = Mutex::new(None);
+/// 保活池的 LRU 顺序（队首最旧）。真相源，与存活的 `web-*` label 对应。
+static WEB_LRU: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+/// 自增 id：agent（MCP）开视图时前端还没来得及给 tab id，用生成的。
+static NEXT_WEB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// 找指定 label 的子 webview。
+fn find_webview(app: &AppHandle, label: &str) -> Option<Webview> {
     let window = app.get_window(MAIN_LABEL)?;
     window
         .webviews()
         .into_iter()
-        .find(|w| w.label() == WEB_LABEL)
+        .find(|w| w.label() == label)
 }
 
-/// 关掉当前子 webview（没有就什么都不做）。
-pub fn close_webview(app: &AppHandle) {
-    if let Some(webview) = active_webview(app) {
+/// 当前活动的子 webview。
+fn active_webview(app: &AppHandle) -> Option<Webview> {
+    let label = active_label();
+    find_webview(app, &label)
+}
+
+/// 活动 label（可能已失效——调用方用 find_webview 兜底判 None）。
+fn active_label() -> String {
+    ACTIVE_WEB
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_else(|| format!("{WEB_PREFIX}none"))
+}
+
+/// 把 label 记为活动（LRU touch + 独占可见：其他 `web-*` 全部 hide）。
+fn set_active(app: &AppHandle, label: &str) {
+    *ACTIVE_WEB.lock().unwrap_or_else(|e| e.into_inner()) = Some(label.to_string());
+    let mut lru = WEB_LRU.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(i) = lru.iter().position(|l| l == label) {
+        lru.remove(i);
+    }
+    lru.push_back(label.to_string());
+    drop(lru);
+    let window = match app.get_window(MAIN_LABEL) {
+        Some(w) => w,
+        None => return,
+    };
+    for w in window.webviews() {
+        let l = w.label();
+        if l.starts_with(WEB_PREFIX) {
+            let _ = if l == label { w.show() } else { w.hide() };
+        }
+    }
+}
+
+/// 从 LRU 摘掉一个 label（连同销毁见 `close_label`）。
+fn lru_remove(label: &str) {
+    let mut lru = WEB_LRU.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(i) = lru.iter().position(|l| l == label) {
+        lru.remove(i);
+    }
+}
+
+/// 关掉指定 label 的子 webview（没有就什么都不做），并清 LRU / 活动指针。
+fn close_label(app: &AppHandle, label: &str) {
+    lru_remove(label);
+    if active_label() == label {
+        *ACTIVE_WEB.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+    if let Some(webview) = find_webview(app, label) {
         let _ = webview.close();
     }
+}
+
+/// 关掉当前活动子 webview（没有就什么都不做）。
+pub fn close_webview(app: &AppHandle) {
+    let label = active_label();
+    close_label(app, &label);
+}
+
+/// 网页的**期望可见性**（前端浮层开合通过 `web_set_visible` 写入）。
+///
+/// 为什么存期望态而不是只做即时 hide/show：`web_open` 会销毁重建子 webview，
+/// 与浮层开合并发时，单次 hide/show 可能落在已销毁或尚未建好的实例上——
+/// 前端 fire-and-forget 的 show 就此丢失，网页永远隐藏（用户看到的
+/// 「点菜单后内嵌浏览器一直空白」）。Rust 侧持有唯一事实：任何时刻新建的
+/// 子 webview 都按期望态收尾，交错后必然收敛。
+static WEB_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// 把期望可见性套用到现存子 webview（没有就不动）。
+fn apply_visible(webview: &Webview, visible: bool) {
+    let _ = if visible { webview.show() } else { webview.hide() };
 }
 
 /// 显示 / 隐藏当前子 webview。
@@ -109,31 +207,37 @@ pub fn close_webview(app: &AppHandle) {
 ///
 /// 菜单收起后要**恢复显示**：直接关掉会丢页面状态（重新加载、滚动位置、
 /// 表单内容全没了），hide/show 只动可见性，页面原样还在。
+///
+/// 先记期望态再套用：即使此刻没有子 webview（正被销毁重建中），期望态也已
+/// 落定，`open_sync` 建完会按它收尾——调用方不需要重发。
 #[tauri::command]
 pub fn web_set_visible(app: AppHandle, visible: bool) {
+    WEB_VISIBLE.store(visible, std::sync::atomic::Ordering::Relaxed);
     if let Some(webview) = active_webview(&app) {
-        let _ = if visible {
-            webview.show()
-        } else {
-            webview.hide()
-        };
+        apply_visible(&webview, visible);
     }
 }
 
-/// 打开网页：新建（或替换）子 webview。
+/// 打开网页：新建（或替换）对应标签的子 webview。
+///
+/// `id` = 前端网页标签的 key（每个标签一个 label `web-<id>`，切标签不销毁——
+/// 保活池 LRU 管理）；不传（agent 经 MCP 开页）则生成一个。多标签共用主窗口，
+/// 非活动的处于 hide 态。
 ///
 /// **必须在非主线程调用**：Windows 上 WebView2 的环境创建在主线程调用会死锁
 /// （wry#583）。Tauri 的异步命令跑在 tokio 工作线程上，安全。
 #[tauri::command]
 pub async fn web_open(
     app: AppHandle,
+    id: Option<String>,
     url: String,
     x: f64,
     y: f64,
     w: f64,
     h: f64,
 ) -> Result<(), String> {
-    open_sync(&app, &url, x, y, w, h)
+    let id = id.unwrap_or_default();
+    open_sync(&app, &id, &url, x, y, w, h)
 }
 
 /// 建视图的串行闸。
@@ -147,11 +251,13 @@ static OPEN_LOCK: Mutex<()> = Mutex::new(());
 ///
 /// MCP 工具也在非主线程上跑（HTTP 端点每条连接一个线程），所以同样安全。
 ///
-/// 三条纪律（2026-10-30）：**串行**（见 `OPEN_LOCK`）、**幂等**（同一个 URL 已经
-/// 在看就不动它）、**等旧视图真的销毁再建**（`close()` 是异步的，同 label 抢先
-/// 重建会 `ERROR_INVALID_STATE`）。
+/// 纪律：**串行**（见 `OPEN_LOCK`）、**幂等**（同 id 同 URL 已在看就只对齐
+/// 可见性）、**等旧视图真的销毁再建**（`close()` 是异步的，同 label 抢先
+/// 重建会 `ERROR_INVALID_STATE`）、**保活池上限**（超过 `WEB_KEEPALIVE` 按
+/// LRU 淘汰最久未用的标签视图）。
 pub fn open_sync(
     app: &AppHandle,
+    id: &str,
     url: &str,
     x: f64,
     y: f64,
@@ -159,30 +265,61 @@ pub fn open_sync(
     h: f64,
 ) -> Result<(), String> {
     let target = normalize_url(url)?;
+    // 开子 webview = 真实使用（agent 自动化也在此列）：预热实例不再降级退出。
+    mark_used();
     let _guard = OPEN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    // 幂等：同一个页面不销毁重建 —— 重建会丢登录态、滚动位置和表单内容，
-    // 而 `web_open` 在自动化流程里会被反复调用（每轮导航前一次）。
-    if let Some(webview) = active_webview(app) {
+    let label = if id.is_empty() {
+        // agent（MCP）路径：独立命名空间 `agent-N`，与前端数字 tab id 永不撞
+        // label（撞了会把用户正在看的标签视图抢走销毁）。
+        format!(
+            "{WEB_PREFIX}agent-{}",
+            NEXT_WEB.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )
+    } else {
+        format!("{WEB_PREFIX}{id}")
+    };
+
+    // 幂等：同一个标签的同一个页面不销毁重建 —— 重建会丢登录态、滚动位置和
+    // 表单内容，而 `web_open` 在自动化流程里会被反复调用（每轮导航前一次）。
+    if let Some(webview) = find_webview(app, &label) {
         let same = webview
             .url()
             .map(|u| u.as_str() == target.as_str())
             .unwrap_or(false);
         if same {
             remember_bounds(x, y, w, h);
+            set_active(app, &label);
+            // 幂等路径也要对齐期望可见性：重建/浮层开合交错时，现存实例的
+            // 实际可见性可能落后于期望态。
+            let visible = WEB_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
+            apply_visible(&webview, visible);
             return Ok(());
+        }
+        // 同标签换了 URL：销毁重建（页面状态本来就要换）。
+        close_label(app, &label);
+        wait_label_gone(app, &label);
+    } else {
+        // 保活池：超过上限先按 LRU 淘汰最久未用的标签视图（异步 close 即可，
+        // label 不同，不会与新视图抢 `ERROR_INVALID_STATE`）。
+        loop {
+            let victim = {
+                let lru = WEB_LRU.lock().unwrap_or_else(|e| e.into_inner());
+                if lru.len() < WEB_KEEPALIVE {
+                    None
+                } else {
+                    lru.iter().find(|l| l.as_str() != label).cloned()
+                }
+            };
+            match victim {
+                Some(v) => close_label(app, &v),
+                None => break,
+            }
         }
     }
 
-    close_webview(app);
-    // `Webview::close()` 只是发销毁请求，`window.webviews()` 要等 Destroyed 才更新。
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while active_webview(app).is_some() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
     let emitter = app.clone();
-    let builder = WebviewBuilder::new(WEB_LABEL, WebviewUrl::External(target))
+    let builder = WebviewBuilder::new(&label, WebviewUrl::External(target))
         // **不开独立 data_directory**：同一进程里所有 WebView2 必须共用同一个
         // user data folder，子 webview 若另设 data_directory 会报
         // 0x8007139F（ERROR_INVALID_STATE）。主窗口用的是启动时固定的
@@ -190,12 +327,24 @@ pub fn open_sync(
         // **开调试端口**（端口写 0 = 让浏览器进程自己挑，真实端口写进 profile 的
         // DevToolsActivePort）：这是 agent 能驱动「用户正在看的那块预览区」的
         // 关键 —— 用户与 agent 看到的是同一个页面、同一个登录态。
-        .additional_browser_args("--remote-debugging-port=0")
+        // 注意 wry 里 builder 传参是**整体替换**默认串（wry webview2/mod.rs
+        // `additional_browser_args.unwrap_or_else(默认串)`），而主窗口走的是默认串；
+        // 同一 UDF 下两个 environment 的参数必须逐字一致，否则第二个
+        // CreateCoreWebView2EnvironmentWithOptions 直接 0x8007139F
+        // （2026-10-23 桌面端三份参数的同一族坑）。所以这里必须写
+        // 「wry 默认串 + CDP」，且主窗口 tauri.conf.json 的
+        // additionalBrowserArgs 也配成同一份——两处改一处就崩。
+        .additional_browser_args(
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=0",
+        )
         // 页面内跳转同样只放行 http / https。
         .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
-        // 页面自己跳了别的地址 → 通知前端（标签标题要跟着变）。
-        .on_page_load(move |_webview, payload| {
-            let _ = emitter.emit("web-navigated", payload.url().to_string());
+        // 页面自己跳了别的地址 → 通知前端（地址栏跟着变，只对对应标签生效）。
+        .on_page_load(move |webview, payload| {
+            let _ = emitter.emit(
+                "web-navigated",
+                serde_json::json!({ "id": webview.label(), "url": payload.url() }).to_string(),
+            );
         });
 
     let window = app
@@ -209,10 +358,30 @@ pub fn open_sync(
         )
         .map_err(|e| create_error(&e))?;
     remember_bounds(x, y, w, h);
+    // 记为活动并独占可见（其他标签视图 hide），再按期望可见性收尾：若浮层
+    // 让位的 hide 先于本次创建到达，新建的视图直接藏起（等浮层收起时前端
+    // show 回来），否则它会浮在菜单之上。
+    set_active(app, &label);
+    let visible = WEB_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
+    if let Some(webview) = find_webview(app, &label) {
+        apply_visible(&webview, visible);
+    }
     // 告诉前端「有个网页视图开了」→ 前端开对应的网页标签（否则用户看到的是
-    // 一块没有标签的网页浮在界面上）。
-    let _ = app.emit("web-opened", url.to_string());
+    // 一块没有标签的网页浮在界面上）。载荷带 id：前端把 Rust 侧标签与自己的
+    // tab 绑定，后续 web_open / web_bounds 都按这个 id 走。
+    let _ = app.emit(
+        "web-opened",
+        serde_json::json!({ "id": label.trim_start_matches(WEB_PREFIX), "url": url }).to_string(),
+    );
     Ok(())
+}
+
+/// 等指定 label 的视图真的销毁（`Webview::close()` 只是发销毁请求）。
+fn wait_label_gone(app: &AppHandle, label: &str) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while find_webview(app, label).is_some() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// 建视图失败的错误体：带足够事实，让调用方不必再猜。
@@ -266,18 +435,36 @@ pub fn app() -> Result<AppHandle, String> {
 }
 
 /// 用**上次的位置**开一个网址（给 agent 用：它不知道预览区在哪）。
+///
+/// id 留空 → Rust 生成一个（前端收到 `web-opened` 载荷里的 id 后，
+/// 会把自己的 tab 绑到这个 id 上）。
 pub fn open_at_last_bounds(url: &str) -> Result<(), String> {
     let app = app()?;
     let (x, y, w, h) = last_bounds();
-    open_sync(&app, url, x, y, w, h)
+    open_sync(&app, "", url, x, y, w, h)
+}
+
+/// 按 id（或活动视图）找目标 webview。
+fn target_webview(app: &AppHandle, id: Option<&str>) -> Option<Webview> {
+    match id {
+        Some(id) if !id.is_empty() => find_webview(app, &format!("{WEB_PREFIX}{id}")),
+        _ => active_webview(app),
+    }
 }
 
 /// 位置 / 尺寸同步（前端在窗口缩放、面板开合时调用）。
 ///
 /// 参数是**物理像素**：子 webview 是独立 HWND，CSS 像素定位会随 DPI 偏。
 #[tauri::command]
-pub fn web_bounds(app: AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
-    let Some(webview) = active_webview(&app) else {
+pub fn web_bounds(
+    app: AppHandle,
+    id: Option<String>,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<(), String> {
+    let Some(webview) = target_webview(&app, id.as_deref()) else {
         return Ok(());
     };
     let rect = Rect {
@@ -289,10 +476,22 @@ pub fn web_bounds(app: AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), 
         .map_err(|e| format!("网页视图位置更新失败：{e}"))
 }
 
-/// 关掉网页视图（前端离开网页标签时调用：否则子窗口会浮在应用上面）。
+/// 收起（hide）指定标签的视图但不销毁：切走网页标签时调用，页面状态保留，
+/// 保活池满了才被 LRU 淘汰。
 #[tauri::command]
-pub fn web_close(app: AppHandle) {
-    close_webview(&app);
+pub fn web_release(app: AppHandle, id: String) {
+    if let Some(webview) = find_webview(&app, &format!("{WEB_PREFIX}{id}")) {
+        let _ = webview.hide();
+    }
+}
+
+/// 关掉网页视图：带 id 关指定标签的；不带关当前活动的（agent「接管」路径）。
+#[tauri::command]
+pub fn web_close(app: AppHandle, id: Option<String>) {
+    match id {
+        Some(id) if !id.is_empty() => close_label(&app, &format!("{WEB_PREFIX}{id}")),
+        _ => close_webview(&app),
+    }
 }
 
 /// 当前内嵌视图的地址。
@@ -318,10 +517,11 @@ pub fn web_navigate(app: AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("网页跳转失败：{e}"))
 }
 
-/// 在当前网页视图里执行一段脚本（前进 / 后退 / 刷新这类浏览器动作）。
+/// 在网页视图里执行一段脚本（前进 / 后退 / 刷新这类浏览器动作）。
+/// 不带 id 作用于活动视图（agent 路径）；带 id 作用于指定标签（前端工具条）。
 #[tauri::command]
-pub fn web_exec(app: AppHandle, script: String) -> Result<(), String> {
-    let Some(webview) = active_webview(&app) else {
+pub fn web_exec(app: AppHandle, id: Option<String>, script: String) -> Result<(), String> {
+    let Some(webview) = target_webview(&app, id.as_deref()) else {
         return Err("没有活动的网页视图".to_string());
     };
     webview
@@ -329,23 +529,28 @@ pub fn web_exec(app: AppHandle, script: String) -> Result<(), String> {
         .map_err(|e| format!("网页脚本执行失败：{e}"))
 }
 
-/// 当前网页视图的状态（前端拿它决定要不要显示占位）。
+/// 当前网页视图的状态（前端拿它决定要不要显示占位 / 做可见性对账）。
 #[derive(serde::Serialize)]
 pub struct WebState {
     pub open: bool,
     pub url: String,
+    /// 期望可见性（浮层收起后前端拿它对账：open 且期望可见 → 实际也应可见）。
+    pub visible: bool,
 }
 
 #[tauri::command]
 pub fn web_state(app: AppHandle) -> WebState {
+    let visible = WEB_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
     match active_webview(&app) {
         Some(webview) => WebState {
             open: true,
             url: webview.url().map(|u| u.to_string()).unwrap_or_default(),
+            visible,
         },
         None => WebState {
             open: false,
             url: String::new(),
+            visible,
         },
     }
 }

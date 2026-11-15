@@ -1,4 +1,5 @@
 // Tauri IPC bridge — replaces Electron preload
+import { IPC } from "./ipc/commands";
 import { invoke } from "./ipc";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
@@ -31,7 +32,7 @@ export async function saveBinaryFile(
 }
 
 export async function getRuntimeInfo(): Promise<{ runtime: string; platform: string; userDataDir: string }> {
-  return invoke("get_runtime_info");
+  return invoke(IPC.getRuntimeInfo);
 }
 
 /** 「运行会话时保持电脑唤醒」开关变化事件。开关在自动化页写入，
@@ -40,7 +41,7 @@ export const KEEP_AWAKE_CHANGED_EVENT = "hermix:keep-awake-changed";
 
 /** 调用 Tauri 命令设置系统保活状态；失败静默（尽力而为的 OS 能力）。 */
 export function setKeepAwake(on: boolean): void {
-  invoke("set_keep_awake", { on }).catch((e) => {
+  invoke(IPC.setKeepAwake, { on }).catch((e) => {
     console.warn("[keep-awake] set_keep_awake failed:", e);
   });
 }
@@ -59,8 +60,8 @@ export function setKeepAwake(on: boolean): void {
  * store my stuff on this machine?".
  */
 export async function openDataDir(): Promise<void> {
-  const path = await invoke<string>("get_data_dir");
-  await invoke("open_external_url", { url: path });
+  const path = await invoke<string>(IPC.getDataDir);
+  await invoke(IPC.openExternalUrl, { url: path });
 }
 
 /**
@@ -69,12 +70,12 @@ export async function openDataDir(): Promise<void> {
  * 不会出现在"显示 A 路径 / 打开 B 路径"的错位。
  */
 export async function getDataDir(): Promise<string> {
-  return invoke<string>("get_data_dir");
+  return invoke<string>(IPC.getDataDir);
 }
 
 export async function openExternalUrl(url: string): Promise<void> {
   try {
-    await invoke("open_external_url", { url });
+    await invoke(IPC.openExternalUrl, { url });
   } catch (e) {
     console.error("[desktopBridge] openExternalUrl failed:", url, e);
 toastError("打开外部链接失败");
@@ -106,7 +107,7 @@ export async function openInExplorer(absolutePath: string): Promise<void> {
   const encoded = normalized.split("/").map(encodeURIComponent).join("/");
   const url = `file:///${encoded.replace(/^\/+/, "")}`;
   try {
-    await invoke("open_external_url", { url });
+    await invoke(IPC.openExternalUrl, { url });
   } catch (e) {
     console.error("[desktopBridge] openInExplorer failed:", absolutePath, e);
     toastError("无法打开文件资源管理器");
@@ -156,11 +157,11 @@ export async function copyText(text: string): Promise<boolean> {
 }
 
 export async function restartDesktopApp(): Promise<void> {
-  await invoke("restart_app");
+  await invoke(IPC.restartApp);
 }
 
 export async function getServerStatus(): Promise<{ running: boolean; healthy: boolean; port: number; base_url: string }> {
-  return invoke("get_server_status");
+  return invoke(IPC.getServerStatus);
 }
 
 /// Read a file from the local filesystem (used by the artifact preview pane
@@ -184,7 +185,7 @@ export async function readArtifactFile(
   size: number;
   resolvedPath?: string | null;
 }> {
-  return invoke("read_artifact_file", { path, workspaceRoot: workspaceRoot ?? null });
+  return invoke(IPC.readArtifactFile, { path, workspaceRoot: workspaceRoot ?? null });
 }
 
 /// Read an artifact's raw bytes as a base64 string. Used by the
@@ -200,7 +201,7 @@ export async function readArtifactFileBytes(
   size: number;
   resolvedPath?: string | null;
 }> {
-  return invoke("read_artifact_file_bytes", { path, workspaceRoot: workspaceRoot ?? null });
+  return invoke(IPC.readArtifactFileBytes, { path, workspaceRoot: workspaceRoot ?? null });
 }
 
 /// Check whether an artifact path resolves to an existing file on disk.
@@ -210,7 +211,7 @@ export async function artifactPathExists(
   path: string,
   workspaceRoot?: string | null,
 ): Promise<boolean> {
-  return invoke("artifact_path_exists", { path, workspaceRoot: workspaceRoot ?? null });
+  return invoke(IPC.artifactPathExists, { path, workspaceRoot: workspaceRoot ?? null });
 }
 
 /// Convert a document (Office / PDF / HTML / EPUB / CSV …) to Markdown
@@ -228,7 +229,7 @@ export async function convertDocumentToMarkdown(
   filePath: string,
   workspaceRoot?: string | null,
 ): Promise<DocumentMarkdownResult> {
-  return invoke("document_to_markdown", {
+  return invoke(IPC.documentToMarkdown, {
     filePath,
     workspaceRoot: workspaceRoot ?? null,
   });
@@ -253,7 +254,7 @@ export async function listDirectory(
   path: string,
   workspaceRoot?: string | null,
 ): Promise<DirEntry[]> {
-  return invoke("list_directory", { path, workspaceRoot: workspaceRoot ?? null });
+  return invoke(IPC.listDirectory, { path, workspaceRoot: workspaceRoot ?? null });
 }
 
 // ── Diagnostics / logs (P0-7) ──────────────────────────────────────
@@ -284,15 +285,15 @@ export interface BackendLogTail {
 }
 
 export async function listBackendLogFiles(): Promise<LogFileInfo> {
-  return invoke("list_backend_log_files");
+  return invoke(IPC.listBackendLogFiles);
 }
 
 export async function readBackendLogTail(tailLines: number): Promise<BackendLogTail> {
-  return invoke("read_backend_log_tail", { tailLines });
+  return invoke(IPC.readBackendLogTail, { tailLines });
 }
 
 export async function openLogDirectory(): Promise<string> {
-  return invoke("open_log_directory");
+  return invoke(IPC.openLogDirectory);
 }
 
 // ── 系统级设置（L4 通知 / 自启 / 托盘，L3.6 壁纸）────────────────────
@@ -300,19 +301,19 @@ export async function openLogDirectory(): Promise<string> {
 // 前端必须把错误如实弹出来：这些能力"看起来开了但没生效"最难排查。
 
 export function getAutostart(): Promise<boolean> {
-  return invoke("get_autostart");
+  return invoke(IPC.getAutostart);
 }
 
 export function setAutostart(enabled: boolean): Promise<void> {
-  return invoke("set_autostart", { enabled });
+  return invoke(IPC.setAutostart, { enabled });
 }
 
 export function sendNotification(title: string, body: string): Promise<void> {
-  return invoke("send_notification", { title, body });
+  return invoke(IPC.sendNotification, { title, body });
 }
 
 export function syncTray(enabled: boolean): Promise<void> {
-  return invoke("sync_tray", { enabled });
+  return invoke(IPC.syncTray, { enabled });
 }
 
 /** 桌面层 UI 行为开关（system_settings.rs::DesktopSettings）。 */
@@ -323,16 +324,16 @@ export interface DesktopSettings {
 }
 
 export function getDesktopSettings(): Promise<DesktopSettings> {
-  return invoke("get_desktop_settings");
+  return invoke(IPC.getDesktopSettings);
 }
 
 export function setCloseAction(closeToTray: boolean): Promise<void> {
-  return invoke("set_close_action", { closeToTray });
+  return invoke(IPC.setCloseAction, { closeToTray });
 }
 
 /** 上报正在流式执行的会话数，驱动托盘菜单「正在执行的任务」项。 */
 export function setTrayTaskCount(count: number): Promise<void> {
-  return invoke("tray_set_task_count", { count });
+  return invoke(IPC.traySetTaskCount, { count });
 }
 
 // Aliases for SettingsView compatibility

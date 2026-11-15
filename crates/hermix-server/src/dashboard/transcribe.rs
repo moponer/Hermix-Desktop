@@ -73,7 +73,11 @@ async fn transcribe_whisper(audio: &[u8], format: &str) -> Result<String, String
     let api_key = std::env::var("OPENAI_API_KEY")
         .map_err(|_| "OPENAI_API_KEY not set. Configure it in Settings → Providers → OpenAI.".to_string())?;
 
-    let client = reqwest::Client::new();
+    // 无超时的 client 会把 STT 请求永久挂在 worker 上（上游卡住 = 前端永远转圈）。
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
 
     let filename = format!("audio.{format}");
     let mime = format!("audio/{format}");

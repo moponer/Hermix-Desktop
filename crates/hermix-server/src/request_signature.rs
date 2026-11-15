@@ -35,10 +35,19 @@ impl NonceCache {
     }
 
     /// 首次出现 → true（并记忆）；重复出现 → false。
+    ///
+    /// 容量上限：`retain` 每次请求都是 O(n)，且此前无上限——高频设备请求
+    /// 可让表单调增长到打满内存。超限时整表清空（与限流表同策略：这些
+    /// 都是尽力而为的防护，内存不能无界）；清空只可能放过一个时间窗内的
+    /// 重放，代价可接受。
     pub fn insert_if_new(&self, nonce: &str) -> bool {
+        const NONCE_MAX: usize = 4096;
         let mut seen = self.seen.lock().expect("nonce cache lock");
         let now = Instant::now();
         seen.retain(|_, at| now.duration_since(*at) < NONCE_TTL);
+        if seen.len() >= NONCE_MAX {
+            seen.clear();
+        }
         seen.insert(nonce.to_string(), now).is_none()
     }
 

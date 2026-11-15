@@ -19,6 +19,23 @@ pub struct ApprovalRegistry {
     /// disconnected, batch never answered) leak but are bounded by
     /// session count × batch count, in practice <100.
     batches: Arc<std::sync::Mutex<HashMap<String, HashMap<String, Vec<String>>>>>,
+    /// 会话级「放手模式」开关（2026-10-31）：置位的会话里，任何审批请求
+    /// 不再登记、不再发卡，直接预解析 `Approved`。这是让「审批卡里选
+    /// 『放手模式』」在**当前轮内立即生效**的唯一汇点 —— 派发层、资源门、
+    /// 工具内部确认三条路径最终都经 `request_approval` 拿裁决，一轮的
+    /// `permission` 快照在 `send_message` 时已捕获定死，改不动它。
+    /// 进程内存态；前端每条消息都带当前档位，消息路径据此重新武装
+    /// （重启后第一条消息即恢复）。
+    ///
+    /// **持久化（2026-11-05）**：`persist_path` 存在时，放手模式的会话集合
+    /// 会写盘并在构造时读回。原设计假设「重启后下一条消息就恢复」，但实测
+    /// 恢复不了用户当下的体感：桌面端一天内可能重启 sidecar 十几次（看门狗 /
+    /// 窗口销毁），每次清空 `full_sessions` → 同一轮对话里审批卡重新弹出，
+    /// 用户看到的是「放手模式根本无效」。档位是用户偏好而非待决状态，跟
+    /// pending 审批一起被 `superseded` 清掉是分类错误。
+    full_sessions: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// 放手模式会话集合的落盘位置；`None` = 不持久化（测试）。
+    persist_path: Option<std::path::PathBuf>,
     default_timeout: Duration,
     /// 「现在有没有人可能答复」的判定。`None` = **不做在场判定**，按墙钟固定超时
     /// （`with_timeout` 的语义，测试与调用方自定义超时时用）。
@@ -54,9 +71,44 @@ impl ApprovalRegistry {
         Self {
             inner: Arc::new(std::sync::Mutex::new(HashMap::new())),
             batches: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            full_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            persist_path: None,
             default_timeout,
             presence: None,
         }
+    }
+
+    /// 打开放手模式的落盘持久化：`set_full_mode` 的每次变更都原子写盘，
+    /// 构造时把已落盘的会话集合读回来——sidecar 被看门狗/窗口销毁重启后，
+    /// 用户的放手档位不再丢（2026-11-05）。
+    pub fn with_persistence(mut self, path: Option<std::path::PathBuf>) -> Self {
+        self.persist_path = path;
+        if let Some(p) = &self.persist_path {
+            match std::fs::read_to_string(p) {
+                Ok(data) => match serde_json::from_str::<Vec<String>>(&data) {
+                    Ok(list) => {
+                        let mut set = self
+                            .full_sessions
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        *set = list.into_iter().collect();
+                        tracing::info!(
+                            path = %p.display(),
+                            sessions = set.len(),
+                            "full-mode sessions restored from disk"
+                        );
+                    }
+                    Err(e) => tracing::warn!(
+                        path = %p.display(),
+                        error = %e,
+                        "full-mode session file corrupt; starting empty"
+                    ),
+                },
+                // 文件不存在 = 首次运行或从未开过放手，静默即可。
+                Err(_) => {}
+            }
+        }
+        self
     }
 
     /// 显式给定在场判定。生产走 [`Self::new`]，测试用它把「有没有人在看」
@@ -90,6 +142,21 @@ impl ApprovalRegistry {
         session_id: &str,
         request_id: &str,
     ) -> oneshot::Receiver<ApprovalOutcome> {
+        // ── 放手模式：不登记、不发卡，直接放行 ─────────────────────────
+        // 该会话的开关由 REST `POST /v1/sessions/{id}/permission` 置位。
+        // 硬底线（hardline blocklist）在派发层先跑，到不了这里，绕不过。
+        // 用 effective 版本：子代理会话（`父::subagent-*`）回落到父会话
+        // 的档位（is_full_mode_effective 的文档记录了 11-09 实测教训）。
+        if self.is_full_mode_effective(session_id) {
+            tracing::info!(
+                session_id = %session_id,
+                request_id = %request_id,
+                "full mode: auto-approved without prompting"
+            );
+            let (tx, rx) = oneshot::channel();
+            let _ = tx.send(ApprovalOutcome::Approved);
+            return rx;
+        }
         let (tx, rx) = oneshot::channel();
         // Store the sender first, then release the lock before
         // spawning the timeout task -- keeps the critical section
@@ -212,23 +279,148 @@ impl ApprovalRegistry {
                 return true;
             }
         }
+        // 子代理后代回落（2026-11-14）：子代理的工具审批用**自己的会话 id**
+        // （`父::subagent-*`，dispatch_policy 的 requester）登记 pending，但
+        // 审批卡走父会话的 WS 流渲染——前端拿父会话 id 来结算，精确键永远
+        // miss，子代理被挂死到审批超时（11-10 06:33:54 实锤：
+        // `REST approval: miss — no pending entry session_id=0e60b75b…`，
+        // 批量卡随后"自动取消"、用户感知卡死）。精确键未命中时在同会话的
+        // 子代理命名空间内补搜——request_id 是全局唯一的 tool call id，
+        // 跨命名空间不会撞；前缀带会话 id 边界（`::subagent-`），别的会话
+        // 的子代理不受影响。
+        let child_prefix = format!("{session_id}::subagent-");
+        let descendant_keys: Vec<String> = sessions
+            .keys()
+            .filter(|k| k.starts_with(&child_prefix))
+            .cloned()
+            .collect();
+        for key in descendant_keys {
+            if let Some(session) = sessions.get_mut(&key) {
+                if let Some(tx) = session.remove(request_id) {
+                    let _ = tx.send(outcome);
+                    return true;
+                }
+            }
+        }
         false
     }
 
+    /// 置位 / 清除某会话的放手模式。`true` 后该会话的所有后续审批请求
+    /// 都在 [`Self::request_approval`] 里直接放行。
+    pub fn set_full_mode(&self, session_id: &str, full: bool) {
+        let snapshot: Vec<String> = {
+            let mut set = self
+                .full_sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if full {
+                set.insert(session_id.to_string());
+            } else {
+                set.remove(session_id);
+            }
+            set.iter().cloned().collect()
+        };
+        // 持久化放手档位：sidecar 被看门狗/窗口销毁重启后读回（2026-11-05）。
+        // 写盘失败只丢「跨重启恢复」，不丢本轮语义 —— 静默记日志即可。
+        if let Some(p) = &self.persist_path {
+            let json = serde_json::to_string(&snapshot).unwrap_or_else(|_| "[]".into());
+            let tmp = p.with_extension("json.tmp");
+            if let Err(e) = std::fs::write(&tmp, json)
+                .and_then(|_| std::fs::rename(&tmp, p))
+            {
+                tracing::warn!(
+                    path = %p.display(),
+                    error = %e,
+                    "failed to persist full-mode sessions"
+                );
+            }
+        }
+    }
+
+    /// 查询某会话是否处于放手模式。
+    pub fn is_full_mode(&self, session_id: &str) -> bool {
+        self.full_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(session_id)
+    }
+
+    /// 放手档位的**生效**判断（2026-11-09）：精确匹配之外，子代理会话
+    /// （`父会话::subagent-*`）回落到父会话。放手是用户对整个对话的宣言，
+    /// 但子代理的工具审批用各自的会话 id 注册（`dispatch_policy.rs` 的
+    /// `requester(sid, …)`），不回落的话父会话开了放手、子代理里照样弹卡
+    /// —— 11-09 超星验证任务实测：10:11:58 父会话 full=true 后拉起的
+    /// 子代理 10:12:20 起继续弹审批卡，批量卡超时"自动取消"。
+    pub fn is_full_mode_effective(&self, session_id: &str) -> bool {
+        if self.is_full_mode(session_id) {
+            return true;
+        }
+        if let Some((parent, _)) = session_id.split_once("::subagent-") {
+            return self.is_full_mode(parent);
+        }
+        false
+    }
+
+    /// 把某会话当前**全部** pending 请求按同一结果放行/拒绝，返回被放行
+    /// 的 request_id 列表。切换到放手模式时调用 —— 用户已经声明「后续
+    /// 不再申请」，队列里挂着旧卡继续等点击与宣言自相矛盾。整表摘除是
+    /// 有意的：此时不存在「想保留的 pending」。批处理索引（`batches`）
+    /// 里可能留下指已放行 id 的陈旧条目，与既有文档一致属有界泄漏，
+    /// `resolve_batch` 对已消失的 id 幂等返回 false。
+    pub fn resolve_all(&self, session_id: &str, outcome: ApprovalOutcome) -> Vec<String> {
+        // 子代理会话（`父::subagent-*`）的 pending 一并按同一结果结算——
+        // 与 is_full_mode_effective 的回落规则一致：放手对整个对话生效，
+        // 切回默认时子代理的挂起卡也该一并处理，不能留孤儿卡继续超时。
+        let child_prefix = format!("{session_id}::subagent-");
+        let drained: HashMap<String, oneshot::Sender<ApprovalOutcome>> = {
+            let mut sessions = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            let mut all = sessions.remove(session_id).unwrap_or_default();
+            let child_keys: Vec<String> = sessions
+                .keys()
+                .filter(|k| k.starts_with(&child_prefix))
+                .cloned()
+                .collect();
+            for k in child_keys {
+                all.extend(sessions.remove(&k).unwrap_or_default());
+            }
+            all
+        };
+        let ids: Vec<String> = drained.keys().cloned().collect();
+        for tx in drained.into_values() {
+            let _ = tx.send(outcome.clone());
+        }
+        ids
+    }
+
     /// True if a sender is still registered for `(session_id,
-    /// request_id)`. Used by the 4-state `session` / `always` side
+    /// request_id)` — exact session first, then the session's
+    /// subagent descendants (same fallback as [`Self::resolve`]:
+    /// subagent cards resolve through the parent stream, so the
+    /// side-effect handlers must see them under the parent id too).
+    /// Used by the 4-state `session` / `always` side
     /// effect handlers to skip the work when the request was
     /// already resolved (duplicate response) or timed out — both
     /// of which remove the entry.
     pub fn is_pending(&self, session_id: &str, request_id: &str) -> bool {
         let sessions = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        sessions
+        if sessions
             .get(session_id)
             .map(|s| s.contains_key(request_id))
             .unwrap_or(false)
+        {
+            return true;
+        }
+        let child_prefix = format!("{session_id}::subagent-");
+        sessions
+            .keys()
+            .filter(|k| k.starts_with(&child_prefix))
+            .any(|k| sessions.get(k).map(|s| s.contains_key(request_id)).unwrap_or(false))
     }
 
-    /// Request ids still awaiting a decision for one session.
+    /// Request ids still awaiting a decision for one session,
+    /// **including its subagent descendants** (`父::subagent-*`):
+    /// their cards render on the parent stream, so the parent's
+    /// re-projection must see them or a reload loses the cards.
     ///
     /// A non-empty result is authoritative proof that the agent loop
     /// is blocked on `AwaitApproval` right now: an entry only exists
@@ -238,10 +430,22 @@ impl ApprovalRegistry {
     /// closed — an empty vec means "nothing live", not "error".
     pub fn list_pending(&self, session_id: &str) -> Vec<String> {
         let sessions = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        sessions
+        let mut ids: Vec<String> = sessions
             .get(session_id)
             .map(|s| s.keys().cloned().collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let child_prefix = format!("{session_id}::subagent-");
+        let child_keys: Vec<String> = sessions
+            .keys()
+            .filter(|k| k.starts_with(&child_prefix))
+            .cloned()
+            .collect();
+        for k in child_keys {
+            if let Some(s) = sessions.get(&k) {
+                ids.extend(s.keys().cloned());
+            }
+        }
+        ids
     }
 
     /// Record a batch id and the request ids it covers for a given
@@ -1301,5 +1505,160 @@ mod approval_registry_tests {
             outcome,
             hermix_core::ApprovalOutcome::TimedOut { .. }
         ));
+    }
+
+    // ── 会话级放手模式 ─────────────────────────────────────────────
+
+    /// 放手模式置位后：request_approval 不登记、不发卡，直接预解析
+    /// Approved —— 这是「审批卡里选放手模式，本轮立即生效」的核心语义。
+    #[tokio::test]
+    async fn full_mode_auto_approves_without_registering() {
+        let reg = ApprovalRegistry::with_timeout(Duration::from_secs(600));
+        reg.set_full_mode("sess-a", true);
+        let rx = reg.request_approval("sess-a", "req-1");
+        assert_eq!(rx.await, Ok(hermix_core::ApprovalOutcome::Approved));
+        // 没有登记进 pending 表：不发卡、不占注册表。
+        assert!(reg.list_pending("sess-a").is_empty());
+        assert!(!reg.is_pending("sess-a", "req-1"));
+        // 每次请求都独立放行（不是一次性）。
+        let rx2 = reg.request_approval("sess-a", "req-2");
+        assert_eq!(rx2.await, Ok(hermix_core::ApprovalOutcome::Approved));
+    }
+
+    /// 放手模式按会话隔离：A 会话放行不影响 B 会话照常走审批。
+    #[tokio::test]
+    async fn full_mode_is_scoped_per_session() {
+        let reg = ApprovalRegistry::with_timeout(Duration::from_secs(600));
+        reg.set_full_mode("sess-a", true);
+        let rx_a = reg.request_approval("sess-a", "req-1");
+        assert_eq!(rx_a.await, Ok(hermix_core::ApprovalOutcome::Approved));
+
+        let rx_b = reg.request_approval("sess-b", "req-1");
+        assert!(reg.is_pending("sess-b", "req-1"), "B 会话必须照常登记待批");
+        assert!(reg.resolve("sess-b", "req-1", hermix_core::ApprovalOutcome::Approved));
+        assert_eq!(rx_b.await, Ok(hermix_core::ApprovalOutcome::Approved));
+    }
+
+    /// 清除开关后恢复原语义：请求重新走登记 → 超时默认拒绝。
+    #[tokio::test]
+    async fn clearing_full_mode_restores_normal_flow() {
+        let reg = ApprovalRegistry::with_timeout(Duration::from_millis(50));
+        reg.set_full_mode("sess-a", true);
+        reg.set_full_mode("sess-a", false);
+        let rx = reg.request_approval("sess-a", "req-1");
+        assert!(reg.is_pending("sess-a", "req-1"));
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(matches!(
+            rx.await,
+            Ok(hermix_core::ApprovalOutcome::TimedOut { .. })
+        ));
+    }
+
+    /// `resolve_all` 排干某会话全部 pending 并逐个放行；其他会话不受影响。
+    #[tokio::test]
+    async fn resolve_all_drains_pending_and_reports_ids() {
+        let reg = ApprovalRegistry::with_timeout(Duration::from_secs(600));
+        let mut rxs: Vec<_> = (0..3)
+            .map(|i| reg.request_approval("sess-a", &format!("req-{i}")))
+            .collect();
+        let _rx_other = reg.request_approval("sess-b", "req-x");
+
+        let mut ids = reg.resolve_all("sess-a", hermix_core::ApprovalOutcome::Approved);
+        ids.sort();
+        assert_eq!(ids, vec!["req-0", "req-1", "req-2"]);
+        for rx in rxs.iter_mut() {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), &mut *rx).await.unwrap().unwrap(),
+                hermix_core::ApprovalOutcome::Approved
+            );
+        }
+        assert!(reg.list_pending("sess-a").is_empty());
+        // 其他会话原封不动。
+        assert_eq!(reg.list_pending("sess-b"), vec!["req-x".to_string()]);
+    }
+
+    // -----------------------------------------------------------------
+    // 子代理后代回落（2026-11-14）—— 卡死回归钉。
+    //
+    // 实锤场景（server.log 11-10 06:33，超星验证任务）：子代理的工具审批
+    // 用自己的会话 id（`父::subagent-*`）登记 pending，但审批卡走**父会话**
+    // 的 WS 流渲染、前端拿父会话 id 结算 → 精确键永远 miss：
+    //   06:33:53.023 WS approval_responses_batch (父, 批准)
+    //   06:33:53.048 REST permission full=true resolved_pending=0
+    //   06:33:54.010 REST approval: miss — no pending entry
+    // 批量卡无人可结 → 超时"自动取消" → 用户感知「授权放手模式就卡死」。
+    // 本组钉保证：父会话 id 的结算（单卡/批量）能落到子代理的 pending 上。
+    // -----------------------------------------------------------------
+
+    /// 单卡：父会话 id 结算 → 落到子代理名下登记的 pending 上。
+    #[tokio::test]
+    async fn resolve_falls_back_to_subagent_pending() {
+        let reg = ApprovalRegistry::with_timeout(Duration::from_secs(600));
+        let rx = reg.request_approval("parent::subagent-1", "call-abc");
+        // 精确键（子代理自己的 id）仍然工作。
+        assert!(reg.is_pending("parent::subagent-1", "call-abc"));
+        // 前端实际走的键：父会话 id。
+        assert!(
+            reg.resolve("parent", "call-abc", hermix_core::ApprovalOutcome::Approved),
+            "parent-id resolve must find the subagent's pending"
+        );
+        assert_eq!(rx.await.unwrap(), hermix_core::ApprovalOutcome::Approved);
+        assert!(!reg.is_pending("parent", "call-abc"));
+    }
+
+    /// 隔离：回落只进本会话的子代理命名空间，别的会话的子代理碰不到。
+    #[tokio::test]
+    async fn resolve_fallback_scoped_to_own_subagents() {
+        let reg = ApprovalRegistry::with_timeout(Duration::from_secs(600));
+        let _rx_mine = reg.request_approval("A::subagent-1", "call-1");
+        let _rx_theirs = reg.request_approval("B::subagent-1", "call-2");
+        // 前缀带会话 id 边界：`A::subagent-` 匹配不到 `B::subagent-1`。
+        assert!(reg.resolve("A", "call-1", hermix_core::ApprovalOutcome::Approved));
+        assert!(!reg.resolve("A", "call-2", hermix_core::ApprovalOutcome::Approved));
+        assert!(reg.is_pending("B", "call-2"), "other session's subagent untouched");
+    }
+
+    /// 批量：coalescer 用父流 id 登记批量索引（`register_batch(parent,…)`），
+    // pending 却在子代理名下 —— 一次 `resolve_batch(parent,…)` 必须全部结掉。
+    #[tokio::test]
+    async fn batch_resolve_reaches_subagent_pendings() {
+        let reg = ApprovalRegistry::with_timeout(Duration::from_secs(600));
+        let rx_a = reg.request_approval("parent::subagent-1", "call-a");
+        let rx_b = reg.request_approval("parent::subagent-2", "call-b");
+        reg.register_batch(
+            "parent",
+            "batch-x",
+            vec!["call-a".into(), "call-b".into()],
+        );
+        let pairs = reg.resolve_batch("parent", "batch-x", hermix_core::ApprovalOutcome::Approved);
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs.iter().all(|(_, ok)| *ok), "every member must resolve");
+        assert_eq!(rx_a.await.unwrap(), hermix_core::ApprovalOutcome::Approved);
+        assert_eq!(rx_b.await.unwrap(), hermix_core::ApprovalOutcome::Approved);
+    }
+
+    /// 刷新重投影：父会话的 `/approvals/pending` 必须带上子代理的挂起卡，
+    /// 否则刷新页面卡就丢了。
+    #[tokio::test]
+    async fn list_pending_includes_subagent_pendings() {
+        let reg = ApprovalRegistry::with_timeout(Duration::from_secs(600));
+        reg.request_approval("parent", "call-p");
+        reg.request_approval("parent::subagent-1", "call-s");
+        reg.request_approval("other", "call-o");
+        let mut ids = reg.list_pending("parent");
+        ids.sort();
+        assert_eq!(ids, vec!["call-p".to_string(), "call-s".to_string()]);
+        assert_eq!(reg.list_pending("other"), vec!["call-o".to_string()]);
+    }
+
+    /// 侧效应判定：`is_pending(parent, rid)` 能看见子代理的挂起，
+    /// 重复响应才不会被误判成「从未存在」而重放侧效应。
+    #[tokio::test]
+    async fn is_pending_sees_subagent_pendings() {
+        let reg = ApprovalRegistry::with_timeout(Duration::from_secs(600));
+        reg.request_approval("parent::subagent-9", "call-9");
+        assert!(reg.is_pending("parent", "call-9"));
+        assert!(reg.resolve("parent", "call-9", hermix_core::ApprovalOutcome::DeniedByUser));
+        assert!(!reg.is_pending("parent", "call-9"));
     }
 }

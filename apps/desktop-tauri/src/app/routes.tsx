@@ -3,7 +3,13 @@
 // 的映射集中为一张路由表，App 主区只需调用 renderRoutes 即可。
 import { lazy, Suspense, type ReactNode } from "react";
 import type { NavPage, Session } from "../types";
+import type { TwinBatch, TwinTask } from "../lib/twinQueue";
+import type { PatrolResult } from "../lib/twinPatrol";
 import { Skeleton, SkeletonCard } from "../components/ui";
+
+// 任务面板的数据形态归 `lib/twinQueue`（纯逻辑 + 单测都在那边），
+// 这里只做对外契约的转发，免得组件同时依赖两个来源。
+export type { TwinBatch, TwinTask };
 
 // 重视图（ECharts / 大表单 / 全量列表）懒加载：首次进入才求值模块并挂载，
 // 且切走即卸载，不占常驻内存。chat 页面是首屏主路径，保持静态导入。
@@ -28,6 +34,12 @@ export const TWIN_SESSION_ID = "twin:ali";
 export interface TwinSendOptions {
   /** 顶部「权限」开关：默认会为高风险操作弹审批。 */
   permissionLevel: "default" | "full";
+  /**
+   * 对话里显示成「你说的话」的那一行。任务面板的批次下发时，线上消息是
+   * 一段带编号清单的指令，直接铺到对话流里没人读得下去 —— 展示用面板
+   * 上那几句需求原文（`；` 分隔）。
+   */
+  display?: string;
 }
 
 /** 她这一轮在干什么 —— 她那页用它就地渲染，不依赖宿主会话表。 */
@@ -59,8 +71,6 @@ export interface TwinPendingDecision {
  * 通道、各自一套发送状态，互不禁用、互不串台。
  */
 export interface TwinInlineApi {
-  /** 投递这一轮；false = 没发出去（错误在 `turn.error`）。 */
-  send: (text: string, opts: TwinSendOptions) => Promise<boolean>;
   /** 停止当前这一轮。 */
   stop: () => void;
   streaming: boolean;
@@ -70,6 +80,35 @@ export interface TwinInlineApi {
   pending: TwinPendingDecision[];
   /** 结算一件待决事项：审批给 decision，澄清把选项放进 answer。 */
   resolve: (id: string, decision: "approved" | "denied", answer?: string) => void;
+
+  // ── 任务面板（2026-11-06 重构：输入口是「下达需求」，不是聊天） ──
+  /** 待拉取的需求，数组顺序 = 优先级（第一项最先开工）。 */
+  queue: TwinTask[];
+  /** 下达一条需求：只入队，不立刻开跑（她按自己的节奏拉取）。 */
+  enqueueTask: (text: string) => void;
+  /** 删除一条还没被拉取的需求。 */
+  removeTask: (id: string) => void;
+  /** 调整优先级：`-1` 上移、`1` 下移。 */
+  moveTask: (id: string, dir: -1 | 1) => void;
+  /** 这一轮整合进来的需求批次（`null` = 还没跑过）；拉取失败时 `status=failed`。 */
+  batch: TwinBatch | null;
+  /**
+   * 把失败批次里还没回面板的需求放回队首。
+   *
+   * 失败时**不无条件自动回队**：这一轮若已经动过手（有工具流水或回复），
+   * 重跑可能重复执行同一条命令 —— 交给用户点一下再决定。
+   */
+  requeueBatch: () => void;
+  /** 「补充」：取回某条待补充需求的原文并从面板移除（改完重新下达）。 */
+  reviseTask: (id: string) => string | null;
+  /** 最近一次心跳巡查的结果（2 分钟一次，零 LLM）；`null` = 还没巡查过。 */
+  patrol: PatrolResult | null;
+  /**
+   * 实验开关（默认关）：巡查发现异常时自动叫她看一眼。
+   * 打开后她可能**自行处理**（重派工单、收尾卡住的任务），成本与后果由用户承担。
+   */
+  autoIntervene: boolean;
+  setAutoIntervene: (on: boolean) => void;
 }
 
 /** 渲染各非 chat 页面所需的 App 级依赖。chat 页面 props 复杂，

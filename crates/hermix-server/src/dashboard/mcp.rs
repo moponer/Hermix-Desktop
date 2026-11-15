@@ -319,6 +319,8 @@ async fn sync_runtime_after_change(
         match entry_to_server_config(updated) {
             Ok((key, cfg)) => {
                 let mgr = state.mcp_manager.clone();
+                let home = state.hermix_home.clone();
+                let registry = state.tool_registry.clone();
                 tokio::spawn(async move {
                     if let Err(e) = mgr.connect(&key, cfg).await {
                         tracing::warn!(
@@ -326,7 +328,12 @@ async fn sync_runtime_after_change(
                             error = %e,
                             "MCP connect on update failed"
                         );
+                        return;
                     }
+                    // 连接成功 = 用户显式启用了一个连接器：确保承载其工具的
+                    // "mcp" 工具集已持久化放行（旧白名单快照没有它时会静默
+                    // 过滤全部 MCP 工具，见 ensure_mcp_toolset_persisted）。
+                    crate::dashboard::skills::ensure_mcp_toolset_persisted(&home, &registry);
                 });
             }
             Err(e) => tracing::warn!(

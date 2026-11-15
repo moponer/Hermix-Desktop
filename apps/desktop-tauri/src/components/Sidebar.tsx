@@ -8,8 +8,8 @@ import {
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
-import { clsx } from "clsx";
-import { reportError } from "../lib/reportError";
+import { IPC } from "../ipc/commands";
+import { clsx } from "clsx";import { reportError } from "../lib/reportError";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { getVersion } from "@tauri-apps/api/app";
@@ -773,7 +773,7 @@ export function Sidebar({
                必须给可见反馈：静默失败时按钮看起来毫无作用（"点断开连接
                无效"），用户无法区分是没执行、还是执行了但连不上。 */
             toastInfo("正在重新连接后端服务…");
-            invoke("restart_sidecar")
+            invoke(IPC.restartSidecar)
               .then(() => toastInfo("后端服务已重连"))
               .catch((e) => {
                 console.error("[Sidebar] restart_sidecar failed:", e);

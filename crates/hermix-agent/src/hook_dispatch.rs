@@ -40,19 +40,30 @@ pub fn invoke_hook(
 pub fn inject_hook_context(results: &[HookResult], ctx: &mut ContextManager) {
     for r in results {
         if let HookResult::InjectContext(text) = r {
-            // Append to the last user message instead of creating a new system message.
-            // This matches Hermes Agent behavior: plugin context goes into the user
-            // message, not the cached system prompt.
-            let messages = ctx.get_messages_mut();
-            if let Some(last_user) = messages.iter_mut().rev().find(|m| m.role == hermix_core::MessageRole::User) {
-                if let Some(ref mut content) = last_user.content {
-                    content.push_str("\n\n");
-                    content.push_str(text);
-                } else {
-                    last_user.content = Some(text.clone());
-                }
-            } else {
-                // Fallback: no user message yet, add as system message
+            if text.trim().is_empty() {
+                continue;
+            }
+            // Append a NEW system message at the tail — never rewrite an
+            // existing one.
+            //
+            // This used to append the text to the *last user message*, which
+            // was already sent to the provider on earlier calls. Provider
+            // prefix caches match bytes from position 0, so mutating that
+            // user row invalidated every token after it (the whole
+            // conversation tail) on each hook, and `PostLlmCall` fires once
+            // per API call. Appending is free: the new row sits after the
+            // cached prefix.
+            //
+            // Dedupe the exact same payload against the recent window —
+            // otherwise a per-call hook with static text grows the history
+            // without adding information.
+            let already_present = ctx
+                .get_messages()
+                .iter()
+                .rev()
+                .take(8)
+                .any(|m| m.content.as_deref() == Some(text.as_str()));
+            if !already_present {
                 ctx.add_message(hermix_core::Message::system(text));
             }
         }

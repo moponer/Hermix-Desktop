@@ -913,6 +913,8 @@ html, body, #root {
    占位必须撑满内容区（inset: 0），否则网页会只盖住一小块。 */
 .web-pane-host { position: relative; overflow: hidden; }
 .web-pane-slot { position: absolute; inset: 0; }
+/* 浮层让位中（子 webview 被 hide）：暗面底色兜底，读作"暂时盖住"而不是空白。 */
+.web-pane-slot.is-yield { background: var(--bg-secondary); }
 .web-pane-url {
   font-family: var(--font-mono); font-size: 12px;
   color: var(--text-secondary);
@@ -1218,8 +1220,9 @@ html, body, #root {
      140  次级模态（设置 .set-overlay / 浏览器面板 .bpanel-overlay）
      200  顶级模态（系统面板 / 关于 .syspanel-overlay）
    注意：这套阶梯只管 DOM 之间的叠放。网页子 webview 是独立 HWND，
-   永远画在所有 DOM 之上——浮层让位由 App.tsx 的
-   floatingChromeOpen 派生布尔驱动 web_set_visible，与 z-index 无关。 */
+   永远画在所有 DOM 之上——浮层让位由 App.tsx 驱动 web_set_visible
+   （浮层根与网页占位矩形相交才 hide，清单见 WEB_YIELD_SELECTORS），
+   与 z-index 无关。 */
 
 /* 表面：两个容器共用。 */
 .ctxmenu, .menubar-pop {

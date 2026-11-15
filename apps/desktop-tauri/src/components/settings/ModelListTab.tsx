@@ -78,6 +78,27 @@ function inlineErrorText(r: api.InlineTestResponse): string {
   }
 }
 
+/** 读取失败的三种成因（`api.EndpointProbe` 去掉成功分支）。 */
+type ReadIssue = "offline" | "unsupported" | "error";
+
+/**
+ * 把成因翻成用户能据以行动的一句话。
+ *
+ * 这一页此前只有一个 `null` 可用，于是「后端刚被重启」被写成「还没有配置任何
+ * 模型」和「当前后端不支持这个开关（需更新后端）」——两句话都在 2026-10-29 的
+ * 实报截图里出现过，而事实是后端正在自动重连、几十秒后就会恢复。
+ */
+function issueText(issue: ReadIssue): string {
+  switch (issue) {
+    case "offline":
+      return "本地后端正在重连，恢复后这里会自动刷新。";
+    case "unsupported":
+      return "当前后端版本不支持这个功能（需更新后端）。";
+    default:
+      return "读取失败，请稍后重试。";
+  }
+}
+
 /** `model_found === false` 时的说明，文案与共用实现见 settingsUtils。 */
 
 export function ModelListTab() {
@@ -103,19 +124,33 @@ export function ModelListTab() {
   const [freeBusy, setFreeBusy] = useState(false);
   /** 待确认的「关闭」动作：免费源是唯一可用模型时，关掉就没模型可用了。 */
   const [confirmDisableFree, setConfirmDisableFree] = useState(false);
+  /** 模型清单这一轮的读取结论（null = 读到了）。列表为空**不再**等价于
+   *  「没有模型」——读不到时保留上一次的行。 */
+  const [modelIssue, setModelIssue] = useState<ReadIssue | null>(null);
+  /** 免费渠道状态这一轮的读取结论（null = 读到了）。 */
+  const [freeIssue, setFreeIssue] = useState<ReadIssue | null>(null);
 
-  const load = useCallback(async (opts?: { silent?: boolean }) => {
+  const load = useCallback(async (
+    opts?: { silent?: boolean },
+  ): Promise<{ model: ReadIssue | null; free: ReadIssue | null }> => {
     // 静默刷新：后台拉取完成后回填列表，不让整页再闪一次加载态。
     if (!opts?.silent) setLoading(true);
     try {
       // 后端是权威：/api/model/list 给出已启用模型与默认模型。
-      const [list, customs, meta, envs, free] = await Promise.all([
-        api.getModelList().catch(() => null),
+      // 两个权威源走探针版：失败必须能区分「不可达 / 没这个接口 / 读失败」。
+      const [modelProbe, customs, meta, envs, freeProbe] = await Promise.all([
+        api.probeModelList(),
         api.getCustomProviders().catch(() => []),
         api.getProviderMeta().catch(() => []),
         api.getEnvVars().catch(() => ({})),
-        api.getFreeChannel().catch(() => null),
+        api.probeFreeChannel(),
       ]);
+      const list = modelProbe.kind === "ok" ? modelProbe.data : null;
+      const free = freeProbe.kind === "ok" ? freeProbe.data : null;
+      const modelIssueNow: ReadIssue | null = modelProbe.kind === "ok" ? null : modelProbe.kind;
+      const freeIssueNow: ReadIssue | null = freeProbe.kind === "ok" ? null : freeProbe.kind;
+      setModelIssue(modelIssueNow);
+      setFreeIssue(freeIssueNow);
       const customIds = new Set(customs.map((c) => c.id));
       const freeIds = new Set(customs.filter((c) => c.is_free_channel).map((c) => c.id));
       setCustoms(customs);
@@ -170,7 +205,10 @@ export function ModelListTab() {
           });
         }
       }
-      setRows(built);
+      // 读不到清单 ≠ 没有模型：`list === null` 时保留上一次的行。内置 catalog
+      // 只存在于后端，把它当空会把「内置模型」整组抹掉（2026-10-29 实报：
+      // 后端重启的两分钟里，这一页只剩一句「还没有配置任何模型」）。
+      if (list) setRows(built);
       setError(null);
       // 后端权威清单镜像进本地缓存 + 广播事件：聊天端 useModelSelector
       // 事件回调立即读到最新（手机面/手工改 config.yaml 等绕过前端写路径
@@ -181,12 +219,36 @@ export function ModelListTab() {
           defaultModel: list.default_model ?? "",
         });
       }
+      return { model: modelIssueNow, free: freeIssueNow };
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      setModelIssue("error");
+      return { model: "error", free: null };
     } finally {
       if (!opts?.silent) setLoading(false);
     }
   }, []);
+
+  // 后端不可达时自愈：每 3s 探一次活，恢复后静默刷新 —— 用户不用守着
+  // 「重试」按钮，也不需要知道刚才发生过一次重启。
+  useEffect(() => {
+    if (modelIssue !== "offline" && freeIssue !== "offline") return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      // 页面在后台时不探活：这是"用户盯着屏幕看不到数据"的兜底，
+      // 没人看的时候每 3s 一次健康检查纯属白烧。
+      if (document.hidden) return;
+      void (async () => {
+        const ok = await api.checkBackendHealth().catch(() => false);
+        if (cancelled || !ok) return;
+        await load({ silent: true });
+      })();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [modelIssue, freeIssue, load]);
 
   useEffect(() => {
     void load();
@@ -283,7 +345,15 @@ export function ModelListTab() {
       );
     } catch (e) {
       // 回读真实状态：开关不能停在没落盘的值上。
-      await load();
+      const { free } = await load();
+      if (free === "offline") {
+        // 后端在这次点击中途被停/重启：既不是「写失败」，更不是「开关不支持」。
+        // 原来这里会把桥的 503 文本原样拼进标题（「…未生效：backend exited」），
+        // 用户看到的是协议黑话。真实状态由上面的回读决定，恢复后自动刷新。
+        setError("后端正在重连，开关没有生效");
+        toastError("后端正在重连，请稍后再试");
+        return;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       setError(`免费模型开关未生效：${msg}`);
       toastError(`免费模型开关未生效：${msg}`);
@@ -429,6 +499,21 @@ export function ModelListTab() {
         </button>
       </div>
 
+      {/* 读取结论与「写入失败」分开展示：前者是后端状态（会自动恢复），
+          后者才是用户动作失败。混在一起会把「正在重连」说成「你的操作失败了」。 */}
+      {modelIssue && (
+        <div className="mt-3 flex items-center gap-2 rounded-[var(--radius-md)] bg-bg-tertiary/60 px-3 py-2 text-[length:var(--text-ui)] text-text-warning">
+          <span className="min-w-0 flex-1">{issueText(modelIssue)}</span>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="btn-flat btn-flat--secondary btn-flat--sm shrink-0"
+          >
+            重试
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="mt-3 px-3 py-2 rounded-[var(--radius-md)] bg-red-500/12 text-[length:var(--text-ui)] text-red-400">
           {error}，请重试。
@@ -447,11 +532,15 @@ export function ModelListTab() {
           description={
             !freeRead
               ? "读取开关状态中…"
-              : freeChannel === null
-                ? "当前后端不支持这个开关（需更新后端）。"
-                : freeChannel.enabled
+              : freeChannel
+                ? freeChannel.enabled
                   ? `已开启 · 当前登记 ${freeChannel.models} 个免费模型。关闭后不再拉取，已拉取的条目会被移除。`
                   : "已关闭 · 不再拉取社区免费模型，之前拉取的条目已移除。"
+                : freeIssue === "offline"
+                  ? "本地后端正在重连，暂时读不到开关状态；恢复后自动刷新。"
+                  : freeIssue === "unsupported"
+                    ? "当前后端不支持这个开关（需更新后端）。"
+                    : "读取开关状态失败，正在自动重试。"
           }
           control={
             <Switch
@@ -513,7 +602,9 @@ export function ModelListTab() {
           </div>
         ) : sorted.length === 0 ? (
           <div className="px-4 py-8 text-center text-xs text-text-muted">
-            还没有配置任何模型。点右上角「添加模型」开始。
+            {modelIssue
+              ? issueText(modelIssue)
+              : "还没有配置任何模型。点右上角「添加模型」开始。"}
           </div>
         ) : (
           sorted.map((row, i) => {

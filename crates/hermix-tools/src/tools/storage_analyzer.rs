@@ -471,7 +471,7 @@ impl StorageAnalyzerHandler {
             ));
         }
         ScanReport {
-            generated_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            generated_at: hermix_core::time::beijing_now().format("%Y-%m-%d %H:%M:%S (北京时间)").to_string(),
             scan_seconds: elapsed,
             system,
             groups,
@@ -520,7 +520,7 @@ impl StorageAnalyzerHandler {
             ));
         }
         Ok(ScanReport {
-            generated_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            generated_at: hermix_core::time::beijing_now().format("%Y-%m-%d %H:%M:%S (北京时间)").to_string(),
             scan_seconds: elapsed,
             system: json!({ "path": path.to_string_lossy().to_string() }),
             groups,

@@ -12,8 +12,8 @@
 // - 页面画完选区 UI 回报 screenshot_overlay_ready，Rust 才亮窗。
 // - 进编辑态、编辑器渲染完成后调 screenshot_backdrop_hide 收掉幕布——
 //   编辑器画布与幕布是同一块像素，切换无缝。
-import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "../ipc";
+import { IPC } from "../ipc/commands";
+import { useCallback, useEffect, useRef, useState } from "react";import { invoke } from "../ipc";
 import { listen } from "@tauri-apps/api/event";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import { CANCEL, CLOSE, CONFIRM } from "./strings";
@@ -71,7 +71,7 @@ export function ScreenshotOverlay() {
   const snapAtRef = useRef(0);
 
   const cancel = useCallback(() => {
-    void invoke("screenshot_cancel").catch(() => {});
+    void invoke(IPC.screenshotCancel).catch(() => {});
   }, []);
 
   // 会话信息：先挂事件监听，再补拉一次当前会话。
@@ -83,7 +83,7 @@ export function ScreenshotOverlay() {
     });
     void (async () => {
       try {
-        const st = await invoke<SessionState | null>("screenshot_session_info");
+        const st = await invoke<SessionState | null>(IPC.screenshotSessionInfo);
         if (stopped || !st) return;
         if ("error" in st) setLoadError(st.error);
         else applySession(st);
@@ -115,7 +115,7 @@ export function ScreenshotOverlay() {
     let inner = 0;
     const outer = requestAnimationFrame(() => {
       inner = requestAnimationFrame(() => {
-        void invoke("screenshot_overlay_ready").catch(() => {});
+        void invoke(IPC.screenshotOverlayReady).catch(() => {});
       });
     });
     return () => {
@@ -127,7 +127,7 @@ export function ScreenshotOverlay() {
   // 进编辑态：编辑器渲染选区像素后收掉原生幕布（同一块像素，无缝切换）。
   useEffect(() => {
     if (!sel) return;
-    void invoke("screenshot_backdrop_hide").catch(() => {});
+    void invoke(IPC.screenshotBackdropHide).catch(() => {});
   }, [sel]);
 
   /** CSS 像素 → 虚拟屏幕物理坐标。 */
@@ -160,7 +160,7 @@ export function ScreenshotOverlay() {
     if (!f || b.w < 4 || b.h < 4) return;
     const s = window.devicePixelRatio || 1;
     try {
-      const src = await invoke<string>("screenshot_select", {
+      const src = await invoke<string>(IPC.screenshotSelect, {
         x: f.origin_x + Math.round(b.x * s),
         y: f.origin_y + Math.round(b.y * s),
         width: Math.round(b.w * s),
@@ -209,7 +209,7 @@ export function ScreenshotOverlay() {
     if (now - snapAtRef.current < SNAP_THROTTLE_MS) return;
     snapAtRef.current = now;
     const p = toPhysical(e.clientX, e.clientY);
-    void invoke<WindowRect | null>("screenshot_window_at", { x: p.x, y: p.y }).then((r) => {
+    void invoke<WindowRect | null>(IPC.screenshotWindowAt, { x: p.x, y: p.y }).then((r) => {
       const key = r ? `${r.x},${r.y},${r.width},${r.height}` : "none";
       if (key === lastSnapKeyRef.current) return;
       lastSnapKeyRef.current = key;

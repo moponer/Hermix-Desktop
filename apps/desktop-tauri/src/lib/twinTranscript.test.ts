@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { mergeTranscript, toTranscriptRows, TRANSCRIPT_CAP } from "./twinTranscript";
+import {
+  mergeTranscript,
+  toTranscriptRows,
+  ROW_MAX_CHARS,
+  TRANSCRIPT_CAP,
+} from "./twinTranscript";
 
 const row = (role: string, text: string) => ({ role, text });
 
@@ -16,9 +21,13 @@ describe("toTranscriptRows", () => {
     expect(rows).toEqual([row("user", "在吗"), row("assistant", "在。")]);
   });
 
-  it("超长文本截断到 300 字并加省略号", () => {
-    const rows = toTranscriptRows([{ role: "assistant", content: "字".repeat(500) }]);
-    expect(rows[0].text).toHaveLength(300);
+  it("超长文本截断到上限并加省略号", () => {
+    // 上限从常量取：这条用例钉的是"有界且带省略号"，不是某个具体数字
+    // （2026-11-06 从 300 提到 1200，部署/汇报说明不能被砍半句）。
+    const rows = toTranscriptRows([
+      { role: "assistant", content: "字".repeat(ROW_MAX_CHARS + 200) },
+    ]);
+    expect(rows[0].text).toHaveLength(ROW_MAX_CHARS);
     expect(rows[0].text.endsWith("…")).toBe(true);
   });
 

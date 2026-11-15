@@ -315,10 +315,9 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         "quit" => {
             // 清理收口在 `shutdown::cleanup`（sidecar + 索引守护进程），
-            // 与 `RunEvent::Exit` 共用同一份实现。`app.exit()` 不触发窗口
-            // `Destroyed`，所以这里必须显式先清理再退。
-            crate::shutdown::cleanup(app);
-            app.exit(0);
+            // 与 `RunEvent::Exit` 共用同一份实现；"先清理再退"合成
+            // `cleanup_and_exit`，与主窗销毁路径同一入口。
+            crate::shutdown::cleanup_and_exit(app, "tray-quit");
         }
         _ => {}
     }

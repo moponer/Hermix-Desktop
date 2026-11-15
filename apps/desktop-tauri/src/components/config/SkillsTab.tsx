@@ -156,9 +156,11 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         />
       ) : (
         categoryOrder.map((cat) => (
-          <section key={cat}>
+          <section key={cat} className="@container">
             <ToolGroupTitle title={catLabel(cat)} count={grouped[cat].length} />
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {/* 容器查询：设置面板固定 ~760px，`xl:`（视口 1280）曾在这里
+                强行放三列，卡片被压到 240px。 */}
+            <div className="grid grid-cols-1 gap-2 @2xl:grid-cols-2 @5xl:grid-cols-3">
               {grouped[cat].map((s) => (
                 <SkillCard key={s.name} skill={s} catLabel={catLabel} onToggle={(name) => {
                   setSkills((prev) => prev.map((p) => p.name === name ? { ...p, enabled: !p.enabled } : p));

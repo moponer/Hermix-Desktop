@@ -131,6 +131,7 @@ fn arb_gateway_config() -> impl Strategy<Value = GatewayConfig> {
                 free_channel: FreeChannelConfig::default(),
                 approval: ApprovalConfig::default(),
                 security: SecurityConfig::default(),
+                storage: hermix_config::StorageConfig::default(),
                 skills: SkillsSettings::default(),
                 mcp_servers: Vec::new(),
                 profile: ProfileConfig::default(),

@@ -1,5 +1,5 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
+import { IPC } from "./ipc/commands";
+import React from "react";import ReactDOM from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "./ipc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -131,7 +131,7 @@ async function mainEntry() {
     );
   }
 
-  // 单次 health 探测，自带超时 race：即使 `invoke("backend_ready")` 永久
+  // 单次 health 探测，自带超时 race：即使 `invoke(IPC.backendReady)` 永久
   // pending，本次探测也会在 timeoutMs 后判定为 false，轮询不会被单个 hung
   // invoke 拖死（否则 while 循环永远停在 await 上，20s 兜底也到不了）。
   function checkOnce(timeoutMs: number): Promise<boolean> {
@@ -200,6 +200,19 @@ async function mainEntry() {
     safeDismiss(false);
   });
 
+  // 上面那条监听几乎必然错过事件：`hermix:backend-error` 在 Rust setup 里 emit，
+  // 而注册监听要等页面加载完 —— 事件早于监听者。挂载后回查一次启动期致命错误，
+  // 把「后端未连接」背后的真实原因（二进制缺失 / 被杀软拦 / 库被占 / 启动即崩）
+  // 补送到用户面前。回查失败（旧 exe 无此命令）静默。
+  void invoke<{ bootError?: string }>(IPC.backendDiagnosis)
+    .then((d) => {
+      const reason = (d?.bootError ?? "").trim();
+      if (!reason) return;
+      toastError(`本地服务启动失败：${reason}`);
+      safeDismiss(false);
+    })
+    .catch(() => {});
+
   // 启动阶段文案：Rust setup 的每个真实步骤都会 emit `hermix:boot-stage`。
   // setup 可能早于前端 listen，所以挂载后回查一次当前阶段补上丢失的事件。
   // 收到即推进阶段；Rust 端最后一步 emit 的文案含"就绪"——此时全阶段点亮
@@ -214,7 +227,7 @@ async function mainEntry() {
   // 挂载后回查当前阶段（setup 可能早于 listen，补上错过的事件）。
   // 回查失败 / 返回空（旧 exe 没有 boot_stage command）都开爬行兜底 ——
   // 修复"进度条永远 0%、启动项全灰"的死屏观感。
-  invoke<string>("boot_stage")
+  invoke<string>(IPC.bootStage)
     .then((stage) => {
       if (stage) {
         advanceSplashStage(stage);
@@ -256,7 +269,7 @@ async function mainEntry() {
     if (raw) {
       const cfg = JSON.parse(raw) as { enabled: boolean; hotkey: string };
       void invoke<{ active: string | null; substituted: boolean }>(
-        "screenshot_apply_config",
+        IPC.screenshotApplyConfig,
         { enabled: cfg.enabled, hotkey: cfg.hotkey },
       ).catch((err) => console.warn("[screenshot] 配置回放失败:", err));
     }
@@ -272,7 +285,7 @@ async function mainEntry() {
         hotkey: string;
         filter?: Record<string, unknown>;
       };
-      void invoke("file_search_apply_config", { enabled: cfg.enabled, hotkey: cfg.hotkey }).catch(
+      void invoke(IPC.fileSearchApplyConfig, { enabled: cfg.enabled, hotkey: cfg.hotkey }).catch(
         (err) => console.warn("[filesearch] 配置回放失败:", err),
       );
       if (cfg.filter) {
@@ -313,7 +326,7 @@ async function mainEntry() {
 const HEALTH_TIMEOUT_MS = 20_000;
 const HEALTH_POLL_MS = 500;
 // 终极兜底：无论 health 探测 / server-ready 事件是否到达，到时无条件关掉
-// splash。防止 `invoke("backend_ready")` 在异常情况下永久 pending 把整段
+// splash。防止 `invoke(IPC.backendReady)` 在异常情况下永久 pending 把整段
 // 关闭逻辑钉死，导致界面永远卡在启动页。splash 只是加载遮罩，真正后端离线
 // 状态由 BackendStatus / ConnectionIndicator 呈现，关掉遮罩不丢任何信息。
 const HARD_FALLBACK_MS = 22_000;

@@ -32,6 +32,8 @@ import { usePermissionLevel, type PermissionLevel } from "../hooks/useExpert";
 import { friendlyModelName } from "./ModelSelector";
 import type { AutomationTask, Session } from "../types";
 import { AliCharacter, type AliState } from "./twin/AliCharacter";
+import { TwinReportCards } from "./twin/TwinReportCards";
+import { TwinTaskQueue } from "./twin/TwinTaskQueue";
 import { TWIN_SESSION_ID, type TwinInlineApi } from "../app/routes";
 import {
   mergeTranscript,
@@ -39,13 +41,59 @@ import {
   TRANSCRIPT_CAP,
   type TranscriptRow,
 } from "../lib/twinTranscript";
-import { dailyLine, pad2, relativeCompact } from "../lib/readout";
+import { clockTime, dailyLine, pad2, relativeCompact, sessionRowLabel } from "../lib/readout";
+import { verdictLines } from "../lib/twinQueue";
+import type { PatrolCode, PatrolFinding } from "../lib/twinPatrol";
 
 /** 落库历史的轮询间隔。她这一轮跑着时暂停，避免轮询结果落后于屏幕造成回跳。 */
 const HISTORY_POLL_MS = 8000;
 
+/** 面板/历史请求的超时预算。后端被长任务（如整盘扫描）拖住时，这些请求会
+ *  一直 pending —— 无限转圈的"加载中"比一条超时报错更伤：用户分不清是
+ *  在工作还是挂了。到点如实报错，轮询路径下一轮自会重试。 */
+const BOARD_TIMEOUT_MS = 10_000;
+
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: number | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<never>((_, reject) => {
+        timer = window.setTimeout(
+          () => reject(new Error(`${label} 超时（${Math.round(ms / 1000)}s 无响应）`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) window.clearTimeout(timer);
+  }
+}
+
 /** 手动切回对话后，这段时间内不再被自动切走（防抢屏）。 */
 const AUTO_SWITCH_COOLDOWN_MS = 30_000;
+
+/**
+ * 团队执行通道（派单 / 跟进 / 验收）—— 阿黎真正"建团队"的动作。
+ *
+ * 2026-11-06 与取数通道拆开：旧表把 `delegate_task`（同步子代理）和
+ * `dispatch_member`（长任务执行单元）混在同一行，用户看到的是「发布到
+ * 团队：delegate_task」—— 明明是子代理在跑，却写着"团队"，判断无从做。
+ * 现在两类各自一行，名字不同、含义不同。
+ */
+const TEAM_TOOL_NAMES = new Set([
+  "dispatch_member",
+  "assign_task",
+  "task_create",
+  "task_update",
+  "review_member",
+  "review_result",
+  "get_member_result",
+  "stop_member",
+]);
+
+/** 取数通道（一次性读/分析，回传结论）—— 不是团队，不产交付物。 */
+const FETCH_TOOL_NAMES = new Set(["delegate_task", "get_subagent_result", "stop_subagent"]);
 
 interface TwinViewProps {
   /** 宿主会话表 —— 「最近会话」用它，避免额外一次全量拉取。 */
@@ -76,8 +124,15 @@ interface TwinViewProps {
   twin: TwinInlineApi;
 }
 
-/** 中轴两态。数据态不是装饰：它承载「现在这一刻最该看的那个数」。 */
-type CenterMode = "chat" | "data" | "tasks";
+/**
+ * 中轴四态（2026-11-06 重构）。
+ *
+ * 面板把「收需求」与「看执行」拆开：`queue` 是待拉取的需求（可排序），
+ * `team` 是团队任务看板（成员工单），`data` 是状态读数（本轮整合了
+ * 哪些需求、发布到团队了什么）。此前只有「对话 / 数据」两态，需求与
+ * 执行混在一条对话流里，用户没法表达优先级，也看不出哪条做完了。
+ */
+type CenterMode = "chat" | "queue" | "team" | "data";
 
 const STATUS_TEXT: Record<string, string> = {
   ok: "上次成功",
@@ -130,7 +185,7 @@ export function TwinView({
   const [workDays, setWorkDays] = useState<api.DailyMemoryDay[]>([]);
   /** 落库历史（轮询拿到）。手机投递进来的轮次、App 重启前的旧轮次都在这。 */
   const [history, setHistory] = useState<TranscriptRow[]>([]);
-  /** 内联口自己的提示：没发出去的原因。 */
+  /** 面板队列表头的一次性提示（例如未入队的重复需求）。 */
   const [notice, setNotice] = useState<string | null>(null);
   /** 无选项澄清的就地输入（服务端要求自由文本时用）。 */
   const [clarifyDraft, setClarifyDraft] = useState<Record<string, string>>({});
@@ -153,7 +208,11 @@ export function TwinView({
   const loadHistory = useCallback(async () => {
     if (streamingRef.current) return;
     try {
-      const res = await api.getSessionMessages(TWIN_SESSION_ID, { limit: 12 });
+      const res = await withTimeout(
+        api.getSessionMessages(TWIN_SESSION_ID, { limit: 12 }),
+        BOARD_TIMEOUT_MS,
+        "值守历史",
+      );
       if (!mountedRef.current) return;
       setHistory(toTranscriptRows(res.messages).slice(-TRANSCRIPT_CAP));
     } catch {
@@ -227,11 +286,15 @@ export function TwinView({
       setError(null);
     }
     try {
-      const [list, active, days] = await Promise.all([
-        api.getAutomationTasks(),
-        api.getActiveAutomationRuns(),
-        api.getDailyMemoryList(14).catch(() => [] as api.DailyMemoryDay[]),
-      ]);
+      const [list, active, days] = await withTimeout(
+        Promise.all([
+          api.getAutomationTasks(),
+          api.getActiveAutomationRuns(),
+          api.getDailyMemoryList(14).catch(() => [] as api.DailyMemoryDay[]),
+        ]),
+        BOARD_TIMEOUT_MS,
+        "值守面板",
+      );
       setTasks(list);
       setActiveRuns(active);
       // 值守口径：daily_memory 摘要行的会话 id 可能带 `[twin:…]` 方括号
@@ -317,6 +380,41 @@ ${d.conclusions}`,
     return rows;
   }, [twin.turn, twin.streaming]);
 
+  /**
+   * 「发布到团队」= 本轮流水里与派单/工单相关的动作。
+   *
+   * 这是"需求真的派出去了"唯一可核对的信号：她有没有调 dispatch_member /
+   * assign_task、工单有没有更新，全在流水里。不做二次加工 —— 面板读的
+   * 就是这一步真实发生的工具名 + 参数摘要。
+   */
+  const teamPublish = useMemo(
+    () =>
+      (twin.turn?.events ?? []).filter((e) => TEAM_TOOL_NAMES.has(e.split(":")[0].trim())),
+    [twin.turn],
+  );
+
+  /**
+   * 「取数」= 本轮调了同步子代理。
+   *
+   * 单独一行的理由：`delegate_task` 会把这一轮卡住直到返回，且**不产出
+   * 交付物**。她该用它读大文件/多文件检索，不该用它跑任务（那是
+   * dispatch_member 的活）。分成两行，用户一眼能看出"这轮是在取数还是在
+   * 派人"，也看得出她把哪一类搞混了。
+   */
+  const fetchPublish = useMemo(
+    () =>
+      (twin.turn?.events ?? []).filter((e) => FETCH_TOOL_NAMES.has(e.split(":")[0].trim())),
+    [twin.turn],
+  );
+
+  /**
+   * 她对这批需求的归档判断 —— **原文**，来自她回复里的 `【归档】…` 行。
+   *
+   * 前端不再按关键词猜"这条属于哪类"：两条需求是不是同一件事，只有她知道
+   * 自己手上在做什么。没写就如实显示"没写"，不替她补一个分类。
+   */
+  const archive = useMemo(() => verdictLines(twin.turn?.reply ?? ""), [twin.turn]);
+
   const recentSessions = useMemo(
     () =>
       // 值守口径（2026-10-25 用户验收）：这里只显示**阿黎工作域**的会话
@@ -354,10 +452,12 @@ ${d.conclusions}`,
     pending.length > 0
       ? `等你决定 · ${pending.length} 件待办`
       : twin.streaming
-        ? "正在执行 · 你刚交代的这一轮"
-        : busy > 0
-          ? `运行中 · ${busy} 个任务在跑`
-          : `静默观察 · ${enabledTasks.length} 个任务待触发`;
+        ? `正在执行 · 本轮 ${twin.batch?.tasks.length ?? 0} 条需求`
+        : twin.queue.length > 0
+          ? `待拉取 · ${twin.queue.length} 条需求排队`
+          : busy > 0
+            ? `运行中 · ${busy} 个任务在跑`
+            : `静默观察 · ${enabledTasks.length} 个任务待触发`;
 
   // 角色姿态与"她在干什么"是同一件事的两个表达，必须同源。
   const aliState: AliState = error
@@ -375,14 +475,16 @@ ${d.conclusions}`,
       : twin.streaming
       ? twin.turn?.activity
         ? `正在用 ${twin.turn.activity} 做事，回复会直接出现在中间`
-        : "正在跑你刚交代的这一轮"
-      : loading
-        ? "正在核对任务状态"
-        : busy > 0
-          ? `盯着 ${busy} 个在跑的任务，异常才出声`
-          : enabledTasks.length > 0
-            ? `${enabledTasks.length} 个任务待触发，暂时没有要打扰你的事`
-            : "还没有启用的任务，我这儿暂时没什么可盯的";
+        : "正在执行面板拉下来的这一批需求"
+      : twin.queue.length > 0
+        ? `${twin.queue.length} 条需求在面板里排队，她下一轮就拉`
+        : loading
+          ? "正在核对任务状态"
+          : busy > 0
+            ? `盯着 ${busy} 个在跑的任务，异常才出声`
+            : enabledTasks.length > 0
+              ? `${enabledTasks.length} 个任务待触发，暂时没有要打扰你的事`
+              : "还没有启用的任务，我这儿暂时没什么可盯的";
 
   const checkedText =
     checkedAt == null
@@ -422,6 +524,23 @@ ${d.conclusions}`,
     return () => window.clearTimeout(t);
   }, [permArmed]);
 
+  /**
+   * 落档 = 本地偏好 + **立刻通知后端**。
+   *
+   * 只写 localStorage 时，后端要到**下一条消息**才从 `permission` 字段得知
+   * 用户已经放手（档位按轮捕获）。后果 2026-11-06 实报：在值守页点完
+   * 「确认放手」，正在跑的这一轮仍然一张张弹审批卡，用户得出"放手模式无效"
+   * 的结论。`POST /v1/sessions/{id}/permission` 是热更加放行已挂起请求的
+   * 入口（主对话 2026-10-31 起就走它），这里补齐同一条。
+   */
+  const applyLevel = useCallback(
+    (next: PermissionLevel) => {
+      setLevel(next);
+      void api.setSessionPermission(TWIN_SESSION_ID, next);
+    },
+    [setLevel],
+  );
+
   const pickPermission = useCallback(
     (next: PermissionLevel) => {
       if (next === level) return;
@@ -430,9 +549,9 @@ ${d.conclusions}`,
         return;
       }
       setPermArmed(false);
-      setLevel("default");
+      applyLevel("default");
     },
-    [level, setLevel],
+    [level, applyLevel],
   );
 
   /** 中轴环读的都是真实量：有 max_runs 才有百分比，否则只报次数。 */
@@ -447,26 +566,65 @@ ${d.conclusions}`,
   const ringR = 130;
   const ringC = 2 * Math.PI * ringR;
 
-  /** 发自这一轮。失败不吞：把原因留在输入口上方，草稿已清空可重打。 */
-  const sendDraft = useCallback(async () => {
-    const text = draft.trim();
-    if (!text) return;
-    if (twin.streaming) {
-      setNotice("她正在跑上一轮，等这次结束再发");
-      return;
-    }
-    setDraft("");
-    setNotice(null);
-    const ok = await twin.send(text, { permissionLevel: level });
-    if (!ok) setNotice("这一轮没发出去（原因见下方错误）");
-  }, [draft, twin, level]);
-
+  /**
+   * 下达一条需求 —— **只入队，不直接开跑**，而且永远不因为"她在跑"而拒绝。
+   *
+   * 两处旧缺陷一起在这里收口：
+   * ① 输出未结束时输入框被禁用，人只能干等（2026-11-06 实报）；
+   * ② 发不出去时只写一句「原因见下方错误」，而下方根本没有错误文本
+   *    （截图实报）—— 现在入队是纯本地操作，不产生"发送失败"这种状态；
+   *    真正下发失败时，原因挂在「任务面板」里那一批上，写的是原始错误。
+   */
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    void sendDraft();
+    const text = draft.trim();
+    if (!text) return;
+    // 重复需求不会入队（面板里已有一条原文一样的）——如实说一句，别假装收下了。
+    if (twin.queue.some((t) => t.text === text)) {
+      setNotice("这条已经在面板里了");
+      return;
+    }
+    twin.enqueueTask(text);
+    setDraft("");
+    setNotice(null);
   };
 
   const sendDisabled = draft.trim().length === 0;
+
+  /** 「补充」：把待补充的需求取回草稿（并从面板移除），改完重新下达。 */
+  const reviseFromPanel = useCallback(
+    (id: string) => {
+      const text = twin.reviseTask(id);
+      if (text == null) return;
+      setDraft(text);
+      setCenter("chat");
+    },
+    [twin],
+  );
+
+  /**
+   * 巡查建议的"下一步"。每条建议都对应一个真实操作 —— 只说"可能卡住了"
+   * 而不给按钮，等于把问题丢回给用户自己找入口。
+   */
+  const patrolAction = useCallback(
+    (code: PatrolCode): { label: string; run: () => void } | null => {
+      switch (code) {
+        case "stalled":
+          return { label: "停止这一轮", run: twin.stop };
+        case "blocked":
+        case "batch_failed":
+        case "queue_waiting":
+          return { label: "去任务面板", run: () => setCenter("queue") };
+        case "tickets_failed":
+          return { label: "看团队看板", run: () => setCenter("team") };
+        default:
+          return null;
+      }
+    },
+    [twin],
+  );
+
+  const findings: PatrolFinding[] = twin.patrol?.findings ?? [];
 
   return (
     <div className="twin-screen" data-mode={aliState}>
@@ -482,7 +640,13 @@ ${d.conclusions}`,
             title={stateText}
           >
             <i aria-hidden />
-            {pending.length > 0 ? "待你决定" : busy > 0 ? "值守中" : "静默"}
+            {pending.length > 0
+              ? "待你决定"
+              : busy > 0
+                ? "值守中"
+                : twin.queue.length > 0
+                  ? "待拉取"
+                  : "静默"}
           </span>
           <span className="twin-head__sub">{stateText}</span>
         </div>
@@ -497,6 +661,9 @@ ${d.conclusions}`,
               变时发生，不会成为周期性抖动。数字不可聚焦，重建不丢焦点。 */}
           <span className="twin-head__kv">
             在跑 <b key={busy}>{pad2(busy)}</b>
+          </span>
+          <span className="twin-head__kv" title="任务面板里还没被拉走的需求">
+            待拉取 <b key={twin.queue.length}>{pad2(twin.queue.length)}</b>
           </span>
           <span className="twin-head__kv">
             已启用 <b key={enabledTasks.length}>{pad2(enabledTasks.length)}</b>
@@ -520,7 +687,7 @@ ${d.conclusions}`,
                   type="button"
                   className="twin-perm__opt twin-perm__opt--danger"
                   onClick={() => {
-                    setLevel("full");
+                    applyLevel("full");
                     setPermArmed(false);
                   }}
                 >
@@ -567,7 +734,7 @@ ${d.conclusions}`,
           <AlertTriangle className="icon-sm" aria-hidden />
           <b>放手模式</b>
           <span>她不再申请权限：命令、删除、写配置都会直接执行，出错由你承担。</span>
-          <button type="button" className="chip-flat" onClick={() => setLevel("default")}>
+          <button type="button" className="chip-flat" onClick={() => applyLevel("default")}>
             切回默认
           </button>
         </div>
@@ -688,36 +855,45 @@ ${d.conclusions}`,
               {recentSessions.length === 0 ? (
                 <p className="twin-muted">还没有会话记录。</p>
               ) : (
-                recentSessions.map((s) => (
-                  <div key={s.id} className="twin-row twin-row--act">
-                    {/* 一行一个会话：标题是正文（主墨 13px），时间是元信息（弱墨，
-                        右对齐）。条数不进行内 —— 它和面板头的「N 条」同单位却
-                        不同含义（会话数 / 消息数），摆在一行里必被读错；
-                        需要时挂在 title 上。 */}
-                    <button
-                      type="button"
-                      className="twin-row__open"
-                      title={`${formatRelative(s.updated_at)}${
-                        typeof s.message_count === "number"
-                          ? ` · 共 ${s.message_count} 条消息`
-                          : ""
-                      }`}
-                      onClick={() => onOpenSession(s.id)}
-                    >
-                      <span className="twin-row__m">{s.title || "未命名会话"}</span>
-                      <span className="twin-row__t">{relativeCompact(s.updated_at)}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="twin-row__del"
-                      aria-label={`删除会话 ${s.title || s.id}`}
-                      title="删除这个会话"
-                      onClick={() => onDeleteSession(s.id)}
-                    >
-                      <X />
-                    </button>
-                  </div>
-                ))
+                recentSessions.map((s) => {
+                  // 阿黎工作域的会话**永远**拿不到标题（自动起名只走主对话），
+                  // 库里是 NULL → 接口回落成 `New chat`。两行一样的「New chat」
+                  // 等于没写（2026-11-06 实报）：按 id 归类成
+                  // 「阿黎的对话 / 自动化 · 任务名 / 成员工单」。
+                  const label = sessionRowLabel(s.id, s.title, (autoId) =>
+                    tasks.find((t) => t.id === autoId)?.name,
+                  );
+                  return (
+                    <div key={s.id} className="twin-row twin-row--act">
+                      {/* 一行一个会话：标题是正文（主墨 13px），时间是元信息（弱墨，
+                          右对齐）。条数不进行内 —— 它和面板头的「N 条」同单位却
+                          不同含义（会话数 / 消息数），摆在一行里必被读错；
+                          需要时挂在 title 上。 */}
+                      <button
+                        type="button"
+                        className="twin-row__open"
+                        title={`${formatRelative(s.updated_at)}${
+                          typeof s.message_count === "number"
+                            ? ` · 共 ${s.message_count} 条消息`
+                            : ""
+                        }`}
+                        onClick={() => onOpenSession(s.id)}
+                      >
+                        <span className="twin-row__m">{label}</span>
+                        <span className="twin-row__t">{relativeCompact(s.updated_at)}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="twin-row__del"
+                        aria-label={`删除会话 ${label}`}
+                        title="删除这个会话"
+                        onClick={() => onDeleteSession(s.id)}
+                      >
+                        <X />
+                      </button>
+                    </div>
+                  );
+                })
               )}
             </div>
           </section>
@@ -760,30 +936,38 @@ ${d.conclusions}`,
             <button
               type="button"
               className="twin-ctab"
-              aria-pressed={center === "data"}
-              onClick={() => setCenter("data")}
+              aria-pressed={center === "queue"}
+              onClick={() => setCenter("queue")}
             >
-              数据
+              任务面板
             </button>
             <button
               type="button"
               className="twin-ctab"
-              aria-pressed={center === "tasks"}
-              onClick={() => setCenter("tasks")}
+              aria-pressed={center === "team"}
+              onClick={() => setCenter("team")}
             >
-              任务
+              团队看板
+            </button>
+            <button
+              type="button"
+              className="twin-ctab"
+              aria-pressed={center === "data"}
+              onClick={() => setCenter("data")}
+            >
+              状态
             </button>
             <span className="twin-ctabs__spacer" />
             {pending.length > 0 ? (
               center === "data" ? (
                 <span className="twin-ctabs__note">
                   <i aria-hidden />
-                  有 {pending.length} 件待办，已切到数据
+                  有 {pending.length} 件待办，已切到状态
                 </span>
               ) : (
                 <span className="twin-ctabs__note">
                   <i aria-hidden />
-                  有 {pending.length} 件待办，点「数据」看详情
+                  有 {pending.length} 件待办，点「状态」看详情
                 </span>
               )
             ) : (
@@ -807,9 +991,9 @@ ${d.conclusions}`,
                 {transcript.length === 0 && !twin.streaming ? (
                   <div className="twin-idle">
                     <span className="twin-idle__scope" aria-hidden />
-                    <p className="twin-idle__line">CH ALI-01 · 待输入</p>
+                    <p className="twin-idle__line">CH ALI-01 · 待下达</p>
                     <p className="twin-idle__hint">
-                      她还没有说过话 —— 在下面说一句，这一轮直接在这台机器上执行
+                      还没有接到需求 —— 在下面下达一条，她从任务面板拉走后在这台机器上执行
                     </p>
                   </div>
                 ) : null}
@@ -843,6 +1027,20 @@ ${d.conclusions}`,
                     />
                   </div>
                 ) : null}
+
+                {/* 部署与汇报（2026-11-06）：她交付的是工单结果，不是文件。
+                    本批开工之后的工单直接摆进对话流 —— 派了谁、做到第几轮、
+                    验收判定、交付说明正文都能就地读到。数据取自
+                    `GET /api/members`，不解析她的回复去猜状态。 */}
+                <TwinReportCards
+                  since={twin.batch?.startedAt ?? null}
+                  onRequestReport={(m) =>
+                    twin.enqueueTask(
+                      `【跟进】工单 ${m.member_id}（${m.role}）已结束：请验收并把结论汇报给我，` +
+                        `说明达成了什么、证据是什么、还差什么。`,
+                    )
+                  }
+                />
 
                 {/* 就地拍板：她这一轮在服务端停住等这个决定，
                     不答就等于 600s 后自动拒绝 —— 按钮必须在视线里。 */}
@@ -913,12 +1111,16 @@ ${d.conclusions}`,
                 )}
               </div>
 
-              {twin.turn?.error || notice ? (
+              {/* 错误只印真错误：`turn.error` 由发送器写入（含原始原因）。
+                  notice 是本地提示（重复需求），单独一行弱化显示 —— 此前
+                  两类混在一句「原因见下方错误」里，而下方什么都没有。 */}
+              {twin.turn?.error ? (
                 <p className="twin-error twin-error--inline" role="alert">
                   <AlertTriangle className="icon-md" />
-                  <span>{twin.turn?.error ?? notice}</span>
+                  <span>{twin.turn.error}</span>
                 </p>
               ) : null}
+              {notice ? <p className="twin-queue__hint twin-queue__notice">{notice}</p> : null}
 
               <form className="twin-cinput" onSubmit={submit}>
                 <div className="twin-cfield">
@@ -930,14 +1132,24 @@ ${d.conclusions}`,
                       manualAtRef.current = Date.now();
                     }}
                     placeholder={
-                      twin.streaming ? "她正在跑这一轮" : "跟她说点什么"
+                      twin.queue.length > 0
+                        ? `下达需求（面板里还有 ${twin.queue.length} 条待拉取）`
+                        : "下达一条需求，她拉取后在这里执行"
                     }
-                    aria-label="给助手阿黎发消息"
-                    disabled={twin.streaming}
+                    aria-label="下达一条需求给助手阿黎"
+                    // 不再随 streaming 禁用：她在跑的时候人照样可以排需求
+                    // （2026-11-06 实报「输出没结束就输入不了」）。
                   />
-                  {/* 停止必须在这一格：她在跑的时候输入框是禁用的，若停在
-                      右翼「她」那张卡里，用户在主视线里找不到打断的入口
-                      （2026-10-27 实报「还有没有停止按钮」）。 */}
+                  <button
+                    type="submit"
+                    className="twin-cfield__send"
+                    aria-label="下达需求"
+                    disabled={sendDisabled}
+                  >
+                    下达
+                  </button>
+                  {/* 停止与下达并存：两个动作互不替代（旧版把发送键换成停止，
+                      于是跑着的时候既发不了也不能"先排后发"）。 */}
                   {twin.streaming ? (
                     <button
                       type="button"
@@ -947,21 +1159,24 @@ ${d.conclusions}`,
                     >
                       停止
                     </button>
-                  ) : (
-                    <button
-                      type="submit"
-                      className="twin-cfield__send"
-                      aria-label="发送"
-                      disabled={sendDisabled}
-                    >
-                      发送
-                    </button>
-                  )}
+                  ) : null}
                 </div>
               </form>
             </div>
-          ) : center === "tasks" ? (
-            <MissionBoardView embedded />
+          ) : center === "queue" ? (
+            <TwinTaskQueue
+              queue={twin.queue}
+              batch={twin.batch}
+              streaming={twin.streaming}
+              onMove={twin.moveTask}
+              onRemove={twin.removeTask}
+              onRevise={reviseFromPanel}
+              onRequeue={twin.requeueBatch}
+            />
+          ) : center === "team" ? (
+            // 团队看板按「本批开始时刻」筛工单：这一批需求派出去的活才在
+            // 视线里，历史工单不混进来（否则「该需求的完成情况」没法读）。
+            <MissionBoardView embedded since={twin.batch?.startedAt ?? null} />
           ) : (
             <div className="twin-data">
               <div className="twin-ring">
@@ -1032,7 +1247,7 @@ ${d.conclusions}`,
                       : twin.streaming
                         ? twin.turn?.activity
                           ? `她正在用 ${twin.turn.activity}`
-                          : "她这一轮在跑"
+                          : "这一批需求在跑"
                         : pending.length > 0
                           ? "她停下等你的决定"
                           : mainStreaming
@@ -1077,6 +1292,191 @@ ${d.conclusions}`,
                   </div>
                   <div className="twin-strip__k">日志天</div>
                 </div>
+                <div>
+                  <div
+                    key={twin.queue.length}
+                    className={`twin-strip__v${twin.queue.length > 0 ? " is-hot" : ""}`}
+                  >
+                    {pad2(twin.queue.length)}
+                  </div>
+                  <div className="twin-strip__k">待拉取</div>
+                </div>
+              </div>
+
+              {/* 需求整合 + 发布到团队（2026-11-06）：状态界面要能回答
+                  「这一轮做的是哪几条需求」「派出去了什么」——两件事都以
+                  真实数据为源（批次 = 面板拉走的那几条；派单 = 工具流水）。 */}
+              <div className="twin-batchpanel">
+                <div className="twin-batchpanel__head">
+                  <span>本轮需求</span>
+                  <span className="twin-batchpanel__meta">
+                    {twin.batch
+                      ? `${twin.batch.tasks.length} 条 · ${
+                          twin.batch.status === "running"
+                            ? "执行中"
+                            : twin.batch.status === "done"
+                              ? "已完成"
+                              : "已失败"
+                        }`
+                      : "还没拉取过"}
+                  </span>
+                </div>
+                {twin.batch ? (
+                  <div className="twin-rows">
+                    {twin.batch.tasks.map((t, i) => (
+                      <div key={t.id} className="twin-row">
+                        <span className="twin-row__t">{pad2(i + 1)}</span>
+                        <span className="twin-row__m" title={t.text}>
+                          {t.text}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="twin-muted">面板里有需求时她会自动拉取一批。</p>
+                )}
+              </div>
+
+              {/* 归档判断：她逐条判断「并入哪条任务线 / 新开哪条」，原文照登。
+                  这条是她自己写的，不是前端分类 —— 界面不替她做语义判断。 */}
+              <div className="twin-batchpanel">
+                <div className="twin-batchpanel__head">
+                  <span>她的归档判断</span>
+                  <span className="twin-batchpanel__meta">
+                    {archive.length > 0 ? `${archive.length} 条` : "没写"}
+                  </span>
+                </div>
+                {archive.length > 0 ? (
+                  <div className="twin-rows">
+                    {archive.map((a, i) => (
+                      <div key={`ar-${i}`} className="twin-row">
+                        <span className="twin-row__m" title={a}>
+                          {a}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="twin-muted">
+                    这一轮她没有写归档行（`【归档】… → 并入/新开 …`）——并入了哪条任务线，以她正文为准。
+                  </p>
+                )}
+              </div>
+
+              <div className="twin-batchpanel">
+                <div className="twin-batchpanel__head">
+                  <span>发布到团队</span>
+                  <span className="twin-batchpanel__meta">
+                    {twin.streaming
+                      ? `本轮 ${teamPublish.length} 次`
+                      : teamPublish.length > 0
+                        ? `上一轮 ${teamPublish.length} 次`
+                        : "没有派单"}
+                  </span>
+                </div>
+                {teamPublish.length > 0 ? (
+                  <div className="twin-rows">
+                    {teamPublish
+                      .slice(-5)
+                      .reverse()
+                      .map((e, i) => (
+                        <div key={`tp-${i}`} className="twin-row">
+                          <span className="twin-row__m" title={e}>
+                            {e}
+                          </span>
+                          <span className="twin-row__k">{twin.streaming ? "本轮" : "上轮"}</span>
+                        </div>
+                      ))}
+                  </div>
+                ) : (
+                  <p className="twin-muted">
+                    这一轮她没有派人。需要人手时她会建团队工单，派了什么会出现在这里。
+                  </p>
+                )}
+              </div>
+
+              {/* 取数通道单独一行：`delegate_task` 是同步子代理，只回结论、
+                  不产出交付物。它与"建团队"混在一行时，用户无法判断这一轮
+                  到底是在取数还是在派人（2026-11-06 实报）。 */}
+              {fetchPublish.length > 0 ? (
+                <div className="twin-batchpanel">
+                  <div className="twin-batchpanel__head">
+                    <span>取数</span>
+                    <span className="twin-batchpanel__meta">{fetchPublish.length} 次</span>
+                  </div>
+                  <div className="twin-rows">
+                    {fetchPublish
+                      .slice(-3)
+                      .reverse()
+                      .map((e, i) => (
+                        <div key={`fp-${i}`} className="twin-row">
+                          <span className="twin-row__m" title={e}>
+                            {e}
+                          </span>
+                          <span className="twin-row__k">{twin.streaming ? "本轮" : "上轮"}</span>
+                        </div>
+                      ))}
+                  </div>
+                  <p className="twin-muted">
+                    子代理只回结论、不产出交付物；会卡住这一轮直到返回。跑任务该走团队。
+                  </p>
+                </div>
+              ) : null}
+
+              {/* 心跳巡查（2 分钟一次，零 LLM）：显示的是**上一次真的算出来的
+                  结果**，不是"服务正常"这类套话。异常时右翼「等你决定」里
+                  还会多一条带按钮的建议。 */}
+              <div className="twin-batchpanel">
+                <div className="twin-batchpanel__head">
+                  <span>巡查</span>
+                  <span className="twin-batchpanel__meta">
+                    {twin.patrol ? `上次 ${clockTime(twin.patrol.at)}` : "正在排第一次"}
+                  </span>
+                </div>
+                {twin.patrol ? (
+                  <>
+                    <p className="twin-muted">
+                      每 2 分钟一次，只看机械信号：队列 {twin.patrol.queue} · 待补充{" "}
+                      {twin.patrol.blocked} · 工单{" "}
+                      {twin.patrol.tickets
+                        ? `${twin.patrol.tickets.running} 在跑 / ${twin.patrol.tickets.done} 完成 / ${twin.patrol.tickets.failed} 失败`
+                        : "查不到"}
+                    </p>
+                    {twin.patrol.findings.length > 0 ? (
+                      <div className="twin-rows">
+                        {twin.patrol.findings.map((f, i) => (
+                          <div key={`${f.code}-${i}`} className="twin-row">
+                            <span
+                              className={`twin-row__k${f.level === "alert" ? " is-hot" : ""}`}
+                            >
+                              {f.level === "alert" ? "异常" : "提醒"}
+                            </span>
+                            <span className="twin-row__m" title={f.text}>
+                              {f.text}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="twin-muted">没有异常。</p>
+                    )}
+                  </>
+                ) : (
+                  <p className="twin-muted">启动后 5 秒跑第一次，之后每 2 分钟一次。</p>
+                )}
+                {/* 唯一会让她"没人叫也动手"的开关。默认关，说明写在按钮上，
+                    不藏在设置页深处 —— 打开它等于把处置权交给她。 */}
+                <button
+                  type="button"
+                  className={`chip-flat${twin.autoIntervene ? " chip-flat--on" : ""}`}
+                  aria-pressed={twin.autoIntervene}
+                  title="只在她空闲、没有待拉取需求、且距上次 ≥10 分钟时触发一次"
+                  onClick={() => twin.setAutoIntervene(!twin.autoIntervene)}
+                >
+                  {twin.autoIntervene
+                    ? "异常时她自己处理：已开"
+                    : "异常时让她自己处理（默认关）"}
+                </button>
               </div>
             </div>
           )}
@@ -1084,9 +1484,23 @@ ${d.conclusions}`,
 
         {/* ── 右翼：现在要你做什么 ─────────────────────────── */}
         <aside className="twin-wing twin-wing--r">
-          <section className={`twin-box${pending.length > 0 ? " twin-box--attn" : ""}`}>
-            <BoxHead code="01" title="等你决定" meta={`${pending.length} 件`} />
-            {pending.length === 0 ? (
+          <section
+            className={`twin-box${
+              pending.length > 0 || findings.some((f) => f.level === "alert")
+                ? " twin-box--attn"
+                : ""
+            }`}
+          >
+            <BoxHead
+              code="01"
+              title="等你决定"
+              meta={
+                findings.length > 0
+                  ? `${pending.length} 待办 · ${findings.length} 建议`
+                  : `${pending.length} 件`
+              }
+            />
+            {pending.length === 0 && findings.length === 0 ? (
               <p className="twin-muted">队列是空的。</p>
             ) : (
               <div className="twin-att">
@@ -1126,6 +1540,24 @@ ${d.conclusions}`,
                     </span>
                   </div>
                 ))}
+                {/* 巡查建议：来自 2 分钟一次的心跳（零 LLM、纯机械判据）。
+                    每条都给一个真实入口，不做"请注意一下"这类空提醒。 */}
+                {findings.map((f, i) => {
+                  const action = patrolAction(f.code);
+                  return (
+                    <div key={`pf-${f.code}-${i}`} className="twin-att__item">
+                      <span className="twin-att__tag">建议</span>
+                      <span className="twin-att__text">{f.text}</span>
+                      <span className="twin-att__actions">
+                        {action ? (
+                          <button type="button" className="chip-flat" onClick={action.run}>
+                            {action.label}
+                          </button>
+                        ) : null}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -1164,6 +1596,19 @@ ${d.conclusions}`,
               <div className="twin-who__text">
                 <span className="twin-who__name">阿黎</span>
                 <span className="twin-who__line">{checkedText}</span>
+                {/* 她这一轮在做哪一批需求 —— 与「任务面板」同一份批次，
+                    不做第二份计数（两处各算一次必然对不上）。 */}
+                <span className="twin-who__line">
+                  {twin.batch
+                    ? `本批 ${twin.batch.tasks.length} 条 · ${
+                        twin.batch.status === "running"
+                          ? "执行中"
+                          : twin.batch.status === "done"
+                            ? "已完成"
+                            : "已失败"
+                      }`
+                    : "还没拉取需求"}
+                </span>
               </div>
             </div>
             <div className="twin-who__acts">

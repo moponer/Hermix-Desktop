@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from "react";
-import { Mic } from "lucide-react";
+
+import { useState, useRef, useCallback } from "react";import { Mic } from "lucide-react";
 import * as api from "../api";
 
 interface VoiceButtonProps {
@@ -97,7 +97,7 @@ export function VoiceButton({ onTranscribe, disabled, compact }: VoiceButtonProp
         try {
           const pcmBase64 = await webmBlobToPcmBase64(blob);
           // stdio bridge: same /v1/voice/transcribe endpoint, just
-          // routed through `invoke("backend_http_request")` instead
+          // routed through `invoke(IPC.backendHttpRequest)` instead
           // of `fetch('http://127.0.0.1:3000/...')`. Body now goes
           // through the bridge's JSON envelope so it has to be a real
           // JSON value, not a string — the old `headers` form is
@@ -132,16 +132,12 @@ export function VoiceButton({ onTranscribe, disabled, compact }: VoiceButtonProp
       onClick={toggle}
       disabled={disabled}
       title={active ? "停止录音" : "语音输入"}
-      className={`flex items-center rounded transition-colors text-[length:var(--text-meta)] ${
-        compact ? "w-7 h-7 justify-center" : "gap-1 px-2 py-1"
-      } ${
-        active
-          ? "bg-error text-white animate-pulse"
-          : "text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
+      className={`composer-chip ${compact ? "composer-chip--compact" : ""} ${
+        active ? "bg-error text-white animate-pulse" : ""
       } disabled:opacity-30`}
     >
-      <Mic className="icon-sm" />
-      {!compact && <span>{active ? "停止" : "语音"}</span>}
+      <Mic />
+      <span>{active ? "停止" : "语音"}</span>
     </button>
   );
 }

@@ -433,6 +433,8 @@ export function ImChannelsCard({
     // 真要更久用户点「刷新」即可——**不能无限轮询**，面板一直开着就成后台负载了。
     let tries = 0;
     const t = window.setInterval(() => {
+      // 页面在后台时不计次也不发请求：回来再继续，300 次上限留给"真的在等"的时间。
+      if (document.hidden) return;
       if (++tries > 300) {
         window.clearInterval(t);
         return;

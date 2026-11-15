@@ -23,7 +23,10 @@ import {
   Maximize2, Shrink, Loader2, FileText,
 } from "lucide-react";
 import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
-import { resolveKind } from "@hermix/preview";
+// 子路径出口而不是 barrel：barrel 会把整条预览栈（PreviewSurface / pdf.js /
+// docx-preview / xlsx）拖进首屏图，`index.html` 的 modulepreload 直接把它
+// 预加载出来 —— 浏览文件这个动作本来一个解析器都不需要。
+import { resolveKind } from "@hermix/preview/resolveKind";
 import type { DirEntryLike, DriveRootLike } from "@hermix/preview";
 import { viewerFileSource } from "./fileSource";
 import { isDarkResolved, useTheme, type ThemeMode } from "./theme";
@@ -55,6 +58,12 @@ interface Tab {
   name: string;
   /** 网页标签：path 是网址，预览走内嵌网页视图而不是文件预览管线。 */
   web?: boolean;
+  /**
+   * Rust 侧子 webview 的 id（label `web-<id>`）。用户开的标签缺省用
+   * `String(id)`；agent（MCP）开的页面由 `web-opened` 载荷带 id 绑定，
+   * 两边共享同一个子 webview。
+   */
+  webId?: string;
 }
 
 interface Bookmark {
@@ -84,6 +93,19 @@ const SORT_KEY = "hermix.viewer.sort";
 /** 视图模式：纯净（只预览）/ 重量（资源管理器 + 预览 + AI + 工具）。 */
 type ViewerMode = "pure" | "heavy";
 const MODE_KEY = "hermix.viewer.mode";
+
+/** 参与网页让位的浮层根（中心清单，加新浮层来这里登记）。
+ *  对应 styles.css z-index 阶梯：menubar-pop / ctxmenu / syspanel-overlay
+ *  （系统面板 + 关于）/ set-overlay（设置 + PDF 工具）/ bpanel-overlay /
+ *  tab-list-pop。toast、拖放遮罩、文档内编辑器浮层不参与（与网页标签互斥或
+ *  短暂非交互）。 */
+const WEB_YIELD_SELECTORS =
+  ".menubar-pop, .ctxmenu, .syspanel-overlay, .set-overlay, .bpanel-overlay, .tab-list-pop";
+
+/** 两矩形是否相交（浮层根 vs 网页占位，视口坐标系）。 */
+function rectsIntersect(a: DOMRect, b: DOMRect): boolean {
+  return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+}
 
 const THEME_LABEL: Record<ThemeMode, string> = {
   system: "跟随系统",
@@ -484,12 +506,17 @@ export function App() {
   /** 当前激活的标签（预览区、顶栏地址栏、菜单都要用）。 */
   const active = tabs.find((t) => t.id === activeTabId) ?? null;
   /**
-   * 网页标签的**实时**地址。
+   * 各网页标签的**实时**地址（键 = Rust 侧 webview id）。
    *
    * 标签的 path 是「打开时那个地址」；页面里点链接跳走后，Rust 侧会推
-   * `web-navigated`。地址栏必须跟着变——否则显示的是已经不在的页面。
+   * `web-navigated`（载荷带 id——多标签各有自己的子 webview，地址只归自己的
+   * 标签）。地址栏取**活动标签**的那一条——否则显示的是已经不在的页面，
+   * 或把后台标签的跳转串到当前地址栏上。
    */
-  const [webUrl, setWebUrl] = useState<string | null>(null);
+  const [webNav, setWebNav] = useState<Record<string, string>>({});
+  /** 活动标签对应的 Rust 侧 webview id。 */
+  const activeWebId = active?.web ? (active.webId ?? String(active.id)) : null;
+  const webUrl = activeWebId ? (webNav[activeWebId] ?? null) : null;
 
   /**
    * 活动标签始终完整可见。
@@ -540,9 +567,12 @@ export function App() {
 
   /**
    * 浮层让位：网页是**独立的子 webview（独立 HWND）**，永远画在父
-   * webview 的 DOM 之上 —— CSS 的 z-index 管不到，不是同一层。任何浮层
+   * webview 的 DOM 之上 —— CSS 的 z-index 管不到，不是同一层。浮层
    * （菜单 / 对话框 / 弹出列表）展开时把网页 **hide**（不是 close——
-   * 关掉会丢页面状态、滚动位置、表单内容），全部收起后再 show 回来。
+   * 关掉会丢页面状态、滚动位置、表单内容），收起后再 show 回来。
+   *
+   * **只让真正压到网页上的浮层触发**：浮层根与网页占位矩形相交才 hide
+   * （见 `WEB_YIELD_SELECTORS`），点不重叠的小浮层不再整块闪网页。
    *
    * 由状态**派生**而不是旧式的命令计数器：计数器在右键菜单点选 / Esc /
    * 遮罩点击这几条关闭路径上从不减一，网页会一直藏到下次滚动才恢复。
@@ -558,9 +588,40 @@ export function App() {
     tabListOpen ||
     overflowMenu !== null ||
     segMenu !== null;
+  /** 网页当前是否处于让位隐藏（同时给占位区上 `is-yield` 底色，见 WebPane）。 */
+  const [webYield, setWebYield] = useState(false);
   useEffect(() => {
-    void invoke("web_set_visible", { visible: !floatingChromeOpen }).catch(() => undefined);
-  }, [floatingChromeOpen]);
+    const slot = document.querySelector<HTMLElement>(".web-pane-slot");
+    // 没有网页标签：子 webview 已随 WebPane 卸载关闭，无可让位。
+    if (!slot) {
+      setWebYield(false);
+      return;
+    }
+    const overlaps =
+      floatingChromeOpen &&
+      Array.from(document.querySelectorAll<HTMLElement>(WEB_YIELD_SELECTORS)).some((el) =>
+        rectsIntersect(el.getBoundingClientRect(), slot.getBoundingClientRect()),
+      );
+    setWebYield(overlaps);
+    const apply = () => invoke("web_set_visible", { visible: !overlaps });
+    // 失败重试一次：hide/show 可能正撞上 web_open 的销毁重建窗口。Rust 侧
+    // 持有期望态（webview_host 的 WEB_VISIBLE），重建完成会按它自动收敛。
+    void apply().catch(() => {
+      window.setTimeout(() => void apply().catch(() => undefined), 200);
+    });
+    if (overlaps) return;
+    // 对账：浮层收起后确认子 webview 真的回来了——show 落在已销毁/尚未建好
+    // 的实例上时会静默丢失，若实例还在却不可见，幂等补发一次 show。
+    const timer = window.setTimeout(() => {
+      void invoke<{ open: boolean; visible: boolean }>("web_state")
+        .then((s) => {
+          if (s.open && !s.visible) void apply().catch(() => undefined);
+        })
+        .catch(() => undefined);
+    }, 300);
+    return () => window.clearTimeout(timer);
+    // 逐个浮层状态入依赖：一个浮层收起、另一个仍开着时也要重算相交。
+  }, [floatingChromeOpen, menu, menubarOpen, sysOpen, aboutOpen, settingsOpen, browserOpen, tabListOpen, overflowMenu, segMenu]);
   /** 本机可用的「打开方式」（notepad / code…）——没装的在菜单里置灰。 */
   const [openApps, setOpenApps] = useState<string[]>([]);
   /** 一次性轻提示（复制/粘贴/打开的结果反馈）。 */
@@ -616,9 +677,14 @@ export function App() {
       await listen<string>("web-opened", (e) => {
         openWebTab(e.payload);
       });
-      // 页面内跳转 → 顶栏地址栏同步（否则地址栏停在打开时那个网址）。
+      // 页面内跳转 → 记到对应标签名下（地址栏只显示活动标签那条）。
       await listen<string>("web-navigated", (e) => {
-        setWebUrl(e.payload);
+        try {
+          const p = JSON.parse(e.payload) as { id?: string; url?: string };
+          if (p.id && p.url) setWebNav((m) => ({ ...m, [p.id as string]: p.url as string }));
+        } catch {
+          /* 兼容旧载荷（纯 URL 字符串）没有 id 时不入表 */
+        }
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -849,7 +915,14 @@ export function App() {
         id: "file",
         label: "文件",
         items: [
-          { id: "refresh", label: "刷新", shortcut: "F5", icon: <RefreshCw size={13} /> },
+          // 纯净模式没有资源管理器，刷新目录无从谈起——置灰而不是点了没反应。
+          {
+            id: "refresh",
+            label: "刷新",
+            shortcut: "F5",
+            disabled: mode === "pure",
+            icon: <RefreshCw size={13} />,
+          },
           { id: "close-tabs", label: "关闭标签", icon: <X size={13} /> },
           "-",
           { id: "quit", label: "退出", danger: true, icon: <LogOut size={13} /> },
@@ -863,9 +936,16 @@ export function App() {
             id: "toggle-hidden",
             label: "隐藏文件",
             checked: showHidden,
+            disabled: mode === "pure",
             icon: <Funnel size={13} />,
           },
-          { id: "toggle-ai", label: "AI 栏", checked: aiOpen, icon: <Sparkles size={13} /> },
+          {
+            id: "toggle-ai",
+            label: "AI 栏",
+            checked: aiOpen,
+            disabled: mode === "pure",
+            icon: <Sparkles size={13} />,
+          },
           "-",
           {
             id: "kernel-embedded",
@@ -908,13 +988,14 @@ export function App() {
             id: "edit",
             label: editorLabel(activeEditorKind),
             shortcut: "Ctrl+E",
-            disabled: activeEditorKind === "none",
+            disabled: mode === "pure" || activeEditorKind === "none",
             icon: <Pencil size={13} />,
           },
           {
             id: "sys-panel",
             label: "资源管理器",
             shortcut: "Ctrl+Shift+Esc",
+            disabled: mode === "pure",
             icon: <Activity size={13} />,
           },
           {
@@ -932,7 +1013,7 @@ export function App() {
         items: [{ id: "about", label: "关于", icon: <Info size={13} /> }],
       },
     ],
-    [showHidden, aiOpen, themeMode, activeEditorKind, settings.browser.kernel],
+    [showHidden, aiOpen, themeMode, activeEditorKind, settings.browser.kernel, mode],
   );
 
   const onMenuCommand = useCallback(
@@ -1160,22 +1241,64 @@ export function App() {
    * 打开一个**网页标签**：预览区用内嵌网页视图（通道 A）渲染，不出应用。
    *
    * 网址当 tab 的 key：同一个网址不重复开（跟文件路径一个规矩）。
+   *
+   * 载荷两种形态：`{"id":"3","url":"…"}`（Rust 侧已建好子 webview，tab 绑它的
+   * id——agent 经 MCP 开页的路径）或纯 URL 字符串（用户/前端自开）。
    */
-  const openWebTab = useCallback((url: string) => {
+  const openWebTab = useCallback((payload: string) => {
+    let url = payload;
+    let rustId: string | undefined;
+    try {
+      const p = JSON.parse(payload) as { id?: string; url?: string };
+      if (p.url) {
+        url = p.url;
+        rustId = p.id;
+      }
+    } catch {
+      /* 纯 URL 字符串 */
+    }
     const target = normalizeUrlInput(url);
     if (openedRef.current.has(target)) {
       setTabs((ts) => {
         const hit = ts.find((t) => t.path === target);
-        if (hit) setActiveTabId(hit.id);
-        return ts;
+        if (!hit) return ts;
+        // 复用既有标签但换绑 Rust id：旧绑定的 webview 可能已被销毁/重建
+        // （agent 重新 open 同一网址会拿到新 id），关掉旧的防孤儿。
+        if (rustId && hit.webId && hit.webId !== rustId) {
+          void invoke("web_close", { id: hit.webId }).catch(() => undefined);
+        }
+        setActiveTabId(hit.id);
+        return rustId ? ts.map((t) => (t.id === hit.id ? { ...t, webId: rustId } : t)) : ts;
       });
       return;
     }
     openedRef.current.add(target);
     const id = nextTabId++;
-    setTabs((ts) => [...ts, { id, path: target, name: urlTabName(target), web: true }]);
+    setTabs((ts) => [
+      ...ts,
+      { id, path: target, name: urlTabName(target), web: true, webId: rustId },
+    ]);
     setActiveTabId(id);
   }, []);
+
+  // 标签对账：网页标签被关闭（关一个 / 关其它 / 全部关闭）→ 销毁对应的子
+  // webview 并清掉实时地址记录。切走**不**关（WebPane 卸载只 web_release
+  // 保活），这里只处理「标签没了」的情况。
+  const webIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const cur = new Set(tabs.filter((t) => t.web).map((t) => t.webId ?? String(t.id)));
+    for (const prev of webIdsRef.current) {
+      if (cur.has(prev)) continue;
+      void invoke("web_close", { id: prev }).catch(() => undefined);
+      setWebNav((m) => {
+        if (!(prev in m)) return m;
+        const next = { ...m };
+        delete next[prev];
+        return next;
+      });
+    }
+    webIdsRef.current = cur;
+  }, [tabs]);
 
   /**
    * 把左侧树展开到指定目录。
@@ -2069,10 +2192,7 @@ export function App() {
       .catch(() => undefined);
   }, [windowSubject]);
 
-  // 切标签 → 网页地址回到该标签自己的地址（之后由 web-navigated 更新）。
-  useEffect(() => {
-    setWebUrl(active?.web ? active.path : null);
-  }, [active?.id, active?.path, active?.web]);
+  // 网页实时地址由 webNav（按 id 记录）派生，见 activeWebId / webUrl。
 
   /** 顶栏地址栏显示的完整地址（网页取实时地址，文件取路径）。 */
   const addressValue = active ? (active.web ? (webUrl ?? active.path) : active.path) : null;
@@ -2086,10 +2206,13 @@ export function App() {
     copyPath(addressValue, active?.web ? "网址已复制" : "路径已复制");
   }, [addressValue, active?.web, copyPath]);
 
-  /** 顶栏导航按钮：与 WebPane 里同一条通道（操作那个子 webview）。 */
-  const runWeb = useCallback((script: string) => {
-    void invoke("web_exec", { script }).catch(() => undefined);
-  }, []);
+  /** 顶栏导航按钮：与 WebPane 里同一条通道（定向到当前标签的子 webview）。 */
+  const runWeb = useCallback(
+    (script: string) => {
+      void invoke("web_exec", { script, id: activeWebId }).catch(() => undefined);
+    },
+    [activeWebId],
+  );
 
   /** 布局状态机（预览优先）：区域怎么排见 CSS 状态规则。AI 栏不再占用
    *  目录槽（旧 preview-ai 态已取消）——它恒在右缘，与目录栏共存：搜索
@@ -2758,7 +2881,13 @@ export function App() {
               </div>
             ) : active.web ? (
               // 纯净模式的导航与网址在顶部地址栏里，网页不再自带一条工具条。
-              <WebPane key={active.id} url={active.path} chrome={mode !== "pure"} />
+              <WebPane
+                key={active.id}
+                url={active.path}
+                webId={active.webId ?? String(active.id)}
+                chrome={mode !== "pure"}
+                veiled={webYield}
+              />
             ) : (
               <Suspense fallback={<div className="preview-pane" />}>
                 <PreviewHost

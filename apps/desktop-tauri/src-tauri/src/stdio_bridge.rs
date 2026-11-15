@@ -151,16 +151,46 @@ impl StdioBridge {
         let my_gen = self.generation;
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
+            // 按**字节**读行再 lossy 解码，不用 `read_line`。
+            //
+            // `read_line` 要求整行是合法 UTF-8，遇到非法字节返回 Err(InvalidData)
+            // —— 本线程随即退出、桥被标记已死，而子进程还在跑：界面永远「未连接」。
+            // 而这恰恰会发生：子进程里任何一句继承 stdout 的外部命令输出都能混进来
+            // （实测 icacls 在中文 Windows 上按 GBK+CRLF 打印「已处理的文件: …」，
+            // 见 hermix-config 的 restrict_owner_only）。协议是「行分隔 JSON」，
+            // 坏行本该被跳过，不该把整条通道打死。
+            let mut buf: Vec<u8> = Vec::new();
+            // GUI 进程的 eprintln! 没有去处（`windows_subsystem = "windows"`），
+            // 这条线程的每一句诊断都必须落盘 —— 否则「子进程活着、界面永远未连接」
+            // 在日志里查不到任何东西（2026-11-07 实机）。下面三个分支就是现场。
+            crate::desktop_log!("[stdio-bridge] reader started (gen={my_gen})");
+            let mut frames: u64 = 0;
+            let exit_reason;
             loop {
-                line.clear();
-                match reader.read_line(&mut line) {
-                    Ok(0) => break, // stdout 关闭（子进程退出）
+                buf.clear();
+                match reader.read_until(b'\n', &mut buf) {
+                    Ok(0) => {
+                        exit_reason = "stdout closed (child exited or closed its stdout)".to_string();
+                        break;
+                    }
                     Ok(_) => {}
-                    Err(_) => break,
+                    Err(e) => {
+                        exit_reason = format!("stdout read error: {e}");
+                        break;
+                    }
                 }
-                let Ok(frame) = serde_json::from_str::<OutboundFrame>(line.trim()) else {
-                    eprintln!("[stdio-bridge] unparseable frame, ignored");
+                let line = String::from_utf8_lossy(&buf);
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                frames += 1;
+                let Ok(frame) = serde_json::from_str::<OutboundFrame>(line) else {
+                    crate::desktop_log!(
+                        "[stdio-bridge] unparseable frame, ignored (len={}): {}",
+                        line.len(),
+                        line.chars().take(120).collect::<String>()
+                    );
                     continue;
                 };
                 if frame.channel == "http" {
@@ -174,7 +204,7 @@ impl StdioBridge {
                     if let Some(tx) = sender {
                         let _ = tx.send(frame.payload);
                     } else {
-                        eprintln!("[stdio-bridge] http reply without waiter, id={id}");
+                        crate::desktop_log!("[stdio-bridge] http reply without waiter, id={id}");
                     }
                 } else {
                     // 流式/主通道推送：转发给前端订阅者。
@@ -194,12 +224,18 @@ impl StdioBridge {
             // 同时 emit `hermix:stream-bridge-dead`，前端监听可在 100ms 内把
             // 卡死的流 settle() 掉；避免等上 300s/600s 的 fallback 定时器。
             mark_dead_and_notify(&app, my_gen, "stdout closed");
+            // 唤醒仍在等应答的请求。body 必须用与 `backend_http_request` 相同的
+            // `backend offline` 词元：前端 `api/rest.ts::offlineMessage` 只认这一个，
+            // 早前的 `backend exited` 会原样冒到用户面前（「免费模型开关未生效：
+            // backend exited」），把「后端刚被重启」说成协议黑话。
             if let Ok(mut p) = inner.pending_http.lock() {
                 for (_, tx) in p.drain() {
-                    let _ = tx.send("{\"status\":503,\"body\":\"backend exited\",\"enc\":\"utf8\"}".into());
+                    let _ = tx.send("{\"status\":503,\"body\":\"backend offline\",\"enc\":\"utf8\"}".into());
                 }
             }
-            eprintln!("[stdio-bridge] stdout reader exited");
+            crate::desktop_log!(
+                "[stdio-bridge] reader exited (gen={my_gen}, frames={frames}): {exit_reason}"
+            );
         });
     }
 
@@ -233,6 +269,22 @@ impl StdioBridge {
         path: &str,
         body: Option<&str>,
     ) -> Result<String, String> {
+        self.request_with_budget(method, path, body, std::time::Duration::from_secs(120))
+            .await
+    }
+
+    /// 同 [`Self::http_request`]，但超时与挂起项清理都收在本次调用内部。
+    ///
+    /// 调用方可以放心在外层再套**更短**的超时——旧代码这么写会泄漏
+    /// `pending_http` 条目：外层把本 future 丢掉后，内层 120s 的清理分支
+    /// 再也没有机会执行，hung 型后端下健康探针每 6s 泄漏一条 id+sender。
+    pub async fn request_with_budget(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+        budget: std::time::Duration,
+    ) -> Result<String, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
         let payload = serde_json::json!({
             "method": method,
@@ -251,7 +303,7 @@ impl StdioBridge {
 
         self.write_frame("http", Some(&id), &payload)?;
 
-        match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
+        match tokio::time::timeout(budget, rx).await {
             Ok(Ok(reply)) => Ok(reply),
             Ok(Err(_)) => Err("http waiter dropped".into()),
             Err(_) => {

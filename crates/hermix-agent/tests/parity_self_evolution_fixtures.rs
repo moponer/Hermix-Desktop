@@ -81,6 +81,11 @@ fn parity_python_v2026_4_16_self_evolution_fixtures() {
         let config = AgentConfig {
             memory_nudge_interval: case.memory_nudge_interval,
             skill_creation_nudge_interval: case.skill_creation_nudge_interval,
+            // fixture 对齐 Python v2026_4_16（无目标驱动续跑）。不关的话
+            // DummyProvider 的纯文本 stop 响应会被 goal_continue_blocker
+            // 推回 default_max_autonomous_nudges(8) 次——一次 run 变 9 次
+            // 迭代，iters_since_skill=9 vs 期望 1（2026-11-10 排查定性）。
+            autonomous_mode: false,
             ..AgentConfig::default()
         };
         let agent = AgentLoop::new(config, Arc::new(registry), Arc::new(DummyProvider));

@@ -32,6 +32,33 @@ use crate::tools::code_execution::CodeExecutionBackend;
 use hermix_core::console_decode::decode_console_output;
 use hermix_core::ToolError;
 
+/// 单流捕获上限：超出部分继续读但不存储（`print` 洪水不再把内存吃爆，
+/// 继续排空也避免子进程因管道写满而挂死）。
+const CAPTURE_CAP: usize = 32 * 1024 * 1024;
+
+/// 有界排空一个子进程输出管道。
+async fn drain_bounded<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut pipe = match pipe {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 65_536];
+    loop {
+        match pipe.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if buf.len() < CAPTURE_CAP {
+                    let take = n.min(CAPTURE_CAP - buf.len());
+                    buf.extend_from_slice(&chunk[..take]);
+                }
+            }
+        }
+    }
+    buf
+}
+
 /// Code execution backend using local interpreters.
 pub struct LocalCodeExecutionBackend {
     default_timeout_secs: u64,
@@ -327,6 +354,9 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
         }
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        // 超时时 future 被 drop，必须连带杀掉解释器（kill_on_drop）——
+        // 死循环脚本的孤儿此前会常驻。
+        cmd.kill_on_drop(true);
 
         // JSON output reports the resolved interpreter path so the LLM
         // can correlate tool errors against "I called python on PATH and
@@ -341,17 +371,23 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
         let canary = canary::plant(&canary_dir).ok();
 
         let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
-            let child = cmd.spawn().map_err(|e| {
+            let mut child = cmd.spawn().map_err(|e| {
                 ToolError::ExecutionFailed(format!("Failed to spawn {interpreter_label}: {e}"))
             })?;
-            let output = child.wait_with_output().await.map_err(|e| {
+            // Job 容器：drop 即 TerminateJobObject 杀整棵树（含脚本派生的
+            // 孙进程）；附着失败降级为只杀顶层。正常结束时也顺带清残渣。
+            #[cfg(windows)]
+            let _job = hermix_core::win_job::JobGuard::attach(child.id().unwrap_or(0));
+            // 有界捕获 + 排空（旧 wait_with_output 无上限，`print` 洪水会把
+            // 内存吃爆）：只保留前 CAPTURE_CAP 字节，超出继续读但不存储。
+            let out_task = tokio::spawn(drain_bounded(child.stdout.take()));
+            let err_task = tokio::spawn(drain_bounded(child.stderr.take()));
+            let status = child.wait().await.map_err(|e| {
                 ToolError::ExecutionFailed(format!("Failed to wait for process: {e}"))
             })?;
-            Ok::<_, ToolError>((
-                output.status.code().unwrap_or(-1),
-                output.stdout,
-                output.stderr,
-            ))
+            let stdout = out_task.await.unwrap_or_default();
+            let stderr = err_task.await.unwrap_or_default();
+            Ok::<_, ToolError>((status.code().unwrap_or(-1), stdout, stderr))
         })
         .await;
 

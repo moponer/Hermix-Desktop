@@ -260,10 +260,15 @@ pub fn experience_prompt_for_tools(
         return Ok(None);
     }
 
-    let mut relevant = Vec::new();
-    for tool in tools {
-        relevant.extend(archive.for_tool(tool)?);
-    }
+    // 一次读完再按工具名筛。`for_tool` 每次调用都会 `load_all()`（遍历目录 +
+    // 逐行解析 JSONL），按工具列表逐个调 = **工具数 × 全文读**（默认 ~109 个
+    // 工具，而这段在每轮 pre_turn 的同步路径上）。
+    let wanted: std::collections::HashSet<&str> = tools.iter().map(String::as_str).collect();
+    let mut relevant: Vec<ExperienceEntry> = archive
+        .load_all()?
+        .into_iter()
+        .filter(|e| e.tools.iter().any(|t| wanted.contains(t.as_str())))
+        .collect();
 
     // Deduplicate by ID.
     let mut seen = std::collections::HashSet::new();
@@ -342,15 +347,11 @@ fn truncate_str(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
-    let mut out = String::with_capacity(max);
-    for (i, c) in s.chars().enumerate() {
-        if i >= max.saturating_sub(1) {
-            out.push('\u{2026}');
-            break;
-        }
-        out.push(c);
-    }
-    out
+    // 切分走 core 的单一实现；省略号计入总长（max-1 字 + …）。
+    format!(
+        "{}…",
+        hermix_core::text_utils::truncate_chars(s, max.saturating_sub(1))
+    )
 }
 
 // Sorting helper for HashMap iterator.

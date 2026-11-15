@@ -12,8 +12,8 @@
  * helper 接管交换与重启；失败由 helper 回滚（update.failed）。
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { invoke } from "../ipc";
+import { IPC } from "../ipc/commands";
+import { useCallback, useEffect, useState } from "react";import { invoke } from "../ipc";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface UpdateStatus {
@@ -58,7 +58,7 @@ export function useUpdater() {
 
   const checkUpdate = useCallback(async (): Promise<UpdateStatus | null> => {
     try {
-      const s = await invoke<UpdateStatus>("update_check");
+      const s = await invoke<UpdateStatus>(IPC.updateCheck);
       setStatus(s);
       setCheckFailed(false);
       setError(null);
@@ -76,16 +76,16 @@ export function useUpdater() {
     setError(null);
     setPhase("downloading");
     try {
-      await invoke("update_download", {
+      await invoke(IPC.updateDownload, {
         downloadUrl: status.download_url,
         expectedSha256: status.sha256,
       });
       setPhase("installing");
-      await invoke("update_install");
+      await invoke(IPC.updateInstall);
       setPhase("restarting");
       // helper 是 detached 进程，给它半秒起跑，再走正常退出（sidecar 收尾）。
       await new Promise((r) => setTimeout(r, 500));
-      await invoke("restart_app");
+      await invoke(IPC.restartApp);
     } catch (e) {
       setError(String(e));
       setPhase("idle");

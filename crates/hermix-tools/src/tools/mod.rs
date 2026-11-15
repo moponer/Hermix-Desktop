@@ -24,6 +24,7 @@ pub mod get_subagent_result;
 pub mod disk_cleanup;
 pub mod file;
 pub mod file_read_state;
+pub mod list_dir;
 pub mod plan_mode;
 pub mod gpt_image;
 pub mod hermix_achievements;
@@ -156,6 +157,9 @@ pub fn register_all(
     // because they need fuzzy-match + ripgrep semantics that the
     // TerminalBackend trait doesn't expose.
     file::register(registry, terminal_backend.clone(), seams.as_ref().map(|s| s.fs.clone()));
+    // list_dir: 单层目录列举（此前提示/预算表引用它但从未注册——模型照做
+    // 得到 Unknown tool 后回退 terminal）。
+    list_dir::register(registry);
     // office_export: 二进制 Office 导出（2026-10-17 决策笔记批次 1，XLSX 先行）。
     // 纯 Rust OOXML 写入——docx/pptx 批次未落地前 format 参数显式拒绝。
     office_export::register(registry);

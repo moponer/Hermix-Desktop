@@ -475,6 +475,73 @@ fn next_fire(schedule: &str, from: DateTime<Utc>) -> Option<DateTime<Utc>> {
     Some(next)
 }
 
+/// 从 cron 表达式派生人类可读的节奏标签；解析不了返回 `None`。
+///
+/// `schedule_label` 此前是创建方随手写的自由文本，与 cron 漂移之后界面显示的
+/// 节奏就是假的（实机：cron `*/10 * * * *` 配着「每 2 小时」的标签空转了
+/// 229 轮）。统一规则：**cron 是唯一事实源** —— 能解析就派生覆盖，
+/// 解析不了（列表/范围/步进等复杂形态）才保留客户端提供的原文本。
+fn describe_cron(expr: &str) -> Option<String> {
+    let parts: Vec<&str> = expr.trim().split_whitespace().collect();
+    let [min, hour, dom, _mon, dow] = parts.as_slice() else {
+        return None;
+    };
+    // `M */N * * *` → 每 N 小时
+    if let Some(hs) = hour.strip_prefix("*/") {
+        if dom == &"*"
+            && dow == &"*"
+            && min.chars().all(|c| c.is_ascii_digit())
+            && hs.chars().all(|c| c.is_ascii_digit())
+        {
+            return Some(format!("每 {hs} 小时"));
+        }
+        return None;
+    }
+    // `*/N * * * *` → 每 N 分钟
+    if let Some(ms) = min.strip_prefix("*/") {
+        if hour == &"*" && dom == &"*" && dow == &"*" && ms.chars().all(|c| c.is_ascii_digit()) {
+            return Some(format!("每 {ms} 分钟"));
+        }
+        return None;
+    }
+    if !min.chars().all(|c| c.is_ascii_digit()) || !hour.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let m: u32 = min.parse().ok()?;
+    if m > 59 {
+        return None;
+    }
+    let time = format!("{:0>2}:{:0>2}", hour, m);
+    match (*dom, *dow) {
+        ("*", "*") => Some(format!("每天 {time}")),
+        ("*", d) if d == "1-5" => Some(format!("每工作日 {time}")),
+        ("*", d) => weekday_cn(d).map(|w| format!("每周{w} {time}")),
+        (d, "*") if d.chars().all(|c| c.is_ascii_digit()) => Some(format!("每月 {d} 日 {time}")),
+        _ => None,
+    }
+}
+
+fn weekday_cn(d: &str) -> Option<&'static str> {
+    match d {
+        "0" | "7" => Some("日"),
+        "1" => Some("一"),
+        "2" => Some("二"),
+        "3" => Some("三"),
+        "4" => Some("四"),
+        "5" => Some("五"),
+        "6" => Some("六"),
+        _ => None,
+    }
+}
+
+/// 用 cron 派生标签覆盖手写标签；cron 解析不了时保留客户端原值。
+/// 创建 / 更新 / 每轮结算三个写点都调用它，保证 label 永远跟着 schedule 走。
+fn refresh_schedule_label(task: &mut AutomationTask) {
+    if let Some(label) = describe_cron(&task.schedule) {
+        task.schedule_label = Some(label);
+    }
+}
+
 /// 一轮跑多久之后，`running_since` 就当成陈旧（进程死了）而允许重跑。
 ///
 /// 取值要**明显大于一次正常运行的时长**（超星刷课一节 12 分钟），否则会把
@@ -704,6 +771,7 @@ pub async fn create_task(
     body.last_error = None;
     body.run_count = 0;
     body.history.clear();
+    refresh_schedule_label(&mut body);
     ensure_next_run(&mut body);
     s.tasks.push(body.clone());
     save_state(&state, &s).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -782,6 +850,7 @@ pub async fn update_task(
     }
     merged.id = id.clone();
     merged.updated_at = now_iso();
+    refresh_schedule_label(&mut merged);
     ensure_next_run(&mut merged);
     *slot = merged.clone();
     save_state(&state, &s).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -850,6 +919,13 @@ pub async fn reset_to_official(
 
 /// Maximum number of history records retained per task.
 const MAX_HISTORY: usize = 20;
+
+/// 连续失败到这个次数就自动停用任务（`consecutive_failures`）。
+///
+/// 一次失败可能是网络抖动；连续 5 次（按任务的调度周期折算通常半小时以上）
+/// 说明配置本身坏了——模型 id 不可用、凭证过期、目标站点改版——继续重试
+/// 只是在按周期往会话里灌错误。停用让人在设置页看见原因再手动开。
+const MAX_CONSECUTIVE_FAILURES: u64 = 5;
 
 /// 连续失败次数（护栏的第二个输入）：从最近一次成功往后数，连续失败的 run 数。
 ///
@@ -1019,7 +1095,7 @@ fn spawn_run(state: HttpServerState, task: AutomationTask) {
         if let Some(slot) = snapshot.tasks.iter_mut().find(|t| t.id == task_id) {
             slot.last_run_at = Some(now);
             slot.last_status = Some(status.clone());
-            slot.last_error = error;
+            slot.last_error = error.clone();
             slot.run_count = slot.run_count.saturating_add(1);
             // 这一轮结束了 → 清掉「在跑」标记，单飞护栏放行下一槽。
             slot.running_since = None;
@@ -1036,6 +1112,25 @@ fn spawn_run(state: HttpServerState, task: AutomationTask) {
             if overflow > 0 {
                 slot.history.drain(0..overflow);
             }
+            // 连续失败熔断：一个配置坏了的任务（模型 id 不可用、凭证过期）
+            // 会按调度周期一直报错，每次都在往用户的会话/通知里灌一条失败。
+            // 到阈值就停用，让人在设置页看见原因再手动开——比无限重试诚实。
+            let streak = consecutive_failures(&slot.history);
+            if streak >= MAX_CONSECUTIVE_FAILURES {
+                slot.enabled = false;
+                slot.last_error = Some(format!(
+                    "连续 {streak} 次运行失败，已自动停用。最后一条错误：{}",
+                    error.as_deref().unwrap_or("（无详情）")
+                ));
+                tracing::warn!(
+                    task_id = %task_id,
+                    streak,
+                    "automation task disabled after consecutive failures"
+                );
+            }
+            // label 跟随 cron 重算：老任务里手写的标签（可能与 cron 漂移）
+            // 在下一次结算时自动被纠正。
+            refresh_schedule_label(slot);
             ensure_next_run(slot);
         }
         let _ = save_state(&state, &snapshot).await;
@@ -1350,6 +1445,37 @@ impl CronjobBackend for DashboardCronjobBackend {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    /// label 必须从 cron 派生：手写标签与 cron 漂移后，界面显示的节奏是假的
+    /// （实机：`*/10 * * * *` 配「每 2 小时」）。
+    #[test]
+    fn describe_cron_covers_the_common_shapes() {
+        assert_eq!(describe_cron("*/10 * * * *").as_deref(), Some("每 10 分钟"));
+        assert_eq!(describe_cron("0 */2 * * *").as_deref(), Some("每 2 小时"));
+        assert_eq!(describe_cron("30 9 * * *").as_deref(), Some("每天 09:30"));
+        assert_eq!(describe_cron("0 9 * * 1-5").as_deref(), Some("每工作日 09:00"));
+        assert_eq!(describe_cron("0 16 * * 5").as_deref(), Some("每周五 16:00"));
+        assert_eq!(describe_cron("0 15 3 * *").as_deref(), Some("每月 3 日 15:00"));
+        // 复杂形态解析不了 → None（保留客户端原文本）
+        assert_eq!(describe_cron("0 9-17 * * *"), None);
+        assert_eq!(describe_cron("0 9 * * 1,3,5"), None);
+        assert_eq!(describe_cron("garbage"), None);
+    }
+
+    #[test]
+    fn refresh_schedule_label_overrides_stale_handwritten_label() {
+        let mut task: AutomationTask = serde_json::from_value(serde_json::json!({
+            "id": "t1",
+            "name": "n",
+            "prompt": "p",
+            "schedule": "*/10 * * * *",
+            "enabled": false,
+            "schedule_label": "每 2 小时"
+        }))
+        .unwrap();
+        refresh_schedule_label(&mut task);
+        assert_eq!(task.schedule_label.as_deref(), Some("每 10 分钟"));
+    }
 
     fn at(h: u32, m: u32, s: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, 21, h, m, s).unwrap()

@@ -1881,6 +1881,174 @@
   color: var(--color-text-error);
 }
 
+/* ── 任务面板（2026-11-06）：待拉取的需求 + 本批 ────────────────────
+   排版语言与「行列表」一致（序号 / 类型 / 正文 / 动作四段），但动作是
+   三个常驻小按钮：排序与删除是这个面板的主要操作，藏进悬停等于没做。
+   分隔靠行距与悬停底色，不画框线。 */
+.twin-queue {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px var(--space-5) 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.twin-queue__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+}
+.twin-queue__count b {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+.twin-queue__hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.twin-queue__notice {
+  margin: 6px var(--space-5) 0;
+  color: var(--color-text-warning);
+}
+.twin-queue__empty {
+  padding: 6px 0;
+}
+.twin-qlist {
+  display: flex;
+  flex-direction: column;
+}
+.twin-qitem {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 6px 4px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-ui);
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+.twin-qitem:hover {
+  background: var(--color-bg-hover);
+}
+.twin-qitem__no {
+  flex: none;
+  width: 24px;
+  font-size: var(--text-micro);
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.twin-qitem__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+/* 待补充行：正文 + 退回原因两行，右侧两个文字动作（补充 / 取消）。 */
+.twin-qblocked {
+  display: flex;
+  flex-direction: column;
+}
+.twin-qitem--blocked {
+  align-items: center;
+  gap: 10px;
+}
+.twin-qitem__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* 正文行在纵向 flex 里不能被拉高：它靠 ellipsis 保一行，不靠 flex 撑。 */
+.twin-qitem__body .twin-qitem__text {
+  flex: none;
+}
+.twin-qitem__reason {
+  font-size: var(--text-micro);
+  color: var(--color-text-warning);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 巡查异常档：读数里唯一允许用警告色的位置（与顶栏「待批」同色系）。 */
+.twin-row__k.is-hot {
+  color: var(--color-text-warning);
+}
+.twin-qitem__acts {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.twin-qitem__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-faint);
+  font-size: var(--text-micro);
+  cursor: pointer;
+}
+.twin-qitem__btn svg {
+  width: 12px;
+  height: 12px;
+}
+.twin-qitem__btn:hover:not(:disabled),
+.twin-qitem__btn:focus-visible {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+}
+.twin-qitem__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.twin-batch__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+}
+.twin-batch__meta {
+  color: var(--color-text-secondary);
+}
+.twin-batch__error {
+  font-size: var(--text-tiny);
+  color: var(--color-text-error);
+}
+/* 「放回面板」：失败批次的显式出口。动过手的一批不自动回队，必须由人确认。 */
+.twin-batch__retry {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+/* 状态页底部两块读数：需求整合 / 发布到团队。 */
+.twin-batchpanel {
+  width: 100%;
+  max-width: 520px;
+  margin-top: 14px;
+  text-align: left;
+}
+.twin-batchpanel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 4px;
+  font-size: var(--text-tiny);
+  color: var(--color-text-secondary);
+}
+.twin-batchpanel__meta {
+  color: var(--color-text-faint);
+}
 /* 数据态 */
 .twin-data {
   position: relative;
@@ -1891,6 +2059,12 @@
   align-items: center;
   justify-content: center;
   padding: 10px;
+}
+/* 状态页现在比一屏高（环 + 读数 + 需求整合 + 发布到团队）：允许滚动，
+   居中在装不下时退化为 safe center —— 不会把顶部的环裁掉。 */
+.twin-data {
+  overflow-y: auto;
+  justify-content: safe center;
 }
 .twin-ring {
   position: relative;
@@ -2519,6 +2693,165 @@
   animation: twin-standby 3.2s steps(1, end) infinite;
 }
 
+/* ── 对话流里的团队汇报卡（2026-11-06） ─────────────────────────────
+   阿黎不产出文件，她的交付物是**工单结果**。此前这块只有一行
+   `🔧 delegate_task` 灰字：派了谁、做到哪、结果是什么全都看不见，用户
+   得切到「团队看板」里翻。这里把本批工单摆进她的对话流 ——
+   一行状态（谁 · 什么状态 · 几轮）+ 工单正文，点开就地读交付说明。
+
+   结构分隔靠底色与间距，不画框线（G11）；状态色只出现在左侧轨道与
+   验收判定字上，纸面保持中性 —— 与值守页其余面板同一套语法。 */
+.tw-report {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.tw-report__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--text-micro);
+  color: var(--color-text-faint);
+  letter-spacing: 0.04em;
+}
+.tw-report__count {
+  font-variant-numeric: tabular-nums;
+}
+.tw-report__card {
+  --tw-rail: var(--color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px 8px 12px;
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(90deg, var(--tw-rail) 0 2px, transparent 2px),
+    var(--color-bg-card);
+}
+.tw-report__card[data-tone="run"] {
+  --tw-rail: var(--color-accent);
+}
+.tw-report__card[data-tone="pass"] {
+  --tw-rail: var(--color-success);
+}
+.tw-report__card[data-tone="warn"] {
+  --tw-rail: var(--color-warning);
+}
+.tw-report__card[data-tone="fail"] {
+  --tw-rail: var(--color-error);
+}
+.tw-report__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-text-primary);
+  font-size: var(--text-meta);
+}
+.tw-report__chev {
+  flex: none;
+  color: var(--color-text-faint);
+}
+.tw-report__role {
+  flex: none;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text-secondary);
+}
+.tw-report__state {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.tw-report__verdict {
+  flex: none;
+  color: var(--color-text-secondary);
+}
+.tw-report__verdict[data-tone="pass"] {
+  color: var(--color-text-success);
+}
+.tw-report__verdict[data-tone="warn"] {
+  color: var(--color-text-warning);
+}
+.tw-report__verdict[data-tone="fail"] {
+  color: var(--color-text-error);
+}
+.tw-report__meta {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--text-micro);
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* 工单正文是这张卡的标题（用户读它才知道"这单是什么"）：主墨、可两行。 */
+.tw-report__task {
+  font-size: var(--text-ui);
+  line-height: 1.55;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.tw-report__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 8px;
+}
+.tw-report__block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tw-report__label {
+  font-size: var(--text-micro);
+  color: var(--color-text-faint);
+  letter-spacing: 0.04em;
+}
+.tw-report__criteria,
+.tw-report__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 16px;
+  font-size: var(--text-meta);
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+.tw-report__criteria {
+  list-style: decimal;
+}
+.tw-report__steps {
+  list-style: disc;
+}
+.tw-report__report {
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  font-size: var(--text-meta);
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tw-report__report--review {
+  max-height: 200px;
+}
+.tw-report__note {
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+}
+/* 「让她验收并汇报」：唯一的动作出口，靠左上对齐表明它属于这张卡。 */
+.tw-report__act {
+  align-self: flex-start;
+}
+
 /* ── 雷达扇区：环上常驻慢扫，转速即状态 ─────────────────────────
    conic-gradient 做扇区、radial-gradient 做遮罩只留环带（57% 以外）；
    旋转走合成层，扇区本身只栅格化一次。 */
@@ -2653,4 +2986,15 @@
   flex: none;
   background: var(--color-accent);
   animation: twin-caret-blink 1.2s steps(1, end) infinite;
+}
+
+/* ── 状态页（2026-11-06）：读数带从绝对定位改为流式 ──────────────────
+   任务面板把状态页撑得比一屏高：底部读数带若仍 absolute，会压在
+   「本轮需求 / 发布到团队」两块上。改回文档流，五格等宽（新增「待拉取」）。 */
+.twin-strip {
+  position: static;
+  width: 100%;
+  max-width: 520px;
+  margin-top: 12px;
+  grid-template-columns: repeat(5, 1fr);
 }

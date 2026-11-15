@@ -1,5 +1,7 @@
 // Hermix Desktop API Client — REST 运行时（从 api.ts 拆分；类型见 ./types，WS 见 ./ws）
-import type { Session, AutomationTask } from "../types";
+import { IPC } from "../ipc/commands";
+import type { Session, AutomationTask, TimelineStep } from "../types";
+import { compactStepsForPersist } from "../utils/timelineLimits";
 import { reportError } from "../lib/reportError";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 // v5: reuse detectToolError from messageParser for errorReason extraction
@@ -40,7 +42,7 @@ import type {
 export type { WorkflowEntry };
 
 // Transport switched from `fetch()` over `127.0.0.1:3000` to
-// `invoke<string>("backend_http_request")` over the Tauri stdio
+// `invoke<string>(IPC.backendHttpRequest)` over the Tauri stdio
 // bridge. `API_BASE` / `WS_BASE` / `apiUrl()` no longer exist —
 // there is no host or port. Anything that still needs the old
 // sentinel (e.g. `providerConfig.ts`'s "user left the provider URL
@@ -138,7 +140,7 @@ export async function apiInvoke(
   });
 
   const raw = await Promise.race([
-    invoke<string>("backend_http_request", {
+    invoke<string>(IPC.backendHttpRequest, {
       method,
       path,
       body: payload,
@@ -166,7 +168,9 @@ export interface FetchOptions {
  *  英文字符串一路冒到 toast 里 —— 用户看到的是 "HTTP 503: backend offline"
  *  这类协议黑话，而真正该说的是「后端没连上」。 */
 function offlineMessage(status: number, body: string): string | null {
-  return status === 503 && /backend offline/i.test(body)
+  // `backend exited` 是 2026-10-29 之前桥侧停机时用的词元（现已统一成
+  // `backend offline`）。两种都认，免得旧二进制把它原样印到 toast 里。
+  return status === 503 && /backend (offline|exited)/i.test(body)
     ? "本地后端未连接（服务未启动或正在重启）"
     : null;
 }
@@ -551,6 +555,24 @@ export const getPendingApprovals = async (
   }
 };
 
+/** 切换会话权限档（放手模式热更，2026-10-31）。后端置位后当前轮内
+ *  立即生效：后续审批请求直接放行，切到 full 时顺带放行已挂起的审批。
+ *  失败静默 —— 后端每条消息都会按消息里的 permission 字段重武装，
+ *  这里失败只损失「本轮内立即生效」，不损失下一轮的正确性。 */
+export const setSessionPermission = async (
+  id: string,
+  level: "default" | "full",
+): Promise<void> => {
+  try {
+    await fetchJSON(`/v1/sessions/${encodeURIComponent(id)}/permission`, {
+      method: "POST",
+      body: JSON.stringify({ level }),
+    });
+  } catch (e) {
+    console.warn(`setSessionPermission(${id}, ${level}) failed — ignored`, e);
+  }
+};
+
 /** 会话打开时首屏只载最近 N 条 —— 长会话（工作台对话）全量拉取会让
  *  wire 载荷与渲染都随历史线性膨胀；更早的历史走「加载更早」按需翻页。 */
 export const INITIAL_MESSAGE_WINDOW = 60;
@@ -615,12 +637,16 @@ export const saveUnifiedSteps = async (
   steps: unknown[]
 ): Promise<void> => {
   try {
+    // 落库前压缩（见 utils/timelineLimits）：一次工具输出曾按 16KB 分片
+    // 全量留存，单回合 steps 能到 1MB 级；这里幂等收敛成「每次调用一条
+    // stdout + 头尾上限」。压缩失败不应影响持久化，所以就地兜底。
+    const compacted = compactStepsForPersist(steps as TimelineStep[]);
     await fetchJSON(
       `/v1/sessions/${encodeURIComponent(id)}/messages/unified_steps`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ unified_steps: steps }),
+        body: JSON.stringify({ unified_steps: compacted }),
       }
     );
   } catch {
@@ -757,6 +783,54 @@ export const getFreeChannel = async (): Promise<FreeChannelState | null> => {
     return null;
   }
 };
+
+/**
+ * 一次 GET 探针的结论。
+ *
+ * `null`/`catch → null` 的老写法把三种完全不同的成因压成同一个值，界面只好
+ * 猜，而且必然猜错：后端正在重启（会自动恢复）被说成「当前后端不支持这个开关
+ * （需更新后端）」，读不到模型清单被说成「还没有配置任何模型」——两句话都在
+ * 2026-10-29 的实际截图里出现过。这里把成因显式分开，交给界面分别措辞。
+ */
+export type EndpointProbe<T> =
+  /** 拿到了。 */
+  | { kind: "ok"; data: T }
+  /** 后端不可达（桥不在位 / 该代已死 / 503 / 超时）——临时状态，会自动恢复。 */
+  | { kind: "offline" }
+  /** 后端在，但没有这个接口 —— 老版本后端，要升级。 */
+  | { kind: "unsupported" }
+  /** 后端在，但这次读失败（5xx / 坏 JSON）。 */
+  | { kind: "error"; message: string };
+
+async function probeJSON<T>(path: string): Promise<EndpointProbe<T>> {
+  let reply: ApiReply;
+  try {
+    reply = await apiInvoke("GET", path);
+  } catch {
+    // 桥的失败只有环境性的几种（不在位 / 超时 / 序列化），都归「不可达」。
+    return { kind: "offline" };
+  }
+  if (reply.status === 503) return { kind: "offline" };
+  if (reply.status === 404 || reply.status === 405 || reply.status === 501) {
+    return { kind: "unsupported" };
+  }
+  if (reply.status < 200 || reply.status >= 300) {
+    return { kind: "error", message: `HTTP ${reply.status}` };
+  }
+  try {
+    return { kind: "ok", data: JSON.parse(reply.body) as T };
+  } catch {
+    return { kind: "error", message: "响应不是合法 JSON" };
+  }
+}
+
+/** 模型清单的探针版（`getModelList` 会在失败时返回 null，见 EndpointProbe）。 */
+export const probeModelList = (): Promise<EndpointProbe<ModelListResponse>> =>
+  probeJSON<ModelListResponse>("/api/model/list");
+
+/** 免费渠道开关状态的探针版。 */
+export const probeFreeChannel = (): Promise<EndpointProbe<FreeChannelState>> =>
+  probeJSON<FreeChannelState>("/api/free-channel");
 
 /** `PUT /api/free-channel` 的响应：切换后的状态 + 本次动作的结果。 */
 export interface FreeChannelToggleResponse {
@@ -1292,11 +1366,36 @@ export const autoCorrectConfig = async (): Promise<AutoCorrectResponse> =>
  *  to call on a render loop without poisoning the request_id table. */
 export const checkBackendHealth = async (): Promise<boolean> => {
   try {
-    return await invoke<boolean>("backend_ready");
+    return await invoke<boolean>(IPC.backendReady);
   } catch {
     return false;
   }
 };
+
+/** 后端故障的现场快照（进程 / 桥 / 最近一次探测 / 启动期致命错误）。
+ *
+ *  界面上「后端未连接」是个笼统结论，三层里哪一层断了决定用户该做什么：
+ *  进程没了 → 查杀软隔离；进程在但不答应答 → 重启；启动期就崩 → bootError
+ *  里带着子进程 stderr。没有它，用户只能看到一句「未连接」。 */
+export type BackendDiagnosis = {
+  processAlive: boolean;
+  bridgeLive: boolean;
+  lastProbe: string;
+  bootError: string;
+};
+
+export const getBackendDiagnosis = async (): Promise<BackendDiagnosis> =>
+  invoke<BackendDiagnosis>(IPC.backendDiagnosis);
+
+/** 把诊断快照翻译成一句可读的原因（会话/界面层共用，避免各处自造文案）。 */
+export function describeBackendDiagnosis(d: BackendDiagnosis | null): string {
+  if (!d) return "";
+  if (d.bootError.trim()) return d.bootError.trim();
+  if (!d.processAlive && !d.bridgeLive) return "内核进程未运行（可能被杀软隔离，或被上次残留进程挡住）";
+  if (d.processAlive && !d.bridgeLive) return "内核进程在，但与它的通信管道已断开";
+  if (d.processAlive && d.bridgeLive) return d.lastProbe || "内核在运行但没有应答";
+  return d.lastProbe;
+}
 
 /** 轮询 `checkBackendHealth` 直到后端应答 `/health`（超时返回 false）。
  *

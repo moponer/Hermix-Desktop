@@ -75,7 +75,13 @@ export default defineConfig({
           const p = id.replace(/\\/g, "/");
           if (/\/node_modules\/(echarts|zrender)\//.test(p)) return "vendor-echarts";
           if (/\/node_modules\/katex\//.test(p)) return "vendor-katex";
-          if (/\/node_modules\/(refractor|prismjs)\//.test(p)) return "vendor-highlight";
+          // refractor 的**语法包**（`lang/*`）不进 vendor 分组：它们由
+          // `codeHighlight` 按需 `import()`，一旦被 manualChunks 收进同一个
+          // chunk，懒加载就变成"先拉 620KB 再挑一个语法"，等于没拆。
+          if (/\/node_modules\/(refractor|prismjs)\//.test(p)) {
+            if (/\/refractor\/lang\//.test(p)) return undefined;
+            return "vendor-highlight";
+          }
           if (/\/node_modules\/(react|react-dom|scheduler)\//.test(p)) return "vendor-react";
           return undefined;
         },

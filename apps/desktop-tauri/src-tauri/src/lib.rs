@@ -26,7 +26,7 @@ include!(concat!(env!("OUT_DIR"), "/frontend_fingerprint.rs"));
 
 use sidecar::{HermixSidecar, WatchdogConfig};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::Emitter;
 use tauri::Manager;
 
@@ -83,6 +83,12 @@ const TWIN_SKILL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/builtin-skills/hermix/twin/SKILL.md"
 ));
+// 仓库代码开发工作流（已有仓库的分析/重构/优化六步循环）。与 directions.rs
+// 的 code.full/code.short 指引块同源：块管每轮提醒，skill 管完整方法论。
+const REPO_REFACTORING_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/repo-refactoring/SKILL.md"
+));
 // 自诊断方法论（日志位置、症状→关键字对照表、配置项、报告格式）。
 const SELF_DIAGNOSIS_SKILL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -131,6 +137,11 @@ const BUILTIN_SKILLS: &[(&str, &str)] = &[
     ("hermix/web-gui-tester", WEB_GUI_TESTER_SKILL),
     ("hermix/self-diagnosis", SELF_DIAGNOSIS_SKILL),
     ("hermix/twin", TWIN_SKILL),
+    // 仓库代码开发工作流（2026-11-09）：已有仓库的分析/重构/优化六步循环
+    // （orient → baseline → locate → smallest change → verify → report）。
+    // 与 directions.rs 的 code.full/code.short 指引块同源：块管每轮提醒，
+    // skill 管按需展开的完整方法论。
+    ("hermix/repo-refactoring", REPO_REFACTORING_SKILL),
 ];
 
 /// Default `SOUL.md` (persona) shipped *inside the binary* via `include_str!`.
@@ -620,6 +631,28 @@ fn boot_stage() -> String {
         .unwrap_or_default()
 }
 
+/// 启动期的**致命**失败原因（spawn 失败 / 启动即崩，含子进程 stderr）。
+///
+/// 与 `BOOT_STAGE` 同款理由：`hermix:backend-error` 是在 setup 里 emit 的，而
+/// 前端注册监听要等页面加载完 —— 事件早于监听者，原因必定丢失，用户只剩顶栏
+/// 一个「后端未连接」。2026-11-07 实机：另一台机器装完，内核进程在、界面未连接，
+/// 界面上一个字的线索都没有。存一份供 `backend_diagnosis` 回查。
+static BOOT_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
+
+pub fn boot_error() -> String {
+    BOOT_ERROR
+        .get()
+        .and_then(|s| s.lock().ok().map(|g| g.clone()))
+        .unwrap_or_default()
+}
+
+fn set_boot_error(err: &str) {
+    let slot = BOOT_ERROR.get_or_init(|| Mutex::new(String::new()));
+    if let Ok(mut g) = slot.lock() {
+        *g = err.to_string();
+    }
+}
+
 /// 前端 dev server（`tauri.conf.json` 的 `devUrl`）是否在听。
 /// 只在 debug 构建里用；300ms 对回环足够，端口不通会立刻失败。
 #[cfg(debug_assertions)]
@@ -698,6 +731,15 @@ pub fn run() {
         std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", webview_args);
     }
 
+    // ── 便携模式环境变量：必须也在 Builder 之前 ──
+    // 它包含 `WEBVIEW2_USER_DATA_FOLDER`。此前只在 setup 里跑，而配置里的主窗口
+    // 在 `Builder::build()` 阶段就已经建好 WebView2 环境 → 主窗口落在**默认目录**
+    // （`com.hermix.desktop\EBWebView`），而 setup 之后拉起的子进程用
+    // `webview-cache`：同一台机器上留下两套用户数据，本进程再建第二个 webview
+    // 就是 0x8007139F（ERROR_INVALID_STATE，与 2026-10-23 的浏览器参数同款坑）。
+    // 函数幂等，setup 里那次调用变成空操作；那里仍保留用户可见的报错弹窗。
+    let _ = portable_env::install_portable_env();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -762,7 +804,7 @@ pub fn run() {
                     .title("Hermix Desktop（dev）")
                     .kind(MessageDialogKind::Error)
                     .blocking_show();
-                shutdown::cleanup(app.handle());
+                shutdown::cleanup(app.handle(), "dev-no-vite");
                 app.handle().exit(0);
                 return Ok(());
             }
@@ -772,52 +814,16 @@ pub fn run() {
             single_instance::spawn_show_listener(app.handle().clone());
             // 在线更新检查：启动 30s 后首查 + 每 2h，失败静默（updater.rs）。
             updater::spawn_check_scheduler(app.handle().clone());
-            // ── viewer 自动拉起（2026-10-25）───────────────────────────
-            // 阿黎的浏览器/文件自动化依赖 viewer MCP（3911）。viewer 不是
-            // sidecar，不随主程序拉起——用户不开查看器，阿黎第一个任务就
-            // 卡在"查看器工具不在工具列表里"（实测）。这里启动 10s 后静默
-            // spawn 它：exe 在主程序旁（安装版）或 workspace target（dev），
-            // 失败完全静默（viewer 缺席时 server 的 MCP 重试会兜底，
-            // 用户手动开查看器也能用）。
-            //
-            // **必须带 --hidden**（2026-10-25 用户定死的硬约束）：启动主程序
-            // 绝不能弹出查看器窗口。--hidden 下 viewer 窗口保持隐藏、MCP
-            // 照常就绪；用户打开文件时单实例投递会把窗口弹到前面。
-            {
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_secs(10));
-                    let exe = match std::env::current_exe() {
-                        Ok(p) => p.parent().map(|d| d.join("hermix-viewer.exe")),
-                        _ => None,
-                    }
-                    .filter(|p| p.exists())
-                    .or_else(|| {
-                        // dev：workspace target 下找最新的（debug 优先）。
-                        ["target/debug/hermix-viewer.exe", "target/release/hermix-viewer.exe"]
-                            .iter()
-                            .map(|rel| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                                .join("../../../").join(rel))
-                            .find(|p| p.exists())
-                    });
-                    let Some(exe) = exe else { return };
-                    use std::os::windows::process::CommandExt;
-                    // DETACHED_PROCESS：viewer 有自己的窗口与生命周期，
-                    // 不随主程序退出；也不需要控制台。
-                    match std::process::Command::new(&exe)
-                        .arg("--hidden")
-                        .creation_flags(0x0000_0008)
-                        .spawn()
-                    {
-                        Ok(child) => {
-                            eprintln!("[viewer] 已自动拉起查看器（pid {}）。", child.id());
-                        }
-                        // 单实例互斥（viewer 自身）或其它启动期错误：静默。
-                        Err(e) => {
-                            eprintln!("[viewer] 自动拉起失败（静默忽略）：{e}");
-                        }
-                    }
-                });
-            }
+            // ── viewer 不再开机预拉起（2026-10-29）───────────────────
+            // 旧行为：启动 10s 后静默 spawn `hermix-viewer.exe --hidden`。
+            // 代价是**一整棵 WebView2 进程树**（browser + gpu + 2 utility +
+            // renderer + crashpad，实测 6 进程 / 97MB 工作集 / ~490MB 提交），
+            // 而多数会话根本不看文件。现在改成两边按需：
+            //   · 用户侧：`open_in_viewer` / 文件关联 → 直接 spawn（本来就有）；
+            //   · agent 侧：server 的 viewer MCP 首连失败时自己拉起来并 5s 快速
+            //     复查（见 hermix-server/src/state.rs::connect_mcp_servers_with_retry）。
+            // **--hidden 仍然是硬约束**（2026-10-25 用户定死）：任何自动拉起
+            // 都不得弹出查看器窗口，由 server 侧 spawn 时带该参数。
             // ── N0 CDP 探针门控（批次 N 技术验证）──────────────────
             // HERMIX_CDP_PROBE=1 启动时，等主 webview 就绪后自动跑
             // Runtime.evaluate / DOMSnapshot / Accessibility 三个 CDP
@@ -1061,6 +1067,8 @@ pub fn run() {
                 // 原因（含子进程 stderr）立刻送到启动页与 toast。
                 Err(err) => {
                     eprintln!("[Hermix] sidecar 启动失败: {err}");
+                    crate::desktop_log!("[Hermix] sidecar 启动失败: {err}");
+                    set_boot_error(&err);
                     set_boot_stage(&handle, &format!("本地服务启动失败：{err}"));
                     let _ = handle.emit("hermix:backend-error", err);
                 }
@@ -1084,13 +1092,24 @@ pub fn run() {
                         system_settings::notify_hidden_once(app);
                     }
                 }
-                // 只认主窗。**这里曾对任意窗口生效**：关闭内置浏览器面板
-                // （`browser-panel` 是真销毁，不是隐藏）或关闭截图覆盖窗都会
-                // 走进来，把整个后端 sidecar 停掉 —— 表现就是「关一次浏览器
-                // 面板，之后点什么都报错」。其它窗口的销毁与后端生命周期无关。
+                // 主窗 = 应用本身：它一销毁就收尾并退出进程。
+                //
+                // 旧条件 `webview_windows().len() <= 1` 永远不成立 —— 启动 6s
+                // 后预热的截图覆盖窗（`screenshot-overlay`，隐藏、复用、永不
+                // 销毁）也是 webview 窗口。于是主窗销毁后：cleanup 不跑、进程
+                // 因「还有窗口」被事件循环留着、watchdog 6 次失败后把刚停掉的
+                // sidecar 又拉起来。用户看到的就是「关了程序，任务管理器里还
+                // 留着 Hermix Desktop + hermix.exe」，再点图标只静默退出
+                // （单实例锁还在旧进程手里）。2026-10-30 实锤：
+                // docs/notes/implemented/bug-fix/2026-10-30-close-leaves-zombie-process.md
+                //
+                // 其它窗口（浏览器面板 / 文件搜索）都是主窗的附属，主窗关了
+                // 就等于关程序，它们跟着一起走。托盘模式不走这里：那条路径在
+                // `CloseRequested` 已经 prevent_close 并隐藏窗口。
                 tauri::WindowEvent::Destroyed => {
                     if window.label() == "main" {
-                        shutdown::cleanup(window.app_handle());
+                        let app = window.app_handle();
+                        shutdown::cleanup_and_exit(app, "main-window-destroyed");
                     }
                 }
                 _ => {}
@@ -1164,6 +1183,7 @@ pub fn run() {
             commands::backend_http_request,
             commands::backend_channel_send,
             commands::backend_ready,
+            commands::backend_diagnosis,
             // Settings → Backend → Python 运行时探测。`python_detect`
             // 列出 override / env / sibling
             // / PATH 四档候选，给 UI 看；`set_python_override` 把
@@ -1210,11 +1230,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building hermix-desktop")
         .run(|app, event| {
-            if matches!(
-                event,
-                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-            ) {
-                shutdown::cleanup(app);
+            match event {
+                tauri::RunEvent::ExitRequested { .. } => shutdown::cleanup(app, "run-exit-requested"),
+                tauri::RunEvent::Exit => shutdown::cleanup(app, "run-exit"),
+                _ => {}
             }
         });
 }

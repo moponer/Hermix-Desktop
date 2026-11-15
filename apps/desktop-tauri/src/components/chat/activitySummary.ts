@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { TimelineStep } from "../../types";
-import { groupTimeline } from "../messageParser";
+import { groupTimelineSteps } from "../messageParser";
 
 /**
  * 折叠组的摘要措辞与开合记忆。抄 cc-haha
@@ -76,9 +76,13 @@ export function buildActivitySummary(steps: TimelineStep[]): ActivitySummary {
   // 终态判定与渲染共用同一入口，避免「摘要说成功、图标说失败」。
   // `streamComplete: false` = 不把断流的组提升为 error —— 折叠头在
   // 轮次结束前不该预告一个还没定论的结果。
-  for (const step of steps) {
-    if (step.kind !== "tools") continue;
-    for (const g of groupTimeline(step.events, { streamComplete: false })) {
+  // 与渲染共用**跨 step** 的聚合结果：按 step 分别聚合时，被思考/正文隔开的
+  // 同一次调用会被数成两次（一次 running 不计数、一次已完结计数），摘要与
+  // 行状态就对不上了。
+  const grouped = groupTimelineSteps(steps, { streamComplete: false });
+  for (const groups of grouped) {
+    if (!groups) continue;
+    for (const g of groups) {
       if (g.kind !== "tool") continue;
       if (!buckets.has(g.tool)) {
         buckets.set(g.tool, { count: 0, paths: new Set(), failed: 0, skipped: 0 });

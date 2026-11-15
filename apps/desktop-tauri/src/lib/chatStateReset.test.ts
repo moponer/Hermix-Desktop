@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { resetChatStateForModelSwitch } from "./chatStateReset";
 import type { ChatStateResetDeps } from "./chatStateReset";
+import type { ApprovalResolver } from "../hooks/useApprovalBridge";
 
 function makeDeps(opts?: {
   wsOpen?: boolean;
@@ -19,7 +20,7 @@ function makeDeps(opts?: {
   timerCount?: { retry: number; timeout: number };
 }): ChatStateResetDeps {
   const wsOpen = opts?.wsOpen ?? true;
-  const approvalMap = new Map<string, (d: unknown) => void>();
+  const approvalMap = new Map<string, ApprovalResolver>();
   for (let i = 0; i < (opts?.pendingApprovals ?? 0); i++) {
     approvalMap.set(`apr-${i}`, () => {});
   }
@@ -55,10 +56,12 @@ function makeDeps(opts?: {
     setStreamPhase: vi.fn(),
     setRunningToolCount: vi.fn(),
     setSubAgents: vi.fn(),
-    approvalResolversRef: { current: approvalMap },
-    approvalRetryTimersRef: { current: retryMap },
-    approvalTimeoutTimersRef: { current: timeoutMap },
-    pendingApprovalSessionsRef: { current: pendingApprovalSessions },
+    approval: {
+      resolvers: approvalMap,
+      retryTimers: retryMap,
+      timeoutTimers: timeoutMap,
+      pendingSessions: pendingApprovalSessions,
+    },
     clarifyResolversRef: { current: clarifyMap },
     runningToolRef: { current: runningTools },
     currentAssistantIdRef: { current: "assistant-123" },
@@ -143,7 +146,7 @@ describe("resetChatStateForModelSwitch", () => {
       expect(payload.decision).toBe("denied");
       expect(payload.request_id).toMatch(/^apr-\d$/);
     }
-    expect(deps.approvalResolversRef.current.size).toBe(0);
+    expect(deps.approval.resolvers.size).toBe(0);
   });
 
   it("clears all retry and timeout timers", () => {
@@ -154,8 +157,8 @@ describe("resetChatStateForModelSwitch", () => {
 
     expect(clearIntervalSpy).toHaveBeenCalledTimes(2);
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(3);
-    expect(deps.approvalRetryTimersRef.current.size).toBe(0);
-    expect(deps.approvalTimeoutTimersRef.current.size).toBe(0);
+    expect(deps.approval.retryTimers.size).toBe(0);
+    expect(deps.approval.timeoutTimers.size).toBe(0);
   });
 
   it("clears runningToolRef and emits count 0", () => {
@@ -192,6 +195,6 @@ describe("resetChatStateForModelSwitch", () => {
     expect(consoleWarnSpy).toHaveBeenCalledWith(
       expect.stringContaining("[chatReset] ws not open"),
     );
-    expect(deps.approvalResolversRef.current.size).toBe(0);
+    expect(deps.approval.resolvers.size).toBe(0);
   });
 });

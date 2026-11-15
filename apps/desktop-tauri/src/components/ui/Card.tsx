@@ -51,9 +51,11 @@ const BORDER: Record<CardBorder, string> = {
   none: "border-0",
 };
 
+// 4/8 网格：`sm` 从 10px(p-2.5) 收回到 12px(p-3)。原语自己落在半档上，
+// 调用方就只能跟着半档走 —— 这是「整站节奏不齐」的源头之一。
 const PADDING: Record<CardPadding, string> = {
   none: "p-0",
-  sm: "p-2.5",
+  sm: "p-3",
   md: "p-4",
   lg: "p-5",
 };

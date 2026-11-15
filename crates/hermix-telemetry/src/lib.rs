@@ -49,8 +49,9 @@ pub use run_trace::{RunTrace, RunTraceRecorder, TraceEvent, TraceEventKind};
 // ---------------------------------------------------------------------------
 
 pub use log_manager::{
-    get_log_dir, init_unified_telemetry, list_log_files, log_disk_usage, read_log_range,
-    read_log_tail, set_log_dir, LogCategory, LogFileInfo, TelemetryConfig, TelemetryGuard,
+    flush_logs, get_log_dir, init_unified_telemetry, list_log_files, log_disk_usage,
+    read_log_range, read_log_tail, set_log_dir, LogCategory, LogFileInfo, TelemetryConfig,
+    TelemetryGuard,
 };
 
 // ---------------------------------------------------------------------------

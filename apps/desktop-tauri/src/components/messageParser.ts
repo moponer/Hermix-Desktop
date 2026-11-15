@@ -198,18 +198,81 @@ export interface ToolGroup {
  * at the bottom of this file, which only ever runs on persisted
  * history after the stream is fully settled).
  */
+interface TimelineAcc {
+  groups: ToolGroup[];
+  /** 与 `groups` 平行：每组起于第几个 step（单数组聚合恒为 0）。 */
+  owners: number[];
+  /** 配对键（`tool_call_id`，缺省退化为工具名）→ 尚未闭合的组下标。 */
+  active: Map<string, number>;
+  /** 配对键 → 最近一次出现的组下标；闭合后仍要能接收迟到的 stdout。 */
+  last: Map<string, number>;
+}
+
+function newTimelineAcc(): TimelineAcc {
+  return { groups: [], owners: [], active: new Map(), last: new Map() };
+}
+
 export function groupTimeline(
   events: ExecutionTimelineEvent[],
   opts?: { streamComplete?: boolean },
 ): ToolGroup[] {
-  const streamComplete = opts?.streamComplete ?? true;
-  const groups: ToolGroup[] = [];
-  const active = new Map<string, number>();
+  const acc = newTimelineAcc();
+  for (const ev of events) feedTimelineEvent(acc, ev, 0);
+  finalizeStranded(acc, opts?.streamComplete ?? true);
+  return acc.groups;
+}
 
-  for (const ev of events) {
-    if (ev.type === "file_change") {
+/**
+ * 跨 step 聚合：一次工具调用的 `tool_start` / `tool_stdout` / `tool_complete`
+ * 可能被别的 step（思考、正文）隔开，落进不同的 `tools` step。按 step 逐个
+ * 聚合时，「开始」那一段永远等不到「完成」→ 永远转圈；「完成」那一段又新开
+ * 一行没有工具名、没有入参的空壳。这里按事件真实顺序聚合整轮，再把每个组
+ * 放回它**开始**时所在的 step。
+ *
+ * 返回数组与 `steps` 等长：非 `tools` step 为 `null`。
+ */
+export function groupTimelineSteps(
+  steps: TimelineStep[],
+  opts?: { streamComplete?: boolean },
+): (ToolGroup[] | null)[] {
+  const acc = newTimelineAcc();
+  steps.forEach((step, i) => {
+    if (step.kind !== "tools") return;
+    for (const ev of step.events) feedTimelineEvent(acc, ev, i);
+  });
+  finalizeStranded(acc, opts?.streamComplete ?? true);
+  const out: (ToolGroup[] | null)[] = steps.map((s) =>
+    s.kind === "tools" ? [] : null,
+  );
+  acc.groups.forEach((g, gi) => {
+    out[acc.owners[gi]]?.push(g);
+  });
+  return out;
+}
+
+/**
+ * 一轮里**哪一段文本是正文**：最后一段 `text` step。没有则 `-1`。
+ *
+ * 其余 text step 是过程旁白 —— 夹在工具调用之间的短句（"先看那个目录"、
+ * "路径没对上，先看工作区实际结构"）。它落库成 `text` 而不是 `reasoning`
+ * （模型把它写进 `content`，不是 `reasoning_content`），渲染时若按正文
+ * 待遇（正文字号 + 正文色），一场十几次工具调用的任务下来，正文区就是
+ * 一长串没折叠的"思考"。判据用**位置**而不是长度：旁白的定义是"说完还要
+ * 继续干活"，也就是后面还跟着步骤。
+ */
+export function lastTextStepIndex(steps: TimelineStep[]): number {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (steps[i].kind === "text") return i;
+  }
+  return -1;
+}
+
+function feedTimelineEvent(acc: TimelineAcc, ev: ExecutionTimelineEvent, owner: number): void {
+  const groups = acc.groups;
+  const active = acc.active;
+  if (ev.type === "file_change") {
       // file_change is metadata, not a tool run — collect separately.
-      continue;
+      return;
     }
     if (ev.type === "status") {
       // Attach the status note to the most recent *running* tool
@@ -223,7 +286,7 @@ export function groupTimeline(
       // ToolEventCard.tsx so the ACUI renderer and the inline
       // timeline stay in lock-step.
       const note = (ev.content ?? "").trim();
-      if (!note) continue;
+      if (!note) return;
       // Walk back from the end to find the most recent still-running
       // tool group (matches the order in which the LLM emitted them).
       for (let i = groups.length - 1; i >= 0; i--) {
@@ -236,7 +299,7 @@ export function groupTimeline(
       // Orphan status notes (no running tool to attach to) are
       // intentionally dropped — they were the source of the
       // "正在思考" / "初始化完成" floating cards.
-      continue;
+      return;
     }
     const tool = ev.tool?.trim() || "tool";
     // Use `tool_call_id` as the dedup key when the server provides one.
@@ -247,6 +310,15 @@ export function groupTimeline(
     // streaming renderer painted one card per `tool_complete` push.
     const dedupKey = (ev.tool_call_id && ev.tool_call_id.trim()) || tool;
     let idx = active.get(dedupKey);
+    if (idx === undefined && ev.type === "tool_stdout") {
+      // 迟到的 stdout：前端把分片合并到一个动画帧里再落 state，而
+      // `tool_complete` 是立刻生效的 —— 快速工具的分片常常比自己的
+      // 完成事件后到。这种事件没有工具名、没有入参，按「没配对就新开
+      // 一行」处理，长出来的就是一行永远转圈的「调用工具」。补进同一次
+      // 调用的组里；连组都找不到就丢弃（没有信息可展示）。
+      idx = acc.last.get(dedupKey);
+      if (idx === undefined) return;
+    }
     const fresh = ev.type === "tool_start" || idx === undefined;
     if (fresh) {
       groups.push({
@@ -258,9 +330,11 @@ export function groupTimeline(
         startedAt: ev.created_at,
       });
       idx = groups.length - 1;
+      acc.owners.push(owner);
       active.set(dedupKey, idx);
     }
     const safeIdx = idx ?? groups.length - 1;
+    acc.last.set(dedupKey, safeIdx);
     const grp = groups[safeIdx];
     // De-dupe events: skip if this exact event object (same type+ts+content)
     // already landed in the same group from a prior replay. Belt-and-
@@ -287,28 +361,28 @@ export function groupTimeline(
       }
       active.delete(dedupKey);
     }
-  }
-  // Stranded pass — only runs once the parent turn has settled.
-  // During live streaming (`streamComplete === false`) we leave
-  // any `tool_start`-without-`tool_complete` group in `"running"`
-  // state so the renderer keeps showing the spinner / "运行中"
-  // badge — the close event is simply on its way. Forcing these
-  // to "error" mid-stream is what produced the "上来就提示执行中断,
-  // On settled reload (the default `true`), we still promote every
-  // stranded group to `"error"` + "执行已中断（无完成事件）" —
-  // that is the correct read for history recovered after the live
-  // WS is long gone. The renderer's existing error branch handles
-  // the badge + LiveTerminal label from there.
-  if (streamComplete) {
-    for (const idx of active.values()) {
-      const grp = groups[idx];
-      if (grp && grp.status === "running") {
-        grp.status = "error";
-        grp.statusNote = "执行已中断（无完成事件）";
-      }
+}
+
+// Stranded pass — only runs once the parent turn has settled.
+// During live streaming (`streamComplete === false`) we leave
+// any `tool_start`-without-`tool_complete` group in `"running"`
+// state so the renderer keeps showing the spinner / "运行中"
+// badge — the close event is simply on its way. Forcing these
+// to "error" mid-stream is what produced the "上来就提示执行中断,
+// On settled reload (the default `true`), we still promote every
+// stranded group to `"error"` + "执行已中断（无完成事件）" —
+// that is the correct read for history recovered after the live
+// WS is long gone. The renderer's existing error branch handles
+// the badge + LiveTerminal label from there.
+function finalizeStranded(acc: TimelineAcc, streamComplete: boolean): void {
+  if (!streamComplete) return;
+  for (const idx of acc.active.values()) {
+    const grp = acc.groups[idx];
+    if (grp && grp.status === "running") {
+      grp.status = "error";
+      grp.statusNote = "执行已中断（无完成事件）";
     }
   }
-  return groups;
 }
 
 // 实现见 `utils/toolOutcome.ts`（已在上方 import 并转发）。

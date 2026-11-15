@@ -21,13 +21,9 @@ pub struct SessionInfo {
     pub preview: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct PaginatedSessions {
-    pub sessions: Vec<SessionInfo>,
-    pub total: u32,
-    pub limit: u32,
-    pub offset: u32,
-}
+// 删掉 `PaginatedSessions`（2026-10-30）：全仓零引用，是"分页契约曾设计但
+// 从未落地"的残留。真正的分页见 `routes.rs` 的 `handle`（sessions 硬上限 +
+// messages 的 `limit`/`tail_skip` 窗口）。
 
 #[derive(Debug, Serialize)]
 pub struct SessionMessage {
@@ -174,7 +170,7 @@ pub struct CronJobCreate {
 
 // ── Skills ──────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SkillInfo {
     pub name: String,
     /// 技能的中文展示名（来自 frontmatter `display_name`）。

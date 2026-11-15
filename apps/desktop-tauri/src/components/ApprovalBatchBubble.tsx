@@ -16,6 +16,7 @@
 // so the surrounding ProcessTimeline step-fold and the
 // `.tl-approval--leaving` collapse animation behave identically.
 import { useEffect, useState } from "react";
+import { APPROVAL_RISK_LABEL } from "./approvalRisk";
 import {
   Check,
   ChevronDown,
@@ -56,11 +57,7 @@ function worstRisk(items: ApprovalRequestItem[]): Risk {
   }, "safe");
 }
 
-const RISK_LABEL: Record<Risk, string> = {
-  dangerous: "高风险",
-  caution: "中风险",
-  safe: "低风险",
-};
+const RISK_LABEL: Record<Risk, string> = APPROVAL_RISK_LABEL;
 
 /** Best-effort file path extraction. Many tools store the file path
  *  under one of: `path` / `file` / `filePath` / `target`. */

@@ -388,7 +388,7 @@ fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         return s.to_string();
     }
-    s.chars().take(n).collect::<String>() + "…"
+    format!("{}…", hermix_core::text_utils::truncate_chars(s, n))
 }
 
 // ---------------------------------------------------------------------------

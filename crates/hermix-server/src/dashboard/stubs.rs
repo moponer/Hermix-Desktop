@@ -73,13 +73,36 @@ fn save_plugin_state(state: &HttpServerState, body: &DashboardPluginState) -> Re
     std::fs::write(path, json).map_err(|e| e.to_string())
 }
 
+/// 插件设置的 10s 缓存：每请求一次 `read_to_string` + JSON 解析（小文件，
+/// 但设置页切页会连拉）。写操作（set / rescan）显式失效。
+static PLUGINS_CACHE: crate::ttl_cache::TtlCache<String, DashboardPluginResponse> =
+    crate::ttl_cache::TtlCache::new(std::time::Duration::from_secs(10));
+
+/// 插件清单的 30s 缓存：`discover_plugin_manifests` 要 `read_dir` + 逐目录
+/// 解析 `plugin.yaml`。清单只在 rescan / 用户改盘时变化。
+/// 键是 `hermix_home` 路径（2026-11-11 从全局单键改为按 home 区分）：同进程
+/// 多个 home（测试烟囱 / 未来多实例）此前会互相串清单——`17 vs 1` 实测复现。
+static MANIFESTS_CACHE: crate::ttl_cache::TtlCache<String, Vec<Value>> =
+    crate::ttl_cache::TtlCache::new(std::time::Duration::from_secs(30));
+
+fn invalidate_plugin_caches() {
+    PLUGINS_CACHE.invalidate();
+    MANIFESTS_CACHE.invalidate();
+}
+
 /// GET /api/dashboard/plugins — return persisted plugin settings.
 pub async fn get_plugins(State(state): State<HttpServerState>) -> Json<DashboardPluginResponse> {
+    let home_key = state.hermix_home.display().to_string();
+    if let Some(cached) = PLUGINS_CACHE.get(&home_key) {
+        return Json(cached);
+    }
     let (plugin_state, persisted) = load_plugin_state(&state);
-    Json(DashboardPluginResponse {
+    let response = DashboardPluginResponse {
         plugins: plugin_state.plugins,
         persisted,
-    })
+    };
+    PLUGINS_CACHE.put(home_key, response.clone());
+    Json(response)
 }
 
 // ── 移动端活动探测 ──────────────────────────────────────────────────
@@ -136,11 +159,14 @@ pub async fn set_plugins(
         plugins: body.plugins,
     };
     match save_plugin_state(&state, &payload) {
-        Ok(_) => Json(serde_json::json!({
-            "ok": true,
-            "plugins": payload.plugins,
-            "persisted": true
-        })),
+        Ok(_) => {
+            invalidate_plugin_caches();
+            Json(serde_json::json!({
+                "ok": true,
+                "plugins": payload.plugins,
+                "persisted": true
+            }))
+        }
         Err(err) => Json(serde_json::json!({
             "ok": false,
             "error": err
@@ -534,7 +560,10 @@ pub fn resolve_toolset_for(id: &str) -> String {
 
 /// POST /api/dashboard/plugins/rescan — returns count of discovered local plugin manifests.
 pub async fn rescan_plugins(State(state): State<HttpServerState>) -> Json<Value> {
-    let count = discover_plugin_manifests(&state.hermix_home).len();
+    let manifests = discover_plugin_manifests(&state.hermix_home);
+    let count = manifests.len();
+    MANIFESTS_CACHE.put(state.hermix_home.display().to_string(), manifests);
+    PLUGINS_CACHE.invalidate();
     Json(json!({ "ok": true, "count": count }))
 }
 #[cfg(test)]
@@ -638,5 +667,11 @@ mod tests {
 
 /// GET /api/dashboard/plugin-manifests — JSON array from `dashboard-plugins/*/manifest.json`.
 pub async fn get_plugin_manifests(State(state): State<HttpServerState>) -> Json<Vec<Value>> {
-    Json(discover_plugin_manifests(&state.hermix_home))
+    let home_key = state.hermix_home.display().to_string();
+    if let Some(cached) = MANIFESTS_CACHE.get(&home_key) {
+        return Json(cached);
+    }
+    let manifests = discover_plugin_manifests(&state.hermix_home);
+    MANIFESTS_CACHE.put(home_key, manifests.clone());
+    Json(manifests)
 }

@@ -14,6 +14,15 @@ import { COPIED, COPY_FAILED, failure } from "../strings";
 
 const TAIL_LINE_OPTIONS: number[] = [200, 500, 2000, 10000];
 
+/** `GET /api/storage/stats` 的响应（server::dashboard::storage_admin::stats）。 */
+interface StorageStats {
+  db_bytes: number;
+  wal_bytes: number;
+  reclaimable_bytes: number;
+  page_count: number;
+  freelist_pages: number;
+}
+
 /** `GET /api/pairing/audit` 的行（pairing.rs::AuditRow）。 */
 interface AuditRow {
   ts: number;
@@ -64,6 +73,44 @@ export function DiagnosticsTab() {
   const [audit, setAudit] = useState<AuditRow[] | null>(null);
   const [auditError, setAuditError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // ── 会话库存储（GET /api/storage/stats · POST /api/storage/vacuum）──
+  // 后端只增不减：删会话不会缩文件。这里给出**事实**（多大、能回收多少）与
+  // 一个人工触发按钮，而不是替用户自动删数据。
+  const [storage, setStorage] = useState<StorageStats | null>(null);
+  const [storageBusy, setStorageBusy] = useState(false);
+
+  const refreshStorage = useCallback(async () => {
+    try {
+      setStorage(await fetchJSON<StorageStats>("/api/storage/stats"));
+    } catch {
+      // 端点仅本机可用；读不到就留空态，不弹 toast（进设置页不该报错）。
+      setStorage(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshStorage();
+  }, [refreshStorage]);
+
+  const onVacuum = useCallback(async () => {
+    setStorageBusy(true);
+    try {
+      const r = await fetchJSON<{ reclaimed_bytes: number }>("/api/storage/vacuum", {
+        method: "POST",
+      });
+      toastSuccess(
+        r.reclaimed_bytes > 0
+          ? `已回收 ${formatBytes(r.reclaimed_bytes)}`
+          : "回收完成，当前没有可释放的空间",
+      );
+    } catch (e) {
+      toastError(`回收失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setStorageBusy(false);
+      void refreshStorage();
+    }
+  }, [refreshStorage]);
 
   const refresh = useCallback(async () => {
     abortRef.current?.abort();
@@ -232,6 +279,55 @@ export function DiagnosticsTab() {
           尚未发现日志文件。点击「刷新」重试，或执行一次完整对话后再查看。
         </div>
       )}
+
+      {/* 会话库存储：删会话不会缩文件，这里给出体积事实 + 人工回收入口。 */}
+      <div className="rounded-[var(--radius-lg)] bg-bg-card shadow-[var(--shadow-paper)]">
+        <div className="flex items-center justify-between bg-bg-tertiary/40 px-3 py-2">
+          <span className="text-[length:var(--text-meta)] text-text-secondary">会话库存储</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void refreshStorage()}
+              className="h-7 px-2.5 rounded-[var(--radius-md)] flex items-center gap-1 bg-bg-tertiary text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary"
+              aria-label="重新读取会话库体积"
+            >
+              <RefreshCw className="icon-sm" />
+              刷新
+            </button>
+            <button
+              onClick={() => void onVacuum()}
+              disabled={storageBusy}
+              className="h-7 px-2.5 rounded-[var(--radius-md)] flex items-center gap-1 bg-bg-tertiary text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="回收会话库中已释放的空间"
+            >
+              <ShieldCheck className="icon-sm" />
+              {storageBusy ? "回收中…" : "回收空间"}
+            </button>
+          </div>
+        </div>
+        <div className="px-3 py-3 flex flex-wrap gap-x-5 gap-y-1 text-[length:var(--text-meta)] text-text-muted">
+          {storage ? (
+            <>
+              <span>
+                库 <span className="text-text-secondary font-mono">{formatBytes(storage.db_bytes)}</span>
+              </span>
+              <span>
+                WAL <span className="text-text-secondary font-mono">{formatBytes(storage.wal_bytes)}</span>
+              </span>
+              <span>
+                可回收{" "}
+                <span className="text-text-secondary font-mono">
+                  {formatBytes(storage.reclaimable_bytes)}
+                </span>
+              </span>
+              <span className="text-text-faint">
+                {storage.freelist_pages} / {storage.page_count} 页空闲
+              </span>
+            </>
+          ) : (
+            <span>无法读取存储信息（后端未就绪）</span>
+          )}
+        </div>
+      </div>
 
       {/* 安全审计事件（GET /api/pairing/audit，时间倒序） */}
       <div className="rounded-[var(--radius-lg)] bg-bg-card shadow-[var(--shadow-paper)]">

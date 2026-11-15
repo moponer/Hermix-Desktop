@@ -104,9 +104,20 @@ impl PluginScanner {
             None
         };
 
-        if index_html.is_none() && app_source.is_none() {
+        // 已打包（`hx-packager` 产物）的自定义应用：`installed.json` 里记着
+        // `exe: dist/xxx.exe`，源码入口 index.html / src/main.tsx 已经打进
+        // 那个 exe 里了。此前这类应用每次启动都被判 "invalid manifest"
+        // （实机 102 条 WARN + 应用在列表里消失），而它其实是装好可用的。
+        let packaged_exe = std::fs::read_to_string(dir_path.join("installed.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| v.get("exe").and_then(|e| e.as_str()).map(str::to_string))
+            .map(|rel| dir_path.join(rel))
+            .filter(|p| p.exists());
+
+        if index_html.is_none() && app_source.is_none() && packaged_exe.is_none() {
             return Err(PluginError::InvalidManifest(
-                "index.html 和 src/main.tsx 均不存在 (自定义应用需要至少一个)".into(),
+                "index.html、src/main.tsx 与已打包的 exe 均不存在 (自定义应用需要至少一个)".into(),
             ));
         }
 

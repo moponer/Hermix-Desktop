@@ -45,8 +45,12 @@ export function SettingsRow({
         ? { type: "button" as const, onClick, disabled }
         : {})}
       className={cx(
-        "flex w-full items-center gap-4 px-5 py-3.5 text-left",
-        interactive &&
+        // 行高从 14px(py-3.5) 收回 16px(py-4)：设置行是「功能/能力」行，
+        // 半档 14px 让它与 12/16 的卡片内边距对不齐。
+        "flex w-full items-center gap-4 px-5 py-4 text-left",
+        // className 曾经写成 `interactive && className`：不可点的行传进来的
+        // 布局类会被静默丢弃，于是同一组设置行的 padding/对齐按"是否可点"
+        // 分叉。外部传入的类必须无条件生效。
         className,
       )}
     >

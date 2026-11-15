@@ -41,7 +41,7 @@
   --text-title: 16px;    /* 小标题：区块标题、弹窗标题 */
   --text-display: 20px;  /* 页面标题 / 空态（一次性使用） */
   /* hero 28px（2026-10-18 裁决：40px 曾在两套规范间冲突——tokens 注释
-     允许 hero 用 700，TYPOGRAPHY_SYSTEM.md 字重上限却是 600。裁决结果：
+     允许 hero 用 700，docs/notes/archived/architecture/TYPOGRAPHY_SYSTEM.md 字重上限却是 600。裁决结果：
      统一服从字重上限 600，字号从 40 收到 28（与 --text-title 16 / display
      20 保持 4px 递进，不再单独开大档）。只给空态用，不进正文档位系统；
      中文负字距是负优化，hero 保持 0 字距。 */
@@ -58,14 +58,6 @@
   --text-base: 13px;    /* = body（默认 16，统一为 13） */
   --text-lg: 16px;      /* = title（默认 18） */
   --text-xl: 20px;      /* = display */
-
-  /* 旧名别名 —— 仅供 var(--font-size-*) 引用，禁止新代码使用 */
-  --font-size-display: 20px;
-  --font-size-h1: 16px;
-  --font-size-h2: 14px;
-  --font-size-body: 13px;
-  --font-size-meta: 12px;
-  --font-size-tiny: 12px;
 
   /* ── 字重（4 档）────────────────────────────────────────────
      中文在 13px 以下用 700 会糊成块，所以最高只到 600。

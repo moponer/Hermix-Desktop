@@ -15,7 +15,7 @@
 //!   sections from disk.
 //! - `extract_provider_and_model` — split `"provider:model"` notation.
 //! - `messages_for_api_call` — assemble the messages vector sent to the
-//!   provider (strips old reasoning, applies ephemeral system prompt, marks
+//!   provider (drops all reasoning, applies ephemeral system prompt, marks
 //!   cache breakpoints).
 //! - `apply_prompt_cache_markers` — Anthropic prompt-cache marker strategy.
 //! - `build_dynamic_suffix` — per-turn timestamp + session_id block.
@@ -125,10 +125,20 @@ pub fn effective_provider_for_prompt(config: &AgentConfig, model: &str) -> Optio
 /// prompt.
 const SKILL_METADATA_BUDGET_CHARS: usize = 20_000;
 
+/// 详细模式下最多列多少行。
+///
+/// 之前这个 80 是写在渲染循环里的字面量，且超出的部分**无声消失** ——
+/// 实测本机装了 87 个 skill，字母序最后 7 个永远不会出现在提示词里，
+/// `skills_list` 能看到、模型不知道它们存在。现在上限是常量、超限有日志，
+/// 且降级成 names-only 时**全量列出名字**（名字很便宜）。
+const SKILL_INDEX_MAX_ROWS: usize = 80;
+
 /// Render the skill index. Two tiers:
-/// 1. Detailed — grouped by category, `- cmd: description [tags]` rows,
-///    capped at 80 skills;
-/// 2. Over budget → names-only (`- cmd`), preserving discoverability.
+/// 1. Detailed — grouped by category, `- cmd: description [tags]` rows, capped
+///    at [`SKILL_INDEX_MAX_ROWS`] (over the cap → `warn` with the drop count);
+/// 2. Over budget → names-only (`- cmd`), **all** names listed (they are cheap),
+///    truncated only if the names themselves exceed the budget, with an explicit
+///    "N more, use `skills_list`" tail.
 ///
 /// 参数形状跟着 `SkillOrchestrator::scan_skill_commands` 走：它返回
 /// `&HashMap`（避免每次组装 prompt 重建一张表），排序在这里做。
@@ -139,7 +149,7 @@ fn render_skill_index(
     let detailed = |rows: &[(&String, &crate::skill_orchestrator::SkillCommandInfo)]| {
         let mut categories: std::collections::BTreeMap<String, Vec<_>> =
             std::collections::BTreeMap::new();
-        for (cmd, info) in rows.iter().take(80) {
+        for (cmd, info) in rows.iter() {
             let cat = if info.category.is_empty() { "other" } else { &info.category };
             categories
                 .entry(cat.to_string())
@@ -162,20 +172,82 @@ fn render_skill_index(
     };
 
     let mut rows: Vec<_> = commands.iter().collect();
-    rows.sort_by(|a, b| a.0.cmp(b.0));
+    // ★ 行数上限（`SKILL_INDEX_MAX_ROWS`）之前必须先按"可复用价值"排序，
+    // 而不是按字典序。此前纯字典序 + 98 个技能只有 80 行 → 被砍掉的 18 个
+    // 全凭名字首字母决定，其中可能有手写技能；而 `skills/auto` 下自动沉淀
+    // 的垃圾条目（名字就是内容碎片）反而常常排进前 80（2026-11-06 实机：
+    // `total=98 shown=80 dropped=18` 每次运行都在刷）。
+    // 排序键：手写优先于 auto，同类内保持字典序（稳定、可预测）。
+    rows.sort_by(|a, b| {
+        let auto_a = crate::skill_loader::is_auto_generated(a.1);
+        let auto_b = crate::skill_loader::is_auto_generated(b.1);
+        auto_a.cmp(&auto_b).then_with(|| a.0.cmp(b.0))
+    });
+    let total = rows.len();
+    let shown = total.min(SKILL_INDEX_MAX_ROWS);
 
-    let body = detailed(&rows);
-    if body.chars().count() <= budget {
+    let body = detailed(&rows[..shown]);
+    let chars = body.chars().count();
+    if chars <= budget {
+        if total > shown {
+            // 详细模式放不下全部：剩下的只能靠 skills_list 发现。这条日志是
+            // 「模型为什么没想到某个技能」的唯一线索，所以用 warn。
+            tracing::warn!(
+                target: "hermix.skills_index",
+                total,
+                shown,
+                dropped = total - shown,
+                chars,
+                budget,
+                "skill index: row cap reached — the remaining skills are only \
+                 reachable through skills_list"
+            );
+        } else {
+            tracing::debug!(
+                target: "hermix.skills_index",
+                mode = "detailed",
+                total,
+                shown,
+                chars,
+                budget,
+                "skill index rendered"
+            );
+        }
         return body;
     }
+
     // Names-only 降级：保留可发现性（skills_list/skill_view 仍在），
-    // 描述全部让位给预算。
+    // 描述全部让位给预算。名字本身很便宜，所以这一档**不设行数上限**——
+    // 只在真的超出预算时才按预算截，并明确告诉模型还有几个没列。
     let mut names_only = String::from(
         "[技能数量超出元数据预算 — 已降级为仅名称列表。用 `skill_view <名称>` 查看任一技能的完整说明。]\n",
     );
-    for (cmd, _) in rows.iter().take(80) {
-        names_only.push_str(&format!("- {cmd}\n"));
+    let mut listed = 0usize;
+    let mut omitted = 0usize;
+    for (cmd, _) in rows.iter() {
+        let line = format!("- {cmd}\n");
+        if names_only.chars().count() + line.chars().count() > budget {
+            omitted += 1;
+            continue;
+        }
+        names_only.push_str(&line);
+        listed += 1;
     }
+    if omitted > 0 {
+        names_only.push_str(&format!(
+            "…（另有 {omitted} 个未列出，用 `skills_list` 查看）\n"
+        ));
+    }
+    tracing::info!(
+        target: "hermix.skills_index",
+        mode = "names-only",
+        total,
+        listed,
+        omitted,
+        chars = names_only.chars().count(),
+        budget,
+        "skill index degraded to names-only (descriptions dropped, names kept)"
+    );
     names_only
 }
 
@@ -223,14 +295,16 @@ pub fn skills_system_prompt(
     // ceiling for which skills the prompt actually sees content from.
     if !ephemeral.is_empty() {
         let orch2 = crate::skill_orchestrator::SkillOrchestrator::default_dir();
-        let (ephemeral_body, loaded, missing) =
-            orch2.build_preloaded_skills_prompt(&ephemeral);
+        // 预算与自动匹配那条路共用同一个旋钮：正文内联总量上限。勾选本身
+        // 不会丢，超预算的技能降级成指针（名字 + 描述 + 先 `skill_view`）。
+        let (ephemeral_body, loaded, missing) = orch2
+            .build_preloaded_skills_prompt(&ephemeral, config.skill_injection_char_budget);
         if !loaded.is_empty() {
             body.push_str("\n\n## Active Skills (this turn)\n");
             body.push_str(
                 "The user explicitly enabled the following skills for this conversation. \
-                 Treat their instructions as active guidance for the duration of this \
-                 session unless the user overrides them.\n",
+                 Small ones are inlined; any that exceeded the preload budget only get a \
+                 pointer — load those with `skill_view` before acting.\n",
             );
             body.push_str(&ephemeral_body);
         }
@@ -378,9 +452,15 @@ pub fn extract_provider_and_model<'a>(
 /// Assemble the messages vector sent to the provider.
 /// 1. Inject `ephemeral_system_prompt` (per-turn override) if non-empty.
 /// 2. Normalize messages (merge consecutive same-role, strip stale errors, etc.)
-/// 3. Strip `reasoning_content` from all but the most recent assistant
-/// message — old thinking blocks are noise once the LLM has moved on.
+/// 3. Drop `reasoning_content` from **every** message — thinking blocks are
+/// never echoed back, which keeps the assistant rows byte-identical
+/// across calls (see the note at the strip site).
 /// 4. Apply Anthropic prompt-cache markers.
+///
+/// Every step here must be **stable across calls**: a row that was already
+/// sent has to serialize to the same bytes on every later call, otherwise
+/// the provider's prefix cache is invalidated from that position to the end
+/// of the request.
 pub fn messages_for_api_call(config: &AgentConfig, ctx: &ContextManager) -> Vec<Message> {
     let mut messages = ctx.get_messages().to_vec();
     if let Some(ephemeral) = config
@@ -440,21 +520,194 @@ pub fn messages_for_api_call(config: &AgentConfig, ctx: &ContextManager) -> Vec<
     }
     messages = merged;
 
-    // Strip reasoning_content from all but the last assistant message.
-    // Old thinking blocks are noise once the LLM has moved on — it doesn't
-    // need to re-read its own previous reasoning every turn.
-    for i in (0..messages.len()).rev() {
-        if messages[i].reasoning_content.is_some() {
-            // Keep the last one (most recent assistant), clear the rest.
-            // Scan backwards: the first hit is the last assistant.
-            for j in (0..i).rev() {
-                messages[j].reasoning_content = None;
-            }
-            break;
-        }
+    // Never echo assistant thinking blocks back to the provider.
+    //
+    // The previous rule kept the *last* assistant's reasoning and cleared
+    // every earlier one. That is a per-call rewrite of already-sent bytes:
+    // call N sends assistant_A **with** reasoning, call N+1 (after a new
+    // assistant arrives) sends the same row **without** it, so the prefix
+    // cache breaks at assistant_A and every token after it — its tool
+    // results and the whole following round — is billed again. Measured on
+    // a real session: 60 assistant rows carried 190K chars of thinking,
+    // and each call re-paid ~3-12K tokens for that alone.
+    //
+    // Keeping *all* thinking would also be byte-stable but would inflate
+    // every request by that 190K chars (plus it tripped compression far
+    // earlier, and each compression is a full cache reset). Dropping *all*
+    // of it is stable AND smaller: the payload is built the same way on
+    // every call, so position 0..n never changes because of reasoning.
+    // `ctx` keeps the reasoning for persistence / UI replay — this is a
+    // send-time projection, not a mutation of history.
+    for msg in messages.iter_mut() {
+        msg.reasoning_content = None;
     }
+    observe_prefix_reuse(config.session_id.as_deref(), &messages);
     apply_prompt_cache_markers(config, &mut messages);
     messages
+}
+
+/// Per-session state carried between two consecutive API calls.
+///
+/// Beyond the message fingerprints this also remembers the **first** thing the
+/// provider sees: the `tools` array. OpenAI-compatible chat templates render
+/// `tools` *before* the system message, so a changed tool array invalidates
+/// every byte after it — including the whole conversation — even when every
+/// message row is byte-identical. Without this field a `shared_msgs = 0` line
+/// says "something broke" but not "what broke".
+#[derive(Default)]
+struct PrefixState {
+    /// 上一次 payload 的逐条指纹（role + content + tool_calls）。
+    msgs: Vec<(u64, usize)>,
+    /// 上一次**实际发出**的 `tools` 数组指纹（0 = 尚未记录）。
+    tools_fp: u64,
+    /// 本轮将要发出的 `tools` 数组指纹，由 `prepare_run_context` 写入
+    /// （`observe_prefix_reuse` 在每次调用时把它换进 `tools_fp`）。
+    pending_tools_fp: u64,
+    /// 上一次 payload 里 system 消息（第 0 条）的指纹。
+    system_fp: u64,
+}
+
+/// Last payload fingerprint per session. Bounded so parallel sessions
+/// (and sub-agents) can't grow it without limit.
+static PREFIX_STATE: Mutex<Option<std::collections::HashMap<String, PrefixState>>> =
+    Mutex::new(None);
+const MAX_PREFIX_SESSIONS: usize = 32;
+
+/// 计算 `tools` 数组的字节指纹（顺序敏感：同样的集合换个顺序也算变了）。
+pub fn tool_array_fingerprint(tools: &[ToolSchema]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    tools.len().hash(&mut h);
+    for t in tools {
+        t.name.hash(&mut h);
+        t.description.hash(&mut h);
+        format!("{:?}", t.parameters).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// 记录本轮路由出的 `tools` 数组指纹。
+///
+/// 调用点在 `prepare_run_context`（工具集合定稿之后、第一次 API 调用之前），
+/// 每次调用时由 [`observe_prefix_reuse`] 换进快照并比对。
+pub fn record_tool_array_fingerprint(session_id: Option<&str>, fingerprint: u64) {
+    let key = session_id.unwrap_or("").to_string();
+    let Ok(mut slot) = PREFIX_STATE.lock() else {
+        return;
+    };
+    let map = slot.get_or_insert_with(std::collections::HashMap::new);
+    map.entry(key).or_default().pending_tools_fp = fingerprint;
+}
+
+/// Per-session fingerprint of the previous request body, used to measure how
+/// much of this request the provider can serve from its prefix cache.
+///
+/// The provider's number arrives one call late and only as an aggregate, so a
+/// regression ("we started rewriting history again") is invisible until the
+/// hit rate has already dropped. This keeps the *previous* payload's
+/// per-message fingerprints and logs the shared prefix — both at message
+/// granularity and inside the first differing message — which is exactly the
+/// quantity a prefix cache can bill as a hit.
+fn observe_prefix_reuse(session_id: Option<&str>, messages: &[Message]) {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn fingerprint(msg: &Message) -> (u64, usize) {
+        let mut h = DefaultHasher::new();
+        (msg.role as u8).hash(&mut h);
+        msg.content.hash(&mut h);
+        msg.content_parts
+            .as_ref()
+            .map(|p| format!("{p:?}"))
+            .hash(&mut h);
+        msg.tool_calls
+            .as_ref()
+            .map(|c| {
+                c.iter()
+                    .map(|t| format!("{}|{}", t.id, t.function.arguments))
+                    .collect::<Vec<_>>()
+                    .join("\u{1}")
+            })
+            .hash(&mut h);
+        let chars = msg.content.as_deref().map(str::len).unwrap_or(0)
+            + msg
+                .tool_calls
+                .as_ref()
+                .map(|c| c.iter().map(|t| t.function.arguments.len()).sum::<usize>())
+                .unwrap_or(0)
+            + msg
+                .content_parts
+                .as_ref()
+                .map(|p| format!("{p:?}").len())
+                .unwrap_or(0);
+        (h.finish(), chars)
+    }
+
+    let current: Vec<(u64, usize)> = messages.iter().map(fingerprint).collect();
+    let total_msgs = current.len();
+    let total_chars: usize = current.iter().map(|c| c.1).sum::<usize>().max(1);
+    let system_fp = current.first().map(|c| c.0).unwrap_or(0);
+    let key = session_id.unwrap_or("").to_string();
+
+    // 取上次快照 + 换入本轮快照（同一把锁内完成，避免两次调用交错时互相覆盖）。
+    let (prev, tools_changed, system_changed, tools_fp) = {
+        let Ok(mut slot) = PREFIX_STATE.lock() else {
+            return;
+        };
+        let map = slot.get_or_insert_with(std::collections::HashMap::new);
+        if map.len() >= MAX_PREFIX_SESSIONS && !map.contains_key(&key) {
+            map.clear();
+        }
+        let entry = map.entry(key.clone()).or_default();
+        // 本轮 `tools` 指纹由 `prepare_run_context` 预先写入；没有记录的调用
+        // （测试、子代理）退化为「沿用上一次」，不会噪声式报告 tools_changed。
+        let current_tools = if entry.pending_tools_fp != 0 {
+            entry.pending_tools_fp
+        } else {
+            entry.tools_fp
+        };
+        let tools_changed =
+            entry.tools_fp != 0 && current_tools != 0 && current_tools != entry.tools_fp;
+        let system_changed = entry.system_fp != 0 && entry.system_fp != system_fp;
+        let prev = std::mem::take(&mut entry.msgs);
+        entry.msgs = current.clone();
+        entry.tools_fp = current_tools;
+        entry.pending_tools_fp = 0;
+        entry.system_fp = system_fp;
+        (prev, tools_changed, system_changed, current_tools)
+    };
+
+    if prev.is_empty() {
+        return;
+    }
+    let mut shared_msgs = 0usize;
+    while shared_msgs < prev.len().min(current.len()) && prev[shared_msgs].0 == current[shared_msgs].0
+    {
+        shared_msgs += 1;
+    }
+    let shared_chars: usize = current.iter().take(shared_msgs).map(|c| c.1).sum();
+    // `rewritten` = an already-sent row changed shape. That is the one
+    // thing that must never happen: the provider can then only bill
+    // what precedes it as a hit.
+    let rewritten = shared_msgs < prev.len().min(current.len());
+    tracing::info!(
+        target: "hermix.prompt_cache",
+        session = %key,
+        shared_msgs,
+        total_msgs,
+        rewritten,
+        // 归因三元组：`tools` 数组和 system 消息排在消息体之前，
+        // 任一变化都会让 provider 从 position 0 起全部重算。
+        // 只报 shared_msgs 时，"为什么 22 万 token 一个都没命中" 无从判断。
+        tools_changed,
+        system_changed,
+        tools_fp = format!("{tools_fp:016x}"),
+        shared_chars,
+        total_chars,
+        predicted_hit_pct = format!("{:.1}", 100.0 * shared_chars as f64 / total_chars as f64),
+        "prompt_cache: payload prefix reuse (provider can only bill this prefix as a hit)"
+    );
 }
 
 /// Anthropic-specific: mark the system message and the last 3 user/assistant
@@ -527,7 +780,7 @@ pub fn build_dynamic_suffix(config: &AgentConfig, model_for_prompt: &str) -> Str
     let started_at = config
         .session_started_at
         .clone()
-        .unwrap_or_else(|| chrono::Local::now().to_rfc3339());
+        .unwrap_or_else(|| hermix_core::time::beijing_rfc3339_secs());
     suffix = suffix.with_timestamp_at(Some(model_for_prompt), provider.as_deref(), &started_at);
 
     let mut timestamp_extras = String::new();
@@ -864,6 +1117,10 @@ pub fn build_system_prompt(
         target: "hermix.prompt_cache",
         stable_chars = stable_text.len(),
         stable_est_tokens = stable_est,
+        directions_chars = directions_text.len(),
+        directions_est_tokens = directions_text.len() / 4,
+        tools_chars = tools_text.len(),
+        tools_est_tokens = tools_text.len() / 4,
         context_chars = context_text.len(),
         context_est_tokens = context_est,
         volatile_chars = suffix_text.len(),
@@ -1038,31 +1295,11 @@ fn build_stable_layer(
     硬性要求：目标存在于 task_tracker（跨回合持久）与当日 daily_memory；任何>1步的任务都必须有 task 条目与进度更新；会话开始已自动创建当日 daily_memory 骨架，你只需填内容；目标达成即停止，不要为看起来在干活而重复工具调用。"#,
     );
 
-    // Temp-file hygiene: agent frequently authors scratch files
-    // (test scripts under /tmp, debug dumps, fixture data, one-off
-    // parse outputs). Without an explicit cleanup rule the user's
-    // workspace accumulates dead artifacts after every run. This
-    // block sits next to the Operating Principles because the same
-    // "completion" step that writes `conclusions` is the natural
-    // moment to also tidy up the scratch tree.
-    builder = builder.with_block(
-        r#"## 临时文件自清理 (Temp File Hygiene)
-任何由本会话创建、且非用户原始输入的文件，都视作"临时文件"——除非用户在请求里明确说"保留/不要删"，否则必须在本任务收尾时清理：
-1. **临时文件一律写到 `%TEMP%\hermix-scratch\`（即 `<系统临时目录>\hermix-scratch\`）**，不要写到 %TEMP% 的其它散落位置。该目录由程序定义，专门用于一次性产物；清理它**不会弹审批卡**，收尾时请直接调用 `storage_clean` 删除，**不要问用户"要不要删"**——问一次就是一次多余的往返。
-2. 其它可接受位置（会弹审批卡，写之前先想清楚值不值）：
-   - `target/` / `node_modules/` / `.git/` 下（构建/版本目录，会被 git/build 自动忽略）
-3. 不允许把临时文件写到：
-   - 用户家目录根 (`~/`、`C:\Users\<user>\`)
-   - 项目根目录（与用户源文件混在一起）
-   - 任何 dotfile（`.bashrc` / `.zshrc` / `.profile` / `Cargo.toml` 等配置）
-4. **创建临时文件时，在回复里用一句话声明**："已在 hermix-scratch 下建了 X（用途），任务结束会清理。" 这样用户看得见你在写什么、也预期它会消失。
-5. 收尾顺序（与 Operating Principles 第 7 步"收尾总结"合并执行）：
-   a. 验证结论已写入 progress 段
-   b. 删除本任务产生的所有临时文件/目录（scratch 目录内的直接删，无需征询）
-   c. 在 daily_memory 的 conclusions 段末尾追加一句「临时文件：已清理 N 个（M 个保留）」，让用户知道清扫结果
-   d. 若发现需要保留的文件（用户指定或产物类），用 `file_change` 事件或 final message 明确告知用户路径
-   反面案例：写 `/tmp/probe.py` 验证后不删、写 `%TEMP%\probe.py`（散落在 hermix-scratch 之外，收尾时要额外弹审批）、在 `~/` 下创建 `notes.md`。这些都是污染行为。"#,
-    );
+    // 临时文件规则不再在这里写一份：它和 `FILE_LIFECYCLE_GUIDANCE`（stable 层的
+    // always-on 块）说的是同一件事，而且措辞互相矛盾（一边说"一律写到 scratch"，
+    // 一边说"根本不要写盘"）。2026-10-30 合并进 `file_lifecycle.always`，
+    // 具体路径（`%TEMP%\hermix-scratch\`）、免审批清理由那一条统一负责。
+    // 省下 ~1.1K 字符/请求，并消掉一处自相矛盾。
 
     // 自定义应用开发闭环纪律: validate+patch 外科手术式修复, 禁止整篇重写/整篇读入上下文.
     builder = builder.with_block(
@@ -1201,6 +1438,10 @@ fn build_context_layer(
 
     let mut builder = SystemPromptBuilder::new();
 
+    // 逐块尺寸归因（2026-11-11）：context 层实测 27.7K 字符/轮，但此前无法
+    // 知道 27.7K 里谁是大头。挂载前先记尺寸，build 后一条日志给全五块。
+    let mut block_sizes: Vec<(&'static str, usize)> = Vec::new();
+
     if !config.skip_memory {
         let memory_dir = config.resolved_memory_dir();
         let (memory_block, user_block) = load_builtin_memory_snapshot(
@@ -1208,9 +1449,11 @@ fn build_context_layer(
             config.memory_reads_global_fallback(),
         );
         if let Some(block) = memory_block {
+            block_sizes.push(("builtin_memory", block.len()));
             builder = builder.with_block(&block);
         }
         if let Some(block) = user_block {
+            block_sizes.push(("user_memory", block.len()));
             builder = builder.with_block(&block);
         }
     }
@@ -1219,14 +1462,17 @@ fn build_context_layer(
         .map(|r| r.collect_system_prompt_blocks())
         .unwrap_or_default();
     if !mem_block.is_empty() {
+        block_sizes.push(("memory_router", mem_block.len()));
         builder = builder.with_memory_context(&mem_block);
     }
 
     if let Some(skills_prompt) = skills_system_prompt(config, tool_names_set) {
+        block_sizes.push(("skills_index", skills_prompt.len()));
         builder = builder.with_skills_prompt(&skills_prompt);
     }
 
     if let Some(context_prompt) = context_files_prompt(config) {
+        block_sizes.push(("context_files", context_prompt.len()));
         builder = builder.with_context_files(&context_prompt);
     }
 
@@ -1234,11 +1480,17 @@ fn build_context_layer(
     // installed without a list() round-trip. Cheap enough to live in
     // every turn; details fetched on demand via `custom_app_manager get`.
     if let Some(apps_index) = custom_apps_index_prompt(config) {
+        block_sizes.push(("apps_index", apps_index.len()));
         builder = builder.with_block(&apps_index);
     }
 
-
     let rendered = builder.build().to_string();
+    block_sizes.push(("__total", rendered.len()));
+    tracing::info!(
+        target: "hermix.context_breakdown",
+        blocks = ?block_sizes,
+        "context layer per-block chars"
+    );
 
     tracing::debug!(
         target: "hermix.prompt_cache",
@@ -1257,6 +1509,151 @@ fn build_context_layer(
     }
 
     rendered
+}
+
+// ---------------------------------------------------------------------------
+// Session-scoped system prompt snapshot
+// ---------------------------------------------------------------------------
+//
+// provider 的前缀缓存只认「从 position 0 开始的字节」。system 消息是消息体的
+// 第一行，只要它变了，后面 200K token 的历史一条都不算命中。而 system 消息
+// 里装着三样**每轮都会变**的东西：`directions`（依赖当前用户消息与工具集合）、
+// 工具清单文本（依赖路由结果）、内存快照（依赖记忆 epoch）。
+//
+// 因此把首次构建的结果按 session 冻结下来，后续 run 直接复用同一串字节。
+// 失效条件只有三个，且都是「真的变了」：缓存键（模型 / 人格 / 自定义提示 /
+// 工作区）、身份锚点（SOUL.md / 人格卡变更）、记忆 epoch（强制重建）。
+
+/// 快照键。与 stable 层的 `compute_prompt_cache_key` 同源 —— 那两个键描述的是
+/// 同一批输入，分成两套迟早会漂移。
+fn session_prompt_key(
+    config: &AgentConfig,
+    tool_schemas: &[ToolSchema],
+    model_for_prompt: &str,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let base = crate::agent_helpers::compute_prompt_cache_key(
+        model_for_prompt,
+        config.personality.as_deref(),
+        config.system_prompt.as_deref(),
+        config.workspace.as_deref(),
+        !tool_schemas.is_empty(),
+        crate::directions::guidance_override_fingerprint(),
+    );
+    // 会话快照冻结了 `directions`，而 directions 的另外两个输入（用户手选的
+    // 领域模式 / 绑定的工作台）不在 base 键里。用户中途切「编码模式」或换
+    // 工作台时必须重建一次 —— 那是用户主动改的状态，值得付一次缓存失效；
+    // 不重建则整个会话都在用旧的领域指令。
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    base.hash(&mut h);
+    format!("{:?}", config.domain_override).hash(&mut h);
+    format!("{:?}", config.workbench_id).hash(&mut h);
+    // 记忆文件的元数据：冻结 system 提示会让「记忆写入在下一条消息生效」
+    // 失效（那是 epoch 机制的原始承诺）。用 (mtime, len) 当键最省事——
+    // 只有真的改了记忆才重建一次，其余时间保持字节稳定。
+    memory_snapshot_fingerprint(config).hash(&mut h);
+    h.finish()
+}
+
+/// `MEMORY.md` / `USER.md` 的 (路径, mtime, len) 指纹。
+///
+/// 与 `build_context_layer` 读取的是同一批文件（含全局 fallback 目录），
+/// 所以指纹变化 ⟺ 注入内容可能变化。
+fn memory_snapshot_fingerprint(config: &AgentConfig) -> u64 {
+    use std::hash::{Hash, Hasher};
+    if config.skip_memory {
+        return 0;
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut dirs = vec![config.resolved_memory_dir()];
+    if config.memory_reads_global_fallback() {
+        dirs.push(hermix_config::paths::hermix_home().join("memories"));
+    }
+    for dir in dirs {
+        dir.display().to_string().hash(&mut h);
+        for name in ["MEMORY.md", "USER.md"] {
+            match std::fs::metadata(dir.join(name)) {
+                Ok(m) => {
+                    m.len().hash(&mut h);
+                    let mtime = m
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs());
+                    mtime.hash(&mut h);
+                }
+                Err(_) => 0u8.hash(&mut h),
+            }
+        }
+    }
+    h.finish()
+}
+
+/// 进程内 session → (缓存键, 系统提示全文)。
+static SESSION_PROMPTS: Mutex<Option<std::collections::HashMap<String, (u64, String)>>> =
+    Mutex::new(None);
+const MAX_SESSION_PROMPTS: usize = 64;
+
+/// 该会话是否已冻结过系统提示。
+///
+/// `AgentLoop` 用它决定「临时内存变更要不要触发重建」—— 只看
+/// `config.stored_system_prompt` 会漏掉快照路径，于是记忆写入永远不生效。
+pub fn has_session_prompt(session_id: Option<&str>) -> bool {
+    let Some(sid) = session_id.filter(|s| !s.trim().is_empty()) else {
+        return false;
+    };
+    SESSION_PROMPTS
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|m| m.contains_key(sid)))
+        .unwrap_or(false)
+}
+
+/// 丢掉某会话的快照（工具集合重新冻结、`/reset`、身份变更等场景）。
+pub fn forget_session_prompt(session_id: Option<&str>) {
+    let Some(sid) = session_id.filter(|s| !s.trim().is_empty()) else {
+        return;
+    };
+    if let Ok(mut slot) = SESSION_PROMPTS.lock() {
+        if let Some(map) = slot.as_mut() {
+            map.remove(sid);
+        }
+    }
+}
+
+fn lookup_session_prompt(
+    session_id: Option<&str>,
+    key: u64,
+    anchor: Option<&str>,
+) -> Option<String> {
+    let sid = session_id.filter(|s| !s.trim().is_empty())?;
+    let slot = SESSION_PROMPTS.lock().ok()?;
+    let (stored_key, text) = slot.as_ref()?.get(sid)?;
+    if *stored_key != key || text.trim().is_empty() {
+        return None;
+    }
+    // 身份锚点检查与 `config.stored_system_prompt` 路径同规则：SOUL.md / 人格卡
+    // 换了名字而快照里没有新锚点 → 宁可付一次重建，也不能让助手用旧名字回答。
+    if let Some(anchor) = anchor {
+        if !text.contains(anchor) {
+            return None;
+        }
+    }
+    Some(text.clone())
+}
+
+fn store_session_prompt(session_id: Option<&str>, key: u64, prompt: &str) {
+    let Some(sid) = session_id.filter(|s| !s.trim().is_empty()) else {
+        return;
+    };
+    let Ok(mut slot) = SESSION_PROMPTS.lock() else {
+        return;
+    };
+    let map = slot.get_or_insert_with(std::collections::HashMap::new);
+    if map.len() >= MAX_SESSION_PROMPTS && !map.contains_key(sid) {
+        map.clear();
+    }
+    map.insert(sid.to_string(), (key, prompt.to_string()));
 }
 
 /// wire: same as [`resolve_initial_system_prompt`] but threads
@@ -1294,7 +1691,27 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
     // the old name. When the current identity's first line is absent
     // from the stored text, rebuild once; the rebuilt prompt carries the
     // anchor and goes back to being reused.
-    let (prompt, restored) = if !force_rebuild {
+    let session_id = config.session_id.as_deref();
+    let session_key = session_prompt_key(config, tool_schemas, &config.model);
+    let anchor = identity_anchor_line(config);
+    // ★ 会话快照优先：同一会话的每条用户消息都拿到**同一串字节**的 system
+    // 提示。没有这一步，`directions`（依赖当前用户消息）与工具清单（依赖本轮
+    // 路由）会在每条新消息上重排，provider 的前缀缓存从 position 0 起全部作废
+    // —— 2026-10-30 实测：22 万 token 的冷启动调用只命中 184 token。
+    let session_cached = if force_rebuild {
+        None
+    } else {
+        lookup_session_prompt(session_id, session_key, anchor.as_deref())
+    };
+    let (prompt, restored) = if let Some(cached) = session_cached {
+        tracing::debug!(
+            target: "hermix.prompt_cache",
+            session = session_id.unwrap_or(""),
+            chars = cached.len(),
+            "prompt_cache: system prompt restored from the session snapshot"
+        );
+        (cached, true)
+    } else if !force_rebuild {
         match config.stored_system_prompt.as_deref().map(str::trim) {
             Some(t) if !t.is_empty() => {
                 match identity_anchor_line(config) {
@@ -1397,6 +1814,10 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
         }
         (patched, report)
     };
+    // 快照存的是 SectionGate 打补丁**之后**的最终字节：下次复用的就是真正
+    // 发出去的那一串，而不是补丁前的半成品（否则补丁会在每次重建时重新
+    // 追加一遍，前缀永远对不上）。
+    store_session_prompt(session_id, session_key, &final_prompt);
     (final_prompt, restored)
 }
 
@@ -1895,6 +2316,80 @@ mod tests {
             prompt_skip.len() <= prompt_with.len(),
             "skip_memory prompt must be no larger than default prompt"
         );
+    }
+
+    // -------------------------------------------------------------
+    // Prefix-cache invariant
+    // -------------------------------------------------------------
+
+    /// **已经发出去的内容不得被后续请求改写。**
+    ///
+    /// Provider 的 prefix cache 只认从 position 0 开始的字节前缀，所以一个
+    /// turn 内的每一轮工具循环都必须满足：上一轮的 payload 是这一轮 payload
+    /// 的前缀。这条不变量此前被两处打破 ——
+    /// 1. `messages_for_api_call` 保留“最后一条 assistant”的
+    ///    `reasoning_content`：上一次请求里它带着 thinking，这一次变成非最后
+    ///    一条于是被清空，同一位置的字节变了；
+    /// 2. 每轮 `rollup_tool_results` 按“距尾部条数”改写旧工具结果。
+    ///
+    /// 两者叠加把真实命中率钉死在 ~77%。这个测试跑 6 轮工具循环，逐条比对
+    /// 相邻两次 payload 的已发送部分；任何回溯改写都会在这里红。
+    #[test]
+    fn payload_never_rewrites_already_sent_rows() {
+        use hermix_core::{FunctionCall, ToolCall};
+
+        let cfg = AgentConfig::default();
+        let mut ctx = ContextManager::new(128_000);
+        ctx.add_message(Message::system("你是一个助手。"));
+        ctx.add_message(Message::user("帮我查一下日志"));
+
+        let mut prev: Vec<Message> = Vec::new();
+        for round in 0..6 {
+            let mut a = Message::assistant(format!("round {round}"));
+            a.reasoning_content = Some(format!("thinking-{round} {}", "x".repeat(500)));
+            a.tool_calls = Some(vec![ToolCall {
+                id: format!("call_{round}"),
+                function: FunctionCall {
+                    name: "read_file".to_string(),
+                    arguments: "{\"path\":\"a.log\"}".to_string(),
+                },
+            }]);
+            ctx.add_message(a);
+            ctx.add_message(Message::tool_result(
+                format!("call_{round}"),
+                format!("result-{round} {}", "y".repeat(2_000)),
+                Some("read_file"),
+            ));
+
+            let payload = messages_for_api_call(&cfg, &ctx);
+            assert!(
+                payload.iter().all(|m| m.reasoning_content.is_none()),
+                "thinking blocks must never be echoed back"
+            );
+            if !prev.is_empty() {
+                let overlap = prev.len().min(payload.len());
+                for i in 0..overlap {
+                    assert_eq!(
+                        prev[i].role, payload[i].role,
+                        "round {round}: row {i} role changed"
+                    );
+                    assert_eq!(
+                        prev[i].content, payload[i].content,
+                        "round {round}: row {i} content rewritten — already-sent bytes \
+                         must be frozen or the provider prefix cache dies from here on"
+                    );
+                    assert_eq!(
+                        prev[i].tool_calls, payload[i].tool_calls,
+                        "round {round}: row {i} tool_calls rewritten"
+                    );
+                    assert_eq!(
+                        prev[i].reasoning_content, payload[i].reasoning_content,
+                        "round {round}: row {i} reasoning changed"
+                    );
+                }
+            }
+            prev = payload;
+        }
     }
 
     // -------------------------------------------------------------

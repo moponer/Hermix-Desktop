@@ -32,7 +32,6 @@ use tokio::sync::Mutex;
 #[derive(Clone)]
 pub struct HttpSecurity {
     pub api_key: Option<Arc<str>>,
-    pub metrics_require_auth: bool,
     pub rate_limit_per_minute: u32,
     /// When `Some` and non-empty, client IP must be in this set (not applied to `/health`).
     pub allowed_ips: Option<Vec<IpAddr>>,
@@ -139,9 +138,6 @@ impl HttpSecurity {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .map(|s| Arc::from(s.into_boxed_str()));
-        let metrics_require_auth = env_compat("HERMIX_HTTP_METRICS_REQUIRE_AUTH", "HERMES_HTTP_METRICS_REQUIRE_AUTH")
-            .as_deref()
-            == Some("1");
         let rate_limit_per_minute = env_compat("HERMIX_HTTP_RATE_LIMIT_PER_MINUTE", "HERMES_HTTP_RATE_LIMIT_PER_MINUTE")
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_RATE_LIMIT_PER_MINUTE);
@@ -174,7 +170,6 @@ impl HttpSecurity {
         };
         Self {
             api_key,
-            metrics_require_auth,
             rate_limit_per_minute,
             allowed_ips,
             nonce_cache: crate::request_signature::NonceCache::new(),
@@ -195,6 +190,57 @@ fn has_forwarded_evidence(headers: &axum::http::HeaderMap) -> bool {
     ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip"]
         .iter()
         .any(|h| headers.contains_key(*h))
+}
+
+/// CSRF 防线：带副作用的端点要求请求来自本机页面。
+///
+/// 浏览器对 `GET` / 表单 `POST` 不预检，CORS 只能挡住「读响应」，挡不住
+/// 「副作用已发生」——任意网页都能用 `<img src="http://127.0.0.1:3000/x">`
+/// 或跨站表单打到本机服务（默认不配 `api_key` 时 loopback 判 `Local` 全权）。
+///
+/// 判据取三层证据，任一层明确是跨站即拒：
+/// - `Origin` / `Referer` 的 host 不是本机（`localhost` / `127.0.0.1` / `::1` / `tauri.localhost`）；
+/// - `Sec-Fetch-Site: cross-site`。
+///
+/// 三个头全缺（原生客户端、curl、Rust 内部调用）→ 放行：它们本来就能读
+/// `~/.hermix` 下的凭据，用 CSRF 挡不住，加了只会误伤。
+pub(crate) fn browser_origin_allowed(headers: &axum::http::HeaderMap) -> bool {
+    fn host_is_local(value: &str) -> bool {
+        let Some((_scheme, rest)) = value.split_once("://") else {
+            return false;
+        };
+        let host_port = rest.split('/').next().unwrap_or("");
+        let host = host_port
+            .rsplit_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or(host_port)
+            .trim_start_matches('[')
+            .trim_end_matches(']');
+        matches!(host, "localhost" | "127.0.0.1" | "::1" | "tauri.localhost")
+    }
+
+    let header = |name: axum::http::HeaderName| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+    if let Some(origin) = header(axum::http::header::ORIGIN) {
+        if !host_is_local(&origin) {
+            return false;
+        }
+    }
+    if let Some(referer) = header(axum::http::header::REFERER) {
+        if !host_is_local(&referer) {
+            return false;
+        }
+    }
+    if let Some(site) = header(axum::http::HeaderName::from_static("sec-fetch-site")) {
+        if site.eq_ignore_ascii_case("cross-site") {
+            return false;
+        }
+    }
+    true
 }
 
 fn parse_allowed_ips_from_env() -> Option<Vec<IpAddr>> {
@@ -493,6 +539,25 @@ pub(crate) enum DeviceAuthError {
     BadSignature,
 }
 
+/// 协议级自动化测试通道（2026-11-10）：`HERMIX_TEST_TOKEN` 显式设置时，
+/// 精确匹配该 token 的请求按已配对设备放行（免 HMAC 签名）。仅用于本机
+/// 评测 / CI——**生产环境不得设置该变量**。默认未设置 = 通道完全关闭，
+/// 行为与现状一致（401）。
+pub(crate) fn test_channel_device(token: Option<&str>) -> Option<crate::pairing::PairedDevice> {
+    let expected = std::env::var("HERMIX_TEST_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let presented = token?;
+    (presented == expected).then(|| crate::pairing::PairedDevice {
+        device_id: "protocol-test".to_string(),
+        device_name: "protocol-level test client".to_string(),
+        scopes: "[\"chat\"]".to_string(),
+        issued_at: chrono::Utc::now().timestamp(),
+        last_seen_at: None,
+        revoked_at: None,
+    })
+}
+
 impl DeviceAuthError {
     /// 对外响应体。统一 401 + 不含原因的短句。
     pub(crate) fn as_response(self) -> axum::response::Response {
@@ -536,13 +601,9 @@ pub async fn request_guard(
     if path == "/health" {
         return next.run(req).await;
     }
-    if path == "/metrics" && !security.metrics_require_auth {
-        if !ip_allowed(&security, &req) {
-            hermix_telemetry::record_http_reject();
-            return (StatusCode::FORBIDDEN, "client IP not in allowlist").into_response();
-        }
-        return next.run(req).await;
-    }
+    // 曾经这里为 `/metrics` 留了一个免鉴权分支（`metrics_require_auth=false`），
+    // 但那条路由从未注册过 —— 死代码 + 未来的脚枪（谁把 `/metrics` 挂上，
+    // 它就默认免鉴权）。指标现在走 `/v1/metrics`，与业务端点同一套认证。
 
     if !ip_allowed(&security, &req) {
         hermix_telemetry::record_http_reject();
@@ -930,6 +991,54 @@ mod tests {
     fn loopback_ip_resolves_to_local_origin() {
         let ip: IpAddr = "127.0.0.1".parse().unwrap();
         assert!(ip.is_loopback());
+    }
+
+    // ----- CSRF：副作用端点的来源校验 -----
+
+    #[test]
+    fn browser_origin_accepts_local_pages_and_native_clients() {
+        let mut h = axum::http::HeaderMap::new();
+        // 原生客户端 / curl / 内部调用：三个头全缺 → 放行。
+        assert!(browser_origin_allowed(&h));
+        h.insert(
+            axum::http::header::ORIGIN,
+            axum::http::HeaderValue::from_static("http://localhost:1420"),
+        );
+        assert!(browser_origin_allowed(&h));
+        h.insert(
+            axum::http::header::ORIGIN,
+            axum::http::HeaderValue::from_static("tauri://localhost"),
+        );
+        assert!(browser_origin_allowed(&h));
+        h.insert(
+            axum::http::header::ORIGIN,
+            axum::http::HeaderValue::from_static("http://127.0.0.1:3000"),
+        );
+        assert!(browser_origin_allowed(&h));
+    }
+
+    #[test]
+    fn browser_origin_rejects_cross_site_pages() {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::ORIGIN,
+            axum::http::HeaderValue::from_static("https://evil.example"),
+        );
+        assert!(!browser_origin_allowed(&h), "外部 Origin 必须拒");
+
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::REFERER,
+            axum::http::HeaderValue::from_static("https://evil.example/a.png"),
+        );
+        assert!(!browser_origin_allowed(&h), "外部 Referer 必须拒");
+
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::HeaderName::from_static("sec-fetch-site"),
+            axum::http::HeaderValue::from_static("cross-site"),
+        );
+        assert!(!browser_origin_allowed(&h), "Sec-Fetch-Site: cross-site 必须拒");
     }
 
     #[test]

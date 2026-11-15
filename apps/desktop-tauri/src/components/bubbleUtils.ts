@@ -6,7 +6,6 @@ import {
   FolderOpen, Globe, Database, Bot, Brain, HelpCircle, GitBranch, Hammer, FileText,
 } from "lucide-react";
 import { describeShellCommand } from "../lib/commandDescribe";
-import { reportError } from "../lib/reportError";
 /**
  * 毫秒 → `29s` / `4m 12s` / `3h 18m` / `2d 4h`。
  *
@@ -228,7 +227,7 @@ export function inferVerbFromArgs(argsJson?: string): string | null {
       if ("query" in parsed || "pattern" in parsed || "q" in parsed) return "搜索";
       if ("code" in parsed) return "执行代码";
     }
-  } catch (e) { reportError("bubble-parse", e); }
+  } catch { /* 流式中间态的 argsJson 必然是残缺的：解析失败是预期路径，降级即可 */ }
   return null;
 }
 
@@ -242,7 +241,11 @@ export function inferVerbFromArgs(argsJson?: string): string | null {
  */
 export function toolVerb(tool: string, argsJson?: string): string {
   const t = tool.toLowerCase().trim();
-  if (!t || t === "tool") {
+  // `tool` 是 LLM 的占位符；`tool_call` 是运行时的**桥接工具**（模型要调的
+  // 工具不在 tools 数组里时，先经它转发，见 directions.rs 的桥接说明）。
+  // 两者都不是用户认识的名字，动词退回通用说法，具体调的是谁由
+  // `toolPrimaryArg` 从 args.name 里取（「调用工具 execute_code」）。
+  if (!t || t === "tool" || t === "tool_call") {
     return inferVerbFromArgs(argsJson) ?? "调用工具";
   }
   // Memory tool: generic "记忆" verb; the concrete action
@@ -311,7 +314,7 @@ export function toolResultPeek(output?: string, argsJson?: string): string | nul
           }
         }
       }
-    } catch (e) { reportError("bubble-parse", e); }
+    } catch { /* 流式中间态的 argsJson 必然是残缺的：解析失败是预期路径，降级即可 */ }
   }
 
   const trimmed = text.trim();
@@ -375,7 +378,7 @@ export function toolPrimaryArg(tool: string, argsJson?: string, stdoutHint?: str
     try {
       const v = JSON.parse(argsJson);
       if (v && typeof v === "object" && !Array.isArray(v)) parsed = v as Record<string, unknown>;
-    } catch (e) { reportError("bubble-parse", e); }
+    } catch { /* 流式中间态的 argsJson 必然是残缺的：解析失败是预期路径，降级即可 */ }
   }
   const str = (k: string): string | null => {
     if (!parsed) return null;

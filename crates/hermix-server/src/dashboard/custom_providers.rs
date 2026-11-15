@@ -366,7 +366,9 @@ pub async fn fetch_models(
         }));
     }
 
+    // 无超时 = 上游不回包就把这个 handler 永久挂住；探测类请求 20s 足够。
     let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
         .redirect(crate::util::safe_redirect_policy())
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
@@ -501,7 +503,9 @@ pub async fn test_connection(
             models: None,
         }));
     }
+    // 无超时 = 上游不回包就把这个 handler 永久挂住；探测类请求 20s 足够。
     let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
         .redirect(crate::util::safe_redirect_policy())
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());

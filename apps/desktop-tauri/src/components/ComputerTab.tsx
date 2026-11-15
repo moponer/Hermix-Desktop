@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { createPortal } from "react-dom";
+import { IPC } from "../ipc/commands";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";import { createPortal } from "react-dom";
 import {
   Folder, ArrowLeft, ArrowRight, ArrowUp,
   RefreshCw, List, FileText, LayoutGrid,
@@ -168,9 +168,9 @@ export function ComputerTab({
       case "open_external":
         openExternalUrl(entry.path);
         break;
-      case "open_in_viewer":
+      case IPC.openInViewer:
         if (!entry.isDir) {
-          invoke("open_in_viewer", { path: entry.path }).catch((e) =>
+          invoke(IPC.openInViewer, { path: entry.path }).catch((e) =>
             toastWarning(String(e instanceof Error ? e.message : e)),
           );
         }

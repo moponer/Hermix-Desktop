@@ -1,5 +1,5 @@
-import { useState, useCallback, useRef, useEffect, useMemo, type SetStateAction } from "react";
-import { invoke } from "../ipc";
+import { IPC } from "../ipc/commands";
+import { useState, useCallback, useRef, useEffect, useMemo, type SetStateAction } from "react";import { invoke } from "../ipc";
 import type { AcuiDirective } from "../acui/types";
 import type { ApprovalRequestItem, SubAgentEventPayload, MemberEventPayload } from "../types";
 
@@ -153,7 +153,14 @@ export interface StreamCallbacks {
   /** Called on every phase transition. */
   onPhaseChange?: (phase: StreamPhase) => void;
   onChunk?: (text: string) => void;
-  onToolStart?: (info: { toolCallId: string; tool: string; content?: string }) => void;
+  /** `args` = 本次调用的参数对象（tool_start 帧原样转发）。值守页用它把
+   *  「刚才发生」写成 `terminal: <命令>`，而不是只有一个工具名。 */
+  onToolStart?: (info: {
+    toolCallId: string;
+    tool: string;
+    content?: string;
+    args?: unknown;
+  }) => void;
   onToolComplete?: (info: {
     toolCallId: string;
     tool: string;
@@ -342,7 +349,7 @@ export function useStreamChat(activeSessionId: string | null) {
       // active, and `streamingSessionIdRef` tells us which channel.
       const sid = streamingSessionIdRef.current;
       if (!sid) return false;
-      void invoke<void>("backend_channel_send", {
+      void invoke<void>(IPC.backendChannelSend, {
         channel: `stream:${sid}`,
         payload: text,
       });
@@ -495,6 +502,17 @@ export function useStreamChat(activeSessionId: string | null) {
         // Increment the active send ID so any stale WS event handlers from a
         // previous `send()` call become no-ops.
         const mySendId = ++activeSendIdRef.current;
+
+        // 新一轮发送使「上一次停止」的确认超时失效。stop 的 15s 确认定时器
+        // 读的是跨 send 共享的 doneRef：若被停止那一轮的终态帧迟到（工具
+        // abort / finalize 慢，实测可超过 15s），定时器会在新流已经跑起来
+        // 之后触发 teardownLocalStop —— 把**新流**的监听拆掉、状态清空，
+        // 后端继续干活而界面永远停在发送前，即「停止后再发送就卡死」。
+        // 停止的簿记只属于被停止的那一轮，新一轮 send 必须作废它。
+        if (stopTimeoutRef.current !== null) {
+          window.clearTimeout(stopTimeoutRef.current);
+          stopTimeoutRef.current = null;
+        }
 
         streamingSessionIdRef.current = sessionId;
         setStreamingSessionId(sessionId);
@@ -674,7 +692,7 @@ export function useStreamChat(activeSessionId: string | null) {
           // invoke failure is recoverable (the upstream
           // approval/clarity path already has its own retry via
           // `wsSendRaw`).
-          void invoke<void>("backend_channel_send", {
+          void invoke<void>(IPC.backendChannelSend, {
             channel: streamChannelName(ctx.sessionId),
             payload: JSON.stringify(payload),
           });
@@ -769,12 +787,22 @@ export function useStreamChat(activeSessionId: string | null) {
               ? null
               : prev,
           );
+          // UI 流式状态必须无条件清掉（2026-10-30）。
+          //
+          // `keepSessionAlive` 原本被理解成「这一轮没走完，会话先留着」，
+          // 于是连 `streamingSessionId` 一起保留 —— 但那是两件事：**通道**
+          // 是否需要保持，和**界面是否还在流式**没有关系。保留
+          // `streamingSessionId` 的直接后果是 `isStreaming` 永远为真，
+          // MessageList 底部的 AgentActivityIndicator 会一直显示
+          // 「正在回复…」，而此时定时器已经 disarm、`doneRef` 也已置位，
+          // 再没有任何东西能把它关掉（用户看到的就是「不继续也不停止」）。
+          // 现在只让 keepSessionAlive 决定要不要关通道。
+          streamingSessionIdRef.current = null;
+          setStreamingSessionId(null);
+          setStreamingStatus(null);
           if (keepSessionAlive) {
-            console.log(`[WS-KEEPALIVE] site=settle reason=${reason ?? "interrupted"} (outcome!=completed, session preserved)`);
+            console.log(`[WS-KEEPALIVE] site=settle reason=${reason ?? "interrupted"} (channel preserved, UI state cleared)`);
           } else {
-            streamingSessionIdRef.current = null;
-            setStreamingSessionId(null);
-            setStreamingStatus(null);
             console.log(`[WS-CLOSE] site=settle reason=${reason ?? "natural-done"}`);
             wsRef.current?.();
             wsRef.current = null;
@@ -837,8 +865,15 @@ export function useStreamChat(activeSessionId: string | null) {
    * to fall back to its legacy "全局 cancel" behavior when called
    * from contexts that don't have a sessionId handy.
    */
-  /** Stop 确认超时（ms）。超过即视后端不可达，本地清理会话身份。 */
-  const STOP_CONFIRM_TIMEOUT_MS = 3_000;
+  /**
+   * Stop 确认超时（ms）。超过即视后端不可达，本地清理会话身份。
+   *
+   * 3s 太短：工具被 abort 之后 agent 还要跑 finalize（持久化、memory
+   * review、终态帧），慢 provider 下一次 finalize 就可能超过 3s。提前
+   * teardown 会让界面翻回"可发送"，而后端仍在收尾 —— 用户以为停了、
+   * 再发一条却排在旧轮次后面。15s 覆盖正常收尾，只兜真正的桥死。
+   */
+  const STOP_CONFIRM_TIMEOUT_MS = 15_000;
 
   /** 本地拆除流（停止超时 / 无桥通道路径）。与 done 帧路径互斥由 doneRef 仲裁。 */
   const teardownLocalStop = useCallback(() => {
@@ -888,8 +923,13 @@ export function useStreamChat(activeSessionId: string | null) {
       if (stopTimeoutRef.current !== null) {
         window.clearTimeout(stopTimeoutRef.current);
       }
+      // 记住发出 stop 时的活跃 send：确认窗口内用户重新发送会推进
+      // activeSendId，旧停止的收尾就不得再触发（否则会在新流跑起来后
+      // 拆掉它的监听 —— 「停止后再发送就卡死」的直接成因之一）。
+      const stoppedSendId = activeSendIdRef.current;
       stopTimeoutRef.current = window.setTimeout(() => {
         stopTimeoutRef.current = null;
+        if (activeSendIdRef.current !== stoppedSendId) return;
         if (!doneRef.current) {
           console.log("[WS-STOP] stop confirm timeout — local teardown");
           teardownLocalStop();

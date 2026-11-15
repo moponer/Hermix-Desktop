@@ -10,7 +10,10 @@
     ".": "./src/index.ts",
     "./styles/*": "./src/styles/*",
     "./FileTypeIcon": "./src/FileTypeIcon.tsx",
-    "./ProviderIcon": "./src/ProviderIcon.tsx"
+    "./ProviderIcon": "./src/ProviderIcon.tsx",
+    "./resolveKind": "./src/resolveKind.ts",
+    "./lib/textDecode": "./src/lib/textDecode.ts",
+    "./lib/previewUtils": "./src/lib/previewUtils.ts"
   },
   "peerDependencies": {
     "react": "^19.1.0",

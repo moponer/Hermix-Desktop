@@ -624,7 +624,25 @@ fn restrict_owner_only(path: &Path) {
         .arg("*S-1-5-32-544:F")
         .arg("*S-1-5-18:F")
         .creation_flags(CREATE_NO_WINDOW)
+        // **三路 stdio 必须显式 null**：icacls 在中文 Windows 上按 ANSI(GBK)+CRLF
+        // 打印「已处理的文件: …」「已成功处理 1 个文件; …」。继承 stdout 时这些
+        // 字节会混进 sidecar 的 `--stdio` JSONL 协议通道 —— 桌面桥按 UTF-8 读行，
+        // 首行即 invalid UTF-8，读线程退出、桥被标记已死，而 hermix.exe 还活着：
+        // 界面永远「后端未连接」，日志里却什么都看不到（2026-11-07 实机定位，
+        // 全新安装首次写 config.yaml 必触发）。
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status();
+    if let Ok(s) = &status {
+        if !s.success() {
+            tracing::warn!(
+                path = %path.display(),
+                code = ?s.code(),
+                "config.yaml ACL 收紧失败（文件内容仍已写入）"
+            );
+        }
+    }
     if let Err(e) = status {
         tracing::warn!(
             path = %path.display(),

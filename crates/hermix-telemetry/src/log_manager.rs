@@ -10,7 +10,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write as IoWrite, BufWriter};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -173,8 +173,30 @@ impl CategoryWriter {
 // ---------------------------------------------------------------------------
 
 pub struct CategoryLayer {
-    writers: Mutex<Vec<CategoryWriter>>,
+    writers: Arc<Mutex<Vec<CategoryWriter>>>,
     json_mode: bool,
+}
+
+/// 全局 writers 句柄（与 `CategoryLayer` 持有的同一个 `Arc`）。
+///
+/// 只为一件事存在：`std::process::exit` 之前把 BufWriter 里攒的尾部日志刷出去。
+/// 日志按 `FLUSH_EVERY_N` / `FLUSH_EVERY_MS` 攒批刷盘，进程若不经析构直接退出
+/// （sidecar 收到 shutdown 帧后显式 exit，见 hermix-server main.rs），最多会丢
+/// 8KB 未落盘的尾巴 —— 而那恰好是「上一次到底为什么退出」的那几行。
+static GLOBAL_WRITERS: std::sync::OnceLock<Arc<Mutex<Vec<CategoryWriter>>>> =
+    std::sync::OnceLock::new();
+
+/// 把各分类日志缓冲刷到磁盘。进程退出前调用一次；从未初始化日志时是空操作。
+pub fn flush_logs() {
+    let Some(writers) = GLOBAL_WRITERS.get() else {
+        return;
+    };
+    if let Ok(mut w) = writers.lock() {
+        for writer in w.iter_mut() {
+            let _ = writer.flush();
+        }
+        PENDING_SINCE_FLUSH.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl CategoryLayer {
@@ -211,8 +233,11 @@ impl CategoryLayer {
             }
         });
 
+        let writers = Arc::new(Mutex::new(writers));
+        // 让 `flush_logs()` 能在进程显式退出前刷盘（见 GLOBAL_WRITERS 注释）。
+        let _ = GLOBAL_WRITERS.set(writers.clone());
         Ok(Self {
-            writers: Mutex::new(writers),
+            writers,
             json_mode,
         })
     }
@@ -747,6 +772,15 @@ pub fn init_unified_telemetry(config: &TelemetryConfig) -> TelemetryGuard {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// 进程显式退出前会调它。未初始化日志（或已被别的测试抢先初始化）时
+    /// 必须是空操作而不是 panic —— 它跑在退出路径上，panic 只会把「退不干净」
+    /// 换成「退出时崩溃」。
+    #[test]
+    fn flush_logs_is_safe_to_call() {
+        flush_logs();
+        flush_logs();
+    }
 
     #[test]
     fn list_log_files_empty() {

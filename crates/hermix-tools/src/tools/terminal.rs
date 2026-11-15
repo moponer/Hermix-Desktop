@@ -16,17 +16,28 @@ use crate::approval::{ApprovalDecision, ApprovalManager, TerminalApprovalContext
 use crate::context::{ContextAware, ToolCallContext};
 use crate::ToolRegistry;
 
-/// terminal 工具的硬超时上限 (秒)。
-/// LLM 不传 `timeout` 时兜底到此值; 也防止 backend `default_timeout`
-/// 被改大后, powershell/cmd 去无限等外部 API 而卡死整个对话。
+/// terminal 工具的硬超时上限 (秒)：显式传 `timeout` 时能到这个值。
 ///
 /// 2026-10-21：120 → 600，与 `hermix_tools::dispatch::per_tool_budget`
 /// 给 terminal 的外部预算（600s）对齐。此前内部 120s 比外部 600s 先到期，
 /// 于是"跑构建/装依赖/长测试"这类合法前台任务总在第 120 秒被掐断——
 /// 外层预算还有 480s 余量却用不上，是"长任务无法执行"的结构性原因。
-/// 更长的任务仍应走 `background: true` + 轮询（提示词已引导），
-/// 600s 只覆盖"合理的单次同步等待"。
+///
+/// **但不显式传 `timeout` 时不用这个值**，见下。
 const TERMINAL_HARD_TIMEOUT_SECS: u64 = 600;
+
+/// 未显式传 `timeout` 时的默认超时 (秒)。
+///
+/// 2026-11-05 实机事故：模型为"找超星相关文件"发了一条
+/// `Get-ChildItem -Path $env:USERPROFILE -Recurse -Depth 3 -Include ...`，
+/// 没传 timeout → 拿到 600s 预算 → 整盘扫描跑到 139s 仍在跑：
+/// 同一轮的工具串行段被它独占，前端全站请求排队、`/health` 2s 探测超时，
+/// 用户看到的是"助手阿黎一直加载、整个窗口卡死"。
+///
+/// 默认值回到 120s：合理的同步等待（构建、装依赖、长测试）多数在 2 分钟内；
+/// 真要更久，模型必须**显式**传 `timeout`（最多 600）或 `background: true`
+/// —— 让"这台机器可能被一条命令占住 10 分钟"变成一个有意识的决定。
+const TERMINAL_DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 // ---------------------------------------------------------------------------
 // Registration
@@ -331,7 +342,7 @@ impl ToolHandler for TerminalHandler {
             "timeout".into(),
             json!({
                 "type": "integer",
-                "description": "Timeout in seconds. Default and hard cap: 600. Long builds/tests beyond that should run with background: true and be polled."
+                "description": "Timeout in seconds. Default: 120 (omit it for ordinary commands). Hard cap: 600 — long builds/tests that need more must pass an explicit timeout or (better) run with background: true and be polled. A recursive scan of a broad root ($env:USERPROFILE, C:\\Users, /) is refused outright: use search_files / list_files / list_dir instead."
             }),
         );
         props.insert(
@@ -586,10 +597,18 @@ async fn execute_inner(
                 // Persist the session approval so a follow-up call with
                 // the same command / rule family skips the prompt.
                 this.approval.approve_for_session(effective_cmd);
-                tracing::info!(
-                    command = %effective_cmd,
-                    "command confirmed by user via WS approval card"
-                );
+                // 放手模式的自动放行不走这里的两句：它已经在
+                // `request_ws_approval` 顶部打过 `permission=full —
+                // auto-approved without prompting`。此前不论哪条路子都打
+                // "confirmed by user via WS approval card"，于是同一毫秒
+                // 两条互相矛盾的日志 —— 2026-11-06 排「放手模式为什么还在
+                // 弹卡」时，这条假线索把人指向"卡片仍在弹"，实际是自动放行。
+                if approval_ctx.permission != hermix_core::traits::PermissionLevel::Full {
+                    tracing::info!(
+                        command = %effective_cmd,
+                        "command confirmed by user via WS approval card"
+                    );
+                }
             } else {
                 // No WS context wired (headless test, CLI run, or unit test
                 // that bypassed the agent service). There is no way to ask
@@ -606,11 +625,12 @@ async fn execute_inner(
 
         // `timeout` 单位是秒；历史上 schema 误写"毫秒, default 30000"，
         // LLM 按旧文档传 30000 = 8.3 小时。无论传什么，clamp 到硬上限。
+        // 未传时用 DEFAULT（120s），不是硬上限 —— 见常量注释里的事故。
         let timeout = params
             .get("timeout")
             .and_then(|v| v.as_u64())
             .map(|s| s.clamp(1, TERMINAL_HARD_TIMEOUT_SECS))
-            .or(Some(TERMINAL_HARD_TIMEOUT_SECS));
+            .or(Some(TERMINAL_DEFAULT_TIMEOUT_SECS));
 
         // Resolve effective workdir:
         // 1. explicit `workdir` param from the LLM (highest priority)
@@ -641,6 +661,32 @@ async fn execute_inner(
         }
 
         let background = crate::param_coercion::bool_param(&params, "background", false);
+
+        // 整盘递归扫描的硬闸：这类命令几乎总是"该用搜索工具却抄了 shell"。
+        // 它在前台同步执行时会独占本轮工具位（几分钟到十分钟），把同一会话的
+        // 后续工具、UI 请求和 /health 探测一起拖住（2026-11-05 实机）。
+        // 只拦「递归标记 + 宽根目录」同时出现 —— 项目目录里的 -Recurse 不受影响。
+        if !background {
+            if let Some(root) = broad_recursive_scan(command) {
+                tracing::warn!(
+                    command,
+                    root,
+                    "rejected broad recursive terminal scan (would monopolize the turn)"
+                );
+                return Err(ToolError::InvalidParams(format!(
+                    "Refusing a recursive scan rooted at `{root}`: it walks the whole \
+                     user/profile tree and monopolizes this turn for minutes, which makes \
+                     the desktop UI unresponsive.\n\n\
+                     Use a purpose-built tool instead:\n\
+                     - `search_files` (target=files) or `list_files` for finding files by name pattern\n\
+                     - `search_files` (target=content) for searching file contents\n\
+                     - `list_dir` to inspect one directory\n\
+                     - narrow the path to the actual project directory\n\n\
+                     If a full-disk scan is genuinely required, pass `background: true` \
+                     and poll the session — never run it synchronously."
+                )));
+            }
+        }
 
         let pty = crate::param_coercion::bool_param(&params, "pty", false);
 
@@ -798,6 +844,68 @@ impl ContextAware for TerminalHandler {
     }
 }
 
+/// 识别「整盘 / 整用户目录」级别的递归扫描，返回命中的根路径标签。
+///
+/// 判据刻意收窄：**递归标记与宽根必须同时出现**。项目/工作区目录里的
+/// `Get-ChildItem -Recurse`、`grep -r src/` 一律放行 —— 真正要拦的是
+/// 「从 `$env:USERPROFILE` / `C:\Users` / `/` 开始找文件」这种抄 shell 的写法，
+/// 它既扫不出结果（几分钟后被超时掐断），又把当前轮次和桌面 UI 一起拖住。
+fn broad_recursive_scan(command: &str) -> Option<&'static str> {
+    use std::sync::OnceLock;
+
+    // 盘根操作数：`C:\` / `C:/` / 裸 `C:`（可带收尾引号），后随空白或行尾。
+    // 命中 `rg TODO C:\`、`Get-ChildItem C:\ -Recurse`，不误伤 `C:\Users\x`。
+    // （regex crate 不支持前瞻，所以把后续字符吃进匹配再判断。）
+    static DRIVE_ROOT: OnceLock<regex::Regex> = OnceLock::new();
+    let drive_root = DRIVE_ROOT.get_or_init(|| {
+        regex::Regex::new(r#"(?i)[a-z]:[\\/]?["']?(?:\s|$)"#).expect("static regex")
+    });
+
+    let lower = command.to_ascii_lowercase();
+    let recursive = lower.contains("-recurse")
+        || lower.contains("--recursive")
+        || lower.contains("ls -r ")
+        || lower.contains("gci -r")
+        || lower.contains("dir -r")
+        || lower.contains("findstr /s")
+        || (lower.contains("tree ") && lower.contains("/f"))
+        // rg / grep -R 默认递归
+        || lower.contains("rg ")
+        || (lower.contains("dir ") && lower.contains("/s"))
+        || lower.contains("grep -r")
+        || lower.contains("find /");
+    if !recursive {
+        return None;
+    }
+    // 宽根：只列确凿的"整用户/整盘"起点。
+    const BROAD_ROOTS: &[(&str, &str)] = &[
+        ("$env:userprofile", "$env:USERPROFILE"),
+        ("%userprofile%", "%USERPROFILE%"),
+        ("c:\\users", "C:\\Users"),
+        ("c:/users", "C:/Users"),
+        ("~/", "~/"),
+        ("$home", "$HOME"),
+    ];
+    for (needle, label) in BROAD_ROOTS {
+        if lower.contains(needle) {
+            return Some(label);
+        }
+    }
+    // POSIX 根：`find / -name …` / `grep -r x /` / `rg x /`。
+    if lower.contains("find / ")
+        || (lower.contains("grep -r") && lower.contains(" / "))
+        || (lower.contains("rg ") && lower.contains(" / "))
+    {
+        return Some("/");
+    }
+    // Windows 盘根：任何盘符的根目录操作数（黑名单此前漏掉 `rg x C:\`、
+    // `Get-ChildItem D:\ -Recurse`，单条命令照样拖死整机）。
+    if drive_root.is_match(command) {
+        return Some("drive root");
+    }
+    None
+}
+
 /// Detect if a terminal command is trying to READ the CONTENT of a
 /// binary file (images, PDFs). Returns the file extension if so.
 ///
@@ -922,9 +1030,12 @@ async fn execute_session_call(
 fn spill_or_truncate(output: &str, max_chars: usize) -> String {
     use crate::spill::SpillSink;
     let total = output.chars().count();
-    if let Some(spilled) = SpillSink::default_dir()
-        .try_spill_by_content(output, crate::spill::SPILL_INLINE_CHARS)
-    {
+    // 内联预览的上限与「模型可见上限」对齐（2026-10-30）：预览留着 20 K 而
+    // agent 层只允许 16 K，多出来的 4 K 会在下一层被中间截断 —— 指针在尾巴
+    // 上，被切掉就等于把取回路径一起扔了。
+    let inline = crate::result_budget::model_visible_cap("terminal")
+        .min(crate::spill::SPILL_INLINE_CHARS);
+    if let Some(spilled) = SpillSink::default_dir().try_spill_by_content(output, inline) {
         return spilled;
     }
     // The spill failed — degrade to the old truncation.
@@ -994,6 +1105,27 @@ fn format_command_output(output: &CommandOutput) -> String {
 mod tests {
     use super::*;
     use hermix_core::AgentError;
+
+    /// 整盘递归扫描必须被拦下：这是 2026-11-05 实机把桌面 UI 拖死的原句。
+    #[test]
+    fn broad_recursive_scan_flags_profile_tree() {
+        let cmd = r#"Get-ChildItem -Path $env:USERPROFILE -Recurse -Depth 3 -Include "*chaoxing*","*超星*" -ErrorAction SilentlyContinue"#;
+        assert_eq!(broad_recursive_scan(cmd), Some("$env:USERPROFILE"));
+        assert_eq!(
+            broad_recursive_scan(r"dir C:\Users /s /b"),
+            Some("C:\\Users")
+        );
+        assert_eq!(broad_recursive_scan("find / -name '*.log'"), Some("/"));
+    }
+
+    /// 项目目录里的递归扫描是正常用法，不能被误伤。
+    #[test]
+    fn broad_recursive_scan_allows_scoped_recursion() {
+        assert_eq!(broad_recursive_scan("Get-ChildItem -Recurse -Filter *.rs src/"), None);
+        assert_eq!(broad_recursive_scan("grep -rn TODO src/"), None);
+        assert_eq!(broad_recursive_scan("dir /b"), None);
+        assert_eq!(broad_recursive_scan("cargo build --release"), None);
+    }
 
     /// Oversized command output must be **spilled**, not cut: the old
     /// behaviour kept the head and dropped the tail — which is where

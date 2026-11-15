@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{body::Body, http::Method};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -85,7 +86,9 @@ pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core:
     > = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
     let mut stdin = BufReader::new(tokio::io::stdin()).lines();
-    loop {
+    // 退出原因：三条 break 路径此前共用一句 "stdin closed, exiting"，排查时
+    // 分不清是父进程关了管道、读错误，还是外壳主动发了 shutdown 帧。
+    let exit_reason = loop {
         // 用 futures::select 同时监听 stdin 与 shutdown watch；任何一方就绪
         // 都继续下一次迭代：shutdown 信号 → break；stdin 帧 → 正常路由。
         tokio::select! {
@@ -93,10 +96,10 @@ pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core:
             line = stdin.next_line() => {
                 let line = match line {
                     Ok(Some(line)) => line,
-                    Ok(None) => break, // stdin 关闭（父进程退出）→ 自然退出。
+                    Ok(None) => break "stdin eof (parent closed pipe)",
                     Err(e) => {
                         tracing::warn!("stdio: stdin read error, exiting: {e}");
-                        break;
+                        break "stdin read error";
                     }
                 };
                 let Some(frame) = parse_inbound(&line) else {
@@ -107,7 +110,7 @@ pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core:
                 // shutdown 帧：客户端主动请求优雅退出，立即终止循环。
                 if frame.channel == "shutdown" {
                     tracing::info!("stdio: shutdown frame received, exiting gracefully");
-                    break;
+                    break "shutdown frame from parent";
                 }
 
                 // REST 通道：request-response 语义，不走虚拟连接，直接 oneshot。
@@ -143,15 +146,46 @@ pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core:
             }
             _ = shutdown_rx.changed() => {
                 tracing::info!("stdio: shutdown signal via watch channel, exiting");
-                break;
+                break "shutdown via watcher";
             }
         }
-    }
+    };
 
-    tracing::info!("stdio: stdin closed, exiting");
-    if let Some(rt) = im_runtime.as_ref() {
-        rt.stop().await;
+    tracing::info!(reason = exit_reason, "stdio: 主循环结束，开始收尾");
+    // 与 HTTP 模式（lib.rs 的 graceful shutdown）对齐：先中断在途 agent 回合，
+    // 给它们 2s 把部分输出落库。此前这条路径只停 IM 通道，桌面端点「重启后端」
+    // 或退出应用时，正在生成的回复随任务被 drop —— 前端只能收到 bridge-dead
+    // 并提示「连接中断，请重新发送」，中间那段输出既不在 UI 也不保证在库里。
+    state.agent_service().interrupt_all();
+    let agent_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let remaining = state
+            .active_handles
+            .lock()
+            .map(|g| g.len())
+            .unwrap_or(0);
+        if remaining == 0 || std::time::Instant::now() >= agent_deadline {
+            if remaining > 0 {
+                tracing::warn!(
+                    active_tasks = remaining,
+                    "stdio: {} agent task(s) did not finish within 2s — partial output may be lost",
+                    remaining
+                );
+            }
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    if let Some(rt) = im_runtime.as_ref() {
+        // 有界等待：QQ / 企业微信的关连接要走网络，无限等会把整个退出流程拖过
+        // 桌面外壳的强杀阈值（旧行为：外壳 3s 等不到就 TerminateProcess，
+        // 于是「优雅退出」从来没发生过）。
+        match tokio::time::timeout(Duration::from_secs(2), rt.stop()).await {
+            Ok(()) => {}
+            Err(_) => tracing::warn!("stdio: IM 通道停止超时（2s），继续退出"),
+        }
+    }
+    tracing::info!("stdio: 收尾完成");
     Ok(())
 }
 

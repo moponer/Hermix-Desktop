@@ -42,7 +42,9 @@ use crate::interrupt::InterruptController;
 type BoxSendFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 /// Default wall-clock cap for a single child agent turn-chain.
-pub const DEFAULT_SUB_AGENT_TIMEOUT_SECS: u64 = 1800;
+/// 2026-11-10 二次收紧 600→180（用户拍板 3 分钟上限）：子代理只做短任务，
+/// 主 agent 拆分并行派发、或长任务走 dispatch_member 后台化。
+pub const DEFAULT_SUB_AGENT_TIMEOUT_SECS: u64 = 180;
 /// Floor on child max_turns regardless of parent budget.
 pub const SUB_AGENT_MIN_TURNS: u32 = 2;
 /// Ceiling on child max_turns to keep sub-tasks bounded.
@@ -250,12 +252,15 @@ impl SubAgentRole {
 pub(crate) const EXPLORE_ROLE_TOOLS: &[&str] = &[
     "read_file",
     "list_files",
+    "list_dir",
     "search_files",
+    "read_image",
+    "read_pdf",
+    "markitdown",
     "web_search",
     "web_extract",
     "url_safety",
     "session_search",
-    "memory_search",
     "tool_search",
     "tool_describe",
     "tool_call",
@@ -265,13 +270,14 @@ pub(crate) const EXPLORE_ROLE_TOOLS: &[&str] = &[
 const PLAN_ROLE_TOOLS: &[&str] = &[
     "read_file",
     "list_files",
+    "list_dir",
     "search_files",
+    "read_pdf",
+    "markitdown",
     "web_search",
     "web_extract",
     "url_safety",
     "session_search",
-    "memory_search",
-    "memory_store",
     "todo",
     "task_create",
     "task_update",
@@ -987,31 +993,50 @@ impl SubAgentOrchestrator {
         // observes. `abort()` drops the future at its next await, which
         // stops the remaining tool calls from running.
         let mut join = Box::pin(join);
-        let result = match timeout(self.cfg.timeout, join.as_mut()).await {
-            Ok(Ok(Ok(result))) if result.interrupted => Err(SubAgentError::Cancelled),
-            Ok(Ok(Ok(result))) => Ok(result),
-            Ok(Ok(Err(AgentError::Interrupted { .. }))) => Err(SubAgentError::Cancelled),
-            Ok(Ok(Err(e))) => Err(SubAgentError::Agent(e)),
-            Ok(Err(join_err)) => Err(SubAgentError::Agent(AgentError::ToolExecution(format!(
-                "sub-agent join error: {}",
-                join_err
-            )))),
-            Err(_) => {
-                // Cooperative cancel for the in-flight LLM call, then a
-                // hard abort so no further tool executes.
-                child_interrupt.interrupt(Some("timeout".to_string()));
-                // `timeout` consumed the future via `&mut`, so the inner
-                // `JoinHandle` is still owned here and can be aborted.
-                // The task may already be finished; `abort` is a no-op then.
-                join.abort();
-                tracing::warn!(
+        // 父级按下停止时，父不能一直裸等子代理。旧代码只有 `timeout` 一个
+        // 出口：用户点停止后父仍卡在 `execute_async` 里，最坏要等到子代理
+        // 自己超时（`self.cfg.timeout`，默认几十秒到几分钟），主观感受就是
+        // 「停止按钮没反应」。这里让父 interrupt 与 timeout 竞速。
+        let parent_abort = join.as_ref().get_ref().abort_handle();
+        let parent_interrupt = self.cfg.parent_interrupt.clone();
+        let result = tokio::select! {
+            biased;
+            _ = parent_interrupt.wait_for_interrupt() => {
+                child_interrupt.interrupt(Some("parent stopped".to_string()));
+                parent_abort.abort();
+                tracing::info!(
                     task = %req.task.chars().take(80).collect::<String>(),
                     child_depth = req.child_depth,
-                    timeout_secs = ?self.cfg.timeout,
-                    "sub-agent timed out; aborted to prevent further tool side effects"
+                    "sub-agent aborted: parent turn was stopped by the user"
                 );
-                Err(SubAgentError::Timeout)
+                Err(SubAgentError::Cancelled)
             }
+            timed = timeout(self.cfg.timeout, join.as_mut()) => match timed {
+                Ok(Ok(Ok(result))) if result.interrupted => Err(SubAgentError::Cancelled),
+                Ok(Ok(Ok(result))) => Ok(result),
+                Ok(Ok(Err(AgentError::Interrupted { .. }))) => Err(SubAgentError::Cancelled),
+                Ok(Ok(Err(e))) => Err(SubAgentError::Agent(e)),
+                Ok(Err(join_err)) => Err(SubAgentError::Agent(AgentError::ToolExecution(format!(
+                    "sub-agent join error: {}",
+                    join_err
+                )))),
+                Err(_) => {
+                    // Cooperative cancel for the in-flight LLM call, then a
+                    // hard abort so no further tool executes.
+                    child_interrupt.interrupt(Some("timeout".to_string()));
+                    // `timeout` consumed the future via `&mut`, so the inner
+                    // `JoinHandle` is still owned here and can be aborted.
+                    // The task may already be finished; `abort` is a no-op then.
+                    join.abort();
+                    tracing::warn!(
+                        task = %req.task.chars().take(80).collect::<String>(),
+                        child_depth = req.child_depth,
+                        timeout_secs = ?self.cfg.timeout,
+                        "sub-agent timed out; aborted to prevent further tool side effects"
+                    );
+                    Err(SubAgentError::Timeout)
+                }
+            },
         };
 
         watcher_stop.store(true, std::sync::atomic::Ordering::Release);
@@ -1176,29 +1201,24 @@ async fn initial_messages(
          ctx returns a useless truncated summary.\n\
          \n\
          ## How to read files safely\n\
-         - **Check size FIRST**: use `list_files` (returns size) or `terminal wc -l <file>`\n\
+         - **Check size FIRST**: use `list_files` / `list_dir` (returns per-entry sizes)\n\
            before reading. If > ~50 KB or > ~1500 lines, do NOT `read_file` whole.\n\
          - **Read in chunks**: `read_file` accepts `offset` / `limit` parameters.\n\
            Read 200-500 lines at a time, summarize each chunk in your scratchpad, then\n\
            read the next chunk.\n\
-         - **For PDFs**: do NOT use `read_pdf` on a 100-page PDF. Instead, run\n\
-           `terminal pdftotext -layout -f 1 -l 5 file.pdf -` to extract pages 1-5 at a\n\
-           time, or `pdftotext file.pdf -` piped to `head -1000` for the first slice.\n\
-           Aggregate slices into a single summary; never paste raw PDF text into your\n\
-           final response.\n\
+         - **For PDFs**: use `read_pdf` (text extraction) or `markitdown` — they are\n\
+           purpose-built and budgeted; do NOT paste raw PDF text into your final\n\
+           response. Aggregate the facts you need into a single summary.\n\
          - **For code exploration**: use `search_files` (returns match snippets, not\n\
-           full files) before `read_file`. The grep result is usually enough; only\n\
+           full files) before `read_file`. The snippet result is usually enough; only\n\
            `read_file` when you need surrounding context for a specific match.\n\
          \n\
-         ## How to run commands safely\n\
-         - **NEVER `cat` a large file**. Use `head -N`, `tail -N`, `sed -n 'A,Bp'`,\n\
-           or `grep -n PATTERN file` to extract only what you need.\n\
-         - **NEVER `dir /s /b` or `find /` on a large tree** — paginate or use\n\
-           `find ... -maxdepth N` to bound output.\n\
-         - **NEVER dump logs without filtering**. `cat huge.log` wastes your ctx;\n\
-           `grep -E 'ERROR|WARN' huge.log | head -100` is the right move.\n\
-         - **Cap command output**: if a command might produce > ~3,000 chars, pipe\n\
-           through `head`, `tail`, `grep`, or `awk` to extract only the relevant slice.\n\
+         ## Shell is NOT yours to use\n\
+         `terminal` and `code_execution` are BLOCKED for sub-agents (parent/child\n\
+         safety boundary). Everything above is achievable with the built-in tools —\n\
+         do not look for command workarounds. If the task genuinely needs a command,\n\
+         state that in your final response; the parent agent will run it under the\n\
+         user's approval guardrail.\n\
          \n\
          ## Scratchpad discipline\n\
          - Don't paste raw file contents into your final response. Extract the\n\

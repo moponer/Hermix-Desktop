@@ -148,18 +148,23 @@ async fn replay_reasoning_stays_in_reasoning_field() {
     );
 }
 
-// ── 场景 3b：自治模式对"只说不做"发一次 nudge（默认行为）─────────
+// ── 场景 3b：自治模式对"只说不做"连推，直到预算用尽 ─────────────
 #[tokio::test]
-async fn replay_autonomous_nudge_fires_once_then_finalizes() {
-    // 自治模式（默认开）：模型回了可见文字但一轮没调工具 → loop 发一次
-    // nudge 逼它干活；模型再回一次文字后收尾。nudge 只发一次
-    // （autonomous_nudge_count == 0 门槛），所以调用次数是 2 而不是 3。
-    let provider = ScriptedProvider::shared(vec![
-        ScriptedTurn::text("我来处理。"),
-        ScriptedTurn::text("已处理完毕。"),
-    ]);
+async fn replay_autonomous_nudge_repeats_until_budget_then_finalizes() {
+    // 自治模式（默认开）：模型连续回可见文字但一轮都没调工具 → 每轮推一次，
+    // 推满 `default_max_autonomous_nudges()`（默认 8）后收尾。
+    // 调用次数 = 1 + 8 = 9：第 9 轮拿到的 nudge_count 已是 8 →
+    // `goal_continue_blocker` 返回 `nudge_budget_exhausted` → finalize。
+    //
+    // 2026-10-30 之前这里只有 2 轮：判据写死 `autonomous_nudge_count == 0`，
+    // 于是「干一段时间 → 写总结 → 交回用户」成为长任务的唯一出口。
+    let budget = crate::agent_helpers::default_max_autonomous_nudges() as usize;
+    let turns: Vec<ScriptedTurn> = (0..=budget)
+        .map(|i| ScriptedTurn::text(format!("第 {i} 轮只说不做。")))
+        .collect();
+    let provider = ScriptedProvider::shared(turns);
     let agent = AgentLoop::new(
-        AgentConfig { max_turns: 10, ..AgentConfig::default() },
+        AgentConfig { max_turns: 40, ..AgentConfig::default() },
         registry_with_echo_tool(),
         provider.clone() as Arc<dyn hermix_core::LlmProvider>,
     );
@@ -176,11 +181,127 @@ async fn replay_autonomous_nudge_fires_once_then_finalizes() {
         .await
         .expect("run");
 
-    assert!(result.finished_naturally, "nudge round should still finalize naturally");
-    assert_eq!(provider.call_count(), 2, "nudge fires exactly once, then finalize");
+    assert!(result.finished_naturally, "nudge rounds should still finalize naturally");
+    assert_eq!(
+        provider.call_count(),
+        budget + 1,
+        "nudge repeats until the budget is exhausted, then finalize"
+    );
     assert_eq!(
         result.messages.last().and_then(|m| m.content.clone()),
-        Some("已处理完毕。".to_string())
+        Some(format!("第 {budget} 轮只说不做。"))
+    );
+}
+
+// ── 场景 3c：长工具执行期必须有心跳（2026-10-30）─────────────────
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_long_serial_tool_emits_heartbeat() {
+    // 会改状态的工具（注册时不带 risk → 默认 Caution → 串行）单次预算是
+    // 600s（terminal）。此前这段等待零事件，UI 上和"进程已经死了"无法区分。
+    // 这里用一个 6s 的慢工具验证：执行期间至少发出一条 `tool` 心跳状态。
+    let mut reg = ToolRegistry::new();
+    reg.register(
+        "slow_tool",
+        ToolSchema::new(
+            "slow_tool",
+            "sleeps 6s",
+            hermix_core::JsonSchema::new("object"),
+        ),
+        Arc::new(|_params: serde_json::Value| {
+            std::thread::sleep(std::time::Duration::from_secs(6));
+            Ok("done".to_string())
+        }),
+    );
+
+    let seen: Arc<std::sync::Mutex<Vec<(String, String)>>> = Arc::new(Default::default());
+    let sink = Arc::clone(&seen);
+    let callbacks = AgentCallbacks {
+        status_callback: Some(Arc::new(move |kind: &str, msg: &str| {
+            sink.lock()
+                .expect("status lock")
+                .push((kind.to_string(), msg.to_string()));
+        })),
+        ..Default::default()
+    };
+
+    let provider = ScriptedProvider::shared(vec![
+        ScriptedTurn::text("跑个慢工具").with_tool("slow_tool", "{}"),
+        ScriptedTurn::text("完成"),
+    ]);
+    let agent = AgentLoop::new(
+        test_config(),
+        Arc::new(reg),
+        provider.clone() as Arc<dyn hermix_core::LlmProvider>,
+    )
+    .with_callbacks(callbacks);
+
+    let schemas = vec![ToolSchema::new(
+        "slow_tool",
+        "sleeps 6s",
+        hermix_core::JsonSchema::new("object"),
+    )];
+    let result = agent
+        .run(vec![Message::user("做")], Some(schemas))
+        .await
+        .expect("run");
+    assert!(result.finished_naturally);
+
+    let rows = seen.lock().expect("status lock");
+    assert!(
+        rows.iter().any(|(kind, msg)| {
+            kind == "tool" && msg.contains("slow_tool") && msg.contains("仍在执行")
+        }),
+        "长工具执行期必须发心跳；实际收到的状态: {rows:?}"
+    );
+}
+
+// ── 场景 3d：撞轮次预算 + 摘要调用失败 → 必须把归因说出来 ─────────
+#[tokio::test]
+async fn replay_max_turns_summary_failure_emits_attribution_status() {
+    // 轮次预算用尽时 loop 会调一次「请总结」的 LLM。这一调用失败时注入的是
+    // **机械进度记录**，模型随后会把它转述成「已完成 / 未完成 / 下一步」——
+    // 读起来就是"计划都写好了却停了"。这条用例钉住：此时必须有一条状态说明
+    // 归因（预算 + 摘要不可用），而不是让机械记录冒充模型的完成总结。
+    let seen: Arc<std::sync::Mutex<Vec<(String, String)>>> = Arc::new(Default::default());
+    let sink = Arc::clone(&seen);
+    let callbacks = AgentCallbacks {
+        status_callback: Some(Arc::new(move |kind: &str, msg: &str| {
+            sink.lock()
+                .expect("status lock")
+                .push((kind.to_string(), msg.to_string()));
+        })),
+        ..Default::default()
+    };
+
+    let provider = ScriptedProvider::shared(vec![
+        ScriptedTurn::text("先看一眼").with_tool("echo_tool", r#"{"text":"a"}"#),
+    ]);
+    // `total_turns` 从 1 起算：max_turns=2 时第一轮正常跑（消费脚本唯一那一轮），
+    // 第二轮进 pre_turn 就撞预算 → 摘要调用（第 2 次 LLM 调用）必然拿到
+    // 「script exhausted」→ 走机械记录分支。
+    let agent = AgentLoop::new(
+        AgentConfig {
+            max_turns: 2,
+            autonomous_mode: false,
+            ..AgentConfig::default()
+        },
+        registry_with_echo_tool(),
+        provider.clone() as Arc<dyn hermix_core::LlmProvider>,
+    )
+    .with_callbacks(callbacks);
+
+    let schemas = vec![ToolSchema::new(
+        "echo_tool",
+        "test double",
+        hermix_core::JsonSchema::new("object"),
+    )];
+    let _ = agent.run(vec![Message::user("go")], Some(schemas)).await;
+
+    let rows = seen.lock().expect("status lock");
+    assert!(
+        rows.iter()
+            .any(|(kind, msg)| kind == "lifecycle" && msg.contains("收尾摘要调用失败")),
+        "摘要失败时必须给出归因状态；实际收到: {rows:?}"
     );
 }
 

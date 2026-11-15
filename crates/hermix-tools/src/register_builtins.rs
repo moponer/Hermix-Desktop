@@ -616,9 +616,22 @@ mod tests {
         let runtime_toolsets: std::collections::HashSet<String> =
             registry.list_toolsets().into_iter().collect();
 
+        // 外部 crate 注册的 toolset（`member`）在 server 构建期才进来，
+        // 本函数看不到；它们在 `apply_persisted_toolset_state` 之前注册，
+        // 那道 floor 才是真正生效的一遍。见 `EXTERNALLY_REGISTERED_TOOLSETS`。
         let missing: Vec<&&str> = ESSENTIAL_TOOLSETS
             .iter()
-            .filter(|name| !runtime_toolsets.contains(**name))
+            .filter(|name| {
+                !runtime_toolsets.contains(**name)
+                    && !crate::essential::EXTERNALLY_REGISTERED_TOOLSETS
+                        .iter()
+                        .any(|n| *n == **name)
+                    // 条件注册的 toolset（如 session_search：sessions DB 不存在
+                    // 时按设计跳过注册）在全新环境里合法缺席。
+                    && !crate::essential::CONDITIONALLY_REGISTERED_TOOLSETS
+                        .iter()
+                        .any(|n| *n == **name)
+            })
             .collect();
         assert!(
             missing.is_empty(),
@@ -657,7 +670,7 @@ mod tests {
         };
         // Grouped toolsets the floor relies on.
         let expected_groups: &[(&str, usize)] = &[
-            ("file", 6),           // read/write/patch/search + list_files/edit_file
+            ("file", 7),           // read/write/patch/search/list_dir + list_files/edit_file
             ("pdf", 1),            // read_pdf (P1.8 split out of "file")
             ("homeassistant", 4),  // ha_* tools
         ];

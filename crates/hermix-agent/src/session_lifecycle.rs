@@ -36,6 +36,7 @@ use crate::compression::CompressionMetrics;
 use crate::context::ContextManager;
 use crate::cost_guard::CostGuard;
 use crate::message_cache::MessageCache;
+use crate::prompt_assembly::extract_provider_and_model;
 use crate::message_helpers::{
     assistant_has_reasoning, assistant_visible_text, emit_status, extra_body_for_api_mode,
 };
@@ -977,13 +978,21 @@ pub async fn handle_max_iterations(
          what was accomplished and any remaining tasks.",
     ));
     let extra_body = extra_body_for_api_mode(config, &config.api_mode);
+    // `active_model` 可能是 `provider:model` 形态（`config.model` 就是
+    // `minimax:MiniMax-M3.1-Flash`），而 provider 只认裸模型名。正常轮次在
+    // `llm_retry::resolve_llm_target` 里过了一遍 `extract_provider_and_model`，
+    // 摘要路径此前漏了这一步 —— 于是请求带着 `minimax:` 前缀发出去，严格
+    // provider 回 `400 unknown model 'minimax:minimax-m3.1-flash'`；摘要失败
+    // → 注入机械进度记录 → 轮次计数归零 → 同一个工具循环再跑 12 轮再失败
+    // （2026-11-05 实机：自动化任务这样空转了 229 轮）。
+    let (_, summary_model) = extract_provider_and_model(config, active_model);
     let summary_body = || {
         llm_provider.chat_completion(
             ctx.get_messages(),
             &[],
             config.max_tokens,
             config.temperature,
-            Some(active_model),
+            Some(summary_model),
             extra_body.as_ref(),
         )
     };
@@ -994,7 +1003,10 @@ pub async fn handle_max_iterations(
             // error). Degrade to the configured default model once — the
             // summary should run on the user's chosen model first; the
             // default is only a fallback when that model is broken.
-            let fallback = (config.model.as_str() != active_model).then(|| config.model.as_str());
+            // 同样要剥前缀：裸 id 与裸 id 比较，避免"同一个模型却被当成
+            // 两个不同模型"再发一次同样会 400 的请求。
+            let (_, configured_model) = extract_provider_and_model(config, config.model.as_str());
+            let fallback = (configured_model != summary_model).then_some(configured_model);
             if let Some(fb) = fallback {
                 match llm_provider
                     .chat_completion(
@@ -1040,6 +1052,15 @@ pub async fn handle_max_iterations(
 /// This builds the same message from data we already hold: tool-call
 /// counts and the last few steps. It is deliberately directive, not
 /// narrative — the model still writes the user-facing words.
+/// 机械进度记录的开头标记。
+///
+/// 供 `run_loop::pre_turn` 判定「这条不是模型写的总结，是摘要调用失败后的
+/// 本地替代」——只有这样才能在界面上把归因说清楚（否则模型会把记录转述成
+/// 「已完成 / 下一步」，读起来像它自己写完计划就停了）。
+/// 不要用正文里的句子做判据：那些句子在源码里靠 `\` 续行拼接，实际落盘文本
+/// 的空格与源码不一致，`contains` 会静默失配。
+pub(crate) const DETERMINISTIC_SUMMARY_MARKER: &str = "[PROGRESS-RECORD]";
+
 fn deterministic_progress_summary(ctx: &ContextManager, max_turns: u32) -> Message {
     let msgs = ctx.get_messages();
     let tool_msgs: Vec<&Message> = msgs
@@ -1077,7 +1098,7 @@ fn deterministic_progress_summary(ctx: &ContextManager, max_turns: u32) -> Messa
     }
 
     let body = format!(
-        "[SYSTEM] Turn budget exhausted after {max_turns} turns, and the progress-summary \
+        "{DETERMINISTIC_SUMMARY_MARKER} [SYSTEM] Turn budget exhausted after {max_turns} turns, and the progress-summary \
          call failed. Mechanical record of this segment:\n\
          - tool-call turns: {turns}, tool calls: {total_calls}\n\
          - tools used: {name_list}\n\

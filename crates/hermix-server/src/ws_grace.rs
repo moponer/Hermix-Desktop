@@ -10,8 +10,13 @@
 //!     cleanly);
 //!   - removes the `active_handles[active_key]` entry.
 //!
-//! `active_sessions[active_key]` is released **immediately** so a
-//! reconnecting client isn't blocked by `is_duplicate_response`.
+//! `active_sessions` is NOT released here (C3 会话级互斥): the session
+//! slot is keyed by pure `session_id` and must stay held while the agent
+//! runs — releasing it would let a reconnecting client spawn a second
+//! agent for the same session while the first is still autonomous. A
+//! reconnecting send is instead declined via the `task_in_flight`
+//! path in `ws/mod.rs`, and the agent's own completion cleanup frees
+//! the slot.
 //!
 //! Two follow-on risks were fixed:
 //!
@@ -35,13 +40,12 @@
 //! `tokio::spawn(async move { ... })` closures — which require
 //! `'static` lifetimes and cannot hold `&HttpServerState`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
-/// Release `active_sessions[key]` immediately, then schedule a
-/// timer that fires after `grace_secs`:
+/// Schedule a timer that fires after `grace_secs`:
 ///   1. Self-remove the entry from `pending_grace` (so a later
 ///      reconnect takeover that arrives *after* the timer fires
 ///      doesn't try to abort an already-completed JoinHandle).
@@ -55,21 +59,13 @@ use tokio::task::JoinHandle;
 /// The `JoinHandle` is registered in `pending_grace[key]` so a
 /// reconnecting client's `abort_pending_grace()` call can cancel
 /// the timer before it fires.
-#[allow(clippy::too_many_arguments)]
 pub fn schedule_grace_disconnect(
-    active_sessions: &Arc<Mutex<HashSet<String>>>,
     active_handles: &Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     pending_grace: &Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     active_key: &str,
     notify: Arc<Notify>,
     grace_secs: u64,
 ) {
-    // Step 1: free active_sessions immediately. The reconnecting
-    // client must NOT be blocked by `is_duplicate_response`.
-    if let Ok(mut g) = active_sessions.lock() {
-        g.remove(active_key);
-    }
-
     let ah = active_handles.clone();
     let pg = pending_grace.clone();
     let gk = active_key.to_string();
@@ -206,22 +202,20 @@ mod tests {
     // ---------------------- schedule_grace_disconnect ----------------------
 
     #[tokio::test]
-    async fn grace_releases_active_sessions_immediately() {
+    async fn grace_does_not_release_active_sessions_slot() {
+        // C3 会话级互斥：session 槽由 agent 任务自己的收尾清理释放；
+        // grace 断连不得提前放行，否则重连会在旧 agent 仍在跑时再
+        // spawn 出第二个任务。
         let state = fresh_state();
         let key = "s1::hello";
-        // Seed an entry so we can assert it's gone after the call.
         state
             .active_sessions
             .lock()
             .unwrap()
-            .insert(key.to_string());
+            .insert("s1".to_string());
 
         let notify = Arc::new(Notify::new());
-        // grace_secs = 0 → timer fires on next scheduler tick, but
-        // the immediate-release of active_sessions happens BEFORE
-        // the timer is spawned.
         schedule_grace_disconnect(
-            &state.active_sessions,
             &state.active_handles,
             &state.pending_grace,
             key,
@@ -230,8 +224,8 @@ mod tests {
         );
 
         assert!(
-            !state.active_sessions.lock().unwrap().contains(key),
-            "active_sessions[{key}] must be released synchronously"
+            state.active_sessions.lock().unwrap().contains("s1"),
+            "grace must NOT release the session slot while the agent may still run"
         );
     }
 
@@ -242,7 +236,6 @@ mod tests {
         let notify = Arc::new(Notify::new());
 
         schedule_grace_disconnect(
-            &state.active_sessions,
             &state.active_handles,
             &state.pending_grace,
             key,
@@ -272,7 +265,6 @@ mod tests {
 
         // 1-second grace keeps the test fast (~1s wall clock).
         schedule_grace_disconnect(
-            &state.active_sessions,
             &state.active_handles,
             &state.pending_grace,
             key,
@@ -314,7 +306,6 @@ mod tests {
             .insert(key.to_string(), sentinel);
 
         schedule_grace_disconnect(
-            &state.active_sessions,
             &state.active_handles,
             &state.pending_grace,
             key,
@@ -420,7 +411,6 @@ mod tests {
         let notify = Arc::new(Notify::new());
 
         schedule_grace_disconnect(
-            &state.active_sessions,
             &state.active_handles,
             &state.pending_grace,
             key,

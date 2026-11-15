@@ -57,12 +57,8 @@ if (Test-Path $arch) {
 # 4) 禁止生成式索引
 if (Test-Path (Join-Path $notesDir 'INDEX.md')) { Fail 'INDEX.md — 生成式索引被禁止' }
 
-# 5) docs/ 顶层 .md 白名单
-$allowed = @(
-  'HANDOFF_FOUNDATION_REWRITE.md', 'HERMIX_AGENT_SYSTEM_PROMPT.md', 'TYPOGRAPHY_SYSTEM.md',
-  'UI_PROPOSAL_CC_HAHA_2026-09-29.md', 'UI_REDESIGN_PAPER_INK_2026-09-28.md',
-  'DEEPSEEK_HARNESS_BORROWINGS.md', 'MCPHUB_BORROWINGS.md'
-)
+# 5) docs/ 顶层 .md 白名单（2026-11-15 文档清理后清零：过期已删、历史分析归 notes/archived/）
+$allowed = @()
 Get-ChildItem (Join-Path $repo 'docs') -Filter '*.md' -File | ForEach-Object {
   if ($allowed -notcontains $_.Name) { Fail "docs/$($_.Name) — docs/ 顶层禁止新增 .md" }
 }

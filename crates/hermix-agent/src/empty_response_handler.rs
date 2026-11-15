@@ -18,7 +18,7 @@
 //! | `Answered`      | yes          | any          | Gave a real answer   | Finalize       |
 //! | `StoppedSilently` | no         | yes          | Chose silence        | Finalize       |
 //! | `EmptyStop`     | no           | no           | Likely API error     | Retry once     |
-//! | `GaveUp`        | yes          | yes          | Decided to stop      | Finalize       |
+//! | `GaveUp`        | yes          | yes          | Stage done, goal?    | Goal continuation |
 //!
 //! ### What we removed (and why)
 //!
@@ -28,8 +28,10 @@
 //! 2. ~~Permission-giveup nudge (×3)~~ — "LLM said no permission, correct it"
 //! 3. ~~Tool-failure-retry nudge (×3)~~ — "LLM stopped after a failed tool"
 //! 4. ~~Completion-verify nudge (×1)~~ — "LLM said done, verify it"
-//! 5. Autonomous pre-tool nudge (×1) — KEPT: user explicitly asked for
-//!    autonomous mode, this is a user preference, not a trust override.
+//! 5. Goal continuation (once per tool chain) — KEPT: it is not a trust
+//!    override but the definition of "done". A visible reply means this
+//!    *stage* ended, not that the user's objective was met; the model is
+//!    pushed back once to self-check against evidence and keep going.
 //!
 //! Each removed nudge added 1+ LLM API calls (cost + latency) and relied
 //! on brittle string-matching heuristics (e.g. `looks_like_permission_giveup`).
@@ -39,7 +41,9 @@
 //! ### What we kept
 //!
 //! - **Codex ack continuation** — protocol-level need for the Responses API
-//! - **Autonomous pre-tool nudge** — user preference (fires once)
+//! - **Goal continuation** — once per tool chain (`autonomous_nudge_count`
+//!   is reset whenever the model calls a tool again), plus a hard cap in
+//!   `run_loop::MAX_GOAL_CONTINUATIONS`
 //! - **EmptyStop retry** — the one case where we don't trust: an empty
 //!   response with no tool history is most likely an API glitch, not a
 //!   deliberate LLM choice. One retry, then Finalize.
@@ -243,18 +247,25 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
         };
     }
 
-    // 2. Autonomous pre-tool nudge — when autonomous mode is on and the
-    // LLM hasn't used any tools yet, push it to start working.
-    // This is a USER PREFERENCE (they explicitly enabled autonomous mode),
-    // not a trust override. Fires once only.
-    // Priority over EmptyStop retry: if the user turned on autonomous
-    // mode, they want the LLM nudged to use tools — the "empty response"
-    // is exactly the scenario the autonomous nudge is designed for.
+    // 2. 目标续跑（goal continuation）—— 出现可见文本 ≠ 任务完成。
+    //
+    // 旧判据要求 `!history_includes_tool`，只覆盖「模型光说不做」。长任务
+    // 一旦动过工具，该判据永久为假，于是「干一段 → 写总结 → 交回用户」成了
+    // 唯一出口，用户必须每轮手打「继续」。
+    //
+    // 2026-10-30：预算改成 `max_autonomous_nudges`（默认 8）。此前这里写死
+    // `== 0`，于是 `max_autonomous_nudges` 虽然一路传进本结构体却从未被读，
+    // 真实预算恒为「1 次」。模型重新调用工具时该计数会被 `run_loop` 清零，
+    // 所以「干活 → 收尾 → 被推回 → 再干活」可以一路循环到目标完成；连续推满
+    // 预算仍然只说话则放行收尾（不空转）。
+    //
+    // `StoppedSilently`（工具跑完但一个字没说）不走这里 —— 交给下面的
+    // post-tool summarize，语义更贴切。
     if input.autonomous_mode
         && input.has_tool_schemas
-        && !input.history_includes_tool
+        && (has_visible || !input.history_includes_tool)
         && (input.max_turns == 0 || input.total_turns < input.max_turns)
-        && input.autonomous_nudge_count == 0
+        && input.autonomous_nudge_count < input.max_autonomous_nudges
     {
         let turns_info = if input.max_turns > 0 {
             format!("{} of {} used", input.total_turns, input.max_turns)
@@ -264,25 +275,22 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
         let nudge = if has_visible {
             format!(
                 "{} \
-                 Tools are available and more turns remain ({}). \
-                 If the user's message contains an actual task, do NOT stop here — \
-                 use tools to accomplish it (read/write files, execute commands, search). \
-                 If the user was only greeting or chatting and there is genuinely no task \
-                 to work on, simply give your normal conversational reply and stop — \
-                 do NOT invent work and do NOT say the request was already answered. \
-                 Resume now with either a tool call or a final reply.",
+                 收尾之前先自检：用户交办的**整个目标**是否已经全部达成（不是这一阶段，\
+                 是整个任务）。判定依据只能是实据——文件已写入、命令已执行、测试已通过、\
+                 界面已回到预期状态；计划、待办清单、「应该没问题」都不算数。\
+                 未达成 → 直接继续执行下一步（缺信息就用工具去取，不要问用户），\
+                 不要用「下一步我会…」的预告代替执行。\
+                 已达成 → 给出最终结论（做成了什么、证据是什么、还剩什么风险），\
+                 并且不要用「要不要继续 / 这轮先到这 / 需要我接着做吗」这类问句收尾。\
+                 （{}）",
                 AUTONOMOUS_NUDGE_VISIBLE_PREFIX, turns_info
             )
         } else {
             format!(
                 "{} \
-                 Tools are available and more turns remain ({}). \
-                 If the user's message contains an actual task, do NOT stop here — \
-                 continue working with tools (obtain information with tools rather than \
-                 asking the user). \
-                 If there is genuinely no task to work on, give your normal conversational \
-                 reply and stop. \
-                 Resume now with either a tool call or a final reply.",
+                 工具可用且还有回合（{}）。若用户交办的是实际任务，不要停在这里——\
+                 继续用工具推进（缺信息自己取，不要回头问用户）；\
+                 若确实没有任务可做，给出正常的对话回复并结束。",
                 AUTONOMOUS_NUDGE_SILENT_PREFIX, turns_info
             )
         };
@@ -290,7 +298,7 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
             work_state = %work_state,
             nudge_count = input.autonomous_nudge_count + 1,
             total_turns = input.total_turns,
-            "autonomous_pre_tool_nudge: pushing LLM to start using tools"
+            "goal_continuation: nudging LLM to self-check the objective and keep going"
         );
         return EmptyResponseOutput {
             action: EmptyResponseAction::ContinueWithSystemNudge(nudge),
@@ -644,8 +652,8 @@ mod tests {
         match out.action {
             EmptyResponseAction::ContinueWithSystemNudge(text) => {
                 assert!(
-                    text.contains("continue working"),
-                    "pre-tool nudge should say 'continue working', got: {text}"
+                    text.contains("继续用工具推进"),
+                    "silent nudge should push for tool work, got: {text}"
                 );
             }
             other => panic!("expected ContinueWithSystemNudge, got {:?}", other),
@@ -664,8 +672,8 @@ mod tests {
         match out.action {
             EmptyResponseAction::ContinueWithSystemNudge(text) => {
                 assert!(
-                    text.contains("tool"),
-                    "nudge with visible text should redirect to tools, got: {text}"
+                    text.contains("整个目标"),
+                    "visible-text nudge should ask for an objective self-check, got: {text}"
                 );
             }
             other => panic!("expected ContinueWithSystemNudge, got {:?}", other),
@@ -674,44 +682,82 @@ mod tests {
     }
 
     #[test]
-    fn autonomous_nudge_does_not_fire_when_tools_already_used() {
-        // After tools have been used, autonomous pre-tool nudge must NOT fire.
-        let m = make_assistant_msg(Some("20个子目录（车辆），无文件。"));
+    fn goal_continuation_fires_after_tools_were_used() {
+        // 目标驱动：用过工具之后出现可见文本，不再直接收尾 —— 先自检目标。
+        // 旧行为（`!history_includes_tool`）会让长任务每写完一段就结束回合，
+        // 用户必须手动打「继续」。
+        let m = make_assistant_msg(Some("第一步完成，接下来处理第二步。"));
         let mut input = base_input(&m);
         input.autonomous_mode = true;
         input.history_includes_tool = true;
         input.autonomous_nudge_count = 0;
         let out = decide_empty_response(input);
-        assert_eq!(out.new_autonomous_nudge_count, 0);
+        assert_eq!(out.work_state, WorkState::GaveUp);
+        assert_eq!(out.new_autonomous_nudge_count, 1);
+        match out.action {
+            EmptyResponseAction::ContinueWithSystemNudge(text) => {
+                assert!(
+                    text.contains("整个目标"),
+                    "continuation must ask for an objective self-check, got: {text}"
+                );
+            }
+            other => panic!("expected ContinueWithSystemNudge, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn goal_continuation_runs_until_nudge_budget_exhausted() {
+        // 预算内继续推；推满 `max_autonomous_nudges` 才放行收尾（不空转）。
+        let m = make_assistant_msg(Some("全部完成了。"));
+        let mut input = base_input(&m);
+        input.autonomous_mode = true;
+        input.history_includes_tool = true;
+        input.autonomous_nudge_count = 1;
+        let out = decide_empty_response(input);
+        assert_eq!(out.new_autonomous_nudge_count, 2);
+        assert!(matches!(
+            out.action,
+            EmptyResponseAction::ContinueWithSystemNudge(_)
+        ));
+
+        let mut input = base_input(&m);
+        input.autonomous_mode = true;
+        input.history_includes_tool = true;
+        let budget = input.max_autonomous_nudges;
+        input.autonomous_nudge_count = budget;
+        let out = decide_empty_response(input);
+        assert_eq!(out.new_autonomous_nudge_count, budget);
         assert_eq!(out.action, EmptyResponseAction::Finalize);
     }
 
     #[test]
-    fn autonomous_nudge_fires_only_once() {
-        // After autonomous nudge fired once, it won't fire again.
-        // But EmptyStop retry can still fire (it hasn't been consumed yet).
+    fn autonomous_nudge_respects_its_budget() {
+        // 预算内第二次仍然推；EmptyStop retry 只接手预算用尽后的空回复。
         let m = make_assistant_msg(None);
         let mut input = base_input(&m);
         input.autonomous_mode = true;
         input.history_includes_tool = false;
         input.autonomous_nudge_count = 1;
         let out = decide_empty_response(input);
-        // EmptyStop retry fires (autonomous nudge already consumed)
-        assert_eq!(out.new_autonomous_nudge_count, 1); // unchanged
-        assert_eq!(out.new_empty_stop_retry_count, 1); // EmptyStop retry fires
-        assert!(matches!(out.action, EmptyResponseAction::ContinueWithSystemNudge(_)));
+        assert_eq!(out.new_autonomous_nudge_count, 2);
+        assert_eq!(out.new_empty_stop_retry_count, 0); // EmptyStop retry NOT consumed
+        assert!(matches!(
+            out.action,
+            EmptyResponseAction::ContinueWithSystemNudge(_)
+        ));
 
-        // After BOTH autonomous nudge and EmptyStop retry are exhausted → Finalize
+        // 预算用尽 + EmptyStop retry 也已用尽 → Finalize
         let mut input = base_input(&m);
         input.autonomous_mode = true;
         input.history_includes_tool = false;
-        input.autonomous_nudge_count = 1;
+        let budget = input.max_autonomous_nudges;
+        input.autonomous_nudge_count = budget;
         input.empty_stop_retry_count = MAX_EMPTY_STOP_RETRIES;
         let out = decide_empty_response(input);
         assert_eq!(
             out.action,
             EmptyResponseAction::Finalize,
-            "should finalize after autonomous nudge + EmptyStop retry both exhausted"
+            "should finalize after nudge budget + EmptyStop retry both exhausted"
         );
     }
 
@@ -750,7 +796,7 @@ mod tests {
         assert_eq!(out.new_empty_stop_retry_count, 0); // EmptyStop retry NOT consumed
         match out.action {
             EmptyResponseAction::ContinueWithSystemNudge(text) => {
-                assert!(text.contains("continue working") || text.contains("tool"), "should be autonomous nudge, got: {text}");
+                assert!(text.contains("继续用工具推进"), "should be autonomous nudge, got: {text}");
             }
             other => panic!("expected autonomous nudge, got {:?}", other),
         }

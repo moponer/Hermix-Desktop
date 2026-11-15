@@ -20,24 +20,37 @@ fn vault() -> Result<&'static Vault, HttpError> {
     let init = VAULT.get_or_init(|| Vault::open().map_err(|e| format!("vault 打开失败: {e}")));
     match init {
         Ok(v) => Ok(v),
-        Err(e) => Err(HttpError {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: format!("vault 不可用: {e}"),
-        }),
+        Err(e) => {
+            // 细节（路径/底层错误）只进日志：这个端点会被任何能打到本地服务的
+            // 客户端调用，回前端等于把文件布局告诉对方。
+            tracing::error!(error = %e, "vault open failed");
+            Err(HttpError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message: "凭据库不可用（详见 server.log）".to_string(),
+            })
+        }
     }
 }
 
 /// VaultError → HTTP 状态映射：重名 409 / 不存在 404 / 其余 500。
+///
+/// 对外只给稳定文案：`Duplicate` 的名字是用户自己输入的（可以回显），其余
+/// 变体（Db/Io/Crypto/CredMan）的 `Display` 含 SQLite/路径等内部信息。
 fn vault_err(e: VaultError) -> HttpError {
     let status = match &e {
         VaultError::Duplicate(_) => StatusCode::CONFLICT,
         VaultError::NotFound(_) => StatusCode::NOT_FOUND,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    HttpError {
-        status,
-        message: e.to_string(),
-    }
+    let message = match &e {
+        VaultError::Duplicate(name) => format!("凭据「{name}」已存在"),
+        VaultError::NotFound(_) => "凭据不存在".to_string(),
+        other => {
+            tracing::warn!(error = %other, "vault operation failed");
+            "凭据库操作失败（详见 server.log）".to_string()
+        }
+    };
+    HttpError { status, message }
 }
 
 /// GET /api/vault/entries — 列表（永不含密码）。

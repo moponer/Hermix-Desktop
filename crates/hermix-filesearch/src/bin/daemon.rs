@@ -50,7 +50,7 @@ fn main() {
                 println!(
                     "用法: hermix-filesearch [--volumes C:,D:] [--data-dir <path>] [--status] [--serve] [--stop]\n\
                      --stop  停掉正在运行的另一个自己（提权进程只能让它自己退出）
-                     --install-task  注册开机自启计划任务（幂等；索引开机即就绪，用户无需手动启动）"
+                     --install-task  已废弃：清理旧的开机自启计划任务（helper 改为按需拉起）"
                 );
                 return;
             }
@@ -72,11 +72,14 @@ fn main() {
         return;
     }
 
-    // 开机自启（幂等）：计划任务以最高权限跑本 exe --serve。
-    // 由宿主在 ensure_helper 成功后调用一次（提权上下文里静默成功）。
-    // 索引开机即装载，用户随时搜索零等待——不再"每次都要先拉起服务"。
+    // 旧版自启协议：`--install-task` / `installTask` 曾经注册 AtLogOn + Highest
+    // 计划任务，让索引开机即就绪。**已废弃**（2026-10-30）：那条常驻提权进程
+    // 宿主杀不掉，关闭主程序后仍活着锁住 exe（编译 EBUSY / 安装失败），且
+    // `-Force` 会让 debug 构建把任务抢注到 target/debug。现在反过来——收到
+    // 旧协议也一律**清理**任务，见 remove_autostart_task。helper 恢复按需
+    // 拉起（首次搜索弹一次 UAC，有 60s 冷却防连环弹）。
     if install_task {
-        install_autostart_task(&exe_path(), &data_dir);
+        remove_autostart_task();
         return;
     }
 
@@ -193,7 +196,10 @@ async fn serve_loop(service: Arc<SearchService>, data_dir: &std::path::Path) {
         let my_started_at = started_at;
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                // 1s 一轮（2026-10-30 从 10s 收紧）：宿主退出时只写停止请求
+                // 就立即 return，用户常常马上重开主程序或跑安装器 —— 10s 的
+                // 窗口足够撞上"文件被占用"。代价只是每秒一次 stat。
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 let Ok(raw) = std::fs::read_to_string(data_dir.join("stop-request.json"))
                 else {
                     continue;
@@ -233,7 +239,7 @@ async fn serve_loop(service: Arc<SearchService>, data_dir: &std::path::Path) {
                     continue;
                 }
                 // handle 是同步重活（search 要在百万级条目上合并排序、
-                // installTask 要同步等 PowerShell）。直接在 async worker 上跑，
+                // removeTask 要同步等 PowerShell）。直接在 async worker 上跑，
                 // 一次慢请求就占死一个 worker——轮询连接一堆积，accept 循环、
                 // 孤儿看门狗全部饿死，进程活着却对谁都不过话（2026-10-25
                 // 实测：731 CPU 秒、端口在听、90s 无响应）。挪进阻塞线程池，
@@ -386,7 +392,7 @@ fn handle(
     service: &Arc<SearchService>,
     line: &str,
     expected_token: Option<&str>,
-    data_dir: &std::path::Path,
+    _data_dir: &std::path::Path,
 ) -> String {
     let Ok(request) = serde_json::from_str::<serde_json::Value>(line) else {
         return error_response(None, "请求不是合法 JSON");
@@ -414,11 +420,13 @@ fn handle(
             json_response(id, &service.search(query, limit))
         }
         "status" => json_response(id, &service.status()),
-        // 开机自启注册（宿主握手成功后发一次）。必须在 daemon 进程里执行
-        // ——它是提权的，schtasks /Create 才不会被拒绝（宿主侧执行实测
-        // "拒绝访问"）。幂等：/F 覆盖旧任务。
-        "installTask" => {
-            install_autostart_task(&exe_path(), data_dir);
+        // 清理旧的「开机自启计划任务」。删任务要管理员权限，所以必须在这里
+        // 做（daemon 是提权的；宿主侧执行会被「拒绝访问」挡回）。
+        //
+        // `installTask` 是**已废弃的旧名**，保留是因为旧宿主（已发布版本）
+        // 握手成功后仍会调它 —— 让旧名执行清理，比让它继续注册任务更好。
+        "installTask" | "removeTask" => {
+            remove_autostart_task();
             json_response(id, &serde_json::json!({ "ok": true }))
         }
         // 重建索引：忽略现有快照重新扫 MFT。
@@ -545,60 +553,47 @@ fn hide_console_window() {
 #[cfg(not(windows))]
 fn hide_console_window() {}
 
-/// 当前 exe 的绝对路径（任务计划指向它）。
-fn exe_path() -> std::path::PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("hermix-filesearch.exe"))
-}
-
-/// 注册开机自启计划任务（幂等）：SYSTEM 启动时以最高权限跑
-/// `hermix-filesearch.exe --serve --data-dir <dir>`。
-/// 失败只打日志不致命——自启只是体验优化，首次搜索仍会按需拉起。
-fn install_autostart_task(exe: &std::path::Path, data_dir: &std::path::Path) {
-    // 用 PowerShell Register-ScheduledTask 而非 schtasks /XML：后者在提权
-    // daemon 进程里玄学报"找不到文件"（XML 存在、路径规范、绝对路径调用
-    // 全试过；同命令非提权 shell 报"拒绝访问"=文件其实可达）。cmdlet 参数
-    // 直接 argv 传递，无引号/XML 编码问题。powershell 用绝对路径（提权
-    // daemon 的 PATH 不可信）。路径一律正斜杠——Windows 进程创建接受，
-    // 且免去 Rust 字符串里的反斜杠转义。
+/// 删除旧的「开机自启计划任务」——2026-10-30 起 helper 只按需拉起，
+/// 任何一个 `installTask` / `--install-task` 调用都执行清理（旧协议名保留）。
+///
+/// 为什么自启要拆：那条任务是 `AtLogOn + RunLevel Highest`，拉起的是提权
+/// 常驻进程，宿主 `TerminateProcess` 会被「拒绝访问」挡回 —— 于是"关掉主
+/// 程序"永远有残留，残留实例还锁住 `hermix-filesearch.exe`（编译 EBUSY、
+/// 安装器报文件被占用）。注册又用 `-Force`，任何一次 debug 构建的 daemon
+/// 握手都会把任务抢注到 `target/debug/`，下次登录即锁住编译产物。
+///
+/// 删除同样要管理员权限，所以只能在 daemon（已提权）里做。任务不存在时
+/// 静默：绝大多数用户从未注册过。
+fn remove_autostart_task() {
+    // 用 PowerShell 而非 schtasks：不存在的任务用
+    // `-ErrorAction SilentlyContinue` 静默跳过，schtasks 会回非零退出码。
+    // powershell 用绝对路径（提权 daemon 的 PATH 不可信）。
     let ps = format!(
         "{}/System32/WindowsPowerShell/v1.0/powershell.exe",
         std::env::var("SystemRoot")
             .unwrap_or_else(|_| "C:/Windows".to_string())
             .replace(std::path::MAIN_SEPARATOR, "/")
     );
-    // 单引号字符串里只需转义单引号本身（路径含单引号的概率忽略）。
-    let q = |v: &str| format!("'{}'", v.replace('\'', "''"));
-    let script = format!(
-        "Register-ScheduledTask -TaskName HermixFileSearch -Force \
-         -Action (New-ScheduledTaskAction -Execute {} -Argument {}) \
-         -Trigger (New-ScheduledTaskTrigger -AtLogOn) \
-         -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)) \
-         -RunLevel Highest",
-        q(&exe.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")),
-        q(&format!("--serve --data-dir \"{}\"", data_dir.display())),
-    );
+    let script =
+        "Unregister-ScheduledTask -TaskName HermixFileSearch -Confirm:$false -ErrorAction SilentlyContinue";
     let mut command = std::process::Command::new(&ps);
-    command.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         // CREATE_NO_WINDOW：daemon 自己的控制台已藏，子进程也别再亮窗。
         command.creation_flags(0x0800_0000);
     }
-    let output = command.output();
-    match output {
+    match command.output() {
         Ok(out) if out.status.success() => {
-            eprintln!("[filesearch] 开机自启已注册（计划任务 HermixFileSearch）。");
+            eprintln!("[filesearch] 旧开机自启任务已清理（若存在）。");
         }
-        Ok(out) => {
-            eprintln!(
-                "[filesearch] 注册开机自启失败（{}）：stderr={} stdout={}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim(),
-                String::from_utf8_lossy(&out.stdout).trim()
-            );
-        }
-        Err(error) => eprintln!("[filesearch] 注册开机自启失败：{error}"),
+        Ok(out) => eprintln!(
+            "[filesearch] 清理开机自启任务失败（{}）：stderr={}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(error) => eprintln!("[filesearch] 清理开机自启任务失败：{error}"),
     }
 }
 

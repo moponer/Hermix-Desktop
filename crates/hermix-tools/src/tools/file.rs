@@ -312,6 +312,23 @@ impl ToolHandler for ReadFileHandler {
         let offset = params.get("offset").and_then(|v| v.as_u64());
         let limit = params.get("limit").and_then(|v| v.as_u64());
 
+        // 整读内存闸（B5）：`limit` 缺失意味着要读到文件尾（GB 级日志/bundle
+        // 会整体进内存，出口的字符截断救不了峰值）。超限即拒读并指路分页——
+        // 输出预算本来就只有 16K 字符，读更大的文件纯属浪费。
+        if limit.is_none() {
+            const WHOLE_READ_MAX_BYTES: u64 = 8 * 1024 * 1024;
+            if let Ok(meta) = tokio::fs::metadata(Path::new(path)).await {
+                if meta.is_file() && meta.len() > WHOLE_READ_MAX_BYTES {
+                    return Err(ToolError::from_message(format!(
+                        "'{path}' is {} MB — too large to read whole. \
+                         Re-read with `offset`/`limit` (line-based pagination), \
+                         or use `search_files` (content mode) to locate the section you need.",
+                        meta.len() / (1024 * 1024)
+                    )));
+                }
+            }
+        }
+
         // Fs seam: read the whole file, then apply line-level
         // offset/limit ourselves.
         //
@@ -381,9 +398,22 @@ impl ToolHandler for ReadFileHandler {
         // Now whole lines are included until the budget is exhausted and the
         // hint carries the 1-based number of the next line, in the SAME
         // coordinate space as the caller's `offset` parameter.
-        const MAX_OUTPUT_CHARS: usize = crate::result_budget::READ_FILE_CHARS;
+        // ★ 页大小必须与「模型可见上限」对齐（2026-10-30）。
+        //
+        // 旧值用的是 `READ_FILE_CHARS`（80 K）：本工具按 80 K 分页并给出
+        // `next_offset`，而 agent 层在 16 K 处做中间截断 —— 模型看到的是
+        // 「前 8 K + 后 8 K + 提示跳到 offset=N」，中间那 60 多 K **再也不会
+        // 被读到**：提示说续读位置在 N，可 N 是按 80 K 算出来的。这不是
+        // 省 token，是静默丢数据。
+        //
+        // 留 512 字符给 `[file: …]` 头与分页提示，保证整条结果（含提示）
+        // 落在 agent 的上限之内，中间截断就不会再触发。
+        // 注意：`model_visible_cap` 不是 `const fn`（要对 &str 做匹配），
+        // 所以这里是 let 而不是 const。
+        let max_output_chars =
+            crate::result_budget::model_visible_cap("read_file").saturating_sub(512);
         let start_line = offset.unwrap_or(1).max(1);
-        let (body, overflow) = paginate_read_body(&content, start_line, MAX_OUTPUT_CHARS);
+        let (body, overflow) = paginate_read_body(&content, start_line, max_output_chars);
 
         // Prefix the content with an absolute-path header so the LLM
         // (and the front-end artifact extractor) can unambiguously

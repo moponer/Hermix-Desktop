@@ -23,7 +23,12 @@ impl SessionPersistence {
         untrusted: bool,
     ) -> Result<(), AgentError> {
         self.ensure_db()?;
-        let conn = open_with_wal(&self.db_path)?;
+        // 复用进程内的写连接（见 `mod.rs::write_conn`）：每轮往返一次开库+设
+        // pragma 在 Windows 上是 1–3ms，还压在 async 路径上。
+        let conn = write_conn(&self.db_path)?;
+        let conn = conn
+            .lock()
+            .map_err(|_| AgentError::Io("sessions db write connection poisoned".to_string()))?;
         let now = Utc::now().to_rfc3339();
         // `token_usage.session_id` 有 FOREIGN KEY → `sessions(id)`，而子代理
         // 会话（`parent::subagent-<uuid>`）从不走 `persist_session`，直接 INSERT
@@ -221,7 +226,10 @@ impl SessionPersistence {
         self.ensure_db()?;
 
         // Application-level retry with jitter for write contention (Hermes Agent parity).
+        // Bounded by a total budget, not just an attempt count: the caller may be
+        // holding a runtime worker, so a 15 × 150ms worst case is not acceptable.
         let mut last_err = None;
+        let retry_deadline = std::time::Instant::now() + WRITE_RETRY_BUDGET;
         for attempt in 0..=WRITE_MAX_RETRIES {
             match self.save_session_atomic_inner(
                 session_id, messages, model, platform, title,
@@ -232,13 +240,23 @@ impl SessionPersistence {
             ) {
                 Ok(()) => return Ok(()),
                 Err(e) if is_busy_error(&e) && attempt < WRITE_MAX_RETRIES => {
+                    let remaining =
+                        retry_deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        tracing::warn!(
+                            "session_persistence: SQLITE_BUSY retry budget exhausted after {} attempt(s)",
+                            attempt + 1,
+                        );
+                        return Err(e);
+                    }
                     let jitter_ms = WRITE_RETRY_MIN_MS
                         + (rand_jitter_u64() % (WRITE_RETRY_MAX_MS - WRITE_RETRY_MIN_MS + 1));
+                    let sleep = std::time::Duration::from_millis(jitter_ms).min(remaining);
                     tracing::warn!(
                         "session_persistence: SQLITE_BUSY on attempt {}/{}, retrying in {}ms",
-                        attempt + 1, WRITE_MAX_RETRIES, jitter_ms,
+                        attempt + 1, WRITE_MAX_RETRIES, sleep.as_millis(),
                     );
-                    std::thread::sleep(std::time::Duration::from_millis(jitter_ms));
+                    std::thread::sleep(sleep);
                     last_err = Some(e);
                     continue;
                 }

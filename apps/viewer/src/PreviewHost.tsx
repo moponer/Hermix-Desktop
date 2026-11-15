@@ -35,15 +35,10 @@ const PdfPageEditor = lazy(() =>
 const TextEditor = lazy(() =>
   import("./document/TextEditor").then((m) => ({ default: m.TextEditor })),
 );
-const DocxEditor = lazy(() =>
-  import("./document/DocxEditor").then((m) => ({ default: m.DocxEditor })),
-);
-const SheetEditor = lazy(() =>
-  import("./document/SheetEditor").then((m) => ({ default: m.SheetEditor })),
-);
-const PptxEditor = lazy(() =>
-  import("./document/PptxEditor").then((m) => ({ default: m.PptxEditor })),
-);
+// Office 编辑器（DocxEditor / SheetEditor / PptxEditor）已整体移除
+// （2026-11-11 用户拍板：编辑能力残缺——保存兼容性、老格式支持都不成立，
+// 残缺能力不如不做）。Office 文档现在恒走只读预览（PreviewSurface 的
+// DocxView / SpreadsheetView / PptxView），老 .doc 走 legacy_doc 文本抽取。
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 200;
 
@@ -208,32 +203,10 @@ export function PreviewHost({
   const isMedia = useMemo(() => isMediaFile(name), [name]);
 
   /**
-   * Office 文档的**编辑 / 预览**切换。
-   *
-   * docx / xlsx / xlsm 在重量模式下**默认就是可编辑的**（用户诉求：
-   * "打开 word 文档、excel 默认直接就可以编辑"），不套一层「编辑模式」——
-   * Office 软件本来就是这样。纯净模式（轻量）不给编辑能力，仍是只读预览。
-   *
-   * 这里取代了原来的「排版 / 文本」开关：那两个词对 Office 文档没有意义
-   * （点「文本」什么都不会变，applyViewMode 对 docx/pptx 原样返回），
-   * 用户真正要的就是「能改 / 只看」这一个选择。
+   * Office 文档**恒只读预览**（2026-11-11 用户拍板：编辑能力残缺，整体移除
+   * ——DocxEditor / SheetEditor / PptxEditor 不再挂载，编辑 ↔ 预览切换
+   * 随之删除）。此前 officeMode 默认 "edit" 且换文件也回编辑。
    */
-  const officeKind = useMemo<"docx" | "sheet" | "pptx" | null>(() => {
-    if (!canEdit) return null;
-    if (kind === "docx") return "docx";
-    if (kind === "pptx") return "pptx";
-    if (kind === "spreadsheet") {
-      const ext = name.split(".").pop()?.toLowerCase() ?? "";
-      // xls 是 BIFF 二进制，没有可靠的写入器 → 只读预览。
-      return ext === "xlsx" || ext === "xlsm" ? "sheet" : null;
-    }
-    return null;
-  }, [canEdit, kind, name]);
-  /** Office 文档当前是「编辑」还是「预览」。默认编辑 —— 换了文件也回编辑。 */
-  const [officeMode, setOfficeMode] = useState<"edit" | "preview">("edit");
-  useEffect(() => {
-    setOfficeMode("edit");
-  }, [path]);
 
   // 加载阶段：每次 path / viewMode 变了重读
   useEffect(() => {
@@ -269,8 +242,6 @@ export function PreviewHost({
   // 分支（applyViewMode），那时不该再给页编辑器。
   const editorKind = canEdit ? editorFor(kind, name) : "none";
   const editing = editor !== "none";
-  /** Office 就地编辑生效中（docx / xlsx，且用户没切到只读预览）。 */
-  const officeEditing = officeKind !== null && officeMode === "edit";
 
   // 外部（右键菜单 / 菜单栏 / 快捷键）要求打开编辑器。
   useEffect(() => {
@@ -325,32 +296,10 @@ export function PreviewHost({
           返回预览
         </button>
       )}
-      {/* Word / Excel：编辑 ↔ 预览。原先这里是「排版 / 文本」，对 Office
-          文档点了什么都不会变（applyViewMode 对 docx/pptx 原样返回）。 */}
-      {officeKind && (
-        <div className="seg" role="group" aria-label="编辑与预览">
-          <button
-            type="button"
-            className={officeMode === "edit" ? "is-active" : ""}
-            onClick={() => setOfficeMode("edit")}
-            aria-pressed={officeMode === "edit"}
-          >
-            编辑
-          </button>
-          <button
-            type="button"
-            className={officeMode === "preview" ? "is-active" : ""}
-            onClick={() => setOfficeMode("preview")}
-            aria-pressed={officeMode === "preview"}
-          >
-            预览
-          </button>
-        </div>
-      )}
       {/* 「排版 / 文本」切换已收（2026-10-25 用户拍板）：打开默认就是排版
           预览，文本模式（markitdown 抽取）没有使用价值。viewMode 恒
           layout，applyViewMode 不再参与调度。 */}
-      {!editing && !officeEditing && supportsZoom(effectiveKind) && (
+      {!editing && supportsZoom(effectiveKind) && (
         <div className="seg" role="group" aria-label="预览缩放">
           <button
             type="button"
@@ -400,12 +349,9 @@ export function PreviewHost({
         createPortal(<div className="tabbar-actions-inner">{controls}</div>, actionsSlot)
       ) : (
         <div className="preview-toolbar">
-          {/* 编辑态下文件名由编辑器那条工具条显示，这里不再重复一遍。 */}
-          {!officeEditing && (
-            <span className="preview-toolbar-name" title={path}>
-              {name}
-            </span>
-          )}
+          <span className="preview-toolbar-name" title={path}>
+            {name}
+          </span>
           <span className="preview-toolbar-spacer" />
           {controls}
         </div>
@@ -417,32 +363,6 @@ export function PreviewHost({
             name={name}
             onFallback={() => void source.openWithSystem?.(path)}
           />
-        ) : officeEditing && officeKind === "docx" ? (
-          <Suspense fallback={<div className="preview-state-center">正在准备编辑器…</div>}>
-            <DocxEditor
-              path={path}
-              name={name}
-              onPreview={() => setOfficeMode("preview")}
-            />
-          </Suspense>
-        ) : officeEditing && officeKind === "sheet" ? (
-          <Suspense fallback={<div className="preview-state-center">正在准备编辑器…</div>}>
-            <SheetEditor
-              path={path}
-              name={name}
-              source={source}
-              onPreview={() => setOfficeMode("preview")}
-            />
-          </Suspense>
-        ) : officeEditing && officeKind === "pptx" ? (
-          <Suspense fallback={<div className="preview-state-center">正在准备编辑器…</div>}>
-            <PptxEditor
-              path={path}
-              name={name}
-              source={source}
-              onPreview={() => setOfficeMode("preview")}
-            />
-          </Suspense>
         ) : editor === "image" ? (
           <Suspense fallback={<div className="preview-state-center">正在准备编辑器…</div>}>
             <ImageEditor

@@ -10,27 +10,42 @@ use serde::{Deserialize, Serialize};
 use super::types::*;
 use crate::{HttpError, HttpServerState};
 
+/// `/api/skills` 的 15s TTL 缓存。
+///
+/// `store.list()` 是同步目录扫描（`FileSkillStore` 内部全是 `std::fs`），而设置
+/// 页每次打开/切页都会拉一次。技能目录的变化都经由本文件的 `toggle_skill`
+/// 或用户手改磁盘 —— 前者显式清缓存，后者最多延迟 15s 可见。
+static SKILLS_CACHE: crate::ttl_cache::TtlCache<(), Vec<SkillInfo>> =
+    crate::ttl_cache::TtlCache::new(std::time::Duration::from_secs(15));
+
+pub(crate) fn invalidate_skills_cache() {
+    SKILLS_CACHE.invalidate();
+}
+
 /// GET /api/skills
 pub async fn list_skills(State(state): State<HttpServerState>) -> Json<Vec<SkillInfo>> {
+    if let Some(cached) = SKILLS_CACHE.get(&()) {
+        return Json(cached);
+    }
     let Some(store) = state.skill_store.as_ref() else {
         return Json(vec![]);
     };
 
     let metas = store.list().await.unwrap_or_default();
-    Json(
-        metas
-            .into_iter()
-            .map(|m| SkillInfo {
-                name: m.name,
-                display_name: m.display_name,
-                description: m.description.unwrap_or_default(),
-                category: m.category.unwrap_or_default(),
-                // Truth from the store: `false` when the skill directory
-                // sits under `.disabled/` (the toggle moves it there).
-                enabled: m.enabled,
-            })
-            .collect(),
-    )
+    let skills: Vec<SkillInfo> = metas
+        .into_iter()
+        .map(|m| SkillInfo {
+            name: m.name,
+            display_name: m.display_name,
+            description: m.description.unwrap_or_default(),
+            category: m.category.unwrap_or_default(),
+            // Truth from the store: `false` when the skill directory
+            // sits under `.disabled/` (the toggle moves it there).
+            enabled: m.enabled,
+        })
+        .collect();
+    SKILLS_CACHE.put((), skills.clone());
+    Json(skills)
 }
 
 /// GET /api/skills/{name}
@@ -89,6 +104,8 @@ pub async fn toggle_skill(
         })?;
     }
 
+    // 开关会移动技能目录 → 立刻让列表缓存失效，否则 UI 15s 内仍显示旧状态。
+    invalidate_skills_cache();
     Ok(Json(OkResponse { ok: true }))
 }
 
@@ -359,6 +376,66 @@ fn save_toolset_state(
     Ok(())
 }
 
+/// Ensure the `"mcp"` toolset is persisted as enabled and turned on in the
+/// registry. Called whenever an MCP server connects (install / toggle-on /
+/// startup) — installing a connector is an explicit user action, so the
+/// gate that carries its tools must not stay shut behind it.
+///
+/// Why this exists (2026-11-04, the filesearch/viewer night): MCP tools all
+/// register under the `"mcp"` toolset (hermix-mcp/src/client.rs). On machines
+/// whose `enabled_toolsets.json` is an explicit curated list written before
+/// that toolset existed, the whitelist has no `"mcp"` entry → connect
+/// succeeds, tools register, then get filtered from every prompt — silently,
+/// with zero errors. Fresh installs are unaffected (missing file → wildcard
+/// `["*"]`), which is why only long-lived machines ever saw it.
+///
+/// Deliberate-disable tradeoff: a user who explicitly disabled `"mcp"` in
+/// Settings will see it re-enabled after the next connector connect. That is
+/// accepted — the silent-invisible failure mode is far worse, and re-enabling
+/// a visible toggle costs one click, while rediscovering this bug costs a
+/// night. (The essential-floor route was tried first and reverted: its
+/// alignment test correctly forbids floor entries no builtin tool is tagged
+/// with, and `"mcp"` tools are runtime-registered, not builtin.)
+///
+/// Idempotent and cheap: wildcard state (`*` / `all`) and lists already
+/// containing `"mcp"` return without writing.
+pub fn ensure_mcp_toolset_persisted(
+    hermix_home: &Path,
+    registry: &hermix_tools::ToolRegistry,
+) {
+    let persisted = load_toolset_state_for_home(hermix_home);
+    let wildcard = persisted.enabled.iter().any(|n| n == "all" || n == "*");
+    if wildcard || persisted.enabled.iter().any(|n| n == "mcp") {
+        return; // everything already enabled — nothing to do
+    }
+    let mut updated = persisted;
+    updated.enabled.push("mcp".to_string());
+    let path = hermix_home.join("enabled_toolsets.json");
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(error = %e, "cannot create dir for enabled_toolsets.json");
+            return;
+        }
+    }
+    let json = match serde_json::to_string_pretty(&updated) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot serialize enabled_toolsets.json");
+            return;
+        }
+    };
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, &path)).is_err() {
+        tracing::warn!("failed to persist enabled_toolsets.json for mcp toolset");
+        return;
+    }
+    let n = registry.set_toolset_enabled("mcp", true);
+    tracing::info!(
+        entries = n,
+        "mcp toolset auto-enabled and persisted (connector install/toggle)"
+    );
+}
+
 /// Build a canonical enabled-set from a fresh toggle call.
 /// "Enabled wins" semantics: the `enabled` list is the post-toggle
 /// set; any name in `disabled` that is *not* in `enabled` is also
@@ -442,6 +519,10 @@ pub async fn set_enabled_toolsets(
             message: format!("failed to persist enabled_toolsets.json: {}", e),
         });
     }
+
+    // 开关改的是 `is_enabled`，而 `/v1/tools` 的缓存里就含这个字段：
+    // 不清缓存的话，设置页和聊天侧最多 10s 内看到的还是旧状态。
+    crate::routes::invalidate_tool_list_cache();
 
     Ok(Json(ToolsetToggleResult {
         enabled: new_enabled,

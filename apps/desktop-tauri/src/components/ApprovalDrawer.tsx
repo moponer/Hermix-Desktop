@@ -22,6 +22,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronUp, Send, ShieldCheck } from "lucide-react";
+import { APPROVAL_RISK_LABEL } from "./approvalRisk";
 import type { ApprovalBatchMessageMeta, ApprovalMessageMeta } from "../types";
 import { describeToolArgs, toolVerb } from "./bubbleUtils";
 
@@ -44,9 +45,7 @@ interface ApprovalDrawerProps {
 }
 
 type Risk = "dangerous" | "caution" | "safe";
-const RISK_LABEL: Record<Risk, string> = {
-  dangerous: "高风险", caution: "中风险", safe: "低风险",
-};
+const RISK_LABEL: Record<Risk, string> = APPROVAL_RISK_LABEL;
 
 function riskKey(level?: string): Risk {
   const k = (level ?? "caution").toLowerCase();

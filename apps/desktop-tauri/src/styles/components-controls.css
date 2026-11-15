@@ -9,7 +9,9 @@
   gap: 6px;
   padding: 6px 12px;
   border-radius: var(--radius-md);
-  font-size: var(--text-meta);
+  /* 按钮文字 = 界面文本档（13px）。此前是 meta(12px)，比正文还小一档，
+     是整站"字碎"的直接来源；.btn-sm 仍保留 12px 作为紧凑变体。 */
+  font-size: var(--text-ui);
   font-weight: 500;
   font-family: inherit;
   border: 1px solid transparent;
@@ -20,7 +22,14 @@
               transform var(--duration-fast) ease;
 }
 .btn:active:not(:disabled) { transform: scale(0.97); }
-.btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+/* 焦点统一走 base.css 的 `--shadow-focus-flat` 光晕（2026-10-23 扁平化决议）。
+   这里曾各写一条 2px 实线 outline —— 与那条决议直接冲突，且是"三套焦点环"
+   的来源之一。禁用态同理：此前完全没有 `:disabled` 规则，禁用后仍像可点。 */
+.btn:disabled,
+.icon-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .btn-sm { padding: 4px 10px; font-size: var(--text-meta); }
 
 .btn-primary {
@@ -55,7 +64,6 @@
 }
 .icon-btn:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
 .icon-btn:active:not(:disabled) { transform: scale(0.93); }
-.icon-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 
 /* ── Connection indicator (sidebar dot) ── */
 .connection-indicator {
@@ -73,7 +81,6 @@
 }
 .connection-indicator:hover { background: var(--color-bg-hover); }
 .connection-indicator:active:not(:disabled) { transform: scale(0.9); }
-.connection-indicator:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .connection-dot {
   width: 8px;
   height: 8px;
@@ -93,7 +100,8 @@
 .select {
   width: 100%;
   padding: 7px 10px;
-  font-size: var(--text-meta);
+  /* 表单文字与按钮同档（13px）：12px 的输入内容在 125% 缩放下最难读。 */
+  font-size: var(--text-ui);
   color: var(--color-text-primary);
   background: var(--color-bg-primary);
   border-radius: var(--radius-md);
@@ -185,108 +193,143 @@
    § 13.  COMPOSER (chat input area)
    ════════════════════════════════════════════════════════════════════ */
 
+/* 一张纸 + 一条控制线（2026-11-07 重构）。
+   上一版是「灰卡（tertiary）+ 深一档托盘（quaternary）」两级灰阶叠在
+   白纸上，空态占三行高、顶部还浮一行迷路小字 —— 整块读起来像一张
+   禁用的表单（用户：「输入框有点难看，整体效果不好」）。现在：
+     · 卡面 = bg-composer（主题钦定的输入框面，近纸白），层次交给
+       发丝环（--shadow-paper）+ 一层极淡的浮起影，不再自己涂灰；
+     · 控制条与正文**同面**，无独立底色：左 = 本轮设置（目录/权限/
+       专家/模式），右 = 模型 + 动作（附件/语音/增强）+ 发送。
+       设置在左、动作在右，一行扫完；全卡唯一的实心元素是发送钮；
+     · textarea 单行起步，随内容长高（上限 200px 由 mention-input 滚动）。 */
 .composer {
   border-radius: var(--radius-composer, var(--radius-2xl));
-  /* 2026-10-28：去掉外描边与投影。上一版为了「看得出输入位置」叠了
-     shadow-paper + 1px 发丝环，在 760px 宽的卡上读起来是一条粗边框；
-     输入区改由「卡面底色 vs 纸面」区分（--color-bg-composer 比 bg-primary
-     深一档），不再画框。 */
-  /* 输入区是唯一有底色的一层：bg-secondary 比纸面深一档（亮 #f7f7f5 /
-     暗 #202020）。**不画任何边框**，浮起感交给阴影 —— 用主墨的 7% 混色，
-     零色相、随主题深浅自动成立。 */
-  background: var(--color-bg-secondary);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+  background: var(--color-bg-composer);
+  box-shadow:
+    var(--shadow-paper),
+    0 6px 24px color-mix(in srgb, var(--color-text-primary) 6%, transparent);
   overflow: visible;
   transition: box-shadow var(--duration-base) ease;
 }
-/* 聚焦：只加阴影，不加边框（边框色一律不要）。 */
+/* 聚焦：环加深一档 + 浮起略抬，仍然不加边框。 */
 .composer:focus-within {
   box-shadow:
-    0 2px 6px color-mix(in srgb, var(--color-text-primary) 10%, transparent),
-    0 8px 24px color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+    var(--shadow-card),
+    0 10px 32px color-mix(in srgb, var(--color-text-primary) 9%, transparent);
 }
 
-/* 工具栏与底栏排成一行（Composer 里两者同挂 .composer-footer）：
-   工具行 flex-1 且不换行，底栏 shrink-0 贴右。此前是两条独立 flex 行，
-   在窄容器里读起来就是「工具栏换行了」。 */
+/* ⓪ 队列条住在输入卡**外**：它描述的是「还没轮到说的话」，
+   不是本次草稿的一部分。给自己的面 + 自己的阴影，和下面的输入卡
+   留 8px 缝，读起来是两张叠放的卡，而不是卡里的一段内衬。 */
+.composer-queue {
+  background: var(--color-bg-secondary);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+  border-radius: var(--radius-lg);
+  padding: 4px 8px;
+  margin-bottom: 8px;
+}
+
+/* 控制条：左设置、右动作，与正文同一张面。
+   左右内边距 7px + chip 自身 7px = 正文左缘（14px），竖向三条对齐。 */
 .composer-footer {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 8px 6px;
+  padding: 3px 7px 7px;
   min-width: 0;
 }
-.composer-footer .composer-toolrail {
-  /* basis 必须是 0 而不是 auto：Composer 用 ResizeObserver 观察这条工具行，
-     按 clientWidth < 700 切换 compact（隐藏文字标签）。若 basis=auto，
-     宽度随内容伸缩 → compact 一开一关正好卡在 700 附近，形成
-     「宽度→compact→宽度」的测量回环，表现就是输入框一直在抖。
-     固定为 0 后宽度只由容器决定，观测值稳定。 */
-  flex: 1 1 0%;
-  min-width: 0;
-  flex-wrap: nowrap;
-  /* 不能裁剪：专家/模式组是绝对定位到卡片顶部的子元素 */
-  overflow: visible;
-  padding: 0;
-  justify-content: flex-end;
-}
-/* 目录 / 权限：移到左下角（DOM 里仍在底栏，靠 order 提前） */
-.composer-footer .composer-subbar {
-  order: -1;
-  flex: 0 0 auto;
-  height: auto;
-  padding: 0;
-  gap: 2px;
-}
-
-/* 专家 + 模式：放在**卡片内部**的左上角，文字输入区之上。
-   DOM 仍在工具行里（popover 的 ref 与焦点顺序不动），靠绝对定位脱离流；
-   卡片顶部因此预留一条 36px 的带子（下面的 :has 规则）。
-
-   为什么不再浮在框外：上一版是「框外 + 阴影 + 独立圆角」，无论怎么调都
-   读成两个东西。要成为「一个整体」，只能让它们住在同一张卡上：
-   同底色、无自己的边框与投影，只是排在文字之上。 */
-.composer-expert-group {
-  position: absolute;
-  top: 5px;
-  left: 10px;
-  z-index: 2;
-  padding: 2px 4px;
-  background: transparent;
-  box-shadow: none;
-  border-radius: var(--radius-sm);
-}
-/* 只有存在这组控件时才给顶部留白（工作台右栏没有它们，不多留） */
-.composer:has(.composer-expert-group) {
-  padding-top: 34px;
-}
-/* 窄屏：左边距与卡片内边距对齐 */
-@media (max-width: 560px) {
-  .composer-expert-group {
-    left: 6px;
-  }
-}
-/* Composer 两段式：白卡（输入区）/ 灰底栏（工具行 + 会话设置）。
-   底栏是一整条托盘，与卡面只隔一根发丝；托盘内部靠字号与字色的重量
-   递减分层（13px secondary → 12px muted），不再用第二条横线切出三条灰带。 */
-.composer-deck {
-  /* 托盘只比卡面深一档（不是最深一档）：底栏已经占了卡片近一半高度，
-     压到 quaternary 会让下半张卡显成"页脚"。层次交给顶线 + 字号递减。 */
-  background: var(--color-bg-tertiary);
-  box-shadow: inset 0 1px 0 var(--color-border-secondary);
-  /* 托盘贴容器底边，必须内收 1px 跟随圆角，否则直角会从圆角容器里戳出来 */
-  border-radius: 0 0 calc(var(--radius-composer, var(--radius-2xl)) - 1px)
-    calc(var(--radius-composer, var(--radius-2xl)) - 1px);
-}
-
-/* 会话设置行：底栏的第二层，字号/字色都比工具行低一档，无独立底色。 */
-.composer-subbar {
+.composer-scope,
+.composer-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 10px;
-  height: 34px;
-  flex-shrink: 0;
+  gap: 1px;
+  min-width: 0;
+}
+.composer-actions {
+  margin-left: auto;
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+/* 控制条 chip：ghost 面小按钮（24px 档）。墨色退到 tertiary/faint，
+   hover 才回主墨 —— 工具条是「能做什么」的清单，不与正文抢墨。 */
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--control-h-sm);
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 0;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.composer-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer-chip svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  color: var(--color-text-faint);
+  flex: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+.composer-chip:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.composer-chip:hover svg {
+  color: var(--color-text-secondary);
+}
+.composer-chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+/* compact（容器过窄）：只留图标。模型 chip 不参加 —— 模型名是
+   这一行里唯一必须始终可读的信息。 */
+.composer-chip--compact span {
+  display: none;
+}
+
+/* 激活态（已选专家 / 放手模式 / 编码模式 / 已绑目录）：
+   淡底 + 主墨 + 中字重 —— 是「状态」不是「行动」，不给色相。 */
+.composer-chip--on {
+  background: var(--color-chip-model-bg);
+  color: var(--color-chip-model-fg);
+  font-weight: var(--font-weight-medium);
+}
+.composer-chip--on svg {
+  color: var(--color-chip-model-fg);
+}
+.composer-chip--on:hover {
+  background: var(--color-chip-model-bg);
+  color: var(--color-chip-model-fg);
+}
+
+/* 需要行动的缺口（模型未配置）：软底 + 文字安全档语义色。
+   短文案「未配置模型」—— 长句塞进工具条会把整行读散。 */
+.composer-chip--alert {
+  background: var(--color-warning-soft);
+  color: var(--color-text-warning);
+  font-weight: var(--font-weight-medium);
+}
+.composer-chip--alert svg {
+  color: var(--color-text-warning);
+}
+.composer-chip--alert:hover {
+  background: color-mix(in srgb, var(--color-warning) 18%, transparent);
+  color: var(--color-text-warning);
 }
 
 

@@ -36,7 +36,9 @@ use crate::ToolRegistry;
 /// it clips on bytes. The OS-automation tools therefore register with `None`
 /// and cap the result themselves.
 pub fn truncate_chars(s: &str, max: usize) -> String {
-    s.chars().take(max).collect()
+    // 单一实现：`hermix_core::text_utils` 的版本按 char 边界安全切分；
+    // 这里此前是第二份 `chars().take()`。
+    hermix_core::text_utils::truncate_chars(s, max).to_string()
 }
 
 /// Toolset tag for the browser line.

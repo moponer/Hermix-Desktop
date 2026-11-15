@@ -11,7 +11,9 @@
 //     泄到渲染层。
 
 import { invoke } from "@tauri-apps/api/core";
-import { textResultFromBytes } from "@hermix/preview";
+// 子路径出口（见 packages/preview/src/lib/textDecode.ts）：这个 adapter 是
+// 首屏就要的，从 barrel 取一个纯函数会把预览栈整条拖进首屏图。
+import { textResultFromBytes } from "@hermix/preview/lib/textDecode";
 import type {
   DirEntryLike,
   DriveRootLike,

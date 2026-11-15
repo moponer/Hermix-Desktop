@@ -187,7 +187,14 @@ function StreamingBubbleImpl({
   // banner mid-stream (verified banner echo leaked 1.2KB
   // English text into the chat despite MessageBubble's strip working
   // post-stream).
-  const parsedStream = useMemo(() => parseContent(deferred), [deferred]);
+  // 只在真的需要兜底时才做这次全量 strip：正常路径下 `unifiedSteps` 已带
+  // 正文（text step），这条正则链（think/compaction/XML 全套）对整段文本
+  // 每帧跑一遍纯属白烧。
+  const hasSteps = !!(unifiedSteps && unifiedSteps.length > 0);
+  const fallbackBody = useMemo(
+    () => (hasSteps ? "" : parseContent(deferred).body),
+    [deferred, hasSteps],
+  );
 
   // Build effective steps: use unifiedSteps when available, otherwise
   // fall back to the legacy 3-field approach.
@@ -200,9 +207,19 @@ function StreamingBubbleImpl({
       (e) => e.type === "tool_start" || e.type === "tool_stdout" || e.type === "tool_complete",
     );
     if (toolEvents.length > 0) steps.push({ kind: "tools", events: toolEvents });
-    if (parsedStream.body && parsedStream.body.trim()) steps.push({ kind: "text", content: parsedStream.body });
+    if (fallbackBody && fallbackBody.trim()) steps.push({ kind: "text", content: fallbackBody });
     return steps;
-  }, [unifiedSteps, reasoningContent, executionTimeline, parsedStream.body]);
+  }, [unifiedSteps, reasoningContent, executionTimeline, fallbackBody]);
+
+  // 正文里到底有没有字：有 steps 时看 text step，没 steps 时看兜底正文。
+  // （占位条只在"真的没写正文"时出现，不能因为走了 steps 路径就误判。）
+  const hasBodyText = useMemo(
+    () =>
+      hasSteps
+        ? effectiveSteps.some((s) => s.kind === "text" && s.content.trim().length > 0)
+        : fallbackBody.trim().length > 0,
+    [hasSteps, effectiveSteps, fallbackBody],
+  );
 
   // When the LLM hasn't sent any text yet (e.g. it just started and is
   // about to call a tool), the static header label "正在思考…" is still
@@ -283,7 +300,7 @@ function StreamingBubbleImpl({
               />
               {/* 正文占位：工具在跑、正文还没字时，把「调了什么」写在
                   正文位置，避免整段空白读起来像卡住。 */}
-              {!parsedStream.body?.trim() && (
+              {!hasBodyText && (
                 <ToolRunNote steps={effectiveSteps} streaming={isStreamingPhase} />
               )}
             </div>

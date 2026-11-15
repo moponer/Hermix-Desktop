@@ -215,12 +215,16 @@ fn append_session_index(
 }
 
 /// Append rolled-up tool-result originals to a per-session evidence log
-/// (`<hermix_home>/sessions/<sid>/tool-rollup-archive.md`) so the
-/// continuous `rollup_tool_results` drain never destroys recoverable
-/// output — the one-line summaries living in ctx stay backed by the
-/// full text on disk. **Best-effort**: failures only log, never
-/// propagate — rolling up context pressure is never worth failing a
-/// turn over.
+/// (`<hermix_home>/sessions/<sid>/tool-rollup-archive.md`) so a
+/// `rollup_tool_results` pass never destroys recoverable output — the
+/// one-line summaries living in ctx stay backed by the full text on disk.
+/// **Best-effort**: failures only log, never propagate — rolling up context
+/// pressure is never worth failing a turn over.
+///
+/// Note: roll-up no longer runs per tool round. Rewriting an already-sent
+/// row invalidates the provider prefix cache from that row to the end of the
+/// request (the whole trailing window), so it now happens only inside a
+/// compression event, which already pays one cache reset.
 pub fn append_rollup_archive(
     hermix_home: &Path,
     session_id: Option<&str>,

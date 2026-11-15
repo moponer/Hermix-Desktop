@@ -111,6 +111,29 @@ pub async fn document_to_markdown(file_path: String) -> Result<MarkdownResult, S
             "doc", "ppt", "dot", "pot", "wps", "et", "dps", "rtf",
         ];
         if LEGACY_BINARY.contains(&ext.as_str()) {
+            // 老版 .doc（Word 97-2003）走本侧的 OLE 尽力抽取（cfb 解析
+            // WordDocument 流，见 legacy_doc.rs）；其余遗留二进制仍给出路。
+            if matches!(ext.as_str(), "doc" | "dot") {
+                match crate::legacy_doc::extract_doc_text(&canonical) {
+                    Ok(text) => {
+                        return Ok(MarkdownResult {
+                            markdown: text,
+                            file_name: canonical
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("document.doc")
+                                .to_string(),
+                            truncated: false,
+                        });
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "旧版 .doc 预览失败：{e}。可点「用系统程序打开」\
+                             （Word / WPS 均可），另存为 .docx 后即可完整预览。"
+                        ));
+                    }
+                }
+            }
             return Err(format!(
                 "旧版二进制格式 .{ext} 没有浏览器内的解析器。点下方「用系统程序打开」\
                  （Word / WPS 均可）；在 Office 里另存为 .docx / .pptx 后就能直接预览与编辑。"

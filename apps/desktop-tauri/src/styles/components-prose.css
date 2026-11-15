@@ -1215,3 +1215,15 @@
   text-decoration: line-through;
   opacity: 0.7;
 }
+
+/* ── 流式长文的「正在生长的最后一块」 ──
+   正文超过 6000 字符时，MarkdownBody 只解析已闭合的前缀，最后一块按纯文本
+   上屏（见 splitStreamTail）：satteri 解析 + hast→JSX 是随正文线性增长的
+   长任务，而每 120ms 全量重跑一次在长报告上就是主线程抖动。
+   视觉上与正文同档：只按字面保留换行，不加任何装饰。 */
+.md-stream-tail {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  margin-top: 0.6em;
+}

@@ -163,9 +163,13 @@ export function QueueItemRow({
 
   return (
     <li
-      className="group flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-bg-tertiary/50"
+      className="group flex items-start gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-bg-quaternary/60"
       aria-label={`第 ${index + 1} 条排队消息`}
     >
+      {/* 序号：让这段读起来是「待发清单」，而不是又一段正文。 */}
+      <span className="mt-0.5 w-3 shrink-0 select-none text-right font-mono text-[length:var(--text-tiny,11px)] text-text-faint">
+        {index + 1}
+      </span>
       {/* 只有"正在发送 / 失败"才需要状态点。等待中的每行都点一颗灰点，
           会让列表读起来像调试输出，而不是待发消息。 */}
       {(status === "sending" || status === "failed") && (
@@ -224,7 +228,9 @@ export function QueueItemRow({
               onClick={() => canEdit && setEditing(true)}
               disabled={!canEdit}
               title={text}
-              className={`block w-full text-left text-[length:var(--text-ui)] leading-relaxed text-text-primary line-clamp-2 whitespace-pre-wrap break-words ${canEdit ? "cursor-text" : "cursor-default"}`}
+              /* 待发条目的墨色比输入正文低一档（secondary，悬停才升到 primary）：
+                 否则两条文字块紧挨着，用户分不清哪条是"已经写好的"、哪条是"要发的"。 */
+              className={`block w-full text-left text-[length:var(--text-ui)] leading-relaxed text-text-secondary line-clamp-2 whitespace-pre-wrap break-words ${canEdit ? "cursor-text hover:text-text-primary" : "cursor-default"}`}
             >
               {text}
             </button>

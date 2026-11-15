@@ -2,6 +2,7 @@ import { ShieldAlert, Check, X, Terminal, Globe, Wrench, Clock } from "lucide-re
 import type { ApprovalDecision } from "../types";
 import type { ApprovalMessageMeta } from "../types";
 import { describeShellCommand } from "../lib/commandDescribe";
+import { APPROVAL_RISK_LABEL } from "./approvalRisk";
 
 export type ApprovalRequestShape = ApprovalMessageMeta;
 
@@ -12,10 +13,12 @@ export interface InlineApprovalCardProps {
   resolved?: ApprovalDecision | null;
 }
 
+// 文案共用 `approvalRisk.ts`：此前这张卡写「高危」，另外三张卡写「高风险」——
+// 同一个后端字段在同一个界面上有两种说法。样式类仍是本卡独有。
 const RISK_BADGE: Record<string, { label: string; cls: string }> = {
-  dangerous: { label: "高危", cls: "approval-pill approval-pill-dangerous" },
-  caution: { label: "中危", cls: "approval-pill approval-pill-caution" },
-  safe: { label: "低危", cls: "approval-pill approval-pill-safe" },
+  dangerous: { label: APPROVAL_RISK_LABEL.dangerous, cls: "approval-pill approval-pill-dangerous" },
+  caution: { label: APPROVAL_RISK_LABEL.caution, cls: "approval-pill approval-pill-caution" },
+  safe: { label: APPROVAL_RISK_LABEL.safe, cls: "approval-pill approval-pill-safe" },
 };
 
 /**
@@ -132,7 +135,14 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
     // 旧版 is-resolved 后卡片只把 actions 区折叠，行 2 留空 + “已允许”小标，
     // 视觉上半空不空；新版 resolve 触发外层折叠动画，父层下一个消息到达时
     // 直接占位，不留空隙。
-    <div className={`h-enter ${!isPending ? "h-leaving" : ""}`}>
+    <div
+      className={`h-enter ${!isPending ? "h-leaving" : ""}`}
+      // 审批是"必须被打断"的交互：读屏用户此前对"现在需要我决定"毫无感知
+      // （本文件不在任何含 aria-live 的清单里）。assertive 让卡片一出现就被播报。
+      role="group"
+      aria-live="assertive"
+      aria-label="需要你审批的工具调用"
+    >
       <div className="flex-1 min-w-0">
         {/* Header — only while pending. Resolved cards let the status
             pill ("已允许 / 已拒绝 / 已超时") speak for itself; the

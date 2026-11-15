@@ -2,6 +2,7 @@
 // 这些函数均为模块级纯函数，不依赖任何组件作用域状态。
 import type { TimelineStep, ExecutionTimelineEvent } from "../types";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
+import { capStdoutText } from "../utils/timelineLimits";
 
 // Welcome-state draft workspace. Read at App-level so
 // both `handleNewChat` (新建对话 button) and `handleSendMessage`
@@ -370,7 +371,9 @@ export function updateToolStepStdout(
   let found = false;
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].type === "tool_stdout" && events[i].tool_call_id === toolCallId) {
-      events[i] = { ...events[i], content: (events[i].content ?? "") + content };
+      // 按单次调用封顶（见 utils/timelineLimits）：长输出不再把整条消息
+      // 吹成 MB 级，也顺带让 sst/JSON 序列化体积有界。
+      events[i] = { ...events[i], content: capStdoutText(events[i].content ?? "", content) };
       found = true;
       break;
     }

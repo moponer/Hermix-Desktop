@@ -455,6 +455,11 @@ pub async fn auto_compress_if_over_threshold<F>(
     latest_compression_archived_turns: &Mutex<Option<Vec<Message>>>,
     latest_compression_metrics: &Mutex<Option<CompressionMetrics>>,
     ctx: &mut ContextManager,
+    // 强制压缩（2026-11-08）：跳过阈值早退与引擎的 should_compress opt-out。
+    // 供「供应商 400 上下文溢出 → 压缩后重试一次」的自愈路径使用——
+    // 那条路径上压力模型（估算 tokens / max_context_tokens）已经错过了
+    // 预警线，按阈值判断只会原地早退，重试必然复现同一个 400。
+    force: bool,
     memory_pre_compress_note_fn: F,
 ) where
     F: FnOnce(&[Message]) -> Option<String>,
@@ -462,7 +467,7 @@ pub async fn auto_compress_if_over_threshold<F>(
     let total_tokens = ctx.total_tokens();
     let max_c = ctx.max_context_tokens().max(1);
     let threshold = ctx.pressure_threshold_tokens();
-    if total_tokens <= threshold {
+    if !force && total_tokens <= threshold {
         return;
     }
     let message = format!(
@@ -489,7 +494,9 @@ pub async fn auto_compress_if_over_threshold<F>(
         // compression, LLM unavailable, ...) don't quietly write
         // archive refs that no summary will ever cover. The pre-snap
         // is only emitted when the engine has confirmed it will run.
-        if !guard.should_compress(total_tokens as u64) {
+        // `force` 绕过该 opt-out（溢出自愈路径）——但 NoOp 引擎 compress()
+        // 本身仍是 no-op，force 只是少绕一圈，不会写坏历史。
+        if !force && !guard.should_compress(total_tokens as u64) {
             return;
         }
         let pre_snap = guard.breaker_snapshot_with_phase(

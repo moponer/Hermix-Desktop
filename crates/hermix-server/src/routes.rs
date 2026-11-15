@@ -32,7 +32,7 @@ pub(crate) async fn list_experts(State(state): State<HttpServerState>) -> Json<E
 // (e.g. `tool_registry.register(...)` at startup) makes it appear here
 // automatically.
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ToolDescriptor {
     name: String,
@@ -45,15 +45,27 @@ pub(crate) struct ToolDescriptor {
     max_result_size_chars: Option<usize>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ToolListResponse {
     tools: Vec<ToolDescriptor>,
 }
 
+/// `/v1/tools` 的 10s 缓存：`list_tools()` 每次都重新组装 ~109 个工具的
+/// 描述结构体。工具集开关（`skills::set_enabled_toolsets`）显式失效。
+static TOOLS_CACHE: crate::ttl_cache::TtlCache<(), ToolListResponse> =
+    crate::ttl_cache::TtlCache::new(std::time::Duration::from_secs(10));
+
+pub(crate) fn invalidate_tool_list_cache() {
+    TOOLS_CACHE.invalidate();
+}
+
 pub(crate) async fn list_available_tools(
     State(state): State<HttpServerState>,
 ) -> Json<ToolListResponse> {
+    if let Some(cached) = TOOLS_CACHE.get(&()) {
+        return Json(cached);
+    }
     let tools = state
         .tool_registry
         .list_tools()
@@ -69,7 +81,9 @@ pub(crate) async fn list_available_tools(
             max_result_size_chars: t.max_result_size_chars,
         })
         .collect();
-    Json(ToolListResponse { tools })
+    let response = ToolListResponse { tools };
+    TOOLS_CACHE.put((), response.clone());
+    Json(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -375,7 +389,9 @@ pub(crate) async fn patch_session(
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
     let db_path = hermix_config::paths::data_dir_in(&state.hermix_home).join("sessions.db");
-    let conn = open_sessions_db_for_read(&db_path).map_err(|e| HttpError {
+    // PATCH 是写路径：同一时刻有 turn 在写库时，读模式的 500 ms 超时会让
+    // 切工作区 / 切专家这类高频操作随机 500。
+    let conn = open_sessions_db_for_write(&db_path).map_err(|e| HttpError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: e.to_string(),
     })?;
@@ -620,12 +636,26 @@ pub(crate) fn open_sessions_db_for_read(path: &std::path::Path) -> Result<rusqli
         .map_err(|e| e.to_string())
 }
 
+/// 删除会话用的连接：**写模式**（5 s busy_timeout）。
+///
+/// 此前复用 `open_sessions_db_for_read`（500 ms）却在其上开写事务 —— 语义
+/// 与超时都错：当同一时刻有一轮 turn 正在写 `sessions.db`（自动化任务几乎
+/// 总是如此），DELETE 抢不到写锁就立刻 500。2026-11-05 实机：
+/// `DELETE /v1/sessions/automation:task-…::subagent-…` 连续两次 500，
+/// 前端 3 秒后重试即成功 —— 纯粹是超时窗口太短，不是数据问题。
+pub(crate) fn open_sessions_db_for_write(
+    path: &std::path::Path,
+) -> Result<rusqlite::Connection, String> {
+    hermix_store::open_connection(path, hermix_store::OpenMode::Write)
+        .map_err(|e| e.to_string())
+}
+
 pub(crate) async fn delete_session(
     Path(session_id): Path<String>,
     State(state): State<HttpServerState>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
     let db_path = hermix_config::paths::data_dir_in(&state.hermix_home).join("sessions.db");
-    let conn = open_sessions_db_for_read(&db_path).map_err(|e| HttpError {
+    let conn = open_sessions_db_for_write(&db_path).map_err(|e| HttpError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: e.to_string(),
     })?;
@@ -967,17 +997,23 @@ pub(crate) async fn delete_session(
 pub(crate) async fn get_session_usage(
     State(state): State<HttpServerState>,
     Path(session_id): Path<String>,
-) -> Result<Json<hermix_agent::session_persistence::SessionUsageTotals>, StatusCode> {
+) -> Result<Json<hermix_agent::session_persistence::SessionUsageTotals>, HttpError> {
     let persistence = state.session_persistence.clone();
+    // 用 `HttpError` 而不是裸 `StatusCode`：裸状态码的响应体是空的，
+    // 前端 `apiInvoke` 只能报 "HTTP 500"，拿不到任何可展示的文案。
+    let fail = |msg: &str| HttpError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: msg.to_string(),
+    };
     match tokio::task::spawn_blocking(move || persistence.session_usage(&session_id)).await {
         Ok(Ok(totals)) => Ok(Json(totals)),
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "get_session_usage: aggregation failed");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(fail("统计会话用量失败（详见 server.log）"))
         }
         Err(e) => {
             tracing::warn!(error = %e, "get_session_usage: blocking task failed");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(fail("统计会话用量失败（详见 server.log）"))
         }
     }
 }
@@ -1158,15 +1194,55 @@ pub(crate) async fn get_session_messages(
     // 不上。翻页时（tail_skip > 0）才读。
     let skip_archived = requested_tail.is_some() && q.tail_skip.unwrap_or(0) == 0;
 
-    let entries_with_ts = match requested_tail {
-        Some(n) => state
-            .session_persistence
-            .load_session_tail_with_timestamps(&session_id, n),
-        None => state
-            .session_persistence
-            .load_session_with_approvals_and_timestamps(&session_id),
-    }
-    .map_err(HttpError::from)?;
+    // 这一段是**同步 SQLite**：主会话尾部 + `find_children` + 每个归档子会话
+    // 各开一次连接全量读。直接在 handler 里跑会钉住 tokio worker（busy_timeout
+    // 500ms 时一把锁就能卡半秒，WS 心跳跟着抖）。整体搬进阻塞池，一次拿回三份。
+    let persistence = state.session_persistence.clone();
+    let read_session_id = session_id.clone();
+    let read = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        let entries = match requested_tail {
+            Some(n) => persistence.load_session_tail_with_timestamps(&read_session_id, n),
+            None => persistence.load_session_with_approvals_and_timestamps(&read_session_id),
+        }
+        .map_err(|e| e.to_string())?;
+        // (Plan C)：归档消息来自压缩子会话，让用户仍能看到压缩前的内容。
+        // 子会话按创建时间升序 → 归档段自然排在主会话活动消息之前。
+        // 首屏不读归档内容（窗口里用不上），只需 id 保证 `has_more` 为真；
+        // 翻页时用**一个连接**批量读全部子会话（原实现每个子会话 3 次 open）。
+        let (child_ids, archived) = if skip_archived {
+            (
+                persistence
+                    .find_children(&read_session_id)
+                    .unwrap_or_default(),
+                Vec::new(),
+            )
+        } else {
+            let children = persistence
+                .load_children_with_approvals_and_timestamps(&read_session_id)
+                .unwrap_or_default();
+            let ids = children.iter().map(|(id, _)| id.clone()).collect();
+            (ids, children)
+        };
+        Ok((entries, child_ids, archived))
+    })
+    .await;
+    let (entries_with_ts, child_ids, archived_entries_with_ts) = match read {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, session = %session_id, "session read failed");
+            return Err(HttpError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message: "读取会话失败（详见 server.log）".to_string(),
+            });
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "session read task panicked");
+            return Err(HttpError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message: "读取会话失败（详见 server.log）".to_string(),
+            });
+        }
+    };
     let entries: Vec<hermix_agent::SessionEntry> =
         entries_with_ts.iter().map(|(e, _)| e.clone()).collect();
     // Pull the timestamps out in lockstep with the entries below.
@@ -1182,48 +1258,25 @@ pub(crate) async fn get_session_messages(
     // new field to the Rust `Message` struct.
     let mut args_map: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+    let collect_args = |m: &hermix_agent::Message, map: &mut std::collections::HashMap<String, String>| {
+        if let Some(ref tcs) = m.tool_calls {
+            for tc in tcs {
+                map.insert(tc.id.clone(), tc.function.arguments.clone());
+            }
+        }
+    };
     for entry in &entries {
         if let hermix_agent::SessionEntry::Message(m) = entry {
-            if let Some(ref tcs) = m.tool_calls {
-                for tc in tcs {
-                    args_map.insert(tc.id.clone(), tc.function.arguments.clone());
-                }
-            }
+            collect_args(m, &mut args_map);
         }
     }
-
-    // (Plan C): load archived messages from compression
-    // child sessions so the user can still see what was said before
-    // compression. Children are ordered by creation time (oldest
-    // first), so the archived turns appear in chronological order
-    // before the main session's active messages.
-    let child_ids = state
-        .session_persistence
-        .find_children(&session_id)
-        .unwrap_or_default();
-    let mut archived_entries_with_ts: Vec<(String, Vec<(hermix_agent::SessionEntry, Option<String>)>)> = Vec::new();
-    for child_id in &child_ids {
-        if skip_archived {
-            // 归档段在窗口之前，首屏不需要其内容（但 child_ids 已查到，
-            // 下面据此保证 `has_more` 为真）。
-            continue;
-        }
-        let child_ets = state
-            .session_persistence
-            .load_session_with_approvals_and_timestamps(child_id)
-            .unwrap_or_default();
-        // Also build args_map from archived entries so tool argument
-        // reconstruction works for archived tool messages.
-        for (entry, _) in &child_ets {
+    // 归档消息的 tool 参数同样要从子会话的 assistant 行里补全。
+    for (_, child_ets) in &archived_entries_with_ts {
+        for (entry, _) in child_ets {
             if let hermix_agent::SessionEntry::Message(m) = entry {
-                if let Some(ref tcs) = m.tool_calls {
-                    for tc in tcs {
-                        args_map.insert(tc.id.clone(), tc.function.arguments.clone());
-                    }
-                }
+                collect_args(m, &mut args_map);
             }
         }
-        archived_entries_with_ts.push((child_id.clone(), child_ets));
     }
 
     let mut idx = 0usize;
@@ -1494,7 +1547,15 @@ pub(crate) async fn get_session_messages(
     all_messages.extend(child_filtered);
     all_messages.extend(main_msgs);
 
-    let context_usage = state.session_persistence.get_context_usage(&session_id);
+    // 同步 SQLite：与上面那段读取一样搬进阻塞池（此前漏在这里，单次查询也能
+    // 在锁竞争时钉住 worker）。
+    let context_usage = {
+        let persistence = state.session_persistence.clone();
+        let sid = session_id.clone();
+        tokio::task::spawn_blocking(move || persistence.get_context_usage(&sid))
+            .await
+            .unwrap_or(None)
+    };
     let total_messages = all_messages.len();
     let (page, has_more) = window_message_page(all_messages, q.limit, q.tail_skip.unwrap_or(0));
     // 跳过归档读取时 `all_messages` 里没有归档段 → 窗口之前一定还有更早的
@@ -1559,7 +1620,18 @@ pub(crate) async fn send_message(
         system_prompt: req.system_prompt.clone(),
         tools: req.tools.clone(),
         workspace: req.workspace.clone(),
-        permission: parse_permission_level(req.permission.as_deref()),
+        permission: {
+            let level = parse_permission_level(req.permission.as_deref());
+            // 重武装会话级放手开关（端点见 set_session_permission）。只有
+            // 显式携带 permission 字段的消息才重置。
+            if req.permission.as_deref().is_some() {
+                state.approval_registry.set_full_mode(
+                    &session_id,
+                    level == Some(hermix_core::traits::PermissionLevel::Full),
+                );
+            }
+            level
+        },
         images: convert_wire_images(&req.images),
         image: None,
         image_mime_type: None,
@@ -1701,6 +1773,53 @@ pub(crate) async fn list_pending_approvals(
         }));
     }
     Ok(Json(serde_json::json!({ "approvals": approvals })))
+}
+
+/// POST /v1/sessions/{session_id}/permission
+///
+/// 会话级权限档热更（2026-10-31）：审批卡里选「放手模式」或 Composer
+/// 切换开关时由前端立即调用。置位后**当前轮内立即生效** —— 该会话的
+/// 后续审批请求在 `ApprovalRegistry::request_approval` 直接放行，不再
+/// 发卡；切换到 full 时顺带放行已挂起的全部 pending。
+///
+/// Body: `{ "level": "full" | "default" }`。消息路径每条都带 permission
+/// 字段并据此重武装（见 ws/mod.rs / send_message），所以后端不持久化
+/// 此开关：重启后由第一条消息恢复。
+pub(crate) async fn set_session_permission(
+    State(state): State<HttpServerState>,
+    Extension(origin): Extension<hermix_core::Origin>,
+    Path(session_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, HttpError> {
+    if let Err(resp) = crate::mobile::require_own_session(&origin, &session_id) {
+        return Err(HttpError {
+            status: resp.status(),
+            message: "session does not belong to this device".into(),
+        });
+    }
+    let level = body.get("level").and_then(|v| v.as_str()).unwrap_or("default");
+    let full =
+        parse_permission_level(Some(level)) == Some(hermix_core::traits::PermissionLevel::Full);
+    state.approval_registry.set_full_mode(&session_id, full);
+    let resolved = if full {
+        state
+            .approval_registry
+            .resolve_all(&session_id, hermix_core::ApprovalOutcome::Approved)
+            .len()
+    } else {
+        0
+    };
+    tracing::info!(
+        session_id = %session_id,
+        full,
+        resolved_pending = resolved,
+        "session permission level changed via REST"
+    );
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "level": if full { "full" } else { "default" },
+        "resolved_pending": resolved,
+    })))
 }
 
 /// POST /v1/sessions/{session_id}/approval
@@ -1891,15 +2010,21 @@ pub(crate) async fn search_sessions(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Json<SessionSearchResponse> {
     let q = params.get("q").cloned().unwrap_or_default();
+    // 上限必须钳住：`?limit=4000000000` 会原样进 SQL LIMIT，把一次搜索变成
+    // 全表物化。20 是默认，100 是"用户真的想多要几页"的合理上限。
     let limit: u32 = params
         .get("limit")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(20);
+        .unwrap_or(20)
+        .clamp(1, 100);
     let db_path = hermix_config::paths::data_dir_in(&state.hermix_home).join("sessions.db");
-    let results = match open_sessions_db_for_read(&db_path) {
+    // 同步 SQLite：搬进阻塞池，别钉住 tokio worker（与 list_sessions 一致）。
+    let results = tokio::task::spawn_blocking(move || match open_sessions_db_for_read(&db_path) {
         Ok(conn) => query_search_with_conn(&conn, &q, limit).unwrap_or_default(),
         Err(_) => Vec::new(),
-    };
+    })
+    .await
+    .unwrap_or_default();
     Json(SessionSearchResponse { results })
 }
 

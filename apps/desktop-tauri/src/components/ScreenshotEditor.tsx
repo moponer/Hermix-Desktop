@@ -8,8 +8,8 @@
 // 提交 → PNG data URL → screenshot_commit_edited → 剪贴板。
 // 基底画布(base)存"已提交"像素，可见画布 = base + 进行中预览；
 // 撤销栈存 pre-op 快照（PNG dataURL，限 12 步）。
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { invoke } from "../ipc";
+import { IPC } from "../ipc/commands";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";import { invoke } from "../ipc";
 import { Square, MoveUpRight, Pencil, Type, Grid2x2, Crop, Undo2, X, Check } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cx } from "../lib/cx";
@@ -444,7 +444,7 @@ export function ScreenshotEditor({
     setCommitting(true);
     setErr(null);
     const dataUrl = canvas.toDataURL("image/png");
-    invoke("screenshot_commit_edited", { dataUrl }).catch((e) => {
+    invoke(IPC.screenshotCommitEdited, { dataUrl }).catch((e) => {
       setErr(`提交失败：${e instanceof Error ? e.message : String(e)}，请重试。`);
       setCommitting(false);
     });

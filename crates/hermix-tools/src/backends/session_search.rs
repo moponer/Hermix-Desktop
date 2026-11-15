@@ -39,26 +39,6 @@ struct SummaryTask {
 }
 
 impl SqliteSessionSearchBackend {
-    fn ensure_parent_session_column(conn: &Connection) -> Result<(), ToolError> {
-        match conn.execute(
-            "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
-            rusqlite::params![],
-        ) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("duplicate column name") {
-                    Ok(())
-                } else {
-                    Err(ToolError::ExecutionFailed(format!(
-                        "Failed to ensure parent_session_id column: {}",
-                        e
-                    )))
-                }
-            }
-        }
-    }
-
     fn resolve_to_parent(conn: &Connection, session_id: &str) -> String {
         let mut visited = HashSet::new();
         let mut sid = session_id.to_string();
@@ -283,12 +263,19 @@ impl SqliteSessionSearchBackend {
         None
     }
 
-    /// Open or create the sessions database at the given path.
+    /// 打开**已存在**的 sessions DB（只读，不建表）。
+    ///
+    /// 这里曾自己 `CREATE TABLE` 一份 sessions / messages / messages_fts —— 与
+    /// `session_persistence/schema.rs` 是同一 schema 的第二份实现，两份必然
+    /// 漂移；副作用之一是每次进程启动都会把 `idx_messages_session` 重新建出来，
+    /// 正好抵消掉 schema 侧的索引去重。`session_search` 的语义本来就是"查已有
+    /// 会话"，库不存在时不如不注册（`register()` 会打 warn 并跳过），而不是
+    /// 凭空造一个空库让后续写入落在错误的表形状上。
     pub fn new(db_path: &str) -> Result<Self, ToolError> {
-        if let Some(parent) = std::path::Path::new(db_path).parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to create session db directory: {}", e))
-            })?;
+        if !std::path::Path::new(db_path).exists() {
+            return Err(ToolError::ExecutionFailed(
+                "sessions DB 尚不存在（先完成一轮对话再检索）".to_string(),
+            ));
         }
         // Read mode: short busy timeout so a search never stalls the UI behind
         // an in-flight turn's DELETE+INSERT.
@@ -296,71 +283,13 @@ impl SqliteSessionSearchBackend {
             |e| ToolError::ExecutionFailed(format!("Failed to open sessions DB: {}", e)),
         )?;
 
-        // Align with session persistence schema used by the agent loop.
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                model TEXT,
-                platform TEXT DEFAULT 'cli',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                title TEXT,
-                message_count INTEGER DEFAULT 0,
-                parent_session_id TEXT
-            );
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT,
-                tool_call_id TEXT,
-                tool_calls TEXT,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
-            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-                content,
-                session_id UNINDEXED,
-                role UNINDEXED,
-                content='messages',
-                content_rowid='id'
-            );
-            CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-                INSERT INTO messages_fts(rowid, content, session_id, role)
-                VALUES (new.id, new.content, new.session_id, new.role);
-            END;",
-        )
-        .map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to ensure session schema: {}", e))
-        })?;
-
-        Self::ensure_parent_session_column(&conn)?;
-
         Ok(Self {
             conn: Mutex::new(conn),
         })
     }
 
-    /// Index a message into the FTS5 table.
-    pub fn index_message(
-        &self,
-        session_id: &str,
-        role: &str,
-        content: &str,
-        timestamp: &str,
-    ) -> Result<(), ToolError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
-        conn.execute(
-            "INSERT INTO messages (session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![session_id, role, content, timestamp],
-        )
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to index message: {}", e)))?;
-        Ok(())
-    }
+    // `index_message` 已删（2026-10-30）：全仓零调用——消息落库与 FTS 触发器
+    // 都在 `session_persistence`，这里再写一遍只会制造第二份索引。
 }
 
 #[async_trait]

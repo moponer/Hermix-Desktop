@@ -16,16 +16,28 @@ vi.mock("../api", () => ({
   getActiveAutomationRuns: vi.fn(async () => 0),
   getDailyMemoryList: vi.fn(async () => []),
   getSessionMessages: vi.fn(async () => ({ messages: [], hasMore: false })),
+  // 落档时同步热更后端（放手立即生效）；这里只需要"有这么一个函数"。
+  setSessionPermission: vi.fn(async () => {}),
 }));
 
 function makeTwin(overrides: Partial<TwinInlineApi> = {}): TwinInlineApi {
   return {
-    send: vi.fn(async () => true),
     stop: vi.fn(),
     streaming: false,
     turn: null,
     pending: [],
     resolve: vi.fn(),
+    // 任务面板（2026-11-06 重构）：输入口只入队，拉取由 App 侧的调度驱动。
+    queue: [],
+    enqueueTask: vi.fn(),
+    removeTask: vi.fn(),
+    moveTask: vi.fn(),
+    batch: null,
+    requeueBatch: vi.fn(),
+    reviseTask: vi.fn(() => null),
+    patrol: null,
+    autoIntervene: false,
+    setAutoIntervene: vi.fn(),
     ...overrides,
   };
 }
@@ -50,20 +62,17 @@ beforeEach(() => {
 });
 
 describe("TwinView 内联对话", () => {
-  it("提交后投给她自己的发送器，不把人送去对话页", async () => {
+  it("提交即入队（不是直接开跑），也不把人送去对话页", () => {
     const twin = makeTwin();
     const { onOpenChat } = renderTwin(twin);
 
-    const input = screen.getByLabelText("给助手阿黎发消息");
+    const input = screen.getByLabelText("下达一条需求给助手阿黎");
     fireEvent.change(input, { target: { value: "整理一下本周笔记" } });
     fireEvent.submit(input.closest("form")!);
 
-    await waitFor(() =>
-      expect(twin.send).toHaveBeenCalledWith(
-        "整理一下本周笔记",
-        expect.objectContaining({ permissionLevel: "default" }),
-      ),
-    );
+    expect(twin.enqueueTask).toHaveBeenCalledWith("整理一下本周笔记");
+    // 草稿清空：入队成功才有清空，否则用户的内容会凭空消失。
+    expect((input as HTMLInputElement).value).toBe("");
     expect(onOpenChat).not.toHaveBeenCalled();
   });
 
@@ -102,14 +111,29 @@ describe("TwinView 内联对话", () => {
     expect(twin.resolve).toHaveBeenCalledWith("c-1", "approved", "稳妥");
   });
 
-  it("她这一轮在跑时输入框不可用，发送键换成停止", () => {
-    renderTwin(makeTwin({ streaming: true }));
-    expect(screen.getByLabelText("给助手阿黎发消息")).toBeDisabled();
-    // 跑动中输入框是禁用的，暂停入口必须在主视线里：发送键就地变「停止」。
-    // （此前这条断言还在找「发送」——那个按钮在这个状态下根本不渲染，
-    //  2026-10-27 加停止态时测试没跟上。）
-    expect(screen.queryByLabelText("发送")).toBeNull();
+  it("她这一轮在跑时输入框仍可用：下达的需求先入队，停止是另一个按钮", () => {
+    // 2026-11-06 实报：输出没结束时输入框被禁用，人只能干等。
+    // 现在"下达"与"停止"并存，跑着也能排需求。
+    const twin = makeTwin({ streaming: true });
+    renderTwin(twin);
+    const input = screen.getByLabelText("下达一条需求给助手阿黎");
+    expect(input).not.toBeDisabled();
+    fireEvent.change(input, { target: { value: "顺便把周报写了" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(twin.enqueueTask).toHaveBeenCalledWith("顺便把周报写了");
     expect(screen.getByLabelText("停止这一轮")).toBeInTheDocument();
+  });
+
+  it("同一句需求已在面板里时如实提示，不假装收下", () => {
+    const twin = makeTwin({
+      queue: [{ id: "t1", text: "整理笔记", createdAt: "" }],
+    });
+    renderTwin(twin);
+    const input = screen.getByLabelText("下达一条需求给助手阿黎");
+    fireEvent.change(input, { target: { value: "整理笔记" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(twin.enqueueTask).not.toHaveBeenCalled();
+    expect(screen.getByText("这条已经在面板里了")).toBeInTheDocument();
   });
 
   it("本轮出错时把错误原文显示在输入口上方", () => {
@@ -119,6 +143,15 @@ describe("TwinView 内联对话", () => {
       }),
     );
     expect(screen.getByRole("alert")).toHaveTextContent("API key 无效");
+  });
+
+  it("没有错误就不印错误条（旧版「原因见下方错误」配空白就是这条）", () => {
+    renderTwin(
+      makeTwin({
+        turn: { user: "跑一下", reply: "在跑", activity: null, error: null },
+      }),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 
@@ -148,16 +181,16 @@ describe("TwinView 权限模式", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认放手" }));
     expect(await screen.findByText(/都会直接执行/)).toBeInTheDocument();
 
-    // 生效后这一轮下发 full —— 这就是"不再申请权限"的开关。
-    const input = screen.getByLabelText("给助手阿黎发消息");
+    // 落档即通知后端：不等下一条消息重武装，正在跑的这一轮也不再弹卡
+    // （2026-11-06 实报「点了放手还在问」）。
+    expect(api.setSessionPermission).toHaveBeenCalledWith("twin:ali", "full");
+
+    // 下达需求只入队；真正下发时 App 侧现读 localStorage 里的档位
+    // （`pullTwinTasks`），所以这里只需确认入队成功。
+    const input = screen.getByLabelText("下达一条需求给助手阿黎");
     fireEvent.change(input, { target: { value: "跑一下" } });
     fireEvent.submit(input.closest("form")!);
-    await waitFor(() =>
-      expect(twin.send).toHaveBeenCalledWith(
-        "跑一下",
-        expect.objectContaining({ permissionLevel: "full" }),
-      ),
-    );
+    expect(twin.enqueueTask).toHaveBeenCalledWith("跑一下");
   });
 
   it("确认态可以取消，取消后仍是默认模式", () => {
@@ -198,7 +231,7 @@ describe("TwinView 数据态的环", () => {
 
   it("没有在跑的任务：不画进度弧（0% 不留圆点）", async () => {
     renderTwin(makeTwin());
-    fireEvent.click(screen.getByText("数据"));
+    fireEvent.click(screen.getByText("状态"));
     await waitFor(() => expect(circles()).toBe(3));
   });
 
@@ -219,9 +252,165 @@ describe("TwinView 数据态的环", () => {
       },
     ]);
     renderTwin(makeTwin());
-    fireEvent.click(screen.getByText("数据"));
+    fireEvent.click(screen.getByText("状态"));
     await waitFor(() => expect(circles()).toBe(4));
     expect(document.querySelector(".twin-ring__big")?.textContent).toBe("25%"); // 1/4
     expect(screen.getByText("本轮进度")).toBeInTheDocument();
+  });
+});
+
+describe("TwinView 任务面板", () => {
+  // 需求没有"类型"字段：是不是同一件事由阿黎自己判断（见 twinQueue 注释）。
+  const task = (id: string, text: string) => ({ id, text, createdAt: "" });
+
+  it("待拉取按顺序列出：可调优先级、可删除", () => {
+    const twin = makeTwin({
+      queue: [task("t1", "整理笔记"), task("t2", "写周报")],
+    });
+    renderTwin(twin);
+    fireEvent.click(screen.getByText("任务面板"));
+
+    expect(screen.getByText("整理笔记")).toBeInTheDocument();
+    // 队首已是最高优先级：上移必须不可用（否则顺序语义就假了）。
+    expect(screen.getByLabelText("提升优先级：整理笔记")).toBeDisabled();
+    fireEvent.click(screen.getByLabelText("降低优先级：整理笔记"));
+    expect(twin.moveTask).toHaveBeenCalledWith("t1", 1);
+
+    fireEvent.click(screen.getByLabelText("删除需求：写周报"));
+    expect(twin.removeTask).toHaveBeenCalledWith("t2");
+  });
+
+  it("被拉取的需求不再显示在面板里，只留一行本批读数", () => {
+    renderTwin(
+      makeTwin({
+        batch: {
+          id: "b1",
+          tasks: [task("t9", "刷完超星课程")],
+          startedAt: 1,
+          status: "running",
+        },
+      }),
+    );
+    fireEvent.click(screen.getByText("任务面板"));
+
+    // 面板只回答"还没开工的有哪些"：拉走的那条不在这里再列一遍。
+    expect(screen.getByText(/面板是空的/)).toBeInTheDocument();
+    expect(screen.queryByText("刷完超星课程")).toBeNull();
+    // 但执行情况不能凭空消失：一行读数指向状态页。
+    // （同一读数也会出现在批次气泡里 —— getAllByText 断言"存在"而非唯一。）
+    expect(screen.getAllByText(/1 条 · 执行中/).length).toBeGreaterThan(0);
+  });
+
+  it("状态页照登她的归档判断（原文，前端不加工）", () => {
+    renderTwin(
+      makeTwin({
+        turn: {
+          user: "两条需求",
+          reply:
+            "【归档】刷课程 → 并入 超星学习\n【归档】整理桌面 → 新开 桌面整理\n开始执行……",
+          activity: null,
+          error: null,
+        },
+      }),
+    );
+    fireEvent.click(screen.getByText("状态"));
+    expect(screen.getByText("刷课程 → 并入 超星学习")).toBeInTheDocument();
+    expect(screen.getByText("整理桌面 → 新开 桌面整理")).toBeInTheDocument();
+  });
+
+  it("她没写归档行时如实说「没写」，不替她补分类", () => {
+    renderTwin(
+      makeTwin({
+        turn: { user: "两条需求", reply: "都做完了。", activity: null, error: null },
+      }),
+    );
+    fireEvent.click(screen.getByText("状态"));
+    expect(screen.getByText("没写")).toBeInTheDocument();
+  });
+
+  it("失败批次给「放回面板」入口（动过手就不自动回队）", () => {
+    const twin = makeTwin({
+      batch: {
+        id: "b3",
+        tasks: [task("t1", "整理笔记")],
+        startedAt: 1,
+        status: "failed",
+        error: "没发出去",
+      },
+    });
+    renderTwin(twin);
+    fireEvent.click(screen.getByText("任务面板"));
+    fireEvent.click(screen.getByText("把这一批放回面板"));
+    expect(twin.requeueBatch).toHaveBeenCalled();
+  });
+
+  it("待补充的需求：给出补充 / 取消两条路，且不混进待拉取", () => {
+    const twin = makeTwin({
+      queue: [
+        { id: "t1", text: "整理笔记", createdAt: "" },
+        {
+          id: "t2",
+          text: "把那个弄一下",
+          createdAt: "",
+          blocked: true,
+          blockReason: "缺目标文件",
+          returns: 2,
+        },
+      ],
+    });
+    renderTwin(twin);
+    fireEvent.click(screen.getByText("任务面板"));
+
+    expect(screen.getByText(/缺：缺目标文件/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("补充需求：把那个弄一下"));
+    expect(twin.reviseTask).toHaveBeenCalledWith("t2");
+    fireEvent.click(screen.getByLabelText("取消需求：把那个弄一下"));
+    expect(twin.removeTask).toHaveBeenCalledWith("t2");
+  });
+
+  it("状态页显示上一次巡查的读数与异常（真值，不是「一切正常」）", () => {
+    renderTwin(
+      makeTwin({
+        patrol: {
+          at: Date.now(),
+          queue: 2,
+          blocked: 1,
+          tickets: { running: 1, done: 2, failed: 0 },
+          findings: [
+            { code: "blocked", level: "warn", text: "1 条需求缺目标，等你补充或取消" },
+          ],
+        },
+      }),
+    );
+    fireEvent.click(screen.getByText("状态"));
+    expect(screen.getByText(/队列 2 · 待补充 1/)).toBeInTheDocument();
+    // 右翼「等你决定」里也有同一条建议（带按钮），所以用 getAllByText。
+    expect(screen.getAllByText("1 条需求缺目标，等你补充或取消").length).toBeGreaterThan(0);
+  });
+
+  it("自动干预开关默认关，点一下交给后端落档（唯一能让她自己动手的开关）", () => {
+    const twin = makeTwin();
+    renderTwin(twin);
+    fireEvent.click(screen.getByText("状态"));
+    const btn = screen.getByRole("button", { name: "异常时让她自己处理（默认关）" });
+    expect(btn).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(btn);
+    expect(twin.setAutoIntervene).toHaveBeenCalledWith(true);
+  });
+
+  it("拉取失败把原始原因写在批次上（不是「见下方错误」）", () => {
+    renderTwin(
+      makeTwin({
+        batch: {
+          id: "b2",
+          tasks: [task("t1", "整理笔记")],
+          startedAt: 1,
+          status: "failed",
+          error: "后端 500",
+        },
+      }),
+    );
+    fireEvent.click(screen.getByText("任务面板"));
+    expect(screen.getByRole("alert")).toHaveTextContent("后端 500");
   });
 });

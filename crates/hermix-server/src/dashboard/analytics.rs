@@ -29,10 +29,21 @@ fn default_days() -> u32 {
 /// Errors are NO LONGER swallowed into an all-zero 200 : a
 /// failed aggregation returns `500` with a structured
 /// `AnalyticsErrorResponse` so the frontend can show the real cause.
+/// 用量聚合的 15s 缓存（key = `days`）。9+ 条聚合查询 + 两处整表 JSON 解析
+/// 不该在同一秒内被重复执行（分析页切换区间/刷新）。缓存的是**序列化后的值**：
+/// `AnalyticsResponse` 底下挂着 6 个结构体，为缓存单独加一整条 `Clone` 派生链
+/// 不划算。
+static USAGE_CACHE: crate::ttl_cache::TtlCache<String, serde_json::Value> =
+    crate::ttl_cache::TtlCache::new(std::time::Duration::from_secs(15));
+
 pub async fn get_usage(
     State(state): State<HttpServerState>,
     Query(params): Query<AnalyticsParams>,
-) -> Result<Json<AnalyticsResponse>, (StatusCode, Json<AnalyticsErrorResponse>)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<AnalyticsErrorResponse>)> {
+    let cache_key = params.days.to_string();
+    if let Some(cached) = USAGE_CACHE.get(&cache_key) {
+        return Ok(Json(cached));
+    }
     // aggregate_usage 是同步 SQLite（9+ 条查询，其中两条把整表内容拉到 Rust
     // 侧逐行解析 JSON）。直接在 handler 里跑会占住 tokio worker —— 与分析页
     // 并发的 WS 心跳/流式推送都跟着抖。搬到阻塞池。
@@ -41,20 +52,24 @@ pub async fn get_usage(
     let agg = match tokio::task::spawn_blocking(move || persistence.aggregate_usage(days)).await {
         Ok(Ok(a)) => a,
         Ok(Err(e)) => {
+            // 细节只进日志：SQLite 原文含表名/路径/SQL 片段，回前端等于把库结构
+            // 送给任何能打到这个端点的人（配对设备也在其列）。
+            tracing::error!(error = %e, "aggregate_usage failed");
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(AnalyticsErrorResponse {
                     error: "aggregate_usage_failed".to_string(),
-                    cause: e.to_string(),
+                    cause: "内部统计失败（详见 server.log）".to_string(),
                 }),
             ));
         }
         Err(e) => {
+            tracing::error!(error = %e, "aggregate_usage blocking task failed");
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(AnalyticsErrorResponse {
                     error: "aggregate_usage_failed".to_string(),
-                    cause: format!("blocking task failed: {e}"),
+                    cause: "内部统计任务异常（详见 server.log）".to_string(),
                 }),
             ));
         }
@@ -145,7 +160,7 @@ pub async fn get_usage(
     // something; all-unknown ⇒ the UI shows "—" instead of $0.0000.
     let totals_cost_known = by_model.iter().any(|m| m.cost_known);
 
-    Ok(Json(AnalyticsResponse {
+    let response = AnalyticsResponse {
         daily,
         by_model,
         totals: AnalyticsTotals {
@@ -166,7 +181,10 @@ pub async fn get_usage(
         //real skill usage, no longer hardcoded to zeros.
         skills: build_skills(&agg.skills),
         by_tool,
-    }))
+    };
+    let value = serde_json::to_value(&response).unwrap_or(serde_json::Value::Null);
+    USAGE_CACHE.put(cache_key, value.clone());
+    Ok(Json(value))
 }
 
 /// Build the skills response from the real aggregate .

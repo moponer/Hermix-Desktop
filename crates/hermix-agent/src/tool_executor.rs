@@ -207,6 +207,67 @@ impl AgentLoop {
     /// A free function, not a method: the returned slice borrows from
     /// `tool_calls` and must not be tied to `&self`'s lifetime.
     ///
+    /// 单个 delegate_task 的阻塞执行：心跳 + 预算护栏 + 结果包装。
+    /// 2026-11-10 从顺序循环抽出：同轮多个委派不再串行阻塞（N×600s
+    /// 排队），由 `join_all` 并发执行。execute_async 返回 BoxSendFuture，
+    /// 旧注释「inner AgentLoop future 不满足 Send」的前提已不成立。
+    async fn run_blocking_delegate(
+        &self,
+        orch: Arc<crate::sub_agent_orchestrator::SubAgentOrchestrator>,
+        req: crate::sub_agent_orchestrator::SubAgentRequest,
+        budget: std::time::Duration,
+        tc_id: String,
+    ) -> ToolResult {
+        let fut = orch.execute_async(req);
+        tokio::pin!(fut);
+        let deadline = tokio::time::Instant::now() + budget;
+        let mut beat = tokio::time::interval(TOOL_HEARTBEAT);
+        beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        beat.tick().await; // 首个 tick 立即就绪，先消费掉
+        let started = std::time::Instant::now();
+        let output = loop {
+            tokio::select! {
+                biased;
+                // 用户点停止必须立刻出来（2026-11-10 审计补）：并行委派
+                // 阶段此前无 interrupt 分支——点停止后父层仍要等满 190s
+                // 护栏才返回。子代理转入后台收尾，结果仍可取回。
+                _ = self.interrupt.wait_for_interrupt() => {
+                    return ToolResult::err(
+                        &tc_id,
+                        "delegate_task: 用户已停止。子代理转入后台收尾，\
+                         结果已写入 lineage，可用 get_subagent_result 按 sub_agent_id 取回。",
+                    );
+                }
+                out = &mut fut => break Some(out),
+                _ = tokio::time::sleep_until(deadline) => break None,
+                _ = beat.tick() => {
+                    let elapsed = started.elapsed().as_secs();
+                    tracing::info!(
+                        elapsed_secs = elapsed,
+                        "delegate_task: still waiting for sub-agent"
+                    );
+                    self.emit_status(
+                        "tool",
+                        &format!("子代理仍在执行 — 已 {elapsed}s"),
+                    );
+                }
+            }
+        };
+        match output {
+            Some(text) => ToolResult::ok(&tc_id, text),
+            None => ToolResult::err(
+                &tc_id,
+                &format!(
+                    "delegate_task 等待子代理超时（{}s）。子代理可能仍在后台收尾，\
+                     结果已写入 lineage，可用 get_subagent_result 按 sub_agent_id 取回。\
+                     长任务不要用 delegate_task —— 改用 dispatch_member（派单即返回、\
+                     可查进度、交付完整报告）。",
+                    budget.as_secs()
+                ),
+            ),
+        }
+    }
+
     async fn execute_bounded(
         &self,
         tool_calls: &[ToolCall],
@@ -256,6 +317,8 @@ impl AgentLoop {
         // JoinSet and preserves the requested concurrency cap which is already
         // applied upstream via `cap_delegates`.
         let mut orchestrated: Vec<ToolResult> = Vec::new();
+        // 并行扇出收集器（2026-11-10）：同轮全部 delegate_task 的阻塞执行。
+        let mut delegate_futs = Vec::new();
         if let Some(orch) = orchestrator.as_ref() {
             for tc in tool_calls {
                 // `stop_subagent` rides the same interception path: the
@@ -529,9 +592,29 @@ impl AgentLoop {
                 // (breaking async recursion) and WAITS for the child to
                 // finish — synchronous from the LLM's perspective. The
                 // result string is returned directly; no polling needed.
-                let output = orch.execute_async(req).await;
-                orchestrated.push(ToolResult::ok(&tc.id, output));
+                //
+                // 心跳与护栏（2026-11-06）：这里此前是一行裸 await，子代理
+                // 最长可挂 1800s，期间**零事件**。前端 300s 静默就判超时
+                // （有工具在跑时抬到 600s），屏幕上于是留下一个永不结束的
+                // 「已委派子agent」卡片加一句假超时，而父 turn / 该会话仍
+                // 停在这里 —— 用户实报的「一调用 delegate_task 就卡死」。
+                // 现在每 5s 发一条 status（前端按帧重置 idle，不再假超时），
+                // 并用 per_tool_budget 兜底：卡死的形态从"无限转圈"变成
+                // "明确超时 + 该走哪条通道"。
+                // 并行扇出（2026-11-10）：不再就地阻塞——同轮多个委派
+                // 并发执行，循环结束后 join_all 汇合（最终合并按
+                // tool_call_id 配对，乱序安全）。
+                delegate_futs.push(self.run_blocking_delegate(
+                    orch.clone(),
+                    req,
+                    hermix_tools::dispatch::per_tool_budget("delegate_task"),
+                    tc.id.clone(),
+                ))
             }
+
+            // 同轮全部委派并发汇合（最终合并按 tool_call_id 配对，
+            // 顺序无关——见下方 ordered 注释）。
+            orchestrated.extend(futures::future::join_all(delegate_futs).await);
         }
 
         //P2.4 : run remaining interactive tools (currently
@@ -644,11 +727,18 @@ impl AgentLoop {
                                 };
                             }
                             _ = tokio::time::sleep_until(deadline) => {
+                                // 超时也要 abort：只报错不取消会留下一个
+                                // detached 任务继续跑（改文件/占子进程），
+                                // 且与并行路径（timeout 包 future → drop
+                                // 即取消）语义不一致。同步卡死的后端在
+                                // 下个 await 点才会被丢弃，Drop guard
+                                // （KillTreeOnDrop 等）届时清理。
+                                abort.abort();
                                 break ToolResult::err(
                                     &tc.id,
                                     format!(
-                                        "per-call timeout after {}s: tool '{}' did not return in time. \
-                                         [请勿盲目重试][状态未知] 该工具可能仍在后台执行且副作用可能已发生，\
+                                        "per-call timeout after {}s: tool '{}' exceeded its budget and was aborted. \
+                                         [请勿盲目重试][状态未知] 工具在超时点被中止，副作用可能已部分发生；\
                                          重试前请先读取目标文件/状态确认；建议改用其他方式或告知用户该操作暂不可用。",
                                         budget.as_secs(),
                                         tc.function.name

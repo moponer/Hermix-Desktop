@@ -3,8 +3,8 @@ import {
   useCallback, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from "react";
-import { invoke } from "../../ipc";
-import {
+import { IPC } from "../../ipc/commands";
+import { invoke } from "../../ipc";import {
   ArrowLeft, Search, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
   Plug, Sparkles, Network, Image as ImageIcon, Activity, Shield,
   Archive, Palette, Brain, AppWindow, Mic, X, Camera, FlaskConical,
@@ -16,25 +16,59 @@ import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import { Switch, SettingsGroup, SettingsRow, SegmentedControl, Input, IconTile } from "../ui";
 import { toastWarning } from "../../hooks/useToast";
-import {
-  PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab,
-} from "../config/ToolTabs";
-import { ModelListTab } from "./ModelListTab";
-import { SecurityTab } from "./SecurityTab";
-import { BackendTab } from "./BackendSettingsTab";
-import { AdvancedTab } from "./AdvancedSettingsTab";
-import { DiagnosticsTab } from "./DiagnosticsTab";
-import { RuntimesTab } from "./RuntimesTab";
-import { DevicesTab } from "./DevicesTab";
-import { VoiceTab } from "./VoiceTab";
-import { GeneralTab } from "./GeneralTab";
-import { AppearanceTab } from "./AppearanceTab";
-import { ArchiveTab } from "./ArchiveTab";
-
 /**
- * 记忆页是唯一把 echarts 拖进依赖图的设置页（力导图 ~1MB）。改成懒加载：
- * 打开设置弹窗不该为首屏付这笔解析成本 —— 只有真正切到「记忆管理」才取。
+ * 设置页**全部**懒加载：每一页都自带负载（模型列表要拉 `/v1/models`、诊断页
+ * 要跑探测、归档页要扫库、记忆页拖着 ~1MB 的 echarts）。打开设置弹窗只该付
+ * 「外壳 + 当前那一页」的钱。
+ *
+ * 统一成一个 `Suspense`（兜底是空盒子而非「加载中」文案：本地 chunk 通常
+ * <50ms，闪一行字比不闪更差，DesignGuard 也禁止视图里写加载文案）。
  */
+const PluginsTab = lazy(() =>
+  import("../config/ToolTabs").then((m) => ({ default: m.PluginsTab })),
+);
+const SkillsTab = lazy(() =>
+  import("../config/ToolTabs").then((m) => ({ default: m.SkillsTab })),
+);
+const ConnectorsTab = lazy(() =>
+  import("../config/ToolTabs").then((m) => ({ default: m.ConnectorsTab })),
+);
+const ToolsetsTab = lazy(() =>
+  import("../config/ToolTabs").then((m) => ({ default: m.ToolsetsTab })),
+);
+const ModelListTab = lazy(() =>
+  import("./ModelListTab").then((m) => ({ default: m.ModelListTab })),
+);
+const SecurityTab = lazy(() =>
+  import("./SecurityTab").then((m) => ({ default: m.SecurityTab })),
+);
+const BackendTab = lazy(() =>
+  import("./BackendSettingsTab").then((m) => ({ default: m.BackendTab })),
+);
+const AdvancedTab = lazy(() =>
+  import("./AdvancedSettingsTab").then((m) => ({ default: m.AdvancedTab })),
+);
+const DiagnosticsTab = lazy(() =>
+  import("./DiagnosticsTab").then((m) => ({ default: m.DiagnosticsTab })),
+);
+const RuntimesTab = lazy(() =>
+  import("./RuntimesTab").then((m) => ({ default: m.RuntimesTab })),
+);
+const DevicesTab = lazy(() =>
+  import("./DevicesTab").then((m) => ({ default: m.DevicesTab })),
+);
+const VoiceTab = lazy(() =>
+  import("./VoiceTab").then((m) => ({ default: m.VoiceTab })),
+);
+const GeneralTab = lazy(() =>
+  import("./GeneralTab").then((m) => ({ default: m.GeneralTab })),
+);
+const AppearanceTab = lazy(() =>
+  import("./AppearanceTab").then((m) => ({ default: m.AppearanceTab })),
+);
+const ArchiveTab = lazy(() =>
+  import("./ArchiveTab").then((m) => ({ default: m.ArchiveTab })),
+);
 const MemoryTab = lazy(() =>
   import("./MemoryTab").then((m) => ({ default: m.MemoryTab })),
 );
@@ -358,6 +392,20 @@ function PageBody({
   toolQuery: string;
   onToolQuery: (q: string) => void;
 }) {
+  return (
+    <Suspense fallback={<div className="h-40" aria-hidden />}>
+      <PageBodyInner def={def} toolQuery={toolQuery} onToolQuery={onToolQuery} />
+    </Suspense>
+  );
+}
+
+function PageBodyInner({
+  def, toolQuery, onToolQuery,
+}: {
+  def: PageDef;
+  toolQuery: string;
+  onToolQuery: (q: string) => void;
+}) {
   switch (def.id) {
     case "general": return <Section><PageHeading def={def} /><GeneralTab /></Section>;
     case "appearance": return <Section><PageHeading def={def} /><AppearanceTab /></Section>;
@@ -456,7 +504,7 @@ function ScreenshotSettingsCard() {
   // 进页时读一次真实状态：本地配置只是"用户请求的键"。
   useEffect(() => {
     let alive = true;
-    void invoke<HotkeyStatus>("screenshot_hotkey_status")
+    void invoke<HotkeyStatus>(IPC.screenshotHotkeyStatus)
       .then((st) => { if (alive) setActive(st.active); })
       .catch(() => { /* 旧版 exe 没这条命令：忽略，页面照常用 */ });
     return () => { alive = false; };
@@ -471,7 +519,7 @@ function ScreenshotSettingsCard() {
     setCfg(next);
     prevRef.current = next;
     storage.setItem(STORAGE_KEYS.screenshotConfig, JSON.stringify(next));
-    void invoke<HotkeyStatus>("screenshot_apply_config", { enabled: next.enabled, hotkey: next.hotkey })
+    void invoke<HotkeyStatus>(IPC.screenshotApplyConfig, { enabled: next.enabled, hotkey: next.hotkey })
       .then((st) => {
         setActive(st.active);
         if (st.substituted) {
@@ -560,7 +608,7 @@ function FileAssocTab() {
   /** 回读真实状态：开关显示的是「真正生效」，不是「我们写进去了」。 */
   const refresh = useCallback(
     () =>
-      invoke<FileAssocEntry[]>("file_assoc_list")
+      invoke<FileAssocEntry[]>(IPC.fileAssocList)
         .then(setEntries)
         .catch((e) => setError(String(e instanceof Error ? e.message : e))),
     [],
@@ -573,7 +621,7 @@ function FileAssocTab() {
   const toggle = (ext: string, enable: boolean) => {
     setBusy(ext);
     setError(null);
-    void invoke("file_assoc_set", { ext, enable })
+    void invoke(IPC.fileAssocSet, { ext, enable })
       .then(() => refresh())
       .catch((e) => {
         setError(String(e instanceof Error ? e.message : e));

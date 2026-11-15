@@ -30,7 +30,7 @@ use sha2::{Digest, Sha256};
 use windows_sys::Win32::{
     Foundation::{
         CloseHandle, GetLastError, LocalFree, SetHandleInformation, GENERIC_READ, HANDLE,
-        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
     },
     Security::{
         AddMandatoryAce, CopySid, CreateRestrictedToken, CreateWellKnownSid, DuplicateTokenEx,
@@ -59,7 +59,7 @@ use windows_sys::Win32::{
         },
         Threading::{
             CreateProcessAsUserW, GetCurrentProcess, GetExitCodeProcess, OpenProcessToken,
-            TerminateProcess, WaitForSingleObject, CREATE_UNICODE_ENVIRONMENT, INFINITE,
+            TerminateProcess, WaitForSingleObject, CREATE_UNICODE_ENVIRONMENT,
             PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
         },
     },
@@ -714,6 +714,12 @@ fn make_inheritable_pipe() -> Result<(HANDLE, HANDLE), AgentError> {
     Ok((r, w))
 }
 
+/// `wait_timeout` 的结果：正常退出（exit code 原样镜像）或到达 deadline。
+pub enum WaitOutcome {
+    Exited(u32),
+    TimedOut,
+}
+
 /// 受限子进程句柄：stdout/stderr 包装为 std 类型（FromRawHandle），
 /// wait 走 WaitForSingleObject + GetExitCodeProcess（exit code 原样
 /// 镜像，不折叠）。
@@ -727,32 +733,42 @@ pub struct SandboxChild {
 }
 
 impl SandboxChild {
-    /// 阻塞等待退出并镜像精确 exit code。
-    pub fn wait(&mut self) -> Result<u32, AgentError> {
-        let rc = unsafe { WaitForSingleObject(self.process, INFINITE) };
-        if rc != WAIT_OBJECT_0 {
-            return Err(sandbox_err("WaitForSingleObject"));
+    /// 有界等待：每 200ms 醒一次检查 deadline，到期返回 `TimedOut`。
+    ///
+    /// 旧实现是 `WaitForSingleObject(INFINITE)` + 独立看门狗线程睡满 timeout
+    /// 再对**裸 HANDLE** 做 `TerminateProcess`：命令正常结束会让 `Drop` 先
+    /// `CloseHandle`，句柄值被系统复用后看门狗可能杀掉无关进程；而且每条
+    /// 命令固定泄漏一个 OS 线程最长 timeout 秒。轮询等待没有这两个问题；
+    /// 到期后的进程树清理交给调用方（job / taskkill）。
+    pub fn wait_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<WaitOutcome, AgentError> {
+        const SLICE: std::time::Duration = std::time::Duration::from_millis(200);
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(WaitOutcome::TimedOut);
+            }
+            let wait_ms = remaining.min(SLICE).as_millis().max(1) as u32;
+            match unsafe { WaitForSingleObject(self.process, wait_ms) } {
+                WAIT_OBJECT_0 => {
+                    let mut code: u32 = 0;
+                    if unsafe { GetExitCodeProcess(self.process, &mut code) } == 0 {
+                        return Err(sandbox_err("GetExitCodeProcess"));
+                    }
+                    return Ok(WaitOutcome::Exited(code));
+                }
+                WAIT_TIMEOUT => continue,
+                _ => return Err(sandbox_err("WaitForSingleObject")),
+            }
         }
-        let mut code: u32 = 0;
-        if unsafe { GetExitCodeProcess(self.process, &mut code) } == 0 {
-            return Err(sandbox_err("GetExitCodeProcess"));
-        }
-        Ok(code)
     }
 
-    /// 超时/取消时的强杀（local.rs 的 timeout 包装调用）。
+    /// 超时/取消时的强杀（只杀直接子进程；子孙由调用方用 job / taskkill 收）。
     pub fn terminate(&self) {
         unsafe { TerminateProcess(self.process, 1) };
-    }
-
-    /// 超时看门狗：`secs` 秒后强杀子进程。阻塞 wait 无法被外部取消，
-    /// 强杀是挂死命令的唯一出口（TerminateProcess 后 wait 返回非零码）。
-    pub fn spawn_kill_watchdog(&self, secs: u64) {
-        let handle = self.process;
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(secs));
-            unsafe { TerminateProcess(handle, 1) };
-        });
     }
 
     /// 复制 stdout/stderr 读端句柄（DuplicateHandle 语义），供并行读取
@@ -895,11 +911,48 @@ impl SandboxSession {
         if is_drive_root(&ws) {
             return Err(sandbox_msg("workspace must not be a drive root"));
         }
-        let temp_dir = std::env::temp_dir().join(format!("hermix-sbx-{}", uuid::Uuid::new_v4().simple()));
+        // temp 根候选：系统 TMP 在前（现状不变），`~/.hermix/tmp` 兜底。
+        // 2026-11-10：用户自设 TMP（<TMPDIR>）的 ACL 拒绝 WRITE_DAC，
+        // grant_write 的 SetNamedSecurityInfoW 报 Win32 error 5，终端整体
+        // 不可用——回退到应用确定可写的主目录，而不是把整个终端废掉。
+        let mut temp_roots: Vec<PathBuf> = vec![std::env::temp_dir()];
+        if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+            let fallback = PathBuf::from(home).join(".hermix").join("tmp");
+            if !temp_roots.contains(&fallback) {
+                temp_roots.push(fallback);
+            }
+        }
+
+        let mut last_err: Option<AgentError> = None;
+        for root in &temp_roots {
+            match Self::provision_with_temp_root(mode, &ws, root) {
+                Ok(session) => return Ok(session),
+                Err(e) => {
+                    tracing::warn!(
+                        root = %root.display(),
+                        error = %e,
+                        "sandbox temp root unusable — falling back to the next candidate"
+                    );
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| sandbox_msg("no usable sandbox temp root")))
+    }
+
+    /// 在指定 temp 根下建私有会话目录并完成全部授权（`provision` 的
+    /// 逐候选实现体；`ws` 已过盘根与规范路径校验）。
+    fn provision_with_temp_root(
+        mode: SandboxMode,
+        ws: &Path,
+        temp_root: &Path,
+    ) -> Result<Self, AgentError> {
+        let temp_dir =
+            temp_root.join(format!("hermix-sbx-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&temp_dir)
             .map_err(|e| sandbox_msg(format!("temp dir create failed: {e}")))?;
         let temp_canon = canonical_path(&temp_dir)?;
-        if paths_overlap(&ws, &temp_canon) {
+        if paths_overlap(ws, &temp_canon) {
             let _ = std::fs::remove_dir_all(&temp_dir);
             return Err(sandbox_msg("workspace overlaps the sandbox temp root"));
         }
@@ -938,7 +991,7 @@ impl SandboxSession {
 
         Ok(Self {
             token,
-            workspace: ws,
+            workspace: ws.to_path_buf(),
             temp_dir: temp_canon,
         })
     }

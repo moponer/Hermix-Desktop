@@ -104,93 +104,37 @@ impl SessionPersistence {
         // ("duplicate column"). The two `no such table` / `duplicate
         // column` strings are the only ones we swallow.
         // -----------------------------------------------------------------
-        if let Err(e) = conn.execute("ALTER TABLE sessions ADD COLUMN system_prompt TEXT", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate sessions.system_prompt: {e}"
-                )));
-            }
-        }
+        add_column(&conn, "sessions", "system_prompt", "TEXT")?;
 
         // Migration: messages.active (soft-delete flag for /undo).
-        if let Err(e) = conn.execute("ALTER TABLE messages ADD COLUMN active INTEGER NOT NULL DEFAULT 1", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate messages.active: {e}"
-                )));
-            }
-        }
+        add_column(&conn, "messages", "active", "INTEGER NOT NULL DEFAULT 1")?;
 
         // Migration: messages.extra (JSON blob for approval rows + future
         // non-text metadata). Approval rows use role='approval' and stuff
         // request_id/tool/args/risk/decision/decided_at into this column.
-        if let Err(e) = conn.execute("ALTER TABLE messages ADD COLUMN extra TEXT", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate messages.extra: {e}"
-                )));
-            }
-        }
+        add_column(&conn, "messages", "extra", "TEXT")?;
 
         //Migration : add `name` column for tool messages.
         // Without this, reloaded tool messages always show "tool" as
         // the verb because tool_name is None (name not persisted).
-        if let Err(e) = conn.execute("ALTER TABLE messages ADD COLUMN name TEXT", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate messages.name: {e}"
-                )));
-            }
-        }
+        add_column(&conn, "messages", "name", "TEXT")?;
 
         //Migration : add `workspace` and `expert_id` columns
         // to sessions table so the frontend can restore workspace/expert
         // when loading a historical session.
-        if let Err(e) = conn.execute("ALTER TABLE sessions ADD COLUMN workspace TEXT", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate sessions.workspace: {e}"
-                )));
-            }
-        }
-        if let Err(e) = conn.execute("ALTER TABLE sessions ADD COLUMN expert_id TEXT", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate sessions.expert_id: {e}"
-                )));
-            }
-        }
+        add_column(&conn, "sessions", "workspace", "TEXT")?;
+        add_column(&conn, "sessions", "expert_id", "TEXT")?;
 
         //Migration : add `parent_session_id` column for
         // session lineage tracking. Allows the frontend to display a
         // tree of parent/child sessions (e.g. root session → sub-agent
         // sessions). `None` for top-level sessions.
-        if let Err(e) = conn.execute("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate sessions.parent_session_id: {e}"
-                )));
-            }
-        }
+        add_column(&conn, "sessions", "parent_session_id", "TEXT")?;
 
         //Migration : add `last_context_usage` column to
         // persist the most recent context-usage snapshot so a restored
         // session shows the context-usage bar without a fresh stream.
-        if let Err(e) = conn.execute("ALTER TABLE sessions ADD COLUMN last_context_usage TEXT", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate sessions.last_context_usage: {e}"
-                )));
-            }
-        }
+        add_column(&conn, "sessions", "last_context_usage", "TEXT")?;
 
         // Migration: add `workbench_id` so a session knows which workbench
         // (if any) it belongs to. NULL is an ordinary chat; non-NULL marks a
@@ -198,35 +142,14 @@ impl SessionPersistence {
         // the workbench sidebar scope to its own id. Without this both
         // conversation spaces draw from one flat pool and leak into each
         // other's lists.
-        if let Err(e) = conn.execute("ALTER TABLE sessions ADD COLUMN workbench_id TEXT", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate sessions.workbench_id: {e}"
-                )));
-            }
-        }
+        add_column(&conn, "sessions", "workbench_id", "TEXT")?;
 
         // Migration: execution_timeline (tool call events) and
         // reasoning_content (LLM think blocks). Without these columns,
         // tool cards show as stale "运行中" on reload and thinking
         // text is lost. Serialized as JSON TEXT blobs.
-        if let Err(e) = conn.execute("ALTER TABLE messages ADD COLUMN execution_timeline TEXT", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate messages.execution_timeline: {e}"
-                )));
-            }
-        }
-        if let Err(e) = conn.execute("ALTER TABLE messages ADD COLUMN reasoning_content TEXT", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate messages.reasoning_content: {e}"
-                )));
-            }
-        }
+        add_column(&conn, "messages", "execution_timeline", "TEXT")?;
+        add_column(&conn, "messages", "reasoning_content", "TEXT")?;
         // Migration: unified_steps (frontend-built chronological
         // reasoning/tools/text timeline). Without it, a session reload
         // can't restore the inline tool interleaving the user saw
@@ -235,14 +158,7 @@ impl SessionPersistence {
         // blob (array of {kind,...} step objects) — the server stores
         // it verbatim and the client feeds it straight into
         // `resolveSteps`. Idempotent via "duplicate column" detection.
-        if let Err(e) = conn.execute("ALTER TABLE messages ADD COLUMN unified_steps TEXT", []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(AgentError::Io(format!(
-                    "Failed to migrate messages.unified_steps: {e}"
-                )));
-            }
-        }
+        add_column(&conn, "messages", "unified_steps", "TEXT")?;
 
         // -----------------------------------------------------------------
         // schema-version migration bookkeeping. This table is
@@ -399,7 +315,10 @@ impl SessionPersistence {
                 parent_session_id TEXT,
                 workspace TEXT,
                 expert_id TEXT,
-                last_context_usage TEXT
+                last_context_usage TEXT,
+                -- 新库直接建出该列（旧库由下方 ALTER 补），否则同批次里
+                -- `idx_sessions_workbench` 会在建表后立刻报 no such column。
+                workbench_id TEXT
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -422,8 +341,9 @@ impl SessionPersistence {
             CREATE INDEX IF NOT EXISTS idx_messages_session_active
                 ON messages(session_id, active);
 
-            CREATE INDEX IF NOT EXISTS idx_messages_session
-                ON messages(session_id);
+            -- idx_messages_session(session_id) 与 idx_messages_session_active
+            -- 的左前缀完全重复：只带来写放大，查询永远走后者。旧库一并删掉。
+            DROP INDEX IF EXISTS idx_messages_session;
 
             -- 分析/列表查询按时间过滤或排序（usage.rs 的 COUNT/ORDER BY、
             -- 会话列表的 ORDER BY updated_at），此前没有索引 → 全表扫 + 排序。
@@ -431,6 +351,14 @@ impl SessionPersistence {
                 ON messages(created_at);
             CREATE INDEX IF NOT EXISTS idx_sessions_updated_at
                 ON sessions(updated_at);
+
+            -- 会话树与工作台过滤：`find_children`/`get_parent` 按
+            -- parent_session_id 查、`list_sessions` 按 workbench_id IS NULL
+            -- 过滤并 COUNT(*)。三者此前都是 sessions 全表扫。
+            CREATE INDEX IF NOT EXISTS idx_sessions_parent
+                ON sessions(parent_session_id);
+            CREATE INDEX IF NOT EXISTS idx_sessions_workbench
+                ON sessions(workbench_id);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
                 content,
@@ -699,4 +627,28 @@ impl SessionPersistence {
 
         Ok(())
     }
+}
+
+/// 幂等 `ALTER TABLE ... ADD COLUMN`：新库还没建表（`no such table`）与已迁移
+/// （`duplicate column`）都视为 no-op，其余错误上抛。
+///
+/// 此前同一个 8 行块在 `ensure_db_inner` 里逐字复制了 12 次（只有 DDL 与错误
+/// 文案不同）——迁移的容错口径因此有 12 份，任何一处写错（比如漏掉
+/// `no such table`）都只会在特定升级路径上炸。收敛成一个实现后，加一列一行。
+fn add_column(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+    decl: &str,
+) -> Result<(), AgentError> {
+    let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {decl}");
+    if let Err(e) = conn.execute(&sql, []) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column") && !msg.contains("no such table") {
+            return Err(AgentError::Io(format!(
+                "Failed to migrate {table}.{column}: {e}"
+            )));
+        }
+    }
+    Ok(())
 }

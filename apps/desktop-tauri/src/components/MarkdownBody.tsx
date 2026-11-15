@@ -14,18 +14,18 @@
  *   - 全部 components 配置（p / li / code / input）原样保留
  */
 
-import { Children, cloneElement, isValidElement, memo, useCallback, useDeferredValue, useMemo, useRef, useState, useEffect, type ReactElement } from "react";
+import { Children, cloneElement, isValidElement, memo, useCallback, useDeferredValue, useMemo, useRef, useState, useEffect, useSyncExternalStore, type ReactElement } from "react";
 import { markdownToHast } from "satteri";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import type { ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, Copy, X, ChevronDown, ListOrdered } from "lucide-react";
-import katex from "katex";
+/* katex 本体按需 import（见 MathNode）：这里只留样式。 */
 import "katex/dist/katex.min.css";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
 import { useIsDarkTheme } from "../hooks/useTheme";
-import { highlightToReact } from "../lib/codeHighlight";
+import { highlightToReact, langLoadVersion, subscribeLangLoads } from "../lib/codeHighlight";
 import { autoCloseUnbalancedFences } from "../lib/markdownFence";
 import { hardenSoftLineBreaks } from "@hermix/preview";
 import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
@@ -263,9 +263,12 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
   const [showLines, setShowLines] = useState(false);
   const isDiff = /^(diff|patch)$/i.test(language);
 
+  // 长尾语法按需加载（见 codeHighlight 的 LAZY_LANGS）：首次遇到时先出纯文本，
+  // 语法包到位后版本号 +1 → 这里重算一次，把这块升级成高亮。
+  const langVersion = useSyncExternalStore(subscribeLangLoads, langLoadVersion, langLoadVersion);
   const highlighted = useMemo(
     () => highlightToReact(code, language, isDark),
-    [code, language, isDark],
+    [code, language, isDark, langVersion],
   );
 
   const lineCount = useMemo(() => {
@@ -543,18 +546,47 @@ function transformMath(md: string): string {
   return out.join("\n");
 }
 
+/* ── KaTeX：按需加载（512KB，只有真的出现公式时才取）─────────
+   它与 Mermaid 同一形态：静态 import 会让每个打开对话的人都白背一份
+   katex 的解析成本，而实际用到公式的回合很少。取不到/解析失败一律退回
+   原文 `<code>`，不吞内容。CSS 仍静态引入（23KB，换来首帧不闪）。 */
+type KatexLike = {
+  renderToString: (tex: string, opts?: Record<string, unknown>) => string;
+};
+let katexPromise: Promise<KatexLike> | null = null;
+function loadKatex(): Promise<KatexLike> {
+  if (!katexPromise) {
+    katexPromise = import("katex").then(
+      (m) => (m as { default?: KatexLike }).default ?? (m as unknown as KatexLike),
+    );
+  }
+  return katexPromise;
+}
+
 function MathNode({ tex, display }: { tex: string; display?: boolean }) {
-  const html = useMemo(() => {
-    try {
-      return katex.renderToString(tex, {
-        displayMode: display === true,
-        throwOnError: false,
-        strict: false,
-        output: "html",
+  const [html, setHtml] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadKatex()
+      .then((katex) => {
+        try {
+          const out = katex.renderToString(tex, {
+            displayMode: display === true,
+            throwOnError: false,
+            strict: false,
+            output: "html",
+          });
+          if (alive) setHtml(out);
+        } catch {
+          if (alive) setHtml(null);
+        }
+      })
+      .catch(() => {
+        if (alive) setHtml(null);
       });
-    } catch {
-      return null;
-    }
+    return () => {
+      alive = false;
+    };
   }, [tex, display]);
   if (!html) return <code>{tex}</code>;
   return (
@@ -743,6 +775,12 @@ export interface MarkdownBodyProps {
    * 会让展开态反复重建；正文定型后再挂交互。
    */
   interactive?: boolean;
+  /**
+   * 是否处于流式生成中。为 `true` 且正文超过 `STREAM_TAIL_SPLIT_MIN` 时，
+   * 只解析已闭合的前缀、最后一块按纯文本上屏（见 `splitStreamTail`）。
+   * 定型后（`false`）恢复整段高质量渲染。
+   */
+  streaming?: boolean;
 }
 
 // satteri features: 对齐 react-markdown 的 remarkPlugins=[remarkGfm, remarkBreaks]
@@ -751,6 +789,31 @@ export interface MarkdownBodyProps {
 const SATTERI_FEATURES = { features: { gfm: true } } as const;
 
 const MARKDOWN_REPARSE_THROTTLE_MS = 120;
+
+/**
+ * 流式长文的分块降级阈值（字符）。
+ *
+ * 低于这个长度整段解析最省事；超过之后全量重解析的代价开始咬人，于是只
+ * 解析"已闭合的前缀"，正在生长的最后一块先按纯文本上屏（`md-stream-tail`）。
+ * 6000 字是经验值：本仓库典型的一轮回答在 1000–4000 字，长报告才会过线。
+ */
+const STREAM_TAIL_SPLIT_MIN = 6000;
+
+/**
+ * 切出「稳定的头 + 正在长的尾」。
+ *
+ * 切点取最后一个空行：CommonMark 的块边界就在空行上，头部的解析结果因此
+ * 是**稳定前缀**（只在新块出现时变化），可以整块复用；尾部按纯文本渲染，
+ * 不必每 120ms 走一遍 satteri → hast → JSX。
+ */
+function splitStreamTail(md: string): { head: string; tail: string } {
+  if (md.length < STREAM_TAIL_SPLIT_MIN) return { head: md, tail: "" };
+  const idx = md.lastIndexOf("\n\n");
+  // 切点太靠前（比如整段只有一个块）就不切：否则一半正文退回纯文本，
+  // 观感反而更差。
+  if (idx < 1500) return { head: md, tail: "" };
+  return { head: md.slice(0, idx + 2), tail: md.slice(idx + 2) };
+}
 
 /**
  * Trailing-edge throttle：高频更新的 value 最多每 intervalMs 提交一次快照，
@@ -806,7 +869,7 @@ function normalizeWindowsImagePaths(md: string): string {
 }
 
 export const MarkdownBody = memo(function MarkdownBody({
-  content, onPathClick, pathIcons = false, interactive = true,
+  content, onPathClick, pathIcons = false, interactive = true, streaming = false,
 }: MarkdownBodyProps) {
   const handlePathClick = useCallback(onPathClick ?? (() => {}), [onPathClick]);
   // 主题判定走 useIsDarkTheme（响应式 + 不读已废除的 `.dark` 类）。
@@ -818,12 +881,21 @@ export const MarkdownBody = memo(function MarkdownBody({
   // 流式期间不抢占输入框打字与滚动。120ms 节流决定"多久解析一次"，
   // deferred 决定"在哪个优先级解析"——两者互补。
   const deferredContent = useDeferredValue(displayContent);
+  // 流式长回复：只解析**已闭合的块**（head），最后一段（正在长的那个块）
+  // 先按纯文本上屏。理由：satteri 解析 + hast→JSX 的代价随正文线性增长，
+  // 5000 字以上每 120ms 全量重解析就是几十毫秒的长任务；而正在增长的
+  // 永远只是最后一块。head 是前缀，只有"多了一个空行"时才变 —— 于是
+  // 完整解析的次数从"每个节流窗口一次"降到"每出现一个新块一次"。
+  const { head, tail } = useMemo(
+    () => (streaming ? splitStreamTail(deferredContent) : { head: deferredContent, tail: "" }),
+    [deferredContent, streaming],
+  );
   // 1. 不平衡 fence 关闭（与 react-markdown 时一致）
   // 2. 软换行 → 硬换行（satleri 不开 remarkBreaks，等价物在 strings 层）
   // 3. satteri 解析 → hast tree
   // 4. hast-util-to-jsx-runtime → React element
   const rendered = useMemo(() => {
-    const normalized = normalizeWindowsImagePaths(deferredContent);
+    const normalized = normalizeWindowsImagePaths(head);
     const balanced = autoCloseUnbalancedFences(normalized);
     const hardened = hardenSoftLineBreaks(balanced);
     const withMath = transformMath(hardened);
@@ -963,7 +1035,7 @@ export const MarkdownBody = memo(function MarkdownBody({
         },
       },
     });
-  }, [deferredContent, handlePathClick, pathIcons, isDark]);
+  }, [head, handlePathClick, pathIcons, isDark]);
 
   // 正文定型后才切小节（复制/折叠）。流式阶段保持扁平，避免每 chunk 重建小节树。
   const body = useMemo(() => {
@@ -977,5 +1049,10 @@ export const MarkdownBody = memo(function MarkdownBody({
     );
   }, [rendered, interactive]);
 
-  return <div className="prose max-w-none">{body}</div>;
+  return (
+    <div className="prose max-w-none">
+      {body}
+      {tail && <div className="md-stream-tail">{tail}</div>}
+    </div>
+  );
 });

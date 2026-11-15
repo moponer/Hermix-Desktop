@@ -96,6 +96,10 @@ pub struct CleanReport {
     pub freed_bytes: u64,
     pub refused: Vec<String>,
     pub errors: Vec<String>,
+    /// 体积快照在 deadline 内没走完（子树被低估）。删除照常执行，
+    /// freed 仅供参考。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub size_scan_truncated: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +317,10 @@ impl StorageCleanHandler {
         let mut refused = vec![];
         let mut errors = vec![];
         let mut freed: u64 = 0;
+        // 体积快照总预算：删除前的 freed 统计不值得无界遍历（数百万文件的
+        // 子树会把 blocking 线程钉住几分钟）。超时后 freed 低估、删除照常。
+        let scan_deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let mut size_scan_truncated = false;
 
         for raw in paths {
             let canonical = match safety_check(&raw) {
@@ -327,6 +335,14 @@ impl StorageCleanHandler {
                 walkdir::WalkDir::new(&canonical)
                     .into_iter()
                     .filter_map(|e| e.ok())
+                    .take_while(|_| {
+                        if std::time::Instant::now() >= scan_deadline {
+                            size_scan_truncated = true;
+                            false
+                        } else {
+                            true
+                        }
+                    })
                     .filter(|e| e.file_type().is_file())
                     .filter_map(|e| e.metadata().ok())
                     .map(|m| m.len())
@@ -357,6 +373,7 @@ impl StorageCleanHandler {
             freed_bytes: freed,
             refused,
             errors,
+            size_scan_truncated,
         }
     }
 }

@@ -13,7 +13,7 @@ import type { ChatMessage, TimelineStep } from "../types";
 import { ApprovalRequestView } from "./ApprovalBubble";
 import { ApprovalBatchView } from "./ApprovalBatchBubble";
 import {
-  parseContent, groupTimeline,
+  parseContent, groupTimelineSteps, lastTextStepIndex,
   type FileChangeEntry, type MemoryUpdateEntry, type MemoryRecallEntry,
 } from "./messageParser";
 import { parseMemoryResult } from "../utils/memoryToolResult";
@@ -167,14 +167,14 @@ export function ProcessTimeline({
   // 在组件里会被无声吞掉。改为按本轮的稳定 key 存进模块级 Map
   // （见 chat/activitySummary.ts 的 useDisclosure）。
 
-  // Pre-compute tool groups per step so the "已完成 N 个工具" count
-  // reflects actual tool *invocations*, not raw timeline events — a
+  // Pre-compute tool groups (跨 step 一次聚合) so the "已完成 N 个工具"
+  // count reflects actual tool *invocations*, not raw timeline events — a
   // single tool call can emit hundreds of `tool_stdout` chunks that would
   // otherwise inflate the count to 700+ for just a handful of tools.
-  // Reusing the same `groupTimeline` call that drives rendering keeps the
-  // header count in sync with what the user sees when expanded.
+  // Reusing the same `groupTimelineSteps` call that drives rendering keeps
+  // the header count in sync with what the user sees when expanded.
   // During streaming the parent re-renders 30-50×/s (rAF batches), so the
-  // memo avoids re-running `groupTimeline` when `steps`/streaming are unchanged.
+  // memo avoids re-running the aggregation when `steps`/streaming are unchanged.
   // While the live turn is active (streaming text, a tool is still
   // executing, or the UI is paused for approval), do NOT flip stranded
   // groups to `"error"`. A long-running tool whose `tool_complete` has not
@@ -199,12 +199,7 @@ export function ProcessTimeline({
   // 待决定审批改由 ApprovalDrawer 承载，它固定在输入框上方（视线落点），
   // 不存在“渲染在视野外”的问题。
   const stepGroups = useMemo(
-    () =>
-      steps.map((s) =>
-        s.kind === "tools"
-          ? groupTimeline(s.events, { streamComplete })
-          : null,
-      ),
+    () => groupTimelineSteps(steps, { streamComplete }),
     // `steps` is a new array on every render during streaming
     // (the parent rebuilds it from the live message's unified_steps),
     // so the memo will recompute when steps actually change. When the
@@ -237,6 +232,8 @@ export function ProcessTimeline({
     0,
   );
   const reasoningSteps = steps.filter((s) => s.kind === "reasoning");
+  // 正文 = 收尾那一段 text；其余 text 是过程旁白（见 messageParser）。
+  const lastTextIndex = lastTextStepIndex(steps);
   const resolvedApprovals = steps.filter(
     (s) => s.kind === "approval_request" && s.meta.decision !== null,
   ).length;
@@ -379,16 +376,28 @@ export function ProcessTimeline({
         </button>
       )}
       {/* Chronological render — 一轮就是一个按时间顺序平铺的过程流：
-            - text step 永远在自己的时间位置上（这是给用户看的正文）
+            - **收尾那一段** text 是正文，永远可见；夹在工具调用之间的 text 是
+              过程旁白，运行中用次级色、轮次结束后随过程一起收进折叠头
             - tools step 平铺成过程行；运行中一直可见，结束后随整轮收进折叠头
             - reasoning step 各自是独立折叠项：正在想的那段展开，刚结束的收起
           折叠的唯一总开关是上面的 `tl-process-header`，只在轮次结束后出现。 */}
       <div className="tl-process-body">
         {steps.map((step, i) => {
           if (step.kind === "text") {
+            // 旁白不进正文：模型的旁白是「我接下来去做什么」，收尾段才是答复。
+            // 判据见 `lastTextStepIndex` —— 位置，不是长度。
+            const isNarration = i !== lastTextIndex;
+            if (isNarration && settled && !expanded) return null;
             const parsed = parseContent(step.content);
             return (
-              <div key={`text-${i}`} className="tl-iteration tl-text-step">
+              <div
+                key={`text-${i}`}
+                className={
+                  isNarration
+                    ? "tl-iteration tl-text-step tl-text-step--narration"
+                    : "tl-iteration tl-text-step"
+                }
+              >
                 {parsed.body && (
                   <div className="tl-text-inner">
                     <MarkdownBody
@@ -404,6 +413,7 @@ export function ProcessTimeline({
                          ProcessTimeline 同时服务流式与定稿两条路径，
                          所以按 isStreaming 区分。 */
                       interactive={!isStreaming}
+                      streaming={isStreaming}
                       onPathClick={onPathClick ?? (() => {})}
                     />
                   </div>

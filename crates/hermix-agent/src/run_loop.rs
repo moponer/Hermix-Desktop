@@ -192,6 +192,13 @@ mod tool_turn;
 use tool_prep::ToolPrep;
 mod verification;
 
+/// 「本可收尾、但任务未必完成」时最多自动续跑多少次。
+///
+/// `max_turns` 默认 0（不限），所以自动续跑需要自己的硬上限：模型可能陷进
+/// 「调一个工具 → 写一段总结 → 被推回去 → 再调一个工具」的磨蹭循环，靠
+/// 收敛检测（连错 / 零新信息）不一定能收住。
+const MAX_GOAL_CONTINUATIONS: u32 = 40;
+
 impl AgentLoop {
     /// Arm the one-shot stop-signal forwarder (2026-10-18).
     ///
@@ -222,6 +229,69 @@ impl AgentLoop {
                 interrupt.interrupt(None);
             });
         }
+    }
+
+    /// 「这一轮可以收尾了，但目标是不是真的完成了？」——判定要不要把模型
+    /// 推回去继续干。
+    ///
+    /// 旧判据是 `!history_has_tool`（本次运行还没用过任何工具），语义只覆盖
+    /// 「模型光说不做」这一种情形。长任务一旦动过工具，`history_has_tool`
+    /// 永久为真，于是「干一段 → 写总结 → 交回用户」成为唯一出口，用户必须
+    /// 每轮手动打「继续」。这里换成目标驱动：
+    ///
+    /// - `autonomous_nudge_count < default_max_autonomous_nudges()`：连续
+    ///   「只说话不动手」的轮数还没用满预算 → 可以推。
+    /// - 模型每次重新调用工具都会把该计数清零（见 `codex_ack_continuations = 0`
+    ///   的同一位置），所以「干活 → 收尾总结 → 被推回 → 再干活」可以一直循环
+    ///   到目标完成。
+    /// - 连续推满 `default_max_autonomous_nudges`（默认 8）次仍然只说话 →
+    ///   判定它确实没活可干，放行收尾（避免把它推进空转）。
+    /// - `goal_continuations` 是全程硬上限，防止磨蹭型任务无限烧钱。
+    ///
+    /// 2026-10-30：判据曾是 `autonomous_nudge_count == 0`（只能推一次），而
+    /// `max_autonomous_nudges`（默认 8）虽然一路传进 `decide_empty_response`
+    /// 却从未被读过 —— 两个预算都是死的，长任务里"写一段总结就收尾"成了唯一
+    /// 出口。现在两处统一走本函数返回的同一个 blocker，避免两份真相源互相
+    /// 抵消（另一处曾是 `nudge_eligible`）。
+    fn goal_continue_blocker(
+        &self,
+        autonomous_nudge_count: u32,
+        goal_continuations: u32,
+        total_turns: u32,
+        tool_schemas_empty: bool,
+    ) -> Option<&'static str> {
+        if !self.config.autonomous_mode {
+            return Some("autonomous_mode_off");
+        }
+        if tool_schemas_empty {
+            return Some("no_tool_schemas");
+        }
+        if autonomous_nudge_count >= default_max_autonomous_nudges() {
+            return Some("nudge_budget_exhausted");
+        }
+        if goal_continuations >= MAX_GOAL_CONTINUATIONS {
+            return Some("goal_continuation_cap");
+        }
+        if self.config.max_turns != 0 && total_turns >= self.config.max_turns {
+            return Some("turn_budget");
+        }
+        None
+    }
+
+    fn should_goal_continue(
+        &self,
+        autonomous_nudge_count: u32,
+        goal_continuations: u32,
+        total_turns: u32,
+        tool_schemas_empty: bool,
+    ) -> bool {
+        self.goal_continue_blocker(
+            autonomous_nudge_count,
+            goal_continuations,
+            total_turns,
+            tool_schemas_empty,
+        )
+        .is_none()
     }
 
     /// `run()` / `run_stream()` 共享的回合准备：`prepare_run_context` → 解构 →
@@ -489,18 +559,48 @@ impl AgentLoop {
                             return TurnLlmOutcome::Terminate(TurnLlmTermination::UserInterrupted);
                         }
                         Err(e) => {
-                            if stream.is_some() {
+                            // 上下文溢出自愈（2026-11-08，cx-chaoxing-progress 任务死因）：
+                            // 压力模型（估算 tokens / max_context_tokens）没到预警线时，
+                            // 供应商已因真实窗口溢出 400；旧路径直接 Terminate 让任务
+                            // 自杀。识别 ContextOverflow → 强制同步压缩 → 重试一次；
+                            // 压缩后仍失败才按原路径优雅终止。
+                            if crate::agent_helpers::classify_error(&e.to_string())
+                                == crate::agent_helpers::ErrorClass::ContextOverflow
+                            {
                                 tracing::warn!(
                                     error = %e,
-                                    "LLM call failed (stream retry path) — treating as graceful interrupt for persistence"
+                                    "provider rejected context length — forcing compression and retrying once"
                                 );
+                                self.force_compress_now(ctx).await;
+                                match self
+                                    .call_llm_with_retry(ctx, tool_schemas, turn_runtime_route)
+                                    .await
+                                {
+                                    Ok(resp) => resp,
+                                    Err(retry_err) => {
+                                        tracing::warn!(
+                                            error = %retry_err,
+                                            "LLM call failed after forced compression — treating as graceful interrupt for persistence"
+                                        );
+                                        return TurnLlmOutcome::Terminate(
+                                            TurnLlmTermination::Errored(retry_err.to_string()),
+                                        );
+                                    }
+                                }
                             } else {
-                                tracing::warn!(
-                                    error = %e,
-                                    "LLM call failed (non-stream path) — treating as graceful interrupt for persistence"
-                                );
+                                if stream.is_some() {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "LLM call failed (stream retry path) — treating as graceful interrupt for persistence"
+                                    );
+                                } else {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "LLM call failed (non-stream path) — treating as graceful interrupt for persistence"
+                                    );
+                                }
+                                return TurnLlmOutcome::Terminate(TurnLlmTermination::Errored(e.to_string()));
                             }
-                            return TurnLlmOutcome::Terminate(TurnLlmTermination::Errored(e.to_string()));
                         }
                     }
                 }
@@ -573,6 +673,8 @@ impl AgentLoop {
         let mut total_turns: u32 = state.total_turns;
         let session_id = self.config.session_id.as_deref().unwrap_or("");
         let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
+        // 目标驱动自动续跑的总次数（硬上限见 MAX_GOAL_CONTINUATIONS）。
+        let mut goal_continuations: u32 = 0;
 
         loop {
             // turn transition watchdog（原 run/run_stream 各一份的 48 行块，
@@ -712,24 +814,34 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                     if Self::assistant_visible_text_after_think_blocks(
                         &response.message
                     ) {
-                        // In autonomous_mode, if the LLM produced
-                        // visible text but no tool calls and no tools have
-                        // been used yet, fall through to decide_empty_response
-                        // instead of finalizing. The autonomous nudge will push
-                        // the LLM to start using tools. Without this, the agent
-                        // would stop after the LLM says "I'll help you with that"
-                        // without actually doing any work.
-                        let history_has_tool = ctx
-                            .get_messages()
-                            .iter()
-                            .any(|m| m.role == MessageRole::Tool);
-                        let should_autonomous_nudge = self.config.autonomous_mode
-                            && !history_has_tool
-                            && autonomous_nudge_count == 0
-                            && (self.config.max_turns == 0
-                                || total_turns < self.config.max_turns)
-                            && !tool_schemas.is_empty();
+                        // 目标驱动：出现可见文本不等于任务完成。默认落回
+                        // decide_empty_response 让模型自检目标、必要时继续干活；
+                        // 只有「已推过一次且模型仍然只说话」或自动续跑预算耗尽
+                        // 才真正收尾（判定见 should_goal_continue）。
+                        let should_autonomous_nudge = self.should_goal_continue(
+                            autonomous_nudge_count,
+                            goal_continuations,
+                            total_turns,
+                            tool_schemas.is_empty(),
+                        );
                         if !should_autonomous_nudge {
+                            // 停止必须可归因（2026-10-30）：这条早退以前一条
+                            // 日志都不打，"为什么这一轮停了"只能靠反推代码。
+                            tracing::info!(
+                                turn = total_turns,
+                                exit = "finalize_text_only_turn",
+                                blocker = self
+                                    .goal_continue_blocker(
+                                        autonomous_nudge_count,
+                                        goal_continuations,
+                                        total_turns,
+                                        tool_schemas.is_empty(),
+                                    )
+                                    .unwrap_or("unknown"),
+                                goal_continuations,
+                                autonomous_nudge_count,
+                                "finalize: LLM produced visible text without tool calls"
+                            );
                             // WW: persist the final assistant
                             // message into ctx BEFORE terminal persist. The
                             // Continue branch falls through to
@@ -749,6 +861,17 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                                 &mut ctx,
                                 &mut state.acceptance_gate,
                             );
+                            // 纯文本自然收尾也必须走会话终态持久化：此前这里
+                            // 漏调 persist_session_terminal，spawn_background_review
+                            // 不触发 → iters_since_skill 阈值复位永不发生
+                            // （parity fixture `skill_counter_hits_threshold_and_resets`
+                            // 实测复现；run_stream 同款分支本就有此调用）。
+                            self.persist_session_terminal(
+                                &ctx,
+                                session_id,
+                                total_turns,
+                                review_memory_at_end,
+                            );
                             return Ok(self.finalize_agent_result(
                                 &ctx,
                                 total_turns,
@@ -767,9 +890,9 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                                 None,
                             ));
                         }
-                        // Fall through to prepare_assistant_turn +
-                        // decide_empty_response — the autonomous nudge
-                        // will fire and push the LLM to use tools.
+                        // Fall through：由 decide_empty_response 发出目标续跑
+                        // nudge，把模型推回去继续干活。
+                        goal_continuations = goal_continuations.saturating_add(1);
                     }
                     // No visible text (thinking-only or empty) — fall
                     // through to decide_empty_response for edge-case
@@ -831,6 +954,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
             // so both call sites use the same single authority.
             // filter out empty-named tool calls (same fix as
             // run_stream). MiniMax streaming can create placeholder entries.
+            let raw_tool_call_count = tool_calls.as_ref().map(|v| v.len()).unwrap_or(0);
             let tool_calls_filtered: Vec<ToolCall> = tool_calls
                 .unwrap_or_default()
                 .into_iter()
@@ -843,20 +967,42 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 // decide_empty_response for edge-case handling.
                 let has_visible =
                     Self::assistant_visible_text_after_think_blocks(&assistant_msg);
-                // 自治模式豁免：可见文本 + 还没动过工具 + nudge 额度在时，
-                // 不在此 finalize —— 落到 decide_empty_response 让 nudge 推
-                // LLM 开始干活。上方 Finalize 分支的豁免落到这里，而这段
-                // MiniMax 空名过滤的 finalize 曾把它短路（nudge 测试
-                // call_count==1 的回归根因）。
-                let nudge_eligible = self.config.autonomous_mode
-                    && !tool_schemas.is_empty()
-                    && !history_includes_tool
-                    && autonomous_nudge_count == 0
-                    && (self.config.max_turns == 0
-                        || total_turns < self.config.max_turns);
+                // 单一判据（2026-10-30）：与上方 Finalize 分支共用
+                // `goal_continue_blocker`。此处的 `nudge_eligible` 以前额外要求
+                // `!history_includes_tool`，长任务里恒为 false —— 上一处刚判
+                // 「该继续」，这里又判「该收尾」，nudge 被静默吞掉。
+                let nudge_eligible = self
+                    .goal_continue_blocker(
+                        autonomous_nudge_count,
+                        goal_continuations,
+                        total_turns,
+                        tool_schemas.is_empty(),
+                    )
+                    .is_none();
                 if has_visible && !nudge_eligible {
+                    // 文案曾把「本轮没有任何 tool_call」也写成「所有工具名都是空的」，
+                    // 读日志会把人带偏到 MiniMax 空名缺陷上。按有没有真的丢弃空名分开记。
+                    let dropped_unnamed = raw_tool_call_count > 0;
                     tracing::info!(
-                        "All tool calls had empty names after filtering (run); LLM produced visible text — finalizing"
+                        turn = total_turns,
+                        exit = if dropped_unnamed {
+                            "finalize_unnamed_tool_calls"
+                        } else {
+                            "finalize_no_tool_calls"
+                        },
+                        dropped = raw_tool_call_count,
+                        blocker = self
+                            .goal_continue_blocker(
+                                autonomous_nudge_count,
+                                goal_continuations,
+                                total_turns,
+                                tool_schemas.is_empty(),
+                            )
+                            .unwrap_or("unknown"),
+                        goal_continuations,
+                        autonomous_nudge_count,
+                        history_includes_tool,
+                        "finalize: no dispatchable tool call this turn"
                     );
                     self.persist_session_terminal(&ctx, session_id, total_turns, review_memory_at_end);
                     return Ok(self.finalize_agent_result(
@@ -925,6 +1071,9 @@ let outcome = crate::empty_response_handler::decide_empty_response(
             };
 
             codex_ack_continuations = 0;
+            // 模型又开始调工具了 —— 目标续跑计数清零，让它每次收尾后都
+            // 能再被推回一次（见 should_goal_continue）。
+            autonomous_nudge_count = 0;
 
             // tool-call 前置处理（去重 → 修补 → 校验 → 计数器 → delegate 上限
             // → PreToolCall 钩子 → 中断检查）与 `run_stream` 共用同一实现，
@@ -1089,6 +1238,8 @@ let outcome = crate::empty_response_handler::decide_empty_response(
         // LoopState owns total_turns; aliased here for hot-path readability.
         let mut total_turns: u32 = state.total_turns;
         let session_id = self.config.session_id.as_deref().unwrap_or("");
+        // 目标驱动自动续跑的总次数（硬上限见 MAX_GOAL_CONTINUATIONS）。
+        let mut goal_continuations: u32 = 0;
 
         loop {
             // turn transition watchdog（同 run()：TurnBudget 单一实现）。
@@ -1253,23 +1404,16 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                     if Self::assistant_visible_text_after_think_blocks(
                         &response.message
                     ) {
-                        // In autonomous_mode, if the LLM produced
-                        // visible text but no tool calls and no tools have
-                        // been used yet, fall through to decide_empty_response
-                        // instead of finalizing. The autonomous nudge will push
-                        // the LLM to start using tools. Without this, the agent
-                        // would stop after the LLM says "I'll help you with that"
-                        // without actually doing any work.
-                        let history_has_tool = ctx
-                            .get_messages()
-                            .iter()
-                            .any(|m| m.role == MessageRole::Tool);
-                        let should_autonomous_nudge = self.config.autonomous_mode
-                            && !history_has_tool
-                            && autonomous_nudge_count == 0
-                            && (self.config.max_turns == 0
-                                || total_turns < self.config.max_turns)
-                            && !tool_schemas.is_empty();
+                        // 目标驱动：出现可见文本不等于任务完成。默认落回
+                        // decide_empty_response 让模型自检目标、必要时继续干活；
+                        // 只有「已推过一次且模型仍然只说话」或自动续跑预算耗尽
+                        // 才真正收尾（判定见 should_goal_continue）。
+                        let should_autonomous_nudge = self.should_goal_continue(
+                            autonomous_nudge_count,
+                            goal_continuations,
+                            total_turns,
+                            tool_schemas.is_empty(),
+                        );
                         if !should_autonomous_nudge {
                             // WW: persist the final assistant
                             // message into ctx BEFORE terminal persist. The
@@ -1284,6 +1428,21 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                             // saw this live on the 沪EB5805 "看下目录" session:
                             // streaming showed the full "用户，目录共 198 条..."
                             // text but reload was truncated to assistant1+tool.
+                            tracing::info!(
+                                turn = total_turns,
+                                exit = "finalize_text_only_turn",
+                                blocker = self
+                                    .goal_continue_blocker(
+                                        autonomous_nudge_count,
+                                        goal_continuations,
+                                        total_turns,
+                                        tool_schemas.is_empty(),
+                                    )
+                                    .unwrap_or("unknown"),
+                                goal_continuations,
+                                autonomous_nudge_count,
+                                "finalize: LLM produced visible text without tool calls"
+                            );
                             let _ = self.prepare_assistant_turn(
                                 &mut ctx,
                                 &response,
@@ -1313,9 +1472,9 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                                 last_finish_reason.clone(),
                             ));
                         }
-                        // Fall through to prepare_assistant_turn +
-                        // decide_empty_response — the autonomous nudge
-                        // will fire and push the LLM to use tools.
+                        // Fall through：由 decide_empty_response 发出目标续跑
+                        // nudge，把模型推回去继续干活。
+                        goal_continuations = goal_continuations.saturating_add(1);
                     }
                     // No visible text (thinking-only or empty) — fall
                     // through to decide_empty_response for edge-case
@@ -1363,6 +1522,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 cb(total_turns);
             }
 
+            let raw_tool_call_count = tool_calls.as_ref().map(|v| v.len()).unwrap_or(0);
             let tool_calls: Vec<ToolCall> = tool_calls
                 .unwrap_or_default()
                 .into_iter()
@@ -1376,26 +1536,48 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 // decide_empty_response for edge-case handling.
                 let has_visible =
                     Self::assistant_visible_text_after_think_blocks(&assistant_msg);
-                // 自治模式豁免（与 run() 同一意图、同一根因）：nudge 额度在
-                // 且还没动过工具时不 finalize，落到 decide_empty_response。
-                let nudge_eligible = self.config.autonomous_mode
-                    && !tool_schemas.is_empty()
-                    && !history_includes_tool
-                    && autonomous_nudge_count == 0
-                    && (self.config.max_turns == 0
-                        || total_turns < self.config.max_turns);
+                // 单一判据（与 run() 同一实现）：`goal_continue_blocker`
+                // 决定了这里是不是该把模型推回去；以前这里用的是带
+                // `!history_includes_tool` 的独立判据，长任务里恒为 false。
+                let nudge_eligible = self
+                    .goal_continue_blocker(
+                        autonomous_nudge_count,
+                        goal_continuations,
+                        total_turns,
+                        tool_schemas.is_empty(),
+                    )
+                    .is_none();
                 if has_visible && !nudge_eligible {
+                    let dropped_unnamed = raw_tool_call_count > 0;
                     tracing::info!(
-                        "All tool calls had empty names after filtering; LLM produced visible text — finalizing"
+                        turn = total_turns,
+                        exit = if dropped_unnamed {
+                            "finalize_unnamed_tool_calls"
+                        } else {
+                            "finalize_no_tool_calls"
+                        },
+                        dropped = raw_tool_call_count,
+                        blocker = self
+                            .goal_continue_blocker(
+                                autonomous_nudge_count,
+                                goal_continuations,
+                                total_turns,
+                                tool_schemas.is_empty(),
+                            )
+                            .unwrap_or("unknown"),
+                        goal_continuations,
+                        autonomous_nudge_count,
+                        history_includes_tool,
+                        "finalize: no dispatchable tool call this turn"
                     );
-                    // 失败必须看得见：模型想调的工具因 name 缺失被丢弃
-                    // （MiniMax-M3 流式 delta 缺陷），本轮"说了要干活但
-                    // 没干"就静默收场会让用户以为卡死。emit 一条可见
-                    // 状态，前端据此在消息尾部提示，而不是无声结束。
-                    self.emit_status(
-                        "lifecycle",
-                        "工具调用未能解析（模型未返回工具名），本轮已按普通回复结束；可重发继续",
-                    );
+                    // 只有真的丢弃了空名 tool_call 才提示用户「工具未解析」；
+                    // 模型本来就没调工具的普通收尾不该背这个锅。
+                    if dropped_unnamed {
+                        self.emit_status(
+                            "lifecycle",
+                            "工具调用未能解析（模型未返回工具名），本轮已按普通回复结束；可重发继续",
+                        );
+                    }
                     self.persist_session_terminal(
                         &ctx,
                         session_id,
@@ -1508,6 +1690,9 @@ let outcome = crate::empty_response_handler::decide_empty_response(
             }
 
             codex_ack_continuations = 0;
+            // 模型又开始调工具了 —— 目标续跑计数清零，让它每次收尾后都
+            // 能再被推回一次（见 should_goal_continue）。
+            autonomous_nudge_count = 0;
 
             tracing::debug!(phase = %LoopPhase::ToolValidation, turn = total_turns, "run_stream: tool validation");
             self.notify_phase(&LoopPhase::ToolValidation, total_turns);

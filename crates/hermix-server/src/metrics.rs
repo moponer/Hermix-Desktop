@@ -244,6 +244,18 @@ impl MetricsCollector {
     }
 }
 
+/// GET /v1/metrics — 进程内指标快照（JSON）。
+///
+/// 走 `request_guard`（与所有业务端点同一套认证），**不**享受任何免鉴权特例：
+/// 指标里有请求量、错误分布与延迟分位，等于把服务内部状态暴露给任何本机进程
+/// 或网页。此前 `security.rs` 为 `/metrics` 留了一个免鉴权分支，但那条路由从未
+/// 注册过（死代码）；现在只提供 `/v1/metrics` 这一个入口。
+pub(crate) async fn endpoint(
+    axum::extract::State(state): axum::extract::State<crate::HttpServerState>,
+) -> axum::Json<MetricsSnapshot> {
+    axum::Json(state.metrics.snapshot())
+}
+
 /// Snapshot of current metric state for dashboard display.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct MetricsSnapshot {

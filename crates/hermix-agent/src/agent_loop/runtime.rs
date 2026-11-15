@@ -247,6 +247,21 @@ impl AgentLoop {
             }
         }
         strip_budget_warnings_from_messages(&mut messages);
+        // 旧工具结果回收：高水位 + 批量，**只在一个 run 开始时**做一次。
+        // 这是唯一允许改写历史的地方之一（另一次是显式压缩），因为任何一次
+        // 改写都意味着 provider 从 position 0 起重算。
+        let reclaim = crate::tool_result_reclaim::reclaim_old_tool_results(&mut messages);
+        if reclaim.fired() {
+            tracing::info!(
+                target: "hermix.prompt_cache",
+                cleared = reclaim.cleared,
+                saved_chars = reclaim.saved_chars(),
+                chars_before = reclaim.chars_before,
+                chars_after = reclaim.chars_after,
+                "tool_result_reclaim: oldest tool results replaced with placeholders \
+                 (pays one full cache reset)"
+            );
+        }
 
         let task_hint = messages
             .iter()
@@ -275,8 +290,18 @@ impl AgentLoop {
                 "No tool schemas after routing — LLM will not see any tools"
             );
         } else {
+            // `tools` 数组排在 system 之前，是前缀缓存里最靠前的一段。把它的
+            // 指纹记下来，`observe_prefix_reuse` 才能回答「这次没命中是因为
+            // 工具集合变了，还是因为系统提示变了」—— 只报 shared_msgs=0
+            // 的时候，这两个原因在日志里长得一模一样。
+            let tools_fp = crate::prompt_assembly::tool_array_fingerprint(&tool_schemas);
+            crate::prompt_assembly::record_tool_array_fingerprint(
+                self.config.session_id.as_deref(),
+                tools_fp,
+            );
             tracing::info!(
                 resolved = tool_schemas.len(),
+                tools_fp = format!("{tools_fp:016x}"),
                 "Tool schemas resolved for this turn"
             );
         }

@@ -618,7 +618,7 @@ impl MemberRunner {
             }
             let Ok(body) = tokio::fs::read_to_string(&p).await else { continue };
             let Ok(r) = serde_json::from_str::<MemberRecord>(&body) else { continue };
-            let started = r.started_at.to_rfc3339();
+            let started = hermix_core::time::utc_to_beijing(&r.started_at).to_rfc3339();
             items.push((
                 started.clone(),
                 json!({

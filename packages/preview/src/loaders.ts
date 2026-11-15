@@ -59,7 +59,7 @@ async function readBytesWithin(
   if (res.size > limit) {
     return {
       ok: false,
-      message: `${label}过大（${humanMb(res.size)}），预览上限 ${humanMb(limit)}。`,
+      message: `${label}过大（${humanMb(res.size)}），预览上限 ${humanMb(limit)}。可用「打开方式」选系统应用查看。`,
     };
   }
   return { ok: true, bytes: res.bytes, size: res.size, resolvedPath: res.resolvedPath };
@@ -240,7 +240,9 @@ export function buildLoaders(source: FileSource): Record<PreviewKind, PreviewLoa
     markdown: markdownLoader(source),
     html: htmlLoader(source),
     docx: byteLoader(source, "docx", 50 * 1024 * 1024, "文档"),
-    pptx: byteLoader(source, "pptx", 100 * 1024 * 1024, "演示文稿"),
+    // 100MB 收紧到 50MB：pptx 解压成 JS model 的副本是字节数倍，超限走
+    // 「用系统打开」降级而不是静默整读（错误文案里带指引，见 readBytesWithin）。
+    pptx: byteLoader(source, "pptx", 50 * 1024 * 1024, "演示文稿"),
     spreadsheet: spreadsheetLoader(source),
     code: textLoader(source),
     text: textLoader(source),

@@ -124,6 +124,17 @@ pub fn cached_loader(dir: &Path) -> Arc<SkillLoader> {
     loader
 }
 
+/// 自动匹配到的 skill：正文不超过这个长度才内联，超过就只给指针。
+///
+/// 渐进披露的判据只能是**体积**：
+/// - 一律内联 → 命中一个 `custom-app-development`（SKILL.md 33.8 K）就等于
+///   把 16 K 预算吃光，而且这条 system 消息进了历史后每轮重发；
+/// - 一律只给指针 → 2.5 K 的 `workflow-tdd` 也要多跑一次 `skill_view` 往返，
+///   而模型本来就会跳过"请先读取"这类指令（这正是当初改成全文注入的原因）。
+///
+/// 2 000 字符 ≈ 一个"标准技能"的正文量级，超过它才值得一次往返。
+pub const SKILL_INLINE_MAX_CHARS: usize = 2_000;
+
 /// Auto-matches user messages to skills and produces injection text.
 /// Wraps a [`SkillOrchestrator`] and adds keyword-based matching on top of
 /// the slash-command resolution. The orchestrator handles discovery (scanning
@@ -582,15 +593,33 @@ impl SkillLoader {
         parts.push(
             "## Auto-Matched Skills (system-injected)\n\
              The following skills were automatically matched to the user's message. \
-             Review their instructions and apply them if relevant to the current task.\n"
+             Small ones are inlined; large ones only get a pointer — load those with \
+             `skill_view` before acting on them.\n"
                 .to_string(),
         );
 
         for m in &matches {
-            parts.push(format!(
-                "### {} (score: {:.2}, matched on: {})\n{}\n",
-                m.name, m.score, m.matched_on, m.body
-            ));
+            let body_chars = m.body.chars().count();
+            if body_chars <= SKILL_INLINE_MAX_CHARS {
+                parts.push(format!(
+                    "### {} (score: {:.2}, matched on: {})\n{}\n",
+                    m.name, m.score, m.matched_on, m.body
+                ));
+            } else {
+                // 渐进披露：大 skill 只给指针。全文内联的代价是"按每轮重发"付的
+                // （这条是 system 消息，进了历史就不走），而正文体量差着两个
+                // 数量级（workflow-tdd ≈ 2.5 K，custom-app-development ≈ 33.8 K）。
+                parts.push(format!(
+                    "### {} (score: {:.2}, matched on: {}) — 未内联，正文 {body_chars} 字符\n\
+                     {}\n\
+                     动手前先调用 `skill_view(name=\"{}\")` 读完整步骤；标题与摘要不足以支撑执行。\n",
+                    m.name,
+                    m.score,
+                    m.matched_on,
+                    m.description.trim(),
+                    m.name
+                ));
+            }
         }
 
         let mut tools: Option<std::collections::HashSet<String>> = None;
@@ -699,7 +728,7 @@ const AUTO_SKILL_MIN_SCORE: f32 = 0.3;
 /// 同时判 `category` 与路径：`category` 来自 frontmatter（可能缺失或被手改），
 /// 路径里的 `auto` 段则是 `skill_auto_create::AUTO_SKILL_DIR` 的硬约定。
 /// 任一命中即算——宁可多降权一个手写技能，也不要漏掉一个沉淀产物。
-fn is_auto_generated(info: &crate::skill_orchestrator::SkillCommandInfo) -> bool {
+pub(crate) fn is_auto_generated(info: &crate::skill_orchestrator::SkillCommandInfo) -> bool {
     let auto_dir = crate::skill_auto_create::AUTO_SKILL_DIR;
     info.category.eq_ignore_ascii_case(auto_dir)
         || info
@@ -1060,6 +1089,40 @@ mod tests {
         assert!(text.contains("Auto-Matched Skills"));
         assert!(text.contains("commit-message"));
         assert!(text.contains("Conventional Commits"));
+    }
+
+    /// 渐进披露：大正文只给指针（点名 `skill_view` + 正文字符数），不内联。
+    ///
+    /// 判据是体积：2 000 字符以内内联更便宜（省一次工具往返），超过它就该让
+    /// 模型自己决定读不读 —— 一个 33.8 K 的 SKILL.md 内联进历史后每轮重发。
+    #[test]
+    fn large_skill_body_becomes_a_pointer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("big-skill");
+        fs::create_dir_all(&dir).unwrap();
+        let mut content = String::from(
+            "---\nname: big-skill\ndescription: A very large skill about big things\n\
+             tags: [big, large]\n---\n# Big\n",
+        );
+        for i in 0..400 {
+            content.push_str(&format!("detail line {i}\n"));
+        }
+        fs::write(dir.join("SKILL.md"), content).unwrap();
+
+        let mut loader = SkillLoader::with_dir(tmp.path());
+        loader.scan();
+        let (block, _) = loader
+            .build_injection_and_tools("show me a very large skill")
+            .expect("skill should match");
+        assert!(block.contains("未内联"), "大正文必须只给指针: {block}");
+        assert!(
+            block.contains("skill_view(name=\"big-skill\")"),
+            "指针必须点名可执行的调用: {block}"
+        );
+        assert!(
+            !block.contains("detail line 399"),
+            "正文不得内联（渐进披露的意义就在这里）"
+        );
     }
 
     #[test]

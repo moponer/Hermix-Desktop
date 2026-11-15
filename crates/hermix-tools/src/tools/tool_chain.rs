@@ -560,11 +560,10 @@ impl ToolHandler for CompactToolChainHandler {
 /// boundary — CJK strings would otherwise panic).
 /// Returns `(content, was_truncated)`.
 fn truncate(s: &str, max_chars: usize) -> (String, bool) {
-    if s.chars().count() <= max_chars {
-        return (s.to_string(), false);
-    }
-    let truncated: String = s.chars().take(max_chars).collect();
-    (truncated, true)
+    // 切分走 core 的单一实现；`was_truncated` 用整串比较判断（截断后的
+    // 前缀字节数必然更少）。
+    let cut = hermix_core::text_utils::truncate_chars(s, max_chars);
+    (cut.to_string(), cut != s)
 }
 
 // ---------------------------------------------------------------------------

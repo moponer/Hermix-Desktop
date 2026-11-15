@@ -91,8 +91,10 @@ export function AnalyticsView() {
     /* 骨架屏：形状预告真实布局（概览卡 + 图表区），零布局跳动 */
     return (
       <div className="h-full overflow-auto p-4">
-        <div className="max-w-wide-page mx-auto space-y-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {/* 断点按**容器**而不是视口：这一页会被塞进值守页的窄中轴，
+            而窗口仍然很宽，`md:` 会命中并把四列压进 300px。 */}
+        <div className="@container max-w-wide-page mx-auto space-y-6">
+          <div className="grid grid-cols-2 @2xl:grid-cols-4 gap-4">
             {Array.from({ length: 4 }).map((_, i) => (
               <SkeletonCard key={i} lines={1} />
             ))}
@@ -128,7 +130,7 @@ export function AnalyticsView() {
           <div className="flex items-start gap-3">
             <AlertTriangle className="icon-lg text-red-400 mt-0.5 shrink-0" />
             <div className="min-w-0">
-              <div className="text-sm font-medium text-red-300">统计数据加载失败</div>
+              <div className="text-sm font-medium text-text-error">统计数据加载失败</div>
               <div className="mt-1 text-xs text-red-200/80 break-words whitespace-pre-wrap font-mono">
                 {lastError}
               </div>
@@ -442,9 +444,10 @@ function DebugPanel({
           >
             刷新
           </button>
+          {/* 关闭是次要操作：与「刷新」同款实心按钮会让两个动作看起来同等重要。 */}
           <button
             onClick={onClose}
-            className="text-xs px-2.5 py-1 rounded-lg bg-bg-secondary hover:bg-bg-hover"
+            className="text-xs px-2 py-1 rounded-lg text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary"
           >
             {CLOSE}
           </button>
@@ -452,7 +455,7 @@ function DebugPanel({
       </div>
       {loading && <div className="text-xs text-text-faint" aria-busy="true">{LOADING}</div>}
       {error && (
-        <div className="text-xs text-red-300 font-mono break-words whitespace-pre-wrap">{error}</div>
+        <div className="text-xs text-text-error font-mono break-words whitespace-pre-wrap">{error}</div>
       )}
       {debug && (
         <div className="space-y-3">
@@ -468,7 +471,7 @@ function DebugPanel({
                   <div className="text-text-faint">
                     存在：{t.exists ? "是" : "否"} · 行数：{t.row_count ?? "—"}
                   </div>
-                  {t.error && <div className="text-red-300 mt-1 break-words">{t.error}</div>}
+                  {t.error && <div className="text-text-error mt-1 break-words">{t.error}</div>}
                   {t.sample.length > 0 && (
                     <pre className="mt-1.5 max-h-40 overflow-auto text-[length:var(--text-meta)] text-text-faint whitespace-pre-wrap">
                       {JSON.stringify(t.sample, null, 2)}

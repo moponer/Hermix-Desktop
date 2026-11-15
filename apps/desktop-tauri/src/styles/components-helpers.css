@@ -434,6 +434,16 @@
   padding-top: 8px;
 }
 
+/* ── 5a-0a1. 过程旁白 ──
+   夹在工具调用之间、说完还要继续干活的那几句（"先看那个目录"、"路径没对上"）。
+   模型把它写进 `content` 而不是 `reasoning_content`，于是落库成 text step；
+   按正文待遇渲染时，一场十几次工具调用的任务下来，正文区就是一长串没折叠的
+   思考。旁白退到次级色，轮次结束后随过程区一起收进折叠头 —— 正文只留收尾段
+   （判据见 `messageParser.lastTextStepIndex`：位置，不是长度）。 */
+.tl-text-step--narration .tl-text-inner {
+  color: var(--color-text-secondary);
+}
+
 /* ── 5a-0a2. 工具轮正文占位 ──
    一轮只调工具、没写正文时，正文区原本整段空白：过程折叠区里字一直在动，
    正文却一个字没有，读起来像卡住。这一行把 execution_timeline 已记录的事实

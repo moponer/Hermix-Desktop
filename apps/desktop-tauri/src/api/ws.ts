@@ -17,7 +17,7 @@
 // Tauri's `listen("stdio-frame")`
 // and filters by channel name. Upstream frames go through
 // `sendToStreamChannel`, which calls
-// `invoke("backend_channel_send")`.
+// `invoke(IPC.backendChannelSend)`.
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -55,7 +55,7 @@ export async function listenStreamChannel(
 }
 
 // sendToStreamChannel 于 2026-10-18 移除：调用点全部直接
-// `invoke("backend_channel_send", …)`（useStreamParser /
+// `invoke(IPC.backendChannelSend, …)`（useStreamParser /
 // useStreamChat），封装零调用、徒增一层间接。
 
 /** Send a JSON Lines frame upstream on a non-HTTP channel. Callers

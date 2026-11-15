@@ -54,6 +54,19 @@ struct EffectLogSink {
     registry: std::sync::Weak<ToolRegistry>,
 }
 
+/// 效果记录里工具入参的保存上限（字符）。
+///
+/// 只需要够人认出"这一步调了什么、动了哪个文件"：800 字符覆盖绝大多数
+/// 命令与参数前缀，同时把 `write_file` 这类整篇内容的入参挡在库外。
+const EFFECT_ARGS_PREVIEW_CHARS: usize = 800;
+
+/// 未决效果超过这个时长就按陈旧收口（秒）。一天：崩溃后用户当轮的观感
+/// 窗口远小于一天，再久的悬挂值已无任何可恢复的中间态。
+const EFFECT_STALE_SECS: i64 = 24 * 60 * 60;
+
+/// 效果记录的保留期（秒）。30 天足够覆盖排障与回溯，之后只增体积。
+const EFFECT_RETAIN_SECS: i64 = 30 * 24 * 60 * 60;
+
 /// §3.4 L2：TaskRecord 启动对账。启动时残留 `running` = 上次进程死在
 /// sub-agent 执行中途；Checkpoint.from_step 未细化无从续跑——唯一诚实
 /// 的处置是落成 `Terminal(Faulted)`，让恢复视图不留僵尸。只读扫描 +
@@ -103,7 +116,10 @@ impl hermix_tools::EffectSink for EffectLogSink {
             id: hermix_task::effect::new_intent_id(),
             task_id: String::new(),
             tool: tool.to_string(),
-            args_json: args_json.to_string(),
+            // ★ 只存可识别的参数前缀，不存原文。`write_file` 的入参是整篇
+            // 文件内容（实机单条最大 46 KB），近万行后把 effects.db 撑到
+            // 13.9 MB —— 而这张表唯一的用途是崩溃后判断"这一步做了什么"。
+            args_json: crate::util::truncate_chars(args_json, EFFECT_ARGS_PREVIEW_CHARS),
             idempotent,
             created_at: chrono::Utc::now().timestamp(),
         };
@@ -347,6 +363,55 @@ pub struct HttpServerState {
     pub relay_connector_running: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// 按需拉起本地查看器（`hermix-viewer.exe`，与主程序/本 sidecar 同目录）。
+///
+/// 为什么由 server 而不是桌面端拉起：用户的真实触发点是「agent 要预览/操作
+/// 文件」，而那一路走的就是 viewer 的 MCP。桌面端不再开机预拉起（省掉一整棵
+/// 常驻 WebView2 进程树），于是由这里在首连失败时补位。
+///
+/// **必须带 `--hidden`**（2026-10-25 用户定死的硬约束）：自动拉起不得弹窗；
+/// 用户真要打开文件时走 `open_in_viewer`，由查看器自己的单实例机制把窗口
+/// 弹到前面。`HERMIX_NO_SPAWN_VIEWER=1` 可整体关闭（自动化/测试用）。
+fn spawn_local_viewer() -> bool {
+    if std::env::var_os("HERMIX_NO_SPAWN_VIEWER").is_some() {
+        return false;
+    }
+    let Some(exe) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("hermix-viewer.exe")))
+        .filter(|p| p.exists())
+    else {
+        // dev / 精简包：没有查看器可拉，交给 60s 重试与用户手动开。
+        return false;
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.arg("--hidden")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            // DETACHED_PROCESS：查看器有自己的窗口与生命周期，不随 sidecar 退出。
+            .creation_flags(0x0000_0008);
+        match cmd.spawn() {
+            Ok(child) => {
+                tracing::info!(pid = child.id(), "spawned hermix-viewer on demand");
+                true
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to spawn hermix-viewer on demand");
+                false
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = exe;
+        false
+    }
+}
+
 impl HttpServerState {
     /// Subscribe to the broadcast of new pending `clarify` requests. Each
     /// WebSocket call this once at connect-time; the returned receiver
@@ -490,24 +555,37 @@ impl HttpServerState {
         {
             let effects_path = hermix_config::paths::data_dir_in(&hermix_home).join("effects.db");
             let effect_log = hermix_task::EffectLog::new(effects_path);
-            // 崩溃恢复扫描（§3.4）：上次进程可能死在工具执行中途。
-            // 幂等 → 重放语义（由下次调用自然覆盖）；非幂等 → needs_review，
-            // 只记日志（通知条目/用户裁决 UI 属后续批次），不自动重放。
+            // ① 先把陈年未决项收口。它们对应的进程/会话/工具体中间态早就没了，
+            //    「等用户裁决」永远等不到；不收口就是每次启动重报一遍
+            //    （实机累计 2042 条 WARN，36 条从 33 单调涨到 36）。
+            match effect_log.close_stale_unfinished(EFFECT_STALE_SECS) {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(
+                    count = n,
+                    after_hours = EFFECT_STALE_SECS / 3600,
+                    "startup recovery: closed {} stale unfinished tool effect(s) \
+                     (no outcome recorded and older than the review window)",
+                    n
+                ),
+                Err(e) => tracing::warn!("startup recovery: stale close failed: {e}"),
+            }
+            // ② 真正新鲜的未决项才值得报：这是「上次进程死在工具执行中途」的
+            //    唯一证据。明细降 debug —— 聚合计数足够定位，逐条打只会淹没日志。
             match effect_log.scan_unfinished() {
                 Ok(actions) if !actions.is_empty() => {
                     tracing::warn!(
                         count = actions.len(),
-                        "startup recovery: {} unfinished tool effects from previous run \
+                        "startup recovery: {} unfinished tool effect(s) from the last run \
                          (idempotent=REPLAY eligible, non-idempotent=NEEDS_REVIEW)",
                         actions.len()
                     );
                     for a in &actions {
                         match a {
-                            hermix_task::RecoveryAction::Replay(i) => tracing::warn!(
+                            hermix_task::RecoveryAction::Replay(i) => tracing::debug!(
                                 intent = %i.id, tool = %i.tool,
                                 "recovery: idempotent effect eligible for replay"
                             ),
-                            hermix_task::RecoveryAction::NeedsReview(i) => tracing::warn!(
+                            hermix_task::RecoveryAction::NeedsReview(i) => tracing::debug!(
                                 intent = %i.id, tool = %i.tool,
                                 "recovery: non-idempotent effect needs user review"
                             ),
@@ -516,6 +594,16 @@ impl HttpServerState {
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!("startup recovery scan failed: {e}"),
+            }
+            // ③ 保留期：这张表只服务崩溃恢复，不做审计；过期记录连行一起删。
+            match effect_log.prune_older_than(EFFECT_RETAIN_SECS) {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(
+                    rows = n,
+                    retain_days = EFFECT_RETAIN_SECS / 86_400,
+                    "startup recovery: pruned expired effect records"
+                ),
+                Err(e) => tracing::warn!("startup recovery: prune failed: {e}"),
             }
             tool_registry.set_effect_sink(Arc::new(EffectLogSink {
                 log: effect_log,
@@ -738,6 +826,8 @@ impl HttpServerState {
         {
             let mcp_list = crate::dashboard::mcp::load_mcp_servers(&hermix_home);
             let mcp_mgr = mcp_manager.clone();
+            let mcp_home = hermix_home.clone();
+            let mcp_registry = tool_registry.clone();
             // Spawn MCP connection as a background task so it does NOT
             // block the HTTP listener from binding. `npx -y <pkg>` can
             // take 10-30s on first run (package download + Node startup),
@@ -746,6 +836,13 @@ impl HttpServerState {
             // the registry as soon as each server finishes connecting.
             tokio::spawn(async move {
                 Self::connect_mcp_servers_with_retry(mcp_mgr, mcp_list).await;
+                // 启动连接完成后，确保承载全部 MCP 工具的 "mcp" 工具集已被
+                // 白名单放行——旧快照 enabled_toolsets.json 没有它时会静默
+                // 过滤所有已连接连接器的工具（2026-11-04 filesearch/viewer 夜）。
+                crate::dashboard::skills::ensure_mcp_toolset_persisted(
+                    &mcp_home,
+                    &mcp_registry,
+                );
             });
         }
 
@@ -852,6 +949,8 @@ impl HttpServerState {
         // registry / 前端倒计时 / agent 兜底三处都从这里读。
         let approval_timeout_secs = config.approval.timeout_secs;
         hermix_config::set_approval_timeout_secs(approval_timeout_secs);
+        // 放手模式档位的落盘位置（hermix_home 在字面量里被 move，提前解析）。
+        let full_mode_persist_path = hermix_home.join("full_mode_sessions.json");
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -863,7 +962,8 @@ impl HttpServerState {
             agent_service,
             approval_registry: ApprovalRegistry::with_timeout(std::time::Duration::from_secs(
                 approval_timeout_secs,
-            )),
+            ))
+            .with_persistence(Some(full_mode_persist_path)),
             clarify_dispatcher,
             clarify_broadcast,
             mobile_config_tx,
@@ -1179,6 +1279,8 @@ impl HttpServerState {
         let devices_db_path = hermix_home.join("devices.db");
         let approval_timeout_secs = config.approval.timeout_secs;
         hermix_config::set_approval_timeout_secs(approval_timeout_secs);
+        // 放手模式档位的落盘位置（hermix_home 在字面量里被 move，提前解析）。
+        let full_mode_persist_path = hermix_home.join("full_mode_sessions.json");
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -1190,7 +1292,8 @@ impl HttpServerState {
             agent_service,
             approval_registry: ApprovalRegistry::with_timeout(std::time::Duration::from_secs(
                 approval_timeout_secs,
-            )),
+            ))
+            .with_persistence(Some(full_mode_persist_path)),
             clarify_dispatcher,
             clarify_broadcast,
             mobile_config_tx,
@@ -1300,9 +1403,14 @@ impl HttpServerState {
         self
     }
     /// MCP 启动连接 + **失败重试**。viewer 这类"后起"的本地 HTTP 服务：
-    /// 桌面端启动时 viewer 往往还没跑（它不是 sidecar，不随主程序拉起），
+    /// 桌面端启动时 viewer 往往还没跑（它不是 sidecar，**也不再开机预拉起**），
     /// 首连失败后不重试 = 工具永远缺失，阿黎第一个任务就卡死
-    /// （2026-10-25 实测）。60s 间隔重试，最多 30 次（30 分钟），全部成功即止。
+    /// （2026-10-25 实测）。
+    ///
+    /// 2026-10-29 起：首连失败先**按需拉起** viewer（省掉开机即常驻的一整棵
+    /// WebView2 进程树），随后 5s 一档快速复查 4 次（viewer 从进程起到 MCP
+    /// 就绪约 3–8s），仍失败才退回 60s 节奏（那是别的原因：端口占用、配置错、
+    /// 用户装的是不含查看器的精简包）。最多 30 轮，全部成功即止。
     async fn connect_mcp_servers_with_retry(
         mcp_manager: Arc<hermix_mcp::McpManager>,
         mcp_list: crate::dashboard::mcp::McpServersState,
@@ -1321,14 +1429,24 @@ impl HttpServerState {
             if mcp_manager.connect(&name, cfg.clone()).await.is_ok() {
                 tracing::info!(server = %name, "MCP server connected");
             } else {
-                tracing::warn!(server = %name, "MCP server connect failed; will retry every 60s");
+                tracing::warn!(server = %name, "MCP server connect failed; will retry");
                 failed.push((name, cfg));
             }
         }
         let mut attempt = 0u32;
+        let mut spawned: std::collections::HashSet<String> = std::collections::HashSet::new();
         while !failed.is_empty() && attempt < 30 {
             attempt += 1;
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            // 本地 viewer 缺席 → 拉起来（每轮最多试一次；viewer 自带单实例
+            // 互斥，重复 spawn 只会转发后立刻退出）。
+            let mut quick = false;
+            for (name, _) in &failed {
+                if name.contains("viewer") && spawned.insert(name.clone()) {
+                    quick = spawn_local_viewer();
+                }
+            }
+            let delay = if quick && attempt <= 4 { 5 } else { 60 };
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
             let mut still = Vec::new();
             for (name, cfg) in failed {
                 if mcp_manager.connect(&name, cfg.clone()).await.is_ok() {

@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
 /// Maximum characters per context file to prevent context bloat.
-const MAX_CONTEXT_FILE_CHARS: usize = 20_000;
+// 2026-11-11 从 20K 收紧到 6K：分段实测 context_files 块 18K 字符/轮
+// （工作区 AGENTS.md 全文贴着 20K 上限），是静态组装的最大单项。上下文
+// 文件每轮重复付费，6K 保留约定概要；正文细节按需 read_file 取回。
+const MAX_CONTEXT_FILE_CHARS: usize = 6_000;
 
 /// Head/tail ratio for truncation (70% head, 20% tail, 10% separator).
 const TRUNCATE_HEAD_RATIO: f64 = 0.7;

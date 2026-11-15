@@ -275,6 +275,20 @@ fn device_origin(
     ) {
         Ok(device) => Ok(crate::security::derive_origin(Some(&device), None)),
         Err(e) => {
+            // 测试通道（HERMIX_TEST_TOKEN 显式设置时）：常规鉴权失败后，
+            // 精确匹配测试 token 则按已配对测试设备放行——协议级评测/CI
+            // 的自动化入口。未设置该变量时走不进这支，行为与现状一致。
+            let bearer = headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.strip_prefix("Bearer ").map(str::trim));
+            if let Some(_device) = crate::security::test_channel_device(bearer) {
+                tracing::info!("protocol test channel accepted (HERMIX_TEST_TOKEN)");
+                // 用 Local origin 而非 Device：测试客户端的 session_id 需要
+                // 原样透传（Device origin 会把 sid 命名空间化到设备名下，
+                // 客户端拿不到映射 → 403）。鉴权已由 token 精确匹配完成。
+                return Ok(crate::security::derive_origin(None, None));
+            }
             hermix_telemetry::record_http_reject();
             Err(e.as_response())
         }

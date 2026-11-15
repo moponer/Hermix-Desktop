@@ -3,11 +3,13 @@ import {
   extractMemoryUpdates,
   extractMemoryRecalls,
   groupTimeline,
+  groupTimelineSteps,
+  lastTextStepIndex,
   parseContent,
   deriveTurnDurationMs,
 } from "./messageParser";
 import { groupEvents } from "./ToolEventCard";
-import type { ChatMessage, ExecutionTimelineEvent } from "../types";
+import type { ChatMessage, ExecutionTimelineEvent, TimelineStep } from "../types";
 
 function memEvent(over: Partial<ExecutionTimelineEvent>): ExecutionTimelineEvent {
   return {
@@ -235,6 +237,84 @@ describe("groupTimeline stranded-pass (FIX)", () => {
     const groups = groupTimeline(events, { streamComplete: false });
     expect(groups).toHaveLength(1);
     expect(groups[0].status).toBe("done");
+  });
+});
+
+describe("迟到的 tool_stdout 不能长出「永远转圈的调用工具」", () => {
+  // 实测来源：前端把 stdout 分片攒到 rAF 里合并，而 `tool_complete` 立刻生效。
+  // 快速工具的分片因此常常晚于自己的完成事件 —— 旧实现会给它新开一行
+  // （工具名退化成 "tool"、无入参）并停在 "running"，就是用户截图里那两行
+  // 进度早已翻页、却仍在转圈的「调用工具」。
+  it("stdout 落在自己的 complete 之后：补进同一组，不新开行", () => {
+    const ts = new Date().toISOString();
+    const events = [
+      toolEvent({ type: "tool_start", tool: "search_files", tool_call_id: "a", created_at: ts }),
+      toolEvent({ type: "tool_complete", tool: "search_files", tool_call_id: "a", created_at: ts, content: "ok" }),
+      toolEvent({ type: "tool_stdout", tool_call_id: "a", created_at: ts, content: "late chunk" }),
+    ];
+    const groups = groupTimeline(events, { streamComplete: false });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].status).toBe("done");
+    expect(groups[0].events.some((e) => e.type === "tool_stdout")).toBe(true);
+  });
+
+  it("完全找不到归属的 stdout 直接丢弃", () => {
+    const events = [
+      toolEvent({ type: "tool_stdout", tool_call_id: "ghost", content: "x" }),
+    ];
+    expect(groupTimeline(events, { streamComplete: false })).toHaveLength(0);
+  });
+});
+
+describe("lastTextStepIndex（正文 = 收尾那一段）", () => {
+  it("只把最后一段 text 当正文，中间夹着的都是过程旁白", () => {
+    const steps: TimelineStep[] = [
+      { kind: "reasoning", content: "想一下" },
+      { kind: "text", content: "先看目录" },
+      { kind: "tools", events: [] },
+      { kind: "text", content: "路径没对上" },
+      { kind: "tools", events: [] },
+      { kind: "text", content: "## 结论\nfoo" },
+    ];
+    expect(lastTextStepIndex(steps)).toBe(5);
+  });
+
+  it("工具跑在最后（没有收尾正文）时，最后一段 text 仍是正文", () => {
+    const steps: TimelineStep[] = [
+      { kind: "text", content: "去查一下" },
+      { kind: "tools", events: [] },
+    ];
+    expect(lastTextStepIndex(steps)).toBe(0);
+  });
+
+  it("没有 text step 时返回 -1", () => {
+    expect(lastTextStepIndex([{ kind: "reasoning", content: "x" }])).toBe(-1);
+  });
+});
+
+describe("groupTimelineSteps（跨 step 聚合）", () => {
+  const tools = (events: ExecutionTimelineEvent[]): TimelineStep[] => [{ kind: "tools", events }];
+  const step = (...steps: TimelineStep[]): TimelineStep[] => steps;
+
+  it("start 与 complete 被别的 step 隔开时仍配对，组回到 start 所在 step", () => {
+    const ts = new Date().toISOString();
+    const steps = step(
+      ...tools([toolEvent({ type: "tool_start", tool: "read_file", tool_call_id: "a", created_at: ts })]),
+      { kind: "text", content: "边跑边说" },
+      ...tools([toolEvent({ type: "tool_complete", tool: "read_file", tool_call_id: "a", created_at: ts, content: "ok" })]),
+    );
+    const grouped = groupTimelineSteps(steps, { streamComplete: true });
+    expect(grouped[0]).toHaveLength(1);
+    expect(grouped[0]![0].status).toBe("done");
+    // 完成事件那一格不再长出一行没有名字的空壳。
+    expect(grouped[2]).toHaveLength(0);
+  });
+
+  it("非 tools step 返回 null，与渲染索引对齐", () => {
+    const steps = step({ kind: "text", content: "hi" }, ...tools([]));
+    const grouped = groupTimelineSteps(steps);
+    expect(grouped[0]).toBeNull();
+    expect(grouped[1]).toEqual([]);
   });
 });
 

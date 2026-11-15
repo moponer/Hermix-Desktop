@@ -317,15 +317,17 @@ impl Default for FilesystemContext {
 }
 
 fn truncate_chars(s: &str, max: usize) -> String {
-    let mut out = String::with_capacity(max);
-    for (i, c) in s.chars().enumerate() {
-        if i >= max.saturating_sub(1) {
-            out.push('\u{2026}');
-            break;
-        }
-        out.push(c);
+    // 切分走 core 的单一实现。注意：与 `experience_archive` 的同名函数不同，
+    // 这里**没有**"≤ max 原样返回"的短路 —— 恰好 max 长的字符串也会被截成
+    // max-1 字 + …（既有语义，调用方按"总长 ≤ max"排版）。改语义要连调用方
+    // 一起改，这里只收敛实现不改行为。
+    if s.chars().count() <= max.saturating_sub(1) {
+        return s.to_string();
     }
-    out
+    format!(
+        "{}…",
+        hermix_core::text_utils::truncate_chars(s, max.saturating_sub(1))
+    )
 }
 
 // ===========================================================================

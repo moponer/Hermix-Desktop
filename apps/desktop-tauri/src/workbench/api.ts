@@ -10,8 +10,8 @@
 // moduleIndex 等封装对应的 Rust command 已注册但**尚无 UI 入口**——
 // 画布 iframe 经 workbenchGateway 的 fs.* 走另一条通路。这些封装是
 // 画布功能（撤销/依赖申请/lint 预检）的预留面，接 UI 前勿删。
-import { invoke } from "../ipc";
-import { getSessions, updateSessionMetadata } from "../api/rest";
+import { IPC } from "../ipc/commands";
+import { invoke } from "../ipc";import { getSessions, updateSessionMetadata } from "../api/rest";
 
 export interface WorkbenchManifest {
   id: string;
@@ -27,28 +27,28 @@ export interface WorkbenchManifest {
 }
 
 export const workbenchCreate = (name: string) =>
-  invoke<WorkbenchManifest>("workbench_create", { name });
+  invoke<WorkbenchManifest>(IPC.workbenchCreate, { name });
 
-export const workbenchList = () => invoke<WorkbenchManifest[]>("workbench_list");
+export const workbenchList = () => invoke<WorkbenchManifest[]>(IPC.workbenchList);
 
 /** 设为主工作台，其余自动清掉标记。 */
 export const workbenchSetPrimary = (id: string) =>
-  invoke<void>("workbench_set_primary", { id });
+  invoke<void>(IPC.workbenchSetPrimary, { id });
 
 /** 软删工作台：目录移入 `_trash/` 可找回。返回回收站路径。 */
 export const workbenchDelete = (id: string) =>
-  invoke<string>("workbench_delete", { id });
+  invoke<string>(IPC.workbenchDelete, { id });
 
 export const workbenchRead = (id: string, path: string) =>
-  invoke<string>("workbench_read", { id, path });
+  invoke<string>(IPC.workbenchRead, { id, path });
 
 export const workbenchWrite = (id: string, path: string, content: string) =>
-  invoke<void>("workbench_write", { id, path, content });
+  invoke<void>(IPC.workbenchWrite, { id, path, content });
 
-export const workbenchFiles = (id: string) => invoke<string[]>("workbench_files", { id });
+export const workbenchFiles = (id: string) => invoke<string[]>(IPC.workbenchFiles, { id });
 
 export const workbenchBindSession = (id: string, sessionId: string) =>
-  invoke<void>("workbench_bind_session", { id, sessionId });
+  invoke<void>(IPC.workbenchBindSession, { id, sessionId });
 
 /**
  * 确保会话已绑定，并把它划归本工作台的对话空间。
@@ -63,7 +63,7 @@ export const workbenchBindSession = (id: string, sessionId: string) =>
  * PATCH 而不是让桌面端直接写 sessions.db，避免和 sidecar 抢写锁。
  */
 export const workbenchEnsureSession = (id: string, sessionId: string) =>
-  invoke<string>("workbench_ensure_session", { id, sessionId });
+  invoke<string>(IPC.workbenchEnsureSession, { id, sessionId });
 
 /**
  * 把会话划归某个工作台（或传 null 归还给普通对话）。
@@ -81,29 +81,29 @@ export const listWorkbenchSessions = (workbenchId?: string) =>
  * 带 path/content 时做落盘前预检，不先写脏文件再回滚。
  */
 export const workbenchLint = (id: string, path?: string, content?: string) =>
-  invoke<string>("workbench_lint", { id, path, content });
+  invoke<string>(IPC.workbenchLint, { id, path, content });
 
 /** 设定第三方依赖，宿主校验白名单后写回 importmap。 */
 export const workbenchSetDeps = (id: string, deps: string[]) =>
-  invoke<string[]>("workbench_set_deps", { id, deps });
+  invoke<string[]>(IPC.workbenchSetDeps, { id, deps });
 
 /** 已安装的第三方库清单（import 名 → {version, entry}）。 */
 export const workbenchVendorIndex = () =>
   invoke<Record<string, { version: string; entry: string }>>("workbench_vendor_index");
 
 /** 共享 vendor 目录，依赖申请通过后库文件放这里。 */
-export const workbenchVendorDir = () => invoke<string>("workbench_vendor_dir");
+export const workbenchVendorDir = () => invoke<string>(IPC.workbenchVendorDir);
 
 /** 模块索引（文件 → 导出符号），迭代前注入给 agent 复用已有模块。 */
 export const workbenchModuleIndex = (id: string) =>
-  invoke<string>("workbench_module_index", { id });
+  invoke<string>(IPC.workbenchModuleIndex, { id });
 
 /** 撤销最近一次代码改动，返回被恢复的文件（无改动时 null）。 */
 export const workbenchUndo = (id: string) =>
-  invoke<string | null>("workbench_undo", { id });
+  invoke<string | null>(IPC.workbenchUndo, { id });
 
 /** 可撤销的改动列表（最近在前）。 */
-export const workbenchHistory = (id: string) => invoke<string[]>("workbench_history", { id });
+export const workbenchHistory = (id: string) => invoke<string[]>(IPC.workbenchHistory, { id });
 
 /**
  * 宿主网关调用。仅供宿主外壳转发 iframe 的 postMessage 请求 ——
@@ -116,26 +116,26 @@ export const workbenchGateway = (
 ): Promise<unknown> => {
   switch (method) {
     case "db.query":
-      return invoke("workbench_db_query", {
+      return invoke(IPC.workbenchDbQuery, {
         id,
         sql: params.sql,
         params: params.params ?? [],
       });
     case "db.exec":
-      return invoke("workbench_db_exec", {
+      return invoke(IPC.workbenchDbExec, {
         id,
         sql: params.sql,
         params: params.params ?? [],
       });
     case "fs.read":
-      return invoke("workbench_fs_read", { path: params.path });
+      return invoke(IPC.workbenchFsRead, { path: params.path });
     case "fs.write":
-      return invoke("workbench_fs_write", {
+      return invoke(IPC.workbenchFsWrite, {
         path: params.path,
         content: params.content,
       });
     case "fs.list":
-      return invoke("workbench_fs_list", { path: params.path });
+      return invoke(IPC.workbenchFsList, { path: params.path });
   }
 };
 
@@ -152,7 +152,7 @@ export const workbenchGateway = (
  * 都照常通过。
  */
 export const workbenchEntryUrl = async (id: string): Promise<string> => {
-  const path = await invoke<string>("workbench_entry_path", { id });
+  const path = await invoke<string>(IPC.workbenchEntryPath, { id });
   const segments = path.replace(/\\/g, "/").split("/");
   return `http://asset.localhost/${segments.map(encodeURIComponent).join("/")}`;
 };

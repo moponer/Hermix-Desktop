@@ -38,6 +38,46 @@ export function relativeCompact(iso: string | undefined | null): string {
 }
 
 /**
+ * 「最近会话」行标题：库里没有标题时，说清楚这条会话是什么。
+ *
+ * `getSessions` 把 NULL 标题替换成字面量 `New chat`（routes.rs:273），而
+ * 只有主对话走前端自动起名。值守页列的是阿黎工作域（`twin:` / `member::` /
+ * `automation:`），这些会话永远拿不到标题 —— 用户看到的是两行一模一样的
+ * `New chat`（2026-11-06 实报截图），分不清谁是谁。
+ *
+ * 三类来源都写在 id 上，按 id 归类即可；`automation:<taskId>:<runId>` 还能
+ * 顺着 taskId 换回任务名。**不猜内容**：换不回来就说"自动化运行"。
+ */
+export function sessionRowLabel(
+  id: string,
+  title: string | null | undefined,
+  automationName?: (automationId: string) => string | undefined,
+): string {
+  const t = (title ?? "").trim();
+  if (t && t !== "New chat") return t;
+  if (id.startsWith("twin:")) return "阿黎的对话";
+  if (id.startsWith("member::")) return "成员工单";
+  const auto = /^automation:([^:]+):/.exec(id);
+  if (auto) {
+    const name = automationName?.(auto[1]);
+    return name ? `自动化 · ${name}` : "自动化运行";
+  }
+  return t || "未命名会话";
+}
+
+/**
+ * 时钟读数（`14:03:41`）—— 心跳/巡查用它标"上次巡查是什么时候"。
+ *
+ * 用 `Date` 的本地时区（值守页面对的是人，不是 UTC 日志），时分秒定宽，
+ * 数值跳变时不会抖。
+ */
+export function clockTime(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/**
  * 工作日志的一行 → 可直接上屏的一句话。
  *
  * `daily_memory` 的 `conclusions` 存的是**写入格式**，不是显示格式：

@@ -14,6 +14,9 @@ mod automation_trigger;
 mod orchestration_bus;
 mod resource_patrol;
 mod member_api;
+mod request_id;
+mod storage_janitor;
+mod ttl_cache;
 mod task_tracker_adapter;
 mod task_record_sink;
 mod security;
@@ -332,7 +335,9 @@ pub fn router(state: HttpServerState) -> Router {
 
     let mut app = Router::new()
         .route("/health", get(health))
-        .route("/shutdown", get(shutdown_server))
+        // 进程内指标快照（JSON）。走 request_guard 的正常认证路径。
+        .route("/v1/metrics", get(metrics::endpoint))
+        .route("/shutdown", post(shutdown_server))
         // 任务台（总管方案 P4.1）：成员工单 / 资源巡检 / 角色库的桌面数据面。
         .route("/api/members", get(member_api::list_members))
         .route("/api/members/{member_id}", get(member_api::get_member))
@@ -476,6 +481,12 @@ pub fn router(state: HttpServerState) -> Router {
             "/v1/sessions/{session_id}/approval",
             post(routes::approve_via_rest),
         )
+        // 会话级权限档热更（放手模式当前轮立即生效）。见
+        // routes::set_session_permission。
+        .route(
+            "/v1/sessions/{session_id}/permission",
+            post(routes::set_session_permission),
+        )
         // Re-project approvals the client missed while its socket was
         // closed (task_in_flight settle / reconnect).
         .route(
@@ -603,11 +614,16 @@ pub fn router(state: HttpServerState) -> Router {
             }),
     )
     .layer(http_cors_layer())
+    // 最外层：连带 CORS 短路响应也回写 request id（排障时最能对上号）。
+    .layer(axum::middleware::from_fn(request_id::middleware))
 }
 
 pub async fn run_server(addr: SocketAddr, config: GatewayConfig) -> Result<(), AgentError> {
     // 安全中心：按 config 的 security 刷新自动备份策略（与 main.rs 启动路径一致）。
     hermix_tools::backup::set_policy_from_config(&config.security, &hermix_config::paths::hermix_home());
+    // 存储生命周期：`storage.metrics_retention_days > 0` 时启动后台清理
+    // （默认 0 = 关闭）。必须在 build 消费 config 之前读出来。
+    let metrics_retention_days = config.storage.metrics_retention_days;
     let state = HttpServerState::build(config)
         .await?
         .with_automation_scheduler()
@@ -619,6 +635,10 @@ pub async fn run_server(addr: SocketAddr, config: GatewayConfig) -> Result<(), A
     // plaintext 保持现有暴露面语义，TLS 面向远程设备）。env 读法放在这里
     // 而不是 main.rs，是为了 run_server 的调用方零改动。
     let tls_addr = tls::tls_addr_from_env();
+    if metrics_retention_days > 0 {
+        let home = hermix_config::paths::hermix_home();
+        tokio::spawn(storage_janitor::run_loop(home, metrics_retention_days));
+    }
     run_server_with_tls(addr, tls_addr, state).await
 }
 
@@ -698,16 +718,20 @@ pub async fn run_server_with_tls(
     // Start TickLoop by default (powers conscious ECG, watchdog).
     tickloop_mgr.start(Some(tracker)).await;
 
-    // 文件索引预热：启动 5s 后确保提权 helper 在跑——开机自启任务通常已经
-    // 拉起，这里只探活；没在跑就补拉一次。索引随应用启动就开始建/续增量，
-    // 而不是等用户第一次搜索（2026-10-25 用户实测「程序开了几小时，一搜索
-    // 才开始建索引」）。失败静默：UAC 被拒 / exe 未构建时首次搜索仍会按需
-    // 拉起，ensure_helper 内部有单飞锁与失败冷却，不会连环弹。
+    // **不再预热文件索引**（2026-10-30 取消，与开机自启一起拆掉）。
+    //
+    // 原先这里启动 5s 后无条件 `ensure_helper()`：配合 AtLogOn 计划任务，索引
+    // 开机即建。代价是常驻一个宿主**杀不掉**的提权进程——关闭主程序后它还
+    // 活着，锁住 `hermix-filesearch.exe` 与 `binaries/` 副本（编译 EBUSY、
+    // 安装器报文件被占用）。取消自启后若仍预热，就变成"每次启动主程序弹一次
+    // UAC"，比首次搜索更烦，所以预热一起删掉。
+    //
+    // 现在 helper 只在用户真正搜索时按需拉起（`ensure_helper`，自带单飞锁与
+    // 60s 失败冷却，不会连环弹）。这里只做一件事：若旧版本留下的提权 helper
+    // 恰好在跑（登录任务拉起的那份），顺手让它清掉自己名下的旧计划任务。
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        if let Err(error) = filesearch::ensure_helper().await {
-            tracing::debug!(error = %error, "filesearch warmup skipped");
-        }
+        filesearch::purge_legacy_autostart().await;
     });
 
     let mut shutdown_rx = shutdown_rx;
@@ -838,11 +862,19 @@ async fn health() -> impl IntoResponse {
     })
 }
 
+/// 关服端点：`POST`（不给浏览器 `<img>`/`<a>` 这类简单 GET 留后门），
+/// 且要求请求来自本机页面（见 `security::browser_origin_allowed`）。
 async fn shutdown_server(
     axum::extract::Extension(tx): axum::extract::Extension<tokio::sync::watch::Sender<bool>>,
-) -> impl IntoResponse {
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if !crate::security::browser_origin_allowed(&headers) {
+        tracing::warn!("rejected cross-site /shutdown");
+        return (axum::http::StatusCode::FORBIDDEN, "cross-site request rejected").into_response();
+    }
     let _ = tx.send(true);
-    "shutting down"
+    "shutting down".into_response()
 }
 
 // ---------------------------------------------------------------------------

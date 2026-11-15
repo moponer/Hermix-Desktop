@@ -146,7 +146,41 @@ pub const HARD_ESSENTIAL_TOOLSETS: &[&str] = &[
     "delegate_task",
     "get_subagent_result",
     "workflow",
+    // member：同一个坑的第四例（2026-11-06 实报）。`dispatch_member` /
+    // `get_member_result` / `review_member` 是总管方案 D1-D3 的执行单元，
+    // 但 member 是 P1 才上线的新 toolset，用户在更早的「设置里点过一次」
+    // 写下的白名单快照里不可能有它 —— 启动时白名单后置过滤把整个 toolset
+    // 关掉，助手阿黎视野里只剩 `delegate_task`（子代理是硬地板常驻）。
+    // 用户侧现象是「她拿子代理跑任务、不建团队」，而团队机制完好无损：
+    // 派单→成员会话→验收整条链路都在，只是工具不可见，且
+    // `MEMBER_ORCHESTRATION_GUIDANCE` 的注入条件是 `tool_names.contains
+    // ("dispatch_member")`，于是分轨纪律也一并不出现。两个静默后果叠加。
+    "member",
 ];
+
+/// Toolsets registered by **another crate** at server-build time, not by
+/// `register_builtin_tools` (see `hermix_agent::member::runner::
+/// register_member_tools`, which the server calls right after the builtin
+/// pass). They still belong on the hard floor — a stale
+/// `enabled_toolsets.json` snapshot would silently disable them exactly like
+/// `vault` / `cronjob` were — but a hermix-tools-local registry cannot see
+/// them, so the "floor names must be registered" guard must exclude them.
+///
+/// Ordering requirement: the external registration must happen **before**
+/// `apply_persisted_toolset_state`, otherwise the floor's
+/// `set_toolset_enabled` call is a no-op and the toolset stays off.
+pub const EXTERNALLY_REGISTERED_TOOLSETS: &[&str] = &["member"];
+
+/// Toolsets whose registration is **deliberately conditional** and may be
+/// absent from a perfectly healthy registry:
+/// - `session_search` skips registration when the sessions DB does not exist
+///   yet (fresh install / clean test environment). Building the DB itself is
+///   refused on purpose — a hand-rolled schema here would drift from
+///   `session_persistence/schema.rs` (see
+///   `backends/session_search.rs::new`). After the first conversation creates
+///   the DB, the next backend start registers the tool.
+/// The "floor names must be registered" guard must not fire for these.
+pub const CONDITIONALLY_REGISTERED_TOOLSETS: &[&str] = &["session_search"];
 
 /// Soft essential toolsets — re-enabled by the floor ONLY when the
 /// user's saved whitelist is in its default (`["*"]`) state. When the
@@ -183,6 +217,7 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "delegate_task",
     "get_subagent_result",
     "workflow",
+    "member",
     // soft
     "document",
     "storage",
@@ -249,6 +284,7 @@ mod tests {
                 "delegate_task",
                 "get_subagent_result",
                 "workflow",
+                "member",
             ],
             "HARD_ESSENTIAL_TOOLSETS changed — update the floor and any UI copy."
         );
@@ -334,6 +370,15 @@ mod tests {
         );
         // 第四批（2026-10-16 盘点）：跨会话召回 / 任务规划 / 用户提问通道 /
         // 子代理派单，全是「缺了产品残废」级能力，曾被旧白名单快照静默关闭。
+        // 总管执行单元（2026-11-06 实报「阿黎拿子代理跑任务、不建团队」）：
+        // member 是后上线的新 toolset，被旧白名单快照静默关掉，于是团队
+        // 工具与编排纪律（注入条件就是 dispatch_member 可见）一起消失。
+        assert!(
+            HARD_ESSENTIAL_TOOLSETS.contains(&"member"),
+            "member (dispatch_member / get_member_result / review_member) must \
+             remain in the hard essential floor — without it the assistant only \
+             sees delegate_task and runs long tasks as blocking sub-agents"
+        );
         for ts in ["session_search", "todo", "clarify", "delegate_task", "workflow"] {
             assert!(
                 HARD_ESSENTIAL_TOOLSETS.contains(&ts),

@@ -44,12 +44,10 @@ export function VisionButton({ onFilesAttach, disabled, compact }: VisionButtonP
         onClick={() => inputRef.current?.click()}
         disabled={disabled}
         title="上传文档或图片（视觉理解）"
-        className={`flex items-center rounded text-text-muted hover:text-text-primary hover:bg-bg-tertiary disabled:opacity-30 transition-colors text-[length:var(--text-meta)] ${
-          compact ? "w-7 h-7 justify-center" : "gap-1 px-2 py-1"
-        }`}
+        className={`composer-chip ${compact ? "composer-chip--compact" : ""} disabled:opacity-30`}
       >
-        <FileText className="icon-sm" />
-        {!compact && <span>文档图片</span>}
+        <FileText />
+        <span>文档图片</span>
       </button>
     </>
   );

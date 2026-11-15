@@ -616,10 +616,39 @@ impl TerminalBackend for LocalBackend {
                 });
             }
 
+            // 用户按停止时，外层 `tool_executor` 直接 `abort()` 这个任务 ——
+            // future 被 drop，下面 `tokio::time::timeout` 的 Err 分支根本没有
+            // 机会运行，于是 `kill_process_tree` 也不会跑，PowerShell / cmd
+            // 进程会一直留在系统里（实测残留：12:16 / 13:38 起各一个 pwsh，
+            // 而那两条命令早就没人等了）。
+            //
+            // Drop guard 兜底：future 被丢弃（abort）时清进程树；正常完成时
+            // `disarm()`，不对已退出的 pid 做无谓 taskkill。background 分支在
+            // 上面已经 return，构造不到这个 guard，所以不会被误杀。
+            struct KillTreeOnDrop(Option<u32>);
+            impl KillTreeOnDrop {
+                fn disarm(&mut self) {
+                    self.0 = None;
+                }
+            }
+            impl Drop for KillTreeOnDrop {
+                fn drop(&mut self) {
+                    if let Some(pid) = self.0 {
+                        tracing::warn!(
+                            pid,
+                            "command future dropped before completion (abort/stop) — killing process tree"
+                        );
+                        kill_process_tree(pid);
+                    }
+                }
+            }
+            let mut tree_guard = KillTreeOnDrop(child.id());
+
             let output = child
                 .wait_with_output()
                 .await
                 .map_err(|e| AgentError::Io(format!("Failed to wait for command: {}", e)))?;
+            tree_guard.disarm();
 
             // Decode console output — handle Windows OEM code pages (GBK).
             let stdout = decode_console_output(&output.stdout).into_owned();
@@ -801,9 +830,51 @@ impl TerminalBackend for LocalBackend {
     }
 }
 
-/// Windows ACL 沙箱执行路径：受限 token spawn + 超时强杀。同步 FFI
-/// 走 `spawn_blocking`；stdout/stderr 并行读（先 wait 再读会因管道
-/// 写满死锁）。fail-closed：provision/spawn 失败直接报错。
+/// 有界收集子进程输出：两个读线程各 send 一次，超时即返回（调用方随后
+/// 杀进程树迫使管道 EOF）。必须用通道而不是 `join` —— `join` 等的是管道
+/// EOF（所有写端关闭），孙进程握着写端时它永远不返回。
+#[cfg(windows)]
+fn collect_reader_output(
+    rx: &std::sync::mpsc::Receiver<(u8, Vec<u8>)>,
+    budget: std::time::Duration,
+    stdout: &mut Vec<u8>,
+    stderr: &mut Vec<u8>,
+    got: &mut u8,
+) {
+    let deadline = std::time::Instant::now() + budget;
+    while *got != 3 {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        match rx.recv_timeout(remaining) {
+            Ok((0, buf)) => {
+                *stdout = buf;
+                *got |= 1;
+            }
+            Ok((_, buf)) => {
+                *stderr = buf;
+                *got |= 2;
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+/// 杀掉命令的整棵进程树。job 可用时优先 `TerminateJobObject`（一次杀整棵
+/// 树，且不经过 PID——顶层进程退出后 PID 可能被系统复用，`taskkill` 会误杀
+/// 无关进程）；附着失败才降级 taskkill。
+#[cfg(windows)]
+fn kill_command_tree(job: &Option<hermix_core::win_job::JobGuard>, pid: u32) {
+    match job {
+        Some(job) => job.terminate(),
+        None => kill_process_tree(pid),
+    }
+}
+
+/// Windows ACL 沙箱执行路径：受限 token spawn + 有界等待 + 超时杀整棵树。
+/// 同步 FFI 走 `spawn_blocking`；stdout/stderr 并行读（先 wait 再读会因
+/// 管道写满死锁）。fail-closed：provision/spawn 失败直接报错。
 #[cfg(windows)]
 async fn execute_command_sandboxed(
     command: &str,
@@ -830,34 +901,139 @@ async fn execute_command_sandboxed(
             ],
             &wd,
         )?;
-        child.spawn_kill_watchdog(timeout_secs);
+        let pid = child.pid;
+        // 进程树容器：只 TerminateProcess 顶层时，孙进程（cargo/rustc/node）
+        // 会继续握着 stdout 写端，读线程永不返回——"命令已超时但会话/UI
+        // 永远卡住"的根因。附着失败时降级为 taskkill 杀树。
+        #[cfg(windows)]
+        let job = hermix_core::win_job::JobGuard::attach(pid);
+
         let (mut so, mut se) = child.try_clone_pipes()?;
 
-        let out_thread = std::thread::spawn(move || {
+        // 有界排空：只保留前 CAPTURE_CAP 字节，超出部分继续读但不再存储。
+        // 既不让子进程因管道写满而挂死，也不让 `dir /s` 级输出把内存吃爆
+        // （旧 read_to_end 无上限，截断发生在拿到完整字节之后，救不了峰值）。
+        const CAPTURE_CAP: usize = 32 * 1024 * 1024;
+        let (tx, rx) = std::sync::mpsc::channel::<(u8, Vec<u8>)>();
+        let tx_out = tx.clone();
+        std::thread::spawn(move || {
             let mut buf = Vec::new();
-            let _ = so.read_to_end(&mut buf);
-            buf
+            let mut chunk = [0u8; 65_536];
+            loop {
+                match so.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if buf.len() < CAPTURE_CAP {
+                            let take = n.min(CAPTURE_CAP - buf.len());
+                            buf.extend_from_slice(&chunk[..take]);
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let _ = tx_out.send((0, buf));
         });
-        let err_thread = std::thread::spawn(move || {
+        let tx_err = tx.clone();
+        std::thread::spawn(move || {
             let mut buf = Vec::new();
-            let _ = se.read_to_end(&mut buf);
-            buf
+            let mut chunk = [0u8; 65_536];
+            loop {
+                match se.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if buf.len() < CAPTURE_CAP {
+                            let take = n.min(CAPTURE_CAP - buf.len());
+                            buf.extend_from_slice(&chunk[..take]);
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let _ = tx_err.send((1, buf));
         });
-        let exit_code = child.wait()?;
-        let stdout = out_thread.join().unwrap_or_default();
-        let stderr = err_thread.join().unwrap_or_default();
+        drop(tx);
 
-        let stdout = decode_console_output(&stdout).into_owned();
-        let stderr = decode_console_output(&stderr).into_owned();
+        let outcome = match child.wait_timeout(std::time::Duration::from_secs(timeout_secs)) {
+            Ok(o) => o,
+            Err(e) => {
+                child.terminate();
+                kill_command_tree(&job, pid);
+                return Err(e);
+            }
+        };
+        let timed_out = matches!(outcome, crate::sandbox::WaitOutcome::TimedOut);
+        if timed_out {
+            child.terminate();
+            kill_command_tree(&job, pid);
+        }
+
+        let mut stdout_bytes = Vec::new();
+        let mut stderr_bytes = Vec::new();
+        let mut got = 0u8;
+        collect_reader_output(
+            &rx,
+            std::time::Duration::from_secs(2),
+            &mut stdout_bytes,
+            &mut stderr_bytes,
+            &mut got,
+        );
+        if got != 3 {
+            // 正常退出也可能有孙进程握着写端（`start /b`、后台子进程）。
+            // 收尾窗口用尽后杀树再收一次，绝不让读线程永久挂着。
+            child.terminate();
+            kill_command_tree(&job, pid);
+            collect_reader_output(
+                &rx,
+                std::time::Duration::from_secs(2),
+                &mut stdout_bytes,
+                &mut stderr_bytes,
+                &mut got,
+            );
+        }
+        drop(rx);
+
+        if timed_out {
+            return Err(AgentError::Timeout(format!(
+                "Command timed out after {} seconds",
+                timeout_secs
+            )));
+        }
+
+        let exit_code = match outcome {
+            crate::sandbox::WaitOutcome::Exited(code) => code as i32,
+            crate::sandbox::WaitOutcome::TimedOut => -1,
+        };
+        let stdout = decode_console_output(&stdout_bytes).into_owned();
+        let stderr = decode_console_output(&stderr_bytes).into_owned();
+        if stdout.len() > max_output_size || stderr.len() > max_output_size {
+            tracing::warn!(
+                stdout_bytes = stdout.len(),
+                stderr_bytes = stderr.len(),
+                max_output_size,
+                "sandboxed command output exceeded max size, truncating"
+            );
+        }
         Ok(CommandOutput {
-            exit_code: exit_code as i32,
-            stdout: if stdout.len() > max_output_size { stdout[..max_output_size].to_string() } else { stdout },
-            stderr: if stderr.len() > max_output_size { stderr[..max_output_size].to_string() } else { stderr },
+            exit_code,
+            // 按字节直切会在 CJK/emoji 中间 panic（非沙箱路径早已改，这里漏过）。
+            stdout: crate::output::truncate_to_boundary(stdout, max_output_size),
+            stderr: crate::output::truncate_to_boundary(stderr, max_output_size),
         })
     });
-    match blocking.await {
-        Ok(r) => r,
-        Err(e) => Err(AgentError::Io(format!("sandbox join failed: {e}"))),
+    // 兜底：即使进程树/管道出现病态行为，也不让一次命令永久占住一个
+    // blocking 线程（线程池耗尽会让整个后端卡死）。
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs.saturating_add(30)),
+        blocking,
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => Err(AgentError::Io(format!("sandbox join failed: {e}"))),
+        Err(_) => Err(AgentError::Timeout(format!(
+            "Command timed out after {} seconds (sandbox cleanup exceeded its budget)",
+            timeout_secs
+        ))),
     }
 }
 
@@ -935,16 +1111,49 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn sandbox_route_rejects_workspace_overlapping_temp() {
+    async fn sandbox_route_survives_unwritable_temp_root() {
         let _g = set_sandbox_env("workspace-write");
-        // workspace = 系统 temp 根：provision 的私有 temp 建在其下，
-        // overlap 检查必须拒绝（否则沙箱 temp 对"工作区"自身可写）。
+        // 本机实况（2026-11-10）：系统 TMP 指向 <TMPDIR>，整棵子树
+        // 的 ACL 拒绝 WRITE_DAC（新建子目录也继承拒绝，tempfile 建的
+        // 目录一样授不进去）→ 主 temp 根授权必失败。回归钉：provision
+        // 必须回退到 ~/.hermix/tmp 成功建会话。测试 workspace 直接建
+        // 在回退根内（确定可授），用完即清。
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .expect("test requires a home dir");
+        let primary = std::path::Path::new(&home)
+            .join(".hermix")
+            .join("tmp")
+            .join(format!("sbx-test-primary-{}", std::process::id()));
+        std::fs::create_dir_all(&primary).expect("create test primary root");
+        let session = crate::sandbox::SandboxSession::provision(
+            crate::sandbox::SandboxMode::WorkspaceWrite,
+            &primary,
+        )
+        .expect("fallback temp root should keep the sandbox usable");
+        assert!(
+            !session.temp_dir.starts_with(&primary),
+            "fallback temp must live outside the test workspace"
+        );
+        let _ = std::fs::remove_dir_all(&primary);
+        std::env::remove_var("HERMIX_SANDBOX_MODE");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn sandbox_route_fail_closed_when_every_temp_root_overlaps() {
+        let _g = set_sandbox_env("workspace-write");
+        // workspace = 用户主目录：系统 temp（用户 Temp）与 ~/.hermix/tmp
+        // 两个候选全部落在其中 → 无可用候选 → 必须保持 fail-closed。
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .expect("test requires a home dir");
         let err = crate::sandbox::SandboxSession::provision(
             crate::sandbox::SandboxMode::WorkspaceWrite,
-            &std::env::temp_dir(),
+            std::path::Path::new(&home),
         )
         .err()
-        .expect("temp-root workspace must fail closed");
+        .expect("all-overlapping candidates must fail closed");
         assert!(
             err.to_string().contains("overlaps"),
             "unexpected error: {err}"
@@ -1044,6 +1253,68 @@ mod tests {
         if !cfg!(windows) {
             assert!(output.stdout.trim().contains(workdir.trim_end_matches('/')));
         }
+    }
+
+    /// 输出收集阶段必须有界：一个读线程永不回报时也不能卡住调用方
+    /// （旧实现是 `join()`，等的是管道 EOF，孙进程握着写端就永不返回）。
+    #[cfg(windows)]
+    #[test]
+    fn collect_reader_output_gives_up_after_budget() {
+        let (tx, rx) = std::sync::mpsc::channel::<(u8, Vec<u8>)>();
+        tx.send((0u8, b"hello".to_vec())).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut got = 0u8;
+        let started = std::time::Instant::now();
+        collect_reader_output(
+            &rx,
+            std::time::Duration::from_millis(150),
+            &mut stdout,
+            &mut stderr,
+            &mut got,
+        );
+        let elapsed = started.elapsed();
+        assert_eq!(got, 1, "只收到 stdout");
+        assert_eq!(stdout, b"hello");
+        assert!(
+            elapsed >= std::time::Duration::from_millis(140),
+            "应等满预算再放弃，实际 {elapsed:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "不得无限等待，实际 {elapsed:?}"
+        );
+    }
+
+    /// 回归：超时只杀顶层进程时，孙进程继续握着 stdout 写端，旧实现的
+    /// `join()` 会一直等到孙进程自然退出（`ping -n 20` ≈ 19s），表现为
+    /// "命令已超时报错但会话/UI 卡住"。新路径靠 job/taskkill 杀整棵树。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn sandbox_timeout_kills_grandchild_and_does_not_hang() {
+        // `set_sandbox_env` 自身会取 `SANDBOX_ENV_LOCK`，这里不能再手动锁
+        // （std Mutex 不可重入，双重加锁 = 自死锁）。
+        let _sandbox_env = set_sandbox_env("workspace-write");
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path().to_str().unwrap();
+        let backend = LocalBackend::new(1, 1_048_576);
+        if !probe_sandbox_in_workdir(&backend).await {
+            eprintln!("skip: sandbox ACL denied on this volume");
+            return;
+        }
+        let started = std::time::Instant::now();
+        let result = backend
+            .execute_command("ping -n 20 127.0.0.1", None, Some(workdir), false, false)
+            .await;
+        let elapsed = started.elapsed();
+        assert!(
+            matches!(result, Err(AgentError::Timeout(_))),
+            "超时必须如实报 Timeout，实际 {result:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(12),
+            "不得等孙进程自然退出（会卡 ~19s），实际 {elapsed:?}"
+        );
     }
 
     #[tokio::test]

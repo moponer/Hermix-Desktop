@@ -610,12 +610,12 @@ pub(crate) fn safe_redirect_policy() -> reqwest::redirect::Policy {
 ///
 /// 不按字节：中文一字 3 字节，`&s[..n]` 会切在多字节中间 panic 或切出乱码。
 pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
-    let total = text.chars().count();
-    if total <= max_chars {
-        return text.to_string();
+    // 切分走 core 的单一实现；这里只负责省略号语义（超出时补 …）。
+    if text.chars().count() <= max_chars {
+        text.to_string()
+    } else {
+        format!("{}…", hermix_core::text_utils::truncate_chars(text, max_chars))
     }
-    let head: String = text.chars().take(max_chars).collect();
-    format!("{head}…")
 }
 
 #[cfg(test)]

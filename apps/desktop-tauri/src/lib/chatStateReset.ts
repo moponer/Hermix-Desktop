@@ -14,6 +14,7 @@
 // 其余 setter/refs 由 App.tsx 已持有的引用直接传入。
 
 import type { StreamPhase } from "../hooks/useStreamChat";
+import type { ApprovalBridge } from "../hooks/useApprovalBridge";
 
 /** useStreamChat 暴露的 ws 发送原语（cancel / send 内部也用它）。 */
 export type WsSendRaw = (payload: string) => boolean;
@@ -55,17 +56,15 @@ export interface ChatStateResetDeps {
   setSubAgents: (
     updater: (prev: Record<string, unknown>) => Record<string, unknown>,
   ) => void;
-  /** 同步 refs（imperatively cleared）。 */
-  approvalResolversRef: RefLike<
-    Map<string, (decision: unknown) => void>
+  /**
+   * 审批桥接（`hooks/useApprovalBridge`）——直接传桥接对象，不再包
+   * `RefLike`。此前这里收 4 个 ref，调用方还得 `as unknown as` 矫正类型
+   * （resolver 签名对不上）；现在类型直通，谎言消失。
+   */
+  approval: Pick<
+    ApprovalBridge,
+    "resolvers" | "retryTimers" | "timeoutTimers" | "pendingSessions"
   >;
-  approvalRetryTimersRef: RefLike<
-    Map<string, ReturnType<typeof setInterval>>
-  >;
-  approvalTimeoutTimersRef: RefLike<
-    Map<string, ReturnType<typeof setTimeout>>
-  >;
-  pendingApprovalSessionsRef: RefLike<Map<string, string>>;
   clarifyResolversRef: RefLike<
     Map<string, Array<(answer: string) => void>>
   >;
@@ -120,7 +119,7 @@ export function resetChatStateForModelSwitch(deps: ChatStateResetDeps): void {
   // approvalResolversRef 在 cancel 的 onCancel 里已经被 forEach deny +
   // clear，此处再 .clear() 是幂等的；这里重新发 deny 是为防 cancel
   // 因 settleRef 为 null 而跳过 onCancel 的极端 race。
-  deps.approvalResolversRef.current.forEach((_resolver, requestId) => {
+  deps.approval.resolvers.forEach((_resolver, requestId) => {
     const sent = deps.wsSendRaw(
       JSON.stringify({
         type: "approval_response",
@@ -135,12 +134,12 @@ export function resetChatStateForModelSwitch(deps: ChatStateResetDeps): void {
       );
     }
   });
-  deps.approvalResolversRef.current.clear();
-  deps.approvalRetryTimersRef.current.forEach((t) => clearInterval(t));
-  deps.approvalRetryTimersRef.current.clear();
-  deps.approvalTimeoutTimersRef.current.forEach((t) => clearTimeout(t));
-  deps.approvalTimeoutTimersRef.current.clear();
-  deps.pendingApprovalSessionsRef.current.clear();
+  deps.approval.resolvers.clear();
+  deps.approval.retryTimers.forEach((t) => clearInterval(t));
+  deps.approval.retryTimers.clear();
+  deps.approval.timeoutTimers.forEach((t) => clearTimeout(t));
+  deps.approval.timeoutTimers.clear();
+  deps.approval.pendingSessions.clear();
   deps.clarifyResolversRef.current.forEach((resolvers) =>
     resolvers.forEach((resolve) => resolve("")),
   );

@@ -25,6 +25,11 @@ pub enum McpError {
     #[error("Connection error: {0}")]
     ConnectionError(String),
 
+    /// The server did not answer within its request budget. A hung stdio
+    /// server previously blocked its caller forever (no receive timeout).
+    #[error("MCP request timed out: {0}")]
+    Timeout(String),
+
     /// Error in the MCP protocol (JSON-RPC error codes).
     #[error("Protocol error (code {code}): {message}")]
     Protocol { code: i64, message: String },

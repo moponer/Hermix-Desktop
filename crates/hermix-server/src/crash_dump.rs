@@ -161,12 +161,15 @@ fn build_dump(
 }
 
 fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.len() <= max_chars {
+    // 判长从**字节**改为**字符**：此前 CJK 串在字节口径下会提前判"不超长"
+    // 而漏截断（不 panic，但语义错）；切分统一走 core 的 UTF-8 安全实现。
+    if s.chars().count() <= max_chars {
         s.to_string()
     } else {
-        // Walk by chars to avoid splitting UTF-8.
-        let truncated: String = s.chars().take(max_chars).collect();
-        format!("{truncated}...(truncated)")
+        format!(
+            "{}...(truncated)",
+            hermix_core::text_utils::truncate_chars(s, max_chars)
+        )
     }
 }
 

@@ -540,6 +540,30 @@ pub(crate) async fn collect_stream_inner(
         loop {
             tokio::select! {
                 biased;
+                // 静默期也必须能停：旧代码只在「chunk 到达之后」才查
+                // interrupt，provider 不发数据时点停止最坏要等满
+                // `stream_idle_timeout_secs`（默认 120s）才被看见。
+                _ = interrupt.wait_for_interrupt() => {
+                    let (flush_content, flush_reasoning) = think_parser.flush();
+                    if !flush_content.is_empty() {
+                        content.push_str(&flush_content);
+                    }
+                    if !flush_reasoning.is_empty() {
+                        reasoning_content.push_str(&flush_reasoning);
+                    }
+                    tool_call_sanitizer.flush();
+                    let message = assemble_stream_assistant_message(
+                        &content,
+                        &reasoning_content,
+                        &tool_calls,
+                    );
+                    return Ok(StreamCollectOutcome::Interrupted(LlmResponse {
+                        message,
+                        usage: last_usage.clone(),
+                        model: active_model.to_string(),
+                        finish_reason: Some("interrupted".to_string()),
+                    }, None));
+                }
                 chunk_opt = stream.next() => {
                     match chunk_opt {
                         None => break,
@@ -759,6 +783,28 @@ pub(crate) async fn collect_stream_inner(
             loop {
                 tokio::select! {
                     biased;
+                    // 同上：静默期同样响应停止，不再等 idle 超时。
+                    _ = interrupt.wait_for_interrupt() => {
+                        let (flush_c, flush_r) = think_parser.flush();
+                        if !flush_c.is_empty() {
+                            content.push_str(&flush_c);
+                        }
+                        if !flush_r.is_empty() {
+                            reasoning_content.push_str(&flush_r);
+                        }
+                        tool_call_sanitizer.flush();
+                        let message = assemble_stream_assistant_message(
+                            &content,
+                            &reasoning_content,
+                            &tool_calls,
+                        );
+                        return Ok(StreamCollectOutcome::Interrupted(LlmResponse {
+                            message,
+                            usage: last_usage.clone(),
+                            model: active_model.to_string(),
+                            finish_reason: Some("interrupted".to_string()),
+                        }, None));
+                    }
                     chunk_opt = stream.next() => {
                         match chunk_opt {
                             None => break 'silence_watch,

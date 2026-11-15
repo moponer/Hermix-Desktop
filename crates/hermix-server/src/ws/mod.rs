@@ -93,7 +93,20 @@ pub(crate) async fn handle_ws(
             system_prompt: request.system_prompt.clone(),
             tools: request.tools.clone(),
             workspace: request.workspace.clone(),
-            permission: parse_permission_level(request.permission.as_deref()),
+            permission: {
+                let level = parse_permission_level(request.permission.as_deref());
+                // 重武装会话级放手开关（端点见 routes::set_session_permission）。
+                // 只有显式携带 permission 字段的消息才重置——桌面端每条消息
+                // 都带当前档位；不带字段的调用方（自动化等）不该悄悄清掉
+                // 用户刚点开的放手模式。
+                if request.permission.as_deref().is_some() {
+                    state.approval_registry.set_full_mode(
+                        &session_id,
+                        level == Some(hermix_core::traits::PermissionLevel::Full),
+                    );
+                }
+                level
+            },
             images: convert_wire_images(&request.images),
             image: None,
             image_mime_type: None,
@@ -251,6 +264,17 @@ pub(crate) async fn handle_ws_stream_send(
     // arrived within DEDUP_WINDOW_SECS — that's a genuine client
     // retry storm / queue re-drain, still coalesced as before.
     let active_key = dedup_key(session_id, &request.text);
+    // 会话级互斥（C3 修复）：`active_sessions` 以**纯 session_id** 为键，
+    // 与 `active_handles`/`recent_sends` 的 (session, text) 键分离。此前
+    // 三者共用含文本哈希的键，同一会话从两个入口发**不同**文本会并行跑
+    // 两个 agent——先完成的一方 `session_broadcast_drop` 踢掉仍存活方的
+    // 订阅（前端表现为"另一个窗口的流突然中断"），且双方各自全量覆写
+    // DB 造成消息丢失。
+    let session_busy = state
+        .active_sessions
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(session_id);
 
     // Peek without removing: the `!is_finished()` branch below DECLINES this
     // send and must leave the live handle registered. Removing it up front
@@ -360,7 +384,7 @@ pub(crate) async fn handle_ws_stream_send(
         if let Some(handle) = zombie {
             handle.abort();
         }
-        state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+        state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
         state.recent_sends.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
         // Cancel the soft-disconnect's pending grace timer for this key.
         // Otherwise it fires later and `remove`s the NEW handle we're about
@@ -376,6 +400,48 @@ pub(crate) async fn handle_ws_stream_send(
         // 才 abort + 接管，让新 send 重新跑 agent task。
         // Fall through: the `active_sessions` insert below re-takes the
         // lock for THIS send.
+    } else if session_busy {
+        // 同一会话已有另一条消息在跑（C3 会话级互斥）：拒绝第二个入口，
+        // 统一 task_in_flight 语义（状态说明 + 合成 Done 落定本条发送），
+        // 不再并行 spawn。不写 recent_sends——这条发送没有产生任务，
+        // 不该占用去重窗口。
+        tracing::info!(
+            session = %session_id,
+            text_len = request.text.len(),
+            "session busy: declining send — another message is being processed for this session"
+        );
+        let envelope = WsEnvelope {
+            version: 1,
+            request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
+            trace_id: trace_id.to_string(),
+             seq: None,
+             attachment_id: None,
+            event: StreamEvent::Status {
+                content: format!(
+                    "{{\"event\":\"task_in_flight\",\"message\":\"此会话正在处理上一条消息。新消息未触发新任务；请等待完成或在 UI 中点击「停止」。\"}}"
+                ),
+            },
+        };
+        if let Ok(json) = serde_json::to_string(&envelope) {
+            let _ = sender.send(json).await;
+        }
+        let done = WsEnvelope {
+            version: 1,
+            request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
+            trace_id: trace_id.to_string(),
+             seq: None,
+             attachment_id: None,
+            event: StreamEvent::Done {
+                content: String::new(),
+                finish_reason: Some("task_in_flight".to_string()),
+                outcome: Some("completed".to_string()),
+                error: None,
+            },
+        };
+        if let Ok(json) = serde_json::to_string(&done) {
+            let _ = sender.send(json).await;
+        }
+        return StreamSendOutcome::Completed;
     } else if let Some(elapsed) = check_recent_send(&state, session_id, &request.text) {
         tracing::warn!(
             session = %session_id,
@@ -437,15 +503,13 @@ pub(crate) async fn handle_ws_stream_send(
         return StreamSendOutcome::Completed;
     }
 
-    // session-level active-stream lock. After the override
-    // above freed a stale entry, this insert succeeds for the new send.
-    // The key is derived from `dedup_key` so both checks use the same
-    // collision domain. This catches retries that arrive AFTER the
-    // window (when `check_recent_send` above misses them) and is a
-    // safety net for any entry that slipped past the override.
+    // session-level active-stream lock (C3：键 = 纯 session_id，真正的
+    // 「同一会话同时只跑一个 agent」互斥). The busy-decline branch above
+    // already handled the visible case; this insert is the safety net for
+    // any race that slipped past it.
     let is_duplicate = {
         let mut active = state.active_sessions.lock().unwrap_or_else(|e| e.into_inner());
-        if !active.insert(active_key.clone()) {
+        if !active.insert(session_id.to_string()) {
             true
         } else {
             false
@@ -455,7 +519,7 @@ pub(crate) async fn handle_ws_stream_send(
         tracing::warn!(
             session = %session_id,
             text_len = request.text.len(),
-            "active_stream: duplicate (session_id, text) still locked; settling as deduped (safety net)"
+            "active_stream: session still locked; settling as deduped (safety net)"
         );
         // 之前这个分支返回 `StreamEvent::Error`(code=
         // "duplicate_stream")，桌面端把它渲染成红色的「发送失败」横幅——
@@ -690,7 +754,20 @@ pub(crate) async fn handle_ws_stream_send(
         system_prompt: request.system_prompt.clone(),
         tools: request.tools.clone(),
         workspace: request.workspace.clone(),
-        permission: parse_permission_level(request.permission.as_deref()),
+        permission: {
+            let level = parse_permission_level(request.permission.as_deref());
+            // 重武装会话级放手开关（端点见 routes::set_session_permission）。
+            // 只有显式携带 permission 字段的消息才重置——桌面端每条消息都带
+            // 当前档位；不带字段的调用方（自动化等）不该悄悄清掉用户刚点开
+            // 的放手模式。
+            if request.permission.as_deref().is_some() {
+                state.approval_registry.set_full_mode(
+                    &session_id,
+                    level == Some(hermix_core::traits::PermissionLevel::Full),
+                );
+            }
+            level
+        },
         images: convert_wire_images(&request.images),
         image: request.image.clone(),
         image_mime_type: request.image_mime_type.clone(),
@@ -1549,7 +1626,10 @@ pub(crate) async fn handle_ws_stream_send(
                     let evt = event_type.to_string();
                     tokio::spawn(async move {
                         if let Err(e) = tx_spawn.send(envelope).await {
-                            tracing::warn!(
+                            // 客户端先断开（关窗口 / 切会话 / 刷新）后仍在跑的
+                            // turn 必然送不出去，这是正常收尾而不是故障 ——
+                            // 实机一天刷 179 条 WARN，把真问题盖住了。
+                            tracing::debug!(
                                 error = %e,
                                 event = %evt,
                                 "ws tool/agent event dropped: client receiver closed"
@@ -1676,7 +1756,9 @@ pub(crate) async fn handle_ws_stream_send(
         // forever, blocking subsequent messages.
         {
             let mut active_s = active_sessions.lock().unwrap_or_else(|e| e.into_inner());
-            active_s.remove(&active_key_clone);
+            // C3：active_sessions 键 = 纯 session_id（与 handles/recent_sends
+            // 的 (session,text) 键分离）。
+            active_s.remove(&session_id_clone);
             let mut active_h = active_handles.lock().unwrap_or_else(|e| e.into_inner());
             active_h.remove(&active_key_clone);
             let mut rs = recent_sends.lock().unwrap_or_else(|e| e.into_inner());
@@ -1888,7 +1970,8 @@ pub(crate) async fn handle_ws_stream_send(
 
         // Release the per-session stream lock so future sends
         // (same or different content) for this session are allowed.
-        active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key_clone);
+        // C3：键 = 纯 session_id。
+        active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id_clone);
         // Self-clean the live-task handle. With the autonomous-
         // continuation policy the graceful-disconnect timer no longer
         // unconditionally removes this entry (doing so while the agent
@@ -1980,8 +2063,9 @@ pub(crate) async fn handle_ws_stream_send(
     // 内 store 会写副本而非原值；exit_branch 是 &'static str，闭包内
     // 改写会与循环后读取冲突），模块函数只负责"延期清理"。
     let schedule_grace_disconnect = || {
+        // C3：session 槽不再被 grace 提前释放（旧 agent 仍在跑时放行重连
+        // 会 spawn 出第二个任务）；重连发送走 task_in_flight 拒绝路径。
         ws_grace::schedule_grace_disconnect(
-            &state.active_sessions,
             &state.active_handles,
             &state.pending_grace,
             &active_key,
@@ -2019,10 +2103,10 @@ pub(crate) async fn handle_ws_stream_send(
                             ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                             // (type-B root-cause): 重试耗尽仍失败，不再硬杀
                             // agent loop。交给 schedule_grace_disconnect
-                            // 延期清理——立即释放 active_sessions（前端
-                            // 重连的 send 走 takeover 路径 abort 旧
-                            // 任务），grace 秒后才 notify 软杀 + 清理
-                            // active_handles。瞬时 WS 抖动不再让任务
+                            // 延期清理——grace 秒后 notify 软杀 + 清理
+                            // active_handles；session 槽保持占用（C3），
+                            // 重连的 send 走 task_in_flight 拒绝路径挂到
+                            // 仍在跑的任务上。瞬时 WS 抖动不再让任务
                             // "跑着跑着突然停"。
                             schedule_grace_disconnect();
                             break;
@@ -2292,6 +2376,16 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision, note } => {
                                         session = %session_id,
                                         "ws_stream_send: Stop received — firing interrupt"
                                     );
+                                    // `notify_waiters` 唤醒**当前所有**等待者
+                                    // （停止转发任务 + 审批等待 select）。
+                                    // 只用 `notify_one` 时两者抢同一个 permit：
+                                    // 审批等待先醒来会把它消费成 ChannelClosed，
+                                    // 转发任务永不唤醒 → `InterruptController`
+                                    // 从未置位 → 这一轮照旧跑完，用户看到的就是
+                                    // 「点了停止没反应」。随后再补一个 permit，
+                                    // 给「此刻还没开始等」的消费者（刚 spawn 的
+                                    // 转发布置）。
+                                    shutdown_notify.notify_waiters();
                                     shutdown_notify.notify_one();
                                     let stopping = WsEnvelope {
                                         version: 1,

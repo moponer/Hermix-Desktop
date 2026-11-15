@@ -119,10 +119,131 @@ impl FileSkillStore {
         let body_start = end + 4; // skip "\n---"
         let body = rest[body_start..].trim_start_matches('\n').to_string();
 
-        let fm: SkillFrontmatter =
-            serde_yaml::from_str(yaml_str).map_err(|e| SkillError::Parse(e.to_string()))?;
+        let fm = match serde_yaml::from_str::<SkillFrontmatter>(yaml_str) {
+            Ok(fm) => fm,
+            Err(e) => {
+                // 存量坏文件兜底：见 `repair_block_scalars` 的注释。
+                let repaired = repair_block_scalars(yaml_str);
+                match serde_yaml::from_str::<SkillFrontmatter>(&repaired) {
+                    Ok(fm) => {
+                        tracing::debug!(
+                            "frontmatter repaired on read (block-scalar body was unindented)"
+                        );
+                        fm
+                    }
+                    Err(_) => return Err(SkillError::Parse(e.to_string())),
+                }
+            }
+        };
 
         Ok((fm, body))
+    }
+}
+
+/// 该行是否开启一个 YAML 块标量（`key: |` / `key: >`，含 `-`/`+` 变体）。
+fn opens_block_scalar(line: &str) -> bool {
+    let t = line.trim_end();
+    for marker in [": |", ": >"] {
+        if let Some(idx) = t.rfind(marker) {
+            let rest = &t[idx + marker.len()..];
+            if rest.chars().all(|c| c == '-' || c == '+') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 该行是否是顶格的 YAML 键（`name: xxx`）。
+fn is_top_level_key(line: &str) -> bool {
+    let Some((key, _)) = line.split_once(':') else {
+        return false;
+    };
+    if key.is_empty() || key.starts_with(' ') || key.starts_with('-') || key.starts_with('#') {
+        return false;
+    }
+    key.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+}
+
+/// 修复「块标量后面正文顶格写死」的 frontmatter。
+///
+/// 生成侧（`skill_auto_create::render_skill_md` / `skill_patch::render_patched_md`）
+/// 曾经这样写：
+///
+/// ```text
+/// description: |
+/// 本技能由 agent 自动沉淀……
+///
+/// ## 当时的目标
+/// ```
+///
+/// 正文顶格 ⇒ YAML 在块标量结束处把 `## 当时的目标` 当成键，整份
+/// frontmatter 解析失败。2026-11-06 实机：`~/.hermix/skills/auto` 下 55 份
+/// 技能全部报废，`GET /api/skills` 每次刷新刷 271 条 `Failed to parse`。
+/// 生成侧已改成缩进正文；这里负责让**盘上已有的坏文件**也能读出来：
+/// 块标量内的顶格行统一补两格缩进，直到遇到下一个真键。
+pub(crate) fn repair_block_scalars(yaml: &str) -> String {
+    let mut out = String::with_capacity(yaml.len() + 64);
+    let mut in_block = false;
+    for raw in yaml.lines() {
+        let line = raw.trim_end();
+        if in_block {
+            if !line.is_empty() && is_top_level_key(line) {
+                in_block = false;
+                push_key_line(&mut out, line);
+            } else if line.is_empty() || line.starts_with(' ') {
+                out.push_str(line);
+            } else {
+                out.push_str("  ");
+                out.push_str(line);
+            }
+        } else {
+            push_key_line(&mut out, line);
+            if opens_block_scalar(line) {
+                in_block = true;
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// 写一行顶格 YAML。纯数字的 `name: 333` 必须加引号 —— YAML 会把它推断成
+/// 整数，`name: String` 反序列化直接失败（实机 `skills/auto/333/SKILL.md`
+/// 就是这种，光缩进正文修不好它）。
+fn push_key_line(out: &mut String, line: &str) {
+    if let Some((key, value)) = line.split_once(':') {
+        let value = value.trim();
+        if !value.is_empty()
+            && value.chars().all(|c| c.is_ascii_digit())
+            && key.trim() == "name"
+        {
+            out.push_str(key);
+            out.push_str(": \"");
+            out.push_str(value);
+            out.push_str("\"");
+            return;
+        }
+    }
+    out.push_str(line);
+}
+
+/// 同一个坏文件在进程内只告警一次。
+///
+/// `list()` 每次被调用（设置页打开、技能索引重建、每轮技能的刷新）都会
+/// 重新扫描全盘 SKILL.md；此前每个坏文件每次都刷一条 WARN —— 实机 55 个
+/// 坏文件 × 反复刷新 = 一次会话几百条相同告警，真正的错误被埋掉。
+fn warn_parse_failure_once(path: &Path, err: &SkillError) {
+    use std::sync::{Mutex, OnceLock};
+    static REPORTED: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
+    let seen = REPORTED.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut guard = match seen.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    if guard.insert(path.to_path_buf()) {
+        tracing::warn!("Failed to parse {}: {}", path.display(), err);
     }
 }
 
@@ -382,7 +503,7 @@ impl FileSkillStore {
                                 });
                             }
                             Err(e) => {
-                                tracing::warn!("Failed to parse {}: {}", skill_file.display(), e);
+                                warn_parse_failure_once(&skill_file, &e);
                             }
                         }
                     } else {
@@ -561,6 +682,40 @@ mod tests {
         assert_eq!(parsed_fm.category, Some("general".to_string()));
         assert_eq!(parsed_fm.description, Some("A test skill".to_string()));
         assert!(parsed_body.contains("Do the thing"));
+    }
+
+    /// 2026-11-06 实机形态：`description: |` 后面正文顶格 + 纯数字 name。
+    /// 旧写侧产物整批报废（55 份），读取侧必须还能救回来。
+    #[test]
+    fn parses_legacy_unindented_block_scalar() {
+        let raw = "\
+---
+name: 333
+kind: auto
+description: |
+本技能由 agent 自动沉淀（`/333`），来源是一次自然完成的任务。
+
+## 当时的目标
+
+333
+---
+# Body";
+        let (fm, body) = FileSkillStore::parse_skill_file(raw)
+            .expect("legacy unindented frontmatter must still parse");
+        assert_eq!(fm.name, "333");
+        assert!(
+            fm.description.as_deref().unwrap_or("").contains("自动沉淀"),
+            "description 要能读出正文首段: {:?}",
+            fm.description
+        );
+        assert!(body.contains("# Body"));
+    }
+
+    /// 缩进正确的新格式不该被"修复"逻辑改坏（幂等）。
+    #[test]
+    fn repair_is_idempotent_on_well_formed_frontmatter() {
+        let yaml = "name: ok\nkind: auto\ndescription: |\n  line one\n  line two\n";
+        assert_eq!(repair_block_scalars(yaml), yaml);
     }
 
     #[tokio::test]

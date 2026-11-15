@@ -17,6 +17,7 @@ pub mod docx_edit;
 pub mod drive_scan;
 pub mod filesearch;
 pub mod gui;
+pub mod legacy_doc;
 pub mod image_ops;
 pub mod mcp_http;
 pub mod mcp_server;
@@ -92,6 +93,7 @@ fn spawn_singleton_listener(app: tauri::AppHandle) {
                     let _ = w.show();
                     let _ = w.set_focus();
                 }
+                webview_host::mark_used();
                 let _ = app.emit("viewer-open-explorer", ());
                 continue;
             }
@@ -104,6 +106,7 @@ fn spawn_singleton_listener(app: tauri::AppHandle) {
                 let _ = w.show();
                 let _ = w.set_focus();
             }
+            webview_host::mark_used();
             let _ = app.emit("viewer-open-file", path);
         }
     });
@@ -315,6 +318,7 @@ pub fn main() {
             webview_host::web_open,
             webview_host::web_bounds,
             webview_host::web_close,
+            webview_host::web_release,
             webview_host::web_set_visible,
             webview_host::web_navigate,
             webview_host::web_exec,
@@ -357,6 +361,30 @@ pub fn main() {
             }
             seed_pending(app.handle(), &init_args);
             spawn_singleton_listener(app.handle().clone());
+            // ── 预热实例空闲降级 ─────────────────────────────────────
+            // `--hidden` 实例若 15 分钟内从未被真正使用（窗口没 show 过、
+            // 没开过子 webview / 钉住浮窗、agent 没让开过文件），自行退出
+            // ——一整棵 WebView2 进程树（~100MB 工作集）不该为"可能永远
+            // 不会发生的使用"常驻。server 侧首连失败会按需重拉
+            // （connect_mcp_servers_with_retry），下次使用只是多一次冷启动。
+            // 一旦 mark_used 过，线程直接返回，进程进入正常生命周期。
+            if hidden {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let idle = std::time::Duration::from_secs(15 * 60);
+                    let deadline = std::time::Instant::now() + idle;
+                    while std::time::Instant::now() < deadline {
+                        if webview_host::was_used() {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(30));
+                    }
+                    if !webview_host::was_used() {
+                        eprintln!("[viewer] 预热实例 15 分钟未被使用，退出（下次按需重拉）");
+                        handle.exit(0);
+                    }
+                });
+            }
             // 登记应用句柄：MCP 工具（web_open 等）要在没有前端参与的情况下
             // 开关内嵌网页视图。
             webview_host::set_app(app.handle().clone());

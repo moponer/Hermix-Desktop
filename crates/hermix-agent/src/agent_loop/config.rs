@@ -4,6 +4,93 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 
+// ---------------------------------------------------------------------------
+// Session-scoped tool array freeze
+// ---------------------------------------------------------------------------
+
+/// 一个会话冻结下来的 `tools` 数组。
+///
+/// **为什么必须冻结**：provider 的前缀缓存从 position 0 起算，而 OpenAI 兼容
+/// 模板把 `tools` 排在 system 消息之前；集合一变（包括被折叠进 `tool_search`
+/// 桥的数量从 24 变成 30），整条请求连同 20 万 token 的历史全部重算。
+///
+/// 冻结键是 session；注册表规模变化（MCP 新工具 / 插件热载）时重新冻结一次
+/// —— 那种变化本来就该付一次缓存失效，同时把系统提示快照一起作废，避免
+/// 提示里列着已经不在数组里的工具。
+struct FrozenToolSet {
+    registry_len: usize,
+    schemas: Vec<ToolSchema>,
+}
+
+static FROZEN_TOOL_SETS: Mutex<Option<std::collections::HashMap<String, FrozenToolSet>>> =
+    Mutex::new(None);
+const MAX_FROZEN_TOOL_SESSIONS: usize = 64;
+
+/// 命中冻结 → 返回**同一份**数组（字节级相同）；否则用本轮路由结果重新冻结。
+fn freeze_tools_for_session(
+    session_id: Option<&str>,
+    registry_len: usize,
+    fresh: Vec<ToolSchema>,
+) -> Vec<ToolSchema> {
+    let Some(sid) = session_id.map(str::trim).filter(|s| !s.is_empty()) else {
+        // 无会话 id（单测、一次性调用）→ 保持每轮重算，不引入跨测试状态。
+        return fresh;
+    };
+    if fresh.is_empty() {
+        // 空集合不冻结：启动早期注册表可能还没装配完，冻住「空」等于永久
+        // 关掉这个会话的工具面。
+        return fresh;
+    }
+    let Ok(mut slot) = FROZEN_TOOL_SETS.lock() else {
+        return fresh;
+    };
+    let map = slot.get_or_insert_with(std::collections::HashMap::new);
+    if let Some(frozen) = map.get(sid) {
+        if frozen.registry_len == registry_len {
+            // 本轮路由想加的、冻结表里没有的工具：不追加（追加 = 换字节 = 整条
+            // 请求重算），能力由 `tool_search` 桥兜底（它在 always_include 里，
+            // 永远在数组中）。这里只计数，用来量化「按会话冻结」牺牲了多少
+            // 可发现性，供后续决定是否把首轮路由放宽。
+            let known: std::collections::HashSet<&str> =
+                frozen.schemas.iter().map(|s| s.name.as_str()).collect();
+            let missing: Vec<&str> = fresh
+                .iter()
+                .map(|s| s.name.as_str())
+                .filter(|n| !known.contains(n))
+                .collect();
+            if !missing.is_empty() {
+                tracing::debug!(
+                    session = sid,
+                    missing = missing.len(),
+                    example = %missing.first().copied().unwrap_or(""),
+                    "tool set: this run's route wanted tools outside the frozen array \
+                     (still reachable through tool_search)"
+                );
+            }
+            return frozen.schemas.clone();
+        }
+        tracing::info!(
+            session = sid,
+            previous_registry_len = frozen.registry_len,
+            registry_len,
+            "tool set: registry size changed, re-freezing the session tool array"
+        );
+        // 锁顺序固定为 FROZEN → SESSION_PROMPTS，反向没有调用点。
+        crate::prompt_assembly::forget_session_prompt(Some(sid));
+    }
+    if map.len() >= MAX_FROZEN_TOOL_SESSIONS {
+        map.clear();
+    }
+    map.insert(
+        sid.to_string(),
+        FrozenToolSet {
+            registry_len,
+            schemas: fresh.clone(),
+        },
+    );
+    fresh
+}
+
 impl AgentLoop {
     /// Populate [`AgentConfig::stored_system_prompt`] from SQLite (`sessions.system_prompt`) for session continuation.
     /// Call before [`AgentLoop::run`] when resuming a gateway/CLI session so Anthropic prefix cache matches Python.
@@ -930,21 +1017,39 @@ always_include: vec![
         crate::acui_dispatch::default_tool_router(&self.always_include)
     }
 
-    /// Resolve the tool schemas to send to the LLM this turn.
+    /// Resolve the tool schemas to send to the LLM this run.
     /// Behavior:
-    /// - If `tool_router` is `None`: return `candidates` unchanged.
+    /// - If `tool_router` is `None`: name-sort `candidates`.
     /// - If `tool_router` is `Some`: build a [`TurnContext`] from the
-    /// last user message + recent history, call `route`, and return
-    /// the routed schemas. The `always_include` whitelist is enforced
-    /// by the router itself if the caller wrapped it with
+    /// last user message + recent history, call `route`, then
+    /// progressive-disclosure assembly. The `always_include` whitelist is
+    /// enforced by the router itself if the caller wrapped it with
     /// [`AlwaysInclude`]; this method does not re-wrap.
+    /// - Either way the result is **frozen per session**: the first run's
+    /// array is reused verbatim by every later run of the same session
+    /// (see [`freeze_tools_for_session`]), because the provider's prefix
+    /// cache starts at position 0 and the `tools` array is rendered before
+    /// the system message. Reachability is preserved by the
+    /// `tool_search` / `tool_describe` / `tool_call` bridges, which the
+    /// default router always includes.
     pub fn route_tools(
         &self,
         candidates: Vec<ToolSchema>,
         messages: &[Message],
     ) -> Vec<ToolSchema> {
+        // 输入集合的大小 = 「注册表有没有变」的判据。路由本身会截断，所以
+        // 必须在路由**之前**取。
+        let registry_len = candidates.len();
         let Some(router) = self.tool_router.as_ref() else {
-            return candidates;
+            // 没有 router 时上游给的是注册表全量（`HashMap` 迭代序，跨调用
+            // 不保证稳定）。先按名排序再冻结：缓存认的是字节，不是集合。
+            let mut candidates = candidates;
+            candidates.sort_by(|a, b| a.name.cmp(&b.name));
+            return freeze_tools_for_session(
+                self.config.session_id.as_deref(),
+                registry_len,
+                candidates,
+            );
         };
         let user_message = messages
             .iter()
@@ -993,30 +1098,25 @@ always_include: vec![
                 assembly.deferred_count,
             );
         }
-        // ★ Sort the final array by name.
+        // ★ 排序 + 会话冻结。
         //
-        // The provider's prefix cache is keyed on the request bytes, and
-        // the `tools` array is part of the request. The router returns
-        // schemas in **score** order, and the score depends on the last
-        // user message — so the same tool *set* can arrive in a
-        // different order from one turn to the next, and the array's
-        // bytes change for no reason the model can observe.
+        // 排序：router 按**分数**返回，分数带 LRU 加成，同一集合每轮顺序都会
+        // 变；缓存认的是字节，所以先把数组变成「集合的纯函数」。
         //
-        // Measured against the kilo gateway on 2026-10-23 (system
-        // prompt sent the way this app sends it — as a `system` role
-        // entry in `messages`): the tool array sits at the **end** of
-        // the cacheable region, so a reshuffled array costs its own
-        // ~512 tokens and nothing else. Sorting by name makes the
-        // array a pure function of the tool *set*: same set → same
-        // bytes → that ~512 tokens stays cached across turns.
+        // 冻结：光排序不够。集合本身也随用户消息变（打分输入是最后一条 user
+        // message，`max_routed_tools` 截断，超出部分再被 `tool_search` 桥
+        // 折叠成 3 个），于是**每条新用户消息都会换一套 tools**。tools 数组
+        // 在 OpenAI 兼容模板里排在 system 消息之前，它一变，后面 20 万 token
+        // 的历史一条都不算命中 —— 2026-10-30 实测：冷启动调用
+        // `cache_read_tokens = 184`（prompt 22 万），分桶统计 36 次冷启动吃掉
+        // 了全部未命中 token 的 44%。
         //
-        // The score order had no meaning of its own — it was a side
-        // effect of the truncation that decides set membership, and
-        // PriorityBoost's job (keeping priority tools inside the cut)
-        // is done before this point.
+        // （旧注释说「tool 数组在可缓存区域的末尾，重排只值 ~512 token」——
+        // 那是在 kilo 网关上量的；MiniMax 路径上量到的 184 说明它其实在最前面。
+        // 位置是 provider 模板决定的，不能作为设计前提。）
         let mut tool_schemas = assembly.tool_schemas;
         tool_schemas.sort_by(|a, b| a.name.cmp(&b.name));
-        tool_schemas
+        freeze_tools_for_session(self.config.session_id.as_deref(), registry_len, tool_schemas)
     }
 
     /// Queue mid-run user guidance (Python `AIAgent.steer`).
@@ -1298,5 +1398,52 @@ mod auto_skill_render_tests {
         let clean = render_auto_skill_body("demo", "构建项目", &calls, &[]);
         assert!(!clean.contains("## 踩过的坑"));
         assert!(clean.contains("顺利跑通"));
+    }
+}
+
+#[cfg(test)]
+mod tool_freeze_tests {
+    use super::freeze_tools_for_session;
+    use hermix_core::tool_schema::{JsonSchema, ToolSchema};
+
+    fn schema(name: &str) -> ToolSchema {
+        ToolSchema::new(name, "d", JsonSchema::new("object"))
+    }
+
+    /// 同一会话的第二次路由即使拿到**完全不同**的 fresh 集合，也必须返回
+    /// 第一次那份 —— 前缀缓存认的是字节，换一套 tools 等于整条请求从头重算。
+    #[test]
+    fn second_call_returns_the_frozen_array() {
+        let first = vec![schema("alpha"), schema("beta")];
+        let second = vec![schema("gamma")];
+        let got = freeze_tools_for_session(Some("sess-tool-freeze-a"), 2, first);
+        assert_eq!(got.len(), 2);
+        let again = freeze_tools_for_session(Some("sess-tool-freeze-a"), 2, second);
+        let names: Vec<&str> = again.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "beta"], "第二次必须复用冻结数组");
+    }
+
+    /// 注册表规模变了（MCP 新工具 / 插件热载）→ 允许一次重新冻结。
+    #[test]
+    fn registry_growth_refreezes() {
+        freeze_tools_for_session(
+            Some("sess-tool-freeze-b"),
+            1,
+            vec![schema("alpha")],
+        );
+        let got = freeze_tools_for_session(
+            Some("sess-tool-freeze-b"),
+            2,
+            vec![schema("alpha"), schema("beta")],
+        );
+        assert_eq!(got.len(), 2, "注册表变大后必须按新集合重新冻结");
+    }
+
+    /// 无 session id（单测、一次性调用）不冻结，避免跨调用串状态。
+    #[test]
+    fn no_session_means_no_freeze() {
+        assert_eq!(freeze_tools_for_session(None, 1, vec![schema("alpha")]).len(), 1);
+        let got = freeze_tools_for_session(None, 1, vec![schema("beta")]);
+        assert_eq!(got[0].name, "beta");
     }
 }

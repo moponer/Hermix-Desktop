@@ -716,14 +716,14 @@ async fn automation_tasks_reset_restores_demos_keeps_user() {
     let (status, _) = post_json_body(app.clone(), "/api/automation/tasks", &custom).await;
     assert_eq!(status, StatusCode::OK);
     // Delete a demo to dirty the seed set
-    let (status, _) = delete_json(app.clone(), "/api/automation/tasks/demo-morning-brief").await;
+    let (status, _) = delete_json(app.clone(), "/api/automation/tasks/demo-daily-weather").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     // Reset
     let (status, body) = post_json(app.clone(), "/api/automation/reset").await;
     assert_eq!(status, StatusCode::OK);
     let tasks = body["tasks"].as_array().unwrap();
     assert!(tasks.iter().any(|t| t["id"] == "mine"), "user task preserved");
-    assert!(tasks.iter().any(|t| t["id"] == "demo-morning-brief"), "demo restored");
+    assert!(tasks.iter().any(|t| t["id"] == "demo-daily-weather"), "demo restored");
     assert_eq!(tasks.len(), 7, "6 demos + 1 user");
 }
 

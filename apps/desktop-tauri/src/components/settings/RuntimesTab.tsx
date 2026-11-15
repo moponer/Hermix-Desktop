@@ -11,8 +11,8 @@
 //   大小。默认只内置 Python（~10MB 压缩包），Node / Git 走按需下载 ——
 //   见 docs/RUNTIME_BUNDLING.md 的选型与实测体积。
 
-import { useCallback, useEffect, useState } from "react";
-import { FileCode2, GitBranch, RefreshCw } from "lucide-react";
+import { IPC } from "../../ipc/commands";
+import { useCallback, useEffect, useState } from "react";import { FileCode2, GitBranch, RefreshCw } from "lucide-react";
 import { invoke } from "../../ipc";
 import { IconTile } from "../ui";
 import { LOADING } from "../strings";
@@ -76,7 +76,7 @@ export function RuntimesTab() {
   const probe = useCallback(async (kind: RuntimeKind) => {
     setLoading((p) => ({ ...p, [kind]: true }));
     try {
-      const res = await invoke<ProbeResult>("runtime_detect", { kind });
+      const res = await invoke<ProbeResult>(IPC.runtimeDetect, { kind });
       setProbes((p) => ({ ...p, [kind]: res }));
       setError(null);
     } catch (e) {

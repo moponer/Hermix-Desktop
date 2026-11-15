@@ -670,14 +670,25 @@ impl SkillOrchestrator {
 
     /// Load multiple skills for session-wide preloading.
     /// Returns (prompt_text, loaded_skill_names, missing_identifiers).
+    ///
+    /// `char_budget` 是**正文内联**的总预算（`0` = 不限）。这是渐进披露在
+    /// 「用户主动勾选」这条路上的落点：勾选本身就是用户意图，不丢；但正文
+    /// 超过预算的部分不再内联，改成指针，让模型自己 `skill_view` 去取。
+    ///
+    /// 为什么必须封顶：这条路径的产出进的是 **system prompt**（会话快照），
+    /// 一个 `custom-app-development` 的 SKILL.md 就有 33.8 K 字符，勾两个大
+    /// 技能即可把 50 K 字符塞进每一轮请求，而且没有任何日志提示。
     pub fn build_preloaded_skills_prompt(
         &self,
         identifiers: &[String],
+        char_budget: usize,
     ) -> (String, Vec<String>, Vec<String>) {
         let mut prompt_parts = Vec::new();
         let mut loaded_names = Vec::new();
         let mut missing = Vec::new();
         let mut seen = std::collections::HashSet::new();
+        // 已内联的正文字符数（指向性条目不占预算）。
+        let mut inlined_chars = 0usize;
 
         for identifier in identifiers {
             let identifier = identifier.trim();
@@ -700,6 +711,32 @@ impl SkillOrchestrator {
                         }
                     };
                     let (_, body) = parse_frontmatter(&content);
+                    let body_chars = body.trim().chars().count();
+                    let fits = char_budget == 0 || inlined_chars + body_chars <= char_budget;
+
+                    if !fits {
+                        // 超预算 → 指针。用户的选择仍然生效（技能是"活动的"），
+                        // 只是正文交给模型自己按需取。
+                        tracing::info!(
+                            target: "hermix.skills_index",
+                            skill = %info.name,
+                            body_chars,
+                            budget = char_budget,
+                            inlined_chars,
+                            "preloaded skill degraded to a pointer (body exceeds the preload budget)"
+                        );
+                        prompt_parts.push(format!(
+                            "[SYSTEM: The user preloaded the \"{name}\" skill for this session. \
+                             正文 {body_chars} 字符，超出本次预加载预算（{budget}），未内联。\n\
+                             {desc}\n\
+                             动手前先调用 `skill_view(name=\"{name}\")` 读完整步骤。]",
+                            name = info.name,
+                            desc = info.description.trim(),
+                            budget = char_budget,
+                        ));
+                        loaded_names.push(info.name.clone());
+                        continue;
+                    }
 
                     let activation = format!(
                         "[SYSTEM: The user launched this CLI session with the \"{}\" skill \
@@ -716,6 +753,7 @@ impl SkillOrchestrator {
                     }
                     prompt_parts.push(rendered);
                     loaded_names.push(info.name.clone());
+                    inlined_chars += body_chars;
                 }
                 None => {
                     missing.push(identifier.to_string());
@@ -1039,13 +1077,41 @@ allowed-tools:
         let mut orch = SkillOrchestrator::new(tmp.path());
         orch.scan_skill_commands();
 
-        let (prompt, loaded, missing) =
-            orch.build_preloaded_skills_prompt(&["coder".to_string(), "nonexistent".to_string()]);
+        let (prompt, loaded, missing) = orch
+            .build_preloaded_skills_prompt(&["coder".to_string(), "nonexistent".to_string()], 16_000);
 
         assert_eq!(loaded, vec!["coder"]);
         assert_eq!(missing, vec!["nonexistent"]);
         assert!(prompt.contains("Write clean code."));
         assert!(prompt.contains("preloaded"));
+    }
+
+    /// 预加载也走渐进披露：正文超预算就转指针，但**技能本身不丢**
+    /// （名字仍在 `loaded` 里，模型可以自己 `skill_view` 取正文）。
+    #[test]
+    fn preloaded_skill_over_budget_becomes_a_pointer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("big-coder");
+        fs::create_dir_all(&dir).unwrap();
+        let mut md =
+            String::from("---\nname: big-coder\ndescription: Big coding assistant\n---\n");
+        for i in 0..400 {
+            md.push_str(&format!("rule {i}\n"));
+        }
+        fs::write(dir.join("SKILL.md"), md).unwrap();
+
+        let mut orch = SkillOrchestrator::new(tmp.path());
+        orch.scan_skill_commands();
+
+        let (prompt, loaded, _missing) =
+            orch.build_preloaded_skills_prompt(&["big-coder".to_string()], 500);
+        assert_eq!(loaded, vec!["big-coder"], "勾选的技能不能因为超预算而消失");
+        assert!(prompt.contains("未内联"), "超预算必须转指针: {prompt}");
+        assert!(
+            prompt.contains("skill_view(name=\"big-coder\")"),
+            "指针必须点名可执行的调用: {prompt}"
+        );
+        assert!(!prompt.contains("rule 399"), "正文不得内联");
     }
 
     //multi-root skill scanning ---

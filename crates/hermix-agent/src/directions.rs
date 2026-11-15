@@ -40,9 +40,9 @@ Before calling a generic tool like `terminal` or `execute_code`, **scan the avai
 
 Finding files or searching their contents **never** goes through `terminal`. A recursive walk (`Get-ChildItem -Recurse`, `dir /s`, `grep -r`, `find /`) rooted at a broad location (`$env:USERPROFILE`, `C:\Users`, `/`) is refused by the terminal tool outright — and rightly so: it monopolizes the turn for minutes, during which every UI request and health probe queues behind it and the desktop looks frozen.
 
-- **Find files by name pattern** → `search_files` / `glob`
-- **Search file contents** → `search_files` (content mode)
-- **Inspect one directory** → `list_dir`
+- **Find files by name pattern** → `search_files` (target=`files`) / `list_files`
+- **Search file contents** → `search_files` (target=`content`)
+- **Inspect one directory** → `list_dir` (one level, with per-entry sizes)
 - Shell walking is a last resort only when the tools above genuinely cannot express the query — and then only against a **narrow project path**, never a user-profile or filesystem root.
 
 ## Delegate heavy reads to sub-agents
@@ -102,6 +102,44 @@ const EXPLORE_EFFICIENCY_GUIDANCE: &str = "\
 const EXPLORE_EFFICIENCY_SHORT: &str = "\
 ## Exploration efficiency
 Issue independent reads in parallel. Don't re-read files or re-list directories. Don't write temp scripts.";
+
+// 仓库代码开发工作流（2026-11-09）：SOUL 管人格与输出纪律，EXPLORE 管探索
+// 效率，但「已有仓库的分析/重构/优化」没有任何步骤指引——模型拿到仓库
+// 既不建基线也不跑项目自身测试，改动无验证直接报完成（用户实测：代码开发
+// 能力基本为 0）。骨架取自优秀开源编码代理的公共范式：Aider（基线先行、
+// 测试是验收 oracle）、OpenHands/CodeAct（edit-run-observe 循环）、
+// Cline（一步一验证、先读后改）、Claude Code（最小 diff、项目自身检查、
+// 不越界重构）。
+const CODE_DEV_WORKFLOW_GUIDANCE: &str = "\
+# Code changes on an existing repo
+
+Existing-code work follows one loop: **orient → baseline → locate → smallest change → verify**. Skipping a phase turns the change into guesswork.
+
+## 1. Orient before touching
+- Entry points first: README / AGENTS.md / manifest (`Cargo.toml`, `package.json`), then follow call chains with `search_files` — never edit a symbol whose callers you haven't read.
+- Note the project's own check commands (build / test / lint) from its manifest or CI config. They are the acceptance oracle — not your opinion.
+
+## 2. Baseline before change
+- Run the relevant build/tests **before** editing. A red baseline you saw is diagnosable; one you discover after your change is a rabbit hole. Already red? Report it, fix only what you own.
+
+## 3. Locate precisely, read enough
+- `search_files` for symbol/usage discovery, then `read_file` the exact region: the function you change plus its direct callers and tests.
+- Repo too large to hold? Delegate bounded recon via `delegate_task` with a written brief (paths, acceptance command); keep the conclusion, not the dump.
+
+## 4. Smallest change that does the thing
+- One concern per change. Match surrounding style; no drive-by reformatting; no refactors beyond the ask. Prefer editing over rewriting; keep public APIs stable unless asked.
+
+## 5. Verify with the project's own checks
+- After each edit, re-run build/tests/lint. Report command + evidence (`cargo test -p X: 47 passed`). Cannot verify → say `could not verify X (reason)` — never \"should be fine\".
+- A refactor claim requires behavior preservation: tests green before AND after.
+
+## 6. Report like an auditor
+- What changed (file:line), what ran, what passed. Unsolved problems and follow-ups go at the end, once.
+";
+
+const CODE_DEV_WORKFLOW_SHORT: &str = "\
+## Code changes
+Loop: orient → baseline (run the project's tests BEFORE editing) → locate (search, then read the callers) → smallest change → verify with the project's own checks (report command + evidence). Refactor = tests green before AND after. No drive-by reformatting.";
 
 const PARALLEL_EXECUTION_GUIDANCE: &str = "\
 # Parallel tool execution
@@ -946,8 +984,12 @@ Always close `</think>` before visible text. The think block is for reasoning, n
         dirs.push(SystemDir::new(
             "tools.short",
             DirRoute::Subsequent,
-            "## Tools\nScan tool list before using `terminal`. Use purpose-built tools first. \
-             After an action, verify the world actually changed; never repeat the same call a third time.",
+            "## Tools\n`terminal` is for RUNNING (build / test / git / processes), not for LOOKING — \
+             file reads → `read_file`, name or content search → `search_files`, one directory → `list_dir`. \
+             An exploratory question that will likely need 3+ lookups → `delegate_task` (short task, \
+             returns a conclusion) instead of serial lookups in main context. After an action, verify the \
+             world actually changed; never repeat the same call a third time. One investigation thread at \
+             a time — finish it or explicitly park it before opening the next.",
         ));
     }
     // Plan-before-execute discipline.
@@ -983,6 +1025,21 @@ Always close `</think>` before visible text. The think block is for reasoning, n
             "explore.short",
             DirRoute::Subsequent,
             EXPLORE_EFFICIENCY_SHORT,
+        ));
+    }
+    // 仓库代码开发工作流 — 与 explore 纪律同路数：FirstTurn 给全量循环，
+    // Subsequent 留摘要。治「已有仓库改动无基线、无验证、无最小变更约束」。
+    if user_message.is_empty() {
+        dirs.push(SystemDir::new(
+            "code.full",
+            DirRoute::FirstTurn,
+            CODE_DEV_WORKFLOW_GUIDANCE,
+        ));
+    } else {
+        dirs.push(SystemDir::new(
+            "code.short",
+            DirRoute::Subsequent,
+            CODE_DEV_WORKFLOW_SHORT,
         ));
     }
     // Autonomous execution discipline (gated on opt-in).
@@ -1167,7 +1224,7 @@ Always close `</think>` before visible text. The think block is for reasoning, n
     // Project conventions — non-generic, deployment-specific tuning.
     // Injected only when the active workspace's AGENTS.md exposes a
     // conventions section. Keeps the universal core free of any single
-    // user's preferences (see docs/HERMIX_AGENT_SYSTEM_PROMPT.md v2).
+    // user's preferences (see docs/notes/archived/architecture/HERMIX_AGENT_SYSTEM_PROMPT.md v2).
     if let Some(conv) = project_conventions {
         if !conv.trim().is_empty() {
             dirs.push(SystemDir::new(
@@ -1208,7 +1265,7 @@ Always close `</think>` before visible text. The think block is for reasoning, n
 /// `项目约定` / `project conventions` / `conventions` (case-insensitive),
 /// at `#` or `##` level. Everything up to the next heading is returned.
 /// This is the data-injection hook that keeps the agent's *universal*
-/// behaviour (see `docs/HERMIX_AGENT_SYSTEM_PROMPT.md`) separate from
+/// behaviour (see `docs/notes/archived/architecture/HERMIX_AGENT_SYSTEM_PROMPT.md`) separate from
 /// any single deployment's tuning. A different user / workspace simply
 /// gets a different `AGENTS.md` — the core never changes.
 pub fn load_project_conventions(workspace: &str) -> Option<String> {

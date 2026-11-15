@@ -12,6 +12,7 @@ import { clsx } from "clsx";
 import { BUILTIN_EXPERTS, EXPERT_CATEGORIES, type ExpertDef } from "../../data/builtinExperts";
 import { AgentAvatar } from "./AgentAvatar";
 import { toneForCategory } from "../../lib/categoryTone";
+import { EmptyState } from "../ui";
 import { ALL } from "../strings";
 
 export function BuiltInExpertsTab() {
@@ -71,18 +72,21 @@ export function BuiltInExpertsTab() {
             );
           })}
         </div>
-        {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center text-text-muted">
-            <Bot size={36} className="mb-3 opacity-40" />
-            <p className="text-sm">没有匹配的内置专家</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {filtered.map((e) => (
-              <ExpertCard key={e.id} expert={e} />
-            ))}
-          </div>
-        )}
+        {/* 断点按容器：设置面板固定宽，`xl:`（视口 1280）曾在这里硬塞四列。 */}
+        <div className="@container">
+          {filtered.length === 0 ? (
+            <EmptyState
+              icon={<Bot size={28} className="opacity-40" />}
+              title="没有匹配的内置专家"
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 @2xl:grid-cols-2 @4xl:grid-cols-3 @6xl:grid-cols-4">
+              {filtered.map((e) => (
+                <ExpertCard key={e.id} expert={e} />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

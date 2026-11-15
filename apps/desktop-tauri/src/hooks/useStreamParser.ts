@@ -1,5 +1,5 @@
-import type { MutableRefObject, Dispatch, SetStateAction } from "react";
-import { invoke } from "../ipc";
+import { IPC } from "../ipc/commands";
+import type { MutableRefObject, Dispatch, SetStateAction } from "react";import { invoke } from "../ipc";
 import { reportError } from "../lib/reportError";
 import { streamChannelName } from "../api";
 import type { AcuiDirective } from "../acui/types";
@@ -275,7 +275,17 @@ export function createMessageHandler(
         ctx.toolRunningRef.current = true;
         ctx.hasAnyStreamEvent = true;
         ctx.setLastActivityAt(Date.now());
-        ctx.callbacks.onToolStart?.({ toolCallId, tool, content: evtContent });
+        // 参数原样转发：tool_start 帧里本来就有（后端
+        // local_agent_service 的 `"arguments": args`），此前只转 content，
+        // 于是「刚才发生」只能写工具名 —— 屏幕上三行 `terminal`，用户看不出
+        // 跑的是什么命令（2026-11-06 实报）。
+        const toolArgs = data?.arguments ?? data?.event?.arguments;
+        ctx.callbacks.onToolStart?.({
+          toolCallId,
+          tool,
+          content: evtContent,
+          args: toolArgs,
+        });
         return;
       }
 
@@ -724,15 +734,24 @@ export function createMessageHandler(
               // Re-arm idle/stale timers — the agent loop is about to resume.
               ctx.approvalPending = false;
               ctx.armTimeouts();
-              // The `expired` decision means the server already settled this
-              // request; do NOT send `approval_response` over the wire.
-              if (resp.decision === "expired") return;
-              // Restore the streaming placeholder cleared when the card
-              // opened. There is a ~1s gap between the user's click and the
-              // agent loop's next WS event; without this the chat shows dead
-              // whitespace where the waiting card used to be.
-              ctx.streamingSessionIdRef.current = ctx.sessionId;
-              ctx.setStreamingSessionId(ctx.sessionId);
+              // `expired` = 前端墙钟到期。它**不**代表服务端已结算：后端
+              // 计时器按「可送达时间」计费（approval.rs 超时任务），无人
+              // 在线时暂停、最长挂到 30 分钟硬上限。此处若吞掉决定，
+              // agent 循环会一直挂在审批 oneshot 上，整条输出流冻死在
+              // 卡片位置（2026-11-09 实测）。所以 expired 照常送达——
+              // 映射为 denied（fail-closed，与后端超时的默认行为一致）；
+              // 服务端已结算时 resolve 只是 matched=false 的幂等无操作。
+              // 流占位符恢复仅限非 expired：过期卡的轮次多半已推进，
+              // 恢复占位符只会留下幽灵转圈。
+              const expiredSettled = resp.decision === "expired";
+              if (!expiredSettled) {
+                // Restore the streaming placeholder cleared when the card
+                // opened. There is a ~1s gap between the user's click and the
+                // agent loop's next WS event; without this the chat shows dead
+                // whitespace where the waiting card used to be.
+                ctx.streamingSessionIdRef.current = ctx.sessionId;
+                ctx.setStreamingSessionId(ctx.sessionId);
+              }
               // No `wsRef.current` gate: `backend_channel_send` targets the
               // backend channel registry, not the frontend subscription, so
               // a null `unlisten` says nothing about whether the approval
@@ -759,7 +778,7 @@ export function createMessageHandler(
                   decision,
                   ...(note ? { note } : {}),
                 });
-                void invoke<void>("backend_channel_send", {
+                void invoke<void>(IPC.backendChannelSend, {
                   channel: streamChannelName(ctx.sessionId),
                   payload,
                 });
@@ -780,7 +799,7 @@ export function createMessageHandler(
               const liveUnlisten = ctx.wsRef.current;
               if (!liveUnlisten) return;
               try {
-                void invoke<void>("backend_channel_send", {
+                void invoke<void>(IPC.backendChannelSend, {
                   channel: streamChannelName(ctx.sessionId),
                   payload: JSON.stringify({
                     type: "approval_response",
@@ -826,9 +845,16 @@ export function createMessageHandler(
             .then((resp) => {
               ctx.approvalPending = false;
               ctx.armTimeouts();
-              if (resp.decision === "expired") return;
-              ctx.streamingSessionIdRef.current = ctx.sessionId;
-              ctx.setStreamingSessionId(ctx.sessionId);
+              // 与单条路径同因（2026-11-09）：expired 不代表服务端已结算
+              // （后端计时器按可送达时间计费、无人在线时暂停），吞掉决定
+              // 会把 agent 循环冻死在 oneshot 上。照常送达（映射为 denied，
+              // 服务端已结算则 matched=false 幂等无操作）；expired 跳过
+              // 流占位符恢复，避免幽灵转圈。
+              const expiredSettled = resp.decision === "expired";
+              if (!expiredSettled) {
+                ctx.streamingSessionIdRef.current = ctx.sessionId;
+                ctx.setStreamingSessionId(ctx.sessionId);
+              }
               const liveUnlisten = ctx.wsRef.current;
               if (!liveUnlisten) {
                 console.warn(
@@ -850,7 +876,7 @@ export function createMessageHandler(
                   decision,
                   ...(note ? { note } : {}),
                 });
-                void invoke<void>("backend_channel_send", {
+                void invoke<void>(IPC.backendChannelSend, {
                   channel: streamChannelName(ctx.sessionId),
                   payload,
                 });
@@ -868,7 +894,7 @@ export function createMessageHandler(
               const liveUnlisten = ctx.wsRef.current;
               if (!liveUnlisten) return;
               try {
-                void invoke<void>("backend_channel_send", {
+                void invoke<void>(IPC.backendChannelSend, {
                   channel: streamChannelName(ctx.sessionId),
                   payload: JSON.stringify({
                     type: "approval_responses_batch",
@@ -905,7 +931,7 @@ export function createMessageHandler(
               // on its own clarify timeout with no visible error. Send
               // unconditionally and report a genuine send failure.
               try {
-                void invoke<void>("backend_channel_send", {
+                void invoke<void>(IPC.backendChannelSend, {
                   channel: streamChannelName(ctx.sessionId),
                   payload: JSON.stringify({
                     type: "clarify_response",
@@ -931,7 +957,7 @@ export function createMessageHandler(
                 `[clarify] no answer for ${requestId} (${String(e)}); sending empty response to unblock the agent`,
               );
               try {
-                void invoke<void>("backend_channel_send", {
+                void invoke<void>(IPC.backendChannelSend, {
                   channel: streamChannelName(ctx.sessionId),
                   payload: JSON.stringify({
                     type: "clarify_response",

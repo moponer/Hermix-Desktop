@@ -605,7 +605,9 @@ impl SessionPersistence {
         }
         content.push_str(&format!(
             "Date: {}\n\n---\n\n",
-            Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+            // 北京时间（用户审阅的会话日志；2026-11-14 起不再标 UTC——
+            // 中国用户看到 UTC 时间会误判为慢 8 小时）。
+            hermix_core::time::beijing_now().format("%Y-%m-%d %H:%M:%S (北京时间)")
         ));
 
         for msg in messages {
@@ -1392,37 +1394,79 @@ impl SessionPersistence {
         &self,
         session_id: &str,
     ) -> Result<Vec<(SessionEntry, Option<String>)>, AgentError> {
-        let entries = self.load_session_with_approvals(session_id)?;
-
-        // Re-query for `created_at` with the *exact* same SQL
-        // filter as `load_session_with_approvals` so the two row
-        // streams align 1:1 by position. Any drift would manifest
-        // as a misaligned timestamp, which the UI would render as
-        // "刚刚" — same bug we're trying to fix. The filter is
-        // intentionally duplicated rather than refactored into a
-        // shared constant because the SQL strings are also the
-        // SQL-level documentation of what counts as "a row".
         self.ensure_db()?;
         let conn = open_with_wal(&self.db_path)?;
+        Self::read_session_with_timestamps_on(&conn, session_id)
+    }
+
+    /// 一次打开连接、按父会话批量读全部归档子会话。
+    ///
+    /// 此前 `get_session_messages` 是 `find_children` + 每个子会话各调一次
+    /// `load_session_with_approvals_and_timestamps` —— 而后者内部还要再开一次
+    /// 连接读时间戳：N 个子会话 = **1 + 3N 次 `Connection::open`**（Windows 上
+    /// 每次 1–3ms，且都在 async worker 上）。现在共用一个连接、每个子会话一条
+    /// 查询，子会话顺序仍是 `created_at ASC`（与 `find_children` 一致）。
+    ///
+    /// 单个子会话读失败时返回空列表（保持原 `unwrap_or_default` 语义）：
+    /// 坏掉一个归档段不该让整个会话打不开。
+    pub fn load_children_with_approvals_and_timestamps(
+        &self,
+        parent_session_id: &str,
+    ) -> Result<Vec<(String, Vec<(SessionEntry, Option<String>)>)>, AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        let child_ids: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM sessions
+                     WHERE parent_session_id = ?1
+                     ORDER BY created_at ASC",
+                )
+                .map_err(|e| {
+                    AgentError::Io(format!("Failed to prepare children query: {e}"))
+                })?;
+            let rows = stmt
+                .query_map(rusqlite::params![parent_session_id], |row| row.get(0))
+                .map_err(|e| AgentError::Io(format!("Failed to query children: {e}")))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AgentError::Io(format!("Failed to read children: {e}")))?
+        };
+
+        let mut out = Vec::with_capacity(child_ids.len());
+        for child_id in child_ids {
+            let entries = Self::read_session_with_timestamps_on(&conn, &child_id)
+                .unwrap_or_default();
+            out.push((child_id, entries));
+        }
+        Ok(out)
+    }
+
+    /// 单条 SQL 同时取正文与 `created_at`。
+    ///
+    /// 结构上取代了「先 `load_session_with_approvals`、再按相同 WHERE 位置对齐
+    /// 一次时间戳」的双查询 + `zip`：那种写法一旦两条 SQL 的过滤条件漂移，
+    /// 时间戳就会整体错行，UI 表现为「每条消息都显示刚刚」。现在偏移不可能发生。
+    fn read_session_with_timestamps_on(
+        conn: &rusqlite::Connection,
+        session_id: &str,
+    ) -> Result<Vec<(SessionEntry, Option<String>)>, AgentError> {
         let mut stmt = conn
             .prepare(
-                "SELECT created_at FROM messages
+                "SELECT role, content, tool_call_id, tool_calls, extra, name, \
+                        execution_timeline, reasoning_content, unified_steps, created_at
+                 FROM messages
                  WHERE session_id = ?1 AND active = 1 AND role != 'system'
                  ORDER BY id ASC",
             )
-            .map_err(|e| AgentError::Io(format!("Failed to prepare timestamp query: {e}")))?;
-        let ts_vec: Vec<String> = stmt
-            .query_map(rusqlite::params![session_id], |row| row.get::<_, String>(0))
-            .map_err(|e| AgentError::Io(format!("Failed to query timestamps: {e}")))?
+            .map_err(|e| AgentError::Io(format!("Failed to prepare timeline query: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params![session_id], |row| {
+                Ok((Self::session_entry_from_row(row)?, row.get(9)?))
+            })
+            .map_err(|e| AgentError::Io(format!("Failed to query timeline: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AgentError::Io(format!("Failed to collect timestamps: {e}")))?;
-
-        let out: Vec<(SessionEntry, Option<String>)> = entries
-            .into_iter()
-            .zip(ts_vec.into_iter().map(Some).chain(std::iter::repeat(None)))
-            .map(|(e, ts)| (e, ts))
-            .collect();
-        Ok(out)
+            .map_err(|e| AgentError::Io(format!("Failed to read timeline: {e}")))?;
+        Ok(rows)
     }
 
     /// Return all direct children of `session_id` ordered by creation

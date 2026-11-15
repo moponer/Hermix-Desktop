@@ -566,8 +566,14 @@ fn oneline(text: &str) -> String {
 }
 
 fn truncate(text: &str, max: usize) -> String {
-    if text.len() > max {
-        format!("{}...", &text[..max.saturating_sub(3)])
+    // 修复：此前按**字节**判断并切片（`&text[..max-3]`），text 含中文/emoji 时
+    // 切点落在多字节字符中间 → panic。与 tool 结果截断是同一类 bug，统一走
+    // core 的 UTF-8 安全实现。
+    if text.chars().count() > max {
+        format!(
+            "{}...",
+            hermix_core::text_utils::truncate_chars(text, max.saturating_sub(3))
+        )
     } else {
         text.to_string()
     }
@@ -580,6 +586,21 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归：旧实现按**字节**切片（`&text[..max-3]`），中文/emoji 会在
+    /// 多字节边界 panic。修后必须 UTF-8 安全且带省略号。
+    #[test]
+    fn truncate_is_cjk_safe() {
+        let s = "你好世界，这是一段会被截断的中文文本。";
+        let out = truncate(s, 10);
+        assert!(out.ends_with("..."));
+        assert!(out.starts_with("你好世界"));
+        // 每个字符都是完整的（无 panic 即证明边界安全）。
+        assert!(out.chars().count() <= 10 + 3);
+        // 纯 ASCII 路径行为不变（max-3 个字符 + "..."，与旧实现一致）。
+        assert_eq!(truncate("abcdef", 4), "a...");
+        assert_eq!(truncate("abc", 10), "abc");
+    }
 
     #[test]
     fn test_format_token_count() {

@@ -130,7 +130,7 @@ impl HermixSidecar {
         }
 
         let bin = Self::hermix_bin_path()?;
-        eprintln!("[Hermix] Looking for binary at: {}", bin.display());
+        crate::desktop_log!("[Hermix] Looking for binary at: {}", bin.display());
         if !bin.exists() {
             return Err(format!("hermix binary not found at {}", bin.display()));
         }
@@ -177,7 +177,7 @@ impl HermixSidecar {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     crashed = true;
-                    eprintln!(
+                    crate::desktop_log!(
                         "[Hermix] sidecar exited during startup with status {:?}",
                         status
                     );
@@ -185,7 +185,7 @@ impl HermixSidecar {
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(60)),
                 Err(e) => {
-                    eprintln!("[Hermix] try_wait error during startup probe: {e}");
+                    crate::desktop_log!("[Hermix] try_wait error during startup probe: {e}");
                     break;
                 }
             }
@@ -238,16 +238,16 @@ impl HermixSidecar {
             unsafe {
                 if let Some(handle) = windows_job_object::create_and_assign(pid) {
                     self.job_handle = Some(handle);
-                    eprintln!("[Hermix] Sidecar bound to Job Object (pid={pid})");
+                    crate::desktop_log!("[Hermix] Sidecar bound to Job Object (pid={pid})");
                 } else {
-                    eprintln!("[Hermix] Warning: failed to create Job Object for pid={pid}");
+                    crate::desktop_log!("[Hermix] Warning: failed to create Job Object for pid={pid}");
                 }
             }
         }
 
         self.child = Some(child);
         self.stderr = None;
-        eprintln!("[Hermix] Started sidecar in stdio mode");
+        crate::desktop_log!("[Hermix] Started sidecar in stdio mode");
         Ok(())
     }
 
@@ -260,7 +260,7 @@ impl HermixSidecar {
                 use std::io::{BufRead, BufReader};
                 let reader = BufReader::new(pipe);
                 for line in reader.lines().map_while(Result::ok) {
-                    eprintln!("[Hermix:{tag}] {line}");
+                    crate::desktop_log!("[Hermix:{tag}] {line}");
                 }
             })
             .ok();
@@ -284,39 +284,58 @@ impl HermixSidecar {
 
     /// Try graceful shutdown first (write `{"channel":"shutdown",…}` on
     /// stdin so the server can flush SQLite WAL and stop its TickLoop),
-    /// then hard-kill after 3s. Mirrors the TCP-era shutdown handshake
-    /// but the transport is one line of JSON instead of an HTTP request.
+    /// then hard-kill after the grace window. Mirrors the TCP-era shutdown
+    /// handshake but the transport is one line of JSON instead of an HTTP
+    /// request.
+    ///
+    /// 停机期间的 HTTP 请求会立刻拿 503 `backend offline`（`mark_dead`），前端
+    /// 统一渲染成「后端未连接（正在重启）」——所以这里**先**发帧再等在退出，
+    /// 顺序不能反。
     pub fn stop(&mut self) {
         if let Some(mut child) = self.child.take() {
+            let started = std::time::Instant::now();
             let _ = Self::try_graceful_shutdown();
 
-            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            // 先发帧、**随后立刻**标记本代已死，再去等子进程退。
+            //
+            // 顺序很关键：等待期最长 5s，这段时间子进程已经不再读 stdin。若等到
+            // 退出后才 mark_dead，这 5s 里进来的 HTTP 请求会被写进黑洞并一直挂到
+            // 桥的 120s / 前端 10s 死线（用户看到的是转圈），而不是立刻得到
+            // 「后端正在重启」。`backend_http_request` / `backend_ready` 都看这个
+            // 标志，所以前端能秒级转离线并在恢复后自愈。
+            self.bridge_ready.store(false, Ordering::SeqCst);
+            crate::stdio_bridge::mark_dead();
+
+            // 5s（原 3s）：后端退出要做 IM 关连接 + 刷日志，3s 卡在临界点上，
+            // 实测每次都走到强杀（见 desktop.log 的 Graceful shutdown timed out）。
+            // 服务端已改为有界收尾（stdio_session.rs 里 IM 停止 2s 超时 +
+            // main.rs 显式 exit），正常应在数百毫秒内退干净；留 5s 是给冷
+            // SQLite checkpoint 的余量。
+            let deadline = started + Duration::from_secs(5);
             while std::time::Instant::now() < deadline {
                 match child.try_wait() {
-                    Ok(Some(_)) => {
-                        eprintln!("[Hermix] Sidecar stopped gracefully");
+                    Ok(Some(status)) => {
+                        crate::desktop_log!(
+                            "[Hermix] Sidecar exited gracefully (code={status:?}, {}ms)",
+                            started.elapsed().as_millis()
+                        );
                         break;
                     }
-                    Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                    Ok(None) => std::thread::sleep(Duration::from_millis(50)),
                     Err(_) => break,
                 }
             }
 
             if child.try_wait().ok().flatten().is_none() {
-                eprintln!("[Hermix] Graceful shutdown timed out, force killing sidecar");
+                crate::desktop_log!(
+                    "[Hermix] Graceful shutdown timed out after {}ms, force killing sidecar",
+                    started.elapsed().as_millis()
+                );
                 let _ = child.kill();
                 let _ = child.wait();
-                eprintln!("[Hermix] Sidecar stopped (force killed)");
-            } else {
-                eprintln!("[Hermix] Sidecar stopped");
+                crate::desktop_log!("[Hermix] Sidecar stopped (force killed)");
             }
         }
-        // Drop the bridge readiness flag so callers stop treating this
-        // generation as healthy.
-        self.bridge_ready.store(false, Ordering::SeqCst);
-        // 同步标记全局桥已死：`backend_ready` / `backend_http_request`
-        // 据此立刻报告离线，不再往已死子进程的 stdin 写帧。
-        crate::stdio_bridge::mark_dead();
         // Release Job Object handle (triggers KILL_ON_JOB_CLOSE if any
         // child processes remain, but we already killed above).
         #[cfg(windows)]
@@ -361,6 +380,16 @@ impl HermixSidecar {
         self.bridge_ready.load(Ordering::SeqCst) && self.is_running()
     }
 
+    /// 健康度的两项分解，只用于把 watchdog 的失败日志写成可诊断的。
+    /// 返回 `(bridge_ready, child_alive)`：前者 = 桥接上了这一代子进程，
+    /// 后者 = 子进程还没退出。两者都真才算健康。
+    pub fn health_detail(&mut self) -> (bool, bool) {
+        (
+            self.bridge_ready.load(Ordering::SeqCst),
+            self.is_running(),
+        )
+    }
+
     /// Round-trip an HTTP `/health` through the bridge until the server
     /// responds or the deadline elapses. Used by the setup probe so the
     /// `hermix:server-ready` event fires only after the multiplex is
@@ -378,13 +407,13 @@ impl HermixSidecar {
                 // 用真实 /health 往返判定就绪。注意探测的是**这一代**桥：
                 // 重启后 `global()` 已指向新代，不会拿旧代的成功结果
                 // 误判新代为就绪。
-                let probe = tokio::time::timeout(
-                    Duration::from_secs(3),
-                    bridge.http_request("GET", "/health", None),
-                )
-                .await;
+                // 预算收在桥内部（request_with_budget）：外层 timeout 丢
+                // future 会跳过挂起项清理，探针越频繁泄漏越多。
+                let probe = bridge
+                    .request_with_budget("GET", "/health", None, Duration::from_secs(3))
+                    .await;
                 let http_ok = match probe {
-                    Ok(Ok(reply)) => serde_json::from_str::<serde_json::Value>(&reply)
+                    Ok(reply) => serde_json::from_str::<serde_json::Value>(&reply)
                         .ok()
                         .and_then(|p| {
                             p.get("body")
@@ -400,11 +429,11 @@ impl HermixSidecar {
                 // 探测未通过不直接返回 true：那会让启动页在服务真正可用前
             // 就报"就绪"，用户随后发消息必然失败。继续在 deadline 内重试，
             // 把"慢启动"和"起不来"区分开。
-                eprintln!("[Hermix] /health probe not ok yet, retrying…");
+                crate::desktop_log!("[Hermix] /health probe not ok yet, retrying…");
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        eprintln!("[Hermix] wait_until_ready: deadline elapsed without a healthy /health");
+        crate::desktop_log!("[Hermix] wait_until_ready: deadline elapsed without a healthy /health");
         false
     }
 
@@ -419,12 +448,16 @@ impl HermixSidecar {
     /// consecutive failures. The returned `JoinHandle` aborts the
     /// watcher when dropped (i.e. when the Tauri shell exits).
     ///
-    /// Health signal: `is_healthy()` — bridge initialised AND child
-    /// process has not exited. We deliberately do NOT round-trip an HTTP
-    /// `/health` every tick because that would leak HTTP request_ids
-    /// into the server's audit trail every 5 seconds; the bridge_ready
-    /// flag + `child.try_wait()` cover all failure modes the watchdog
-    /// actually cares about (process exit, init failure).
+    /// Health signal is two-layered:
+    /// 1. every tick (cheap): `is_healthy()` — bridge initialised AND
+    ///    child process has not exited (covers process exit, init failure);
+    /// 2. every `HEALTH_PROBE_EVERY_TICKS` healthy ticks: a real `/health`
+    ///    round-trip (covers hung sidecars — process alive but the tokio
+    ///    runtime / executor never answers). Frequency is deliberately low
+    ///    (≈30s) because each probe leaves one request_id in the server's
+    ///    audit trail; a per-tick probe was rejected for exactly that
+    ///    reason, but no probe at all left hung sidecars unrecoverable —
+    ///    the frontend could detect offline yet nobody restarted it.
     pub fn start_watchdog(
         sb: &Arc<std::sync::Mutex<Self>>,
         config: WatchdogConfig,
@@ -437,8 +470,23 @@ impl HermixSidecar {
             let max_restarts = config.max_restarts_before_give_up;
             let mut consecutive_failures: u32 = 0;
             let mut total_restarts: u32 = 0;
+            // give-up 稳态下的静默 tick 计数（日志降噪用）。
+            let mut gave_up_ticks: u32 = 0;
+            // 健康 tick 计数：驱动低频 /health 探测（hung 型唯一可检手段）。
+            let mut healthy_ticks: u32 = 0;
+            const HEALTH_PROBE_EVERY_TICKS: u32 = 6;
+            const HEALTH_PROBE_BUDGET: Duration = Duration::from_secs(2);
 
             loop {
+                // 退出流程已经开始（`cleanup()` 停掉了 sidecar）：立刻收工。
+                // 否则本循环会把「子进程没了」读成故障，6 次之后把刚停掉的
+                // sidecar 重新拉起来 —— 2026-10-30 实锤：主窗销毁 → cleanup
+                // 停 sidecar → 进程没退 → watchdog 15s 后重生它，两个进程
+                // 一起留在任务管理器里。
+                if crate::shutdown::is_cleaned() {
+                    crate::desktop_log!("[Hermix] Watchdog: 退出流程已启动，停止看护");
+                    break;
+                }
                 let backoff_secs = match total_restarts {
                     0 => 2,
                     1 => 5,
@@ -450,10 +498,42 @@ impl HermixSidecar {
                     tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                 }
 
-                let healthy = {
+                let (mut healthy, bridge_ready, child_alive) = {
                     let mut guard = arc.lock().expect("sidecar mutex poisoned");
-                    guard.is_healthy()
+                    let (ready, alive) = guard.health_detail();
+                    (ready && alive, ready, alive)
                 };
+
+                // 低频 /health 往返：把「进程活着但不应答」的 hung 型送进
+                // 同一条重启预算（此前它永远判健康、永不重启）。
+                if healthy {
+                    healthy_ticks = healthy_ticks.wrapping_add(1);
+                    if healthy_ticks % HEALTH_PROBE_EVERY_TICKS == 0 {
+                        if let Some(bridge) = crate::stdio_bridge::global() {
+                            let probe_ok = bridge
+                                .request_with_budget(
+                                    "GET",
+                                    "/health",
+                                    None,
+                                    HEALTH_PROBE_BUDGET,
+                                )
+                                .await
+                                .map(|reply| {
+                                    serde_json::from_str::<serde_json::Value>(&reply)
+                                        .ok()
+                                        .and_then(|v| v.get("status").and_then(|s| s.as_u64()))
+                                        .is_some_and(|s| (200..300).contains(&s))
+                                })
+                                .unwrap_or(false);
+                            if !probe_ok {
+                                crate::desktop_log!(
+                                    "[Hermix] Watchdog: /health probe failed while process alive (hung sidecar?)"
+                                );
+                                healthy = false;
+                            }
+                        }
+                    }
+                }
 
                 if healthy {
                     consecutive_failures = 0;
@@ -462,23 +542,39 @@ impl HermixSidecar {
                 }
 
                 consecutive_failures += 1;
-                eprintln!(
-                    "[Hermix] Sidecar health check failed ({consecutive_failures}/{max_failures})"
+
+                // give-up 稳态：重启预算耗尽且子进程仍不健康，条件不会自己变好。
+                // 原实现每个 tick（15s）打两条日志，2026-11-04 安装版崩溃循环
+                // 实机打出 400+ 条重复行，把首尾有用信息淹掉。这里每 20 个
+                // tick（≈5min）打一条心跳；`hermix:server-gave-up` 事件照发
+                // （前端 setGaveUp 幂等，靠它维持「重启失败，点击重试」UI）。
+                if total_restarts >= max_restarts && consecutive_failures >= max_failures {
+                    gave_up_ticks += 1;
+                    if gave_up_ticks == 1 || gave_up_ticks % 20 == 0 {
+                        // 必须走 desktop_log!：GUI 进程的 eprintln! 没有去处，
+                        // 2026-11-04 崩溃循环正是靠这些行定案的。
+                        crate::desktop_log!(
+                            "[Hermix] Watchdog: giving up after {total_restarts} restarts; \
+                             still unhealthy (bridge_ready={bridge_ready} child_alive={child_alive}, \
+                             quiet tick {gave_up_ticks}). Manual restart required."
+                        );
+                    }
+                    if let Some(ref handle) = app_handle {
+                        let _ = handle.emit("hermix:server-gave-up", ());
+                    }
+                    continue;
+                }
+
+                // 带上分解项：`bridge_ready=false child_alive=false` = 没有子进程，
+                // `bridge_ready=false child_alive=true` = 子进程在但桥没接上（最
+                // 难查的一种）。此前只有一句 "failed (n/30)"，无法区分。
+                crate::desktop_log!(
+                    "[Hermix] Sidecar health check failed ({consecutive_failures}/{max_failures}) \
+                     bridge_ready={bridge_ready} child_alive={child_alive}"
                 );
 
                 if consecutive_failures >= max_failures {
-                    if total_restarts >= max_restarts {
-                        eprintln!(
-                            "[Hermix] Watchdog: giving up after {} restarts. Manual restart required.",
-                            total_restarts
-                        );
-                        if let Some(ref handle) = app_handle {
-                            let _ = handle.emit("hermix:server-gave-up", ());
-                        }
-                        continue;
-                    }
-
-                    eprintln!(
+                    crate::desktop_log!(
                         "[Hermix] Watchdog: restarting sidecar (attempt {}/{}, backoff {}s)",
                         total_restarts + 1,
                         max_restarts,
@@ -501,7 +597,7 @@ impl HermixSidecar {
                         }
                     };
                     if let Err(e) = restart_result {
-                        eprintln!("[Hermix] Watchdog: restart() failed: {e}");
+                        crate::desktop_log!("[Hermix] Watchdog: restart() failed: {e}");
                     } else {
                         consecutive_failures = 0;
                         total_restarts += 1;
@@ -527,12 +623,14 @@ impl Default for WatchdogConfig {
     fn default() -> Self {
         Self {
             check_interval: Duration::from_secs(5),
-            // Same calibration as the TCP era: a cold start of `hermix.exe`
-            // can take ~70s (embedding model load, toolset init) before
-            // the bridge round-trips a `/health` response. 30 failures ×
-            // 5s = 150s tolerance window: a cold start always wins, a
-            // genuinely hung sidecar still restarts after 2.5min.
-            max_consecutive_failures: 30,
+            // 6 次（≈ 5s + 5×2s backoff ≈ 15s，原 30 次≈60s）。
+            //
+            // 旧值按「冷启动要 70s 才应答 /health」标定，但 `is_healthy()` 根本不
+            // 探 /health —— 它只看 `bridge_ready`（spawn 后立刻置位）+ 子进程是否
+            // 存活，慢启动不会消耗失败预算。所以失败只可能来自「子进程没了」或
+            // 「桥没接上」，那是真故障，等 60s 只会让用户对着一个死界面狂点。
+            // 2026-10-29 实测：sidecar 被停后 60s 才重启，期间所有请求都在报错。
+            max_consecutive_failures: 6,
             max_restarts_before_give_up: 5,
         }
     }

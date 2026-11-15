@@ -215,11 +215,30 @@ pub fn render_skill_md(name: &str, body: &str) -> String {
     let mut out = String::with_capacity(body.len() + 128);
     out.push_str("---\nname: ");
     out.push_str(name);
-    out.push_str("\nkind: auto\ndescription: |\n");
-    out.push_str(body);
-    out.push_str("\n---\n\n");
+    out.push_str("\nkind: auto\ndescription: |-\n");
+    push_indented_block(&mut out, body, "  ");
+    out.push_str("---\n\n");
     out.push_str(body);
     out
+}
+
+/// 把一段 markdown 写成 YAML 块标量内容（每行缩进 `indent`）。
+///
+/// 此前是直接 `push_str(body)`：正文顶格 ⇒ 块标量在第一个顶格行结束，
+/// `## 标题` 被 YAML 当成键，**整份 frontmatter 解析失败**。2026-11-06
+/// 实机：`~/.hermix/skills/auto` 下 55 份技能因此报废，`GET /api/skills`
+/// 每次刷新刷 271 条 `Failed to parse`。
+pub(crate) fn push_indented_block(out: &mut String, text: &str, indent: &str) {
+    let normalized = text.replace("\r\n", "\n");
+    for line in normalized.split('\n') {
+        if line.is_empty() {
+            out.push('\n');
+        } else {
+            out.push_str(indent);
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
 }
 
 /// Persist a new auto skill. Refuses to overwrite an existing file

@@ -447,15 +447,11 @@ fn truncate_str(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
-    let mut out = String::with_capacity(max);
-    for (i, c) in s.chars().enumerate() {
-        if i >= max.saturating_sub(1) {
-            out.push('\u{2026}');
-            break;
-        }
-        out.push(c);
-    }
-    out
+    // 切分走 core 的单一实现；省略号计入总长（max-1 字 + …）。
+    format!(
+        "{}…",
+        hermix_core::text_utils::truncate_chars(s, max.saturating_sub(1))
+    )
 }
 
 fn evict_old_experience_files(dir: &Path) -> std::io::Result<()> {

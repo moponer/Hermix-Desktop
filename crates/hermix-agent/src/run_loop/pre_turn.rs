@@ -11,6 +11,12 @@ use crate::context::ContextManager;
 use hermix_core::ToolErrorRecord;
 use serde_json::json;
 
+/// 连续多少次「撞 max_turns 且收尾摘要失败」才停止自动续跑。
+///
+/// 一次失败可能只是瞬时故障，直接停会把长任务误杀；但连续三次说明收尾通道
+/// 本身坏了（模型 id 不可用/配额耗尽），此时归零重跑只是在原地空转。
+const MAX_SUMMARY_FAILURE_STREAK: u32 = 3;
+
 impl AgentLoop {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn do_pre_turn_setup(
@@ -201,7 +207,20 @@ impl AgentLoop {
                 self.config.skill_injection_char_budget,
             ) {
                 Some((trimmed, tools)) => {
-                    ctx.add_message(Message::system(&trimmed));
+                    // A turn with tool rounds re-enters pre_turn once per
+                    // round; the matched skills (and their bodies) are
+                    // identical, so re-appending them only grows the
+                    // *uncached* tail of every request. Skip when the
+                    // exact same block is already in the recent window.
+                    let already_present = ctx
+                        .get_messages()
+                        .iter()
+                        .rev()
+                        .take(8)
+                        .any(|m| m.content.as_deref() == Some(trimmed.as_str()));
+                    if !already_present {
+                        ctx.add_message(Message::system(&trimmed));
+                    }
                     // allowed-tools enforcement (subtract-only): the tools
                     // union of the activated skills narrows this turn's
                     // dispatch surface. Recomputed every turn so a stale
@@ -262,8 +281,57 @@ impl AgentLoop {
                 ),
             );
             let summary_msg = self.handle_max_iterations(ctx, &active_model).await?;
+            let mut summary_failed = false;
             if let Some(msg) = summary_msg {
+                // 摘要调用失败时注入的是**机械进度记录**，模型会把它转述成
+                // 「已完成 / 未完成 / 下一步」—— 用户读起来就是"计划都写好了
+                // 却停了"，而真正的原因是撞了轮次预算 + 摘要模型不可用
+                // （实测 `400 unknown model`）。这条状态把归因摆到台面上，
+                // 避免机械记录被误当成模型的完成总结。
+                if msg.role == hermix_core::MessageRole::System
+                    && msg.content.as_deref().is_some_and(|c| {
+                        c.contains(crate::session_lifecycle::DETERMINISTIC_SUMMARY_MARKER)
+                    })
+                {
+                    summary_failed = true;
+                    state.max_turns_summary_failures = state.max_turns_summary_failures.saturating_add(1);
+                    tracing::warn!(
+                        model = %active_model,
+                        streak = state.max_turns_summary_failures,
+                        "max turns reached and the wrap-up summary call failed — a mechanical progress record was injected instead"
+                    );
+                    self.emit_status(
+                        "lifecycle",
+                        "已达轮次预算，但收尾摘要调用失败（当前模型报错/不可用），已改用本地进度记录继续；下面这段「状态/下一步」是记录，不是模型的完成总结。",
+                    );
+                }
                 ctx.add_message(msg);
+            }
+
+            // 熔断：摘要连续失败时，模型永远收不到"停止探索、汇报"的指令，
+            // 归零重跑只会把同一段工具循环再走一遍（实机 229 轮）。
+            // 到了阈值就如实停机，把原因交给前端展示，而不是继续空转。
+            if summary_failed && state.max_turns_summary_failures >= MAX_SUMMARY_FAILURE_STREAK {
+                self.emit_status(
+                    "lifecycle",
+                    "收尾摘要连续失败（模型 id 不可用或配额不足），已停止自动续跑。请检查模型配置后重新发送。",
+                );
+                return Ok(PreTurnAction::Stop(self.graceful_interrupt_result_errored(
+                    ctx,
+                    state.total_turns,
+                    tool_errors,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
+                    session_started_hooks_fired,
+                    persist_user_idx,
+                    Some(format!(
+                        "收尾摘要连续 {} 次调用失败（model={active_model}），已停止自动续跑以避免空转",
+                        state.max_turns_summary_failures
+                    )),
+                )));
+            }
+            if !summary_failed {
+                state.max_turns_summary_failures = 0;
             }
             state.total_turns = 0;
         }
@@ -308,7 +376,17 @@ impl AgentLoop {
             .with_recent_messages(recent_msgs);
         if let Some(ref outcome) = prefetcher.run(&tc, &tool_names).await {
             let block = outcome.to_system_prompt_block();
-            if !block.is_empty() {
+            // Same block again? Then re-appending buys nothing but grows the
+            // uncached tail of the next request (a turn with tool rounds
+            // reaches this point once per round).
+            let already_present = !block.is_empty()
+                && ctx
+                    .get_messages()
+                    .iter()
+                    .rev()
+                    .take(8)
+                    .any(|m| m.content.as_deref() == Some(block.as_str()));
+            if !block.is_empty() && !already_present {
                 ctx.add_message(Message::system(&block));
                 tracing::trace!(intent = ?outcome.intent, confidence = outcome.confidence, "prefetch result injected as system prompt block");
             }

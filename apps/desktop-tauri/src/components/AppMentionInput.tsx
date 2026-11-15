@@ -204,9 +204,9 @@ function AppMentionInputImpl({
           <div
             ref={backdropRef}
             aria-hidden
-            className="absolute inset-0 pointer-events-none overflow-hidden whitespace-pre-wrap break-words px-4 pt-4 pb-3 text-text-primary"
+            className="absolute inset-0 pointer-events-none overflow-hidden whitespace-pre-wrap break-words px-3.5 pt-3.5 pb-2.5 text-text-primary"
             style={{
-              fontSize: "var(--font-size-body)",
+              fontSize: "var(--text-body)",
               lineHeight: 1.5,
               boxSizing: "border-box",
             }}
@@ -240,9 +240,9 @@ function AppMentionInputImpl({
             disabled={disabled}
             placeholder={isStreaming ? "输入消息加入队列…" : placeholder}
             data-no-border
-            className="relative z-[1] w-full bg-transparent resize-none outline-none px-4 pt-4 pb-3 min-h-[76px]"
+            className="relative z-[1] w-full bg-transparent resize-none outline-none px-3.5 pt-3.5 pb-2.5 min-h-[50px]"
             style={{
-              fontSize: "var(--font-size-body)",
+              fontSize: "var(--text-body)",
               lineHeight: 1.5,
               border: "none",
               borderRadius: 0,
@@ -252,7 +252,7 @@ function AppMentionInputImpl({
               caretColor: "var(--color-text-primary)",
               overflow: "hidden",
             }}
-            rows={3}
+            rows={1}
           />
         </div>
       </div>

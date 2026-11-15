@@ -2,7 +2,7 @@ use crate::AppState;
 use crate::portable_env;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// Local re-implementation of `hermix_config::env_compat`.
 ///
@@ -66,7 +66,7 @@ fn env_compat(new_name: &str, old_name: &str) -> Option<String> {
 /// 1. `$HERMIX_PORTABLE_DATA_DIR` (set in dev mode only)
 /// 2. `$HERMIX_HOME` (explicit override)
 /// 3. Dev-mode: `hermix-data/` at workspace root
-/// 4. Last-ditch: `<install_root>/data`
+/// 4. Last-ditch: `hermix_home()` → `~/.hermix`，**与 sidecar 完全一致**
 ///
 /// `pub(crate)` 是因为 `system_settings`（壁纸落盘）必须用**同一条**解析
 /// 链——复制一份就会在便携模式 / HERMIX_HOME 覆盖下走到不同分支，
@@ -89,11 +89,14 @@ pub(crate) fn resolve_data_dir() -> PathBuf {
             return hermix_data;
         }
     }
-    // Last-ditch: next to the executable.
-    if let Ok(install_root) = portable_env::compute_install_root() {
-        return install_root.join("data");
-    }
-    PathBuf::from(".")
+    // Last-ditch: 与 sidecar 走**同一条**末端解析（`hermix_home()`）。
+    //
+    // 此前这里是 `<install_root>/data`，而 sidecar 的 `hermix_home()` 是
+    // `~/.hermix` —— 于是同一个进程树的日志被劈成两处：`frontend.log` 落在
+    // 安装目录、`server.log`/`desktop.log` 落在用户目录，按时间线对齐根本
+    // 做不到（2026-11-06 实机：安装目录 `data/logs` 停在 11-05，而 11-06 的
+    // 运行全在 `~/.hermix/logs`）。桌面端与后端对"数据在哪"只能有一个答案。
+    hermix_config::paths::hermix_home()
 }
 
 /// Return the current effective data directory for the running
@@ -467,6 +470,68 @@ pub async fn backend_channel_send(channel: String, payload: String) -> Result<()
     bridge.send_to_channel(&channel, &payload)
 }
 
+/// 最近一次 `/health` 探测的结果（人可读）。只在**变化时**落日志。
+///
+/// 为什么需要：`backend_ready` 的失败分支此前几乎全静默 —— 桥已死时的早退
+/// 连一行日志都没有。于是「内核进程在任务管理器里、界面却永远未连接」这种
+/// 故障在日志里查不到任何线索（2026-11-07 实机反馈）。存一份文案兼作
+/// `backend_diagnosis` 的返回值，界面悬停即可看到卡在哪一层。
+static LAST_PROBE: Mutex<String> = Mutex::new(String::new());
+
+fn note_probe(detail: &str) {
+    let changed = match LAST_PROBE.lock() {
+        Ok(mut g) => {
+            if g.as_str() == detail {
+                false
+            } else {
+                *g = detail.to_string();
+                true
+            }
+        }
+        Err(_) => false,
+    };
+    if changed {
+        crate::desktop_log!("[Hermix] backend_ready: {detail}");
+    }
+}
+
+/// 后端故障的现场快照：把「进程在不在 / 桥接上没接上 / 最近一次探测结果 /
+/// 启动期致命错误」四件事分开报，界面据此给出可直接行动的说明，而不是一句
+/// 「未连接」。三个失败面互不重叠，缺任何一项都无法判断该重启、该杀进程还是
+/// 该查杀软。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendDiagnosis {
+    /// sidecar 子进程是否还活着（我们 spawn 的那个，不是同名残留进程）
+    pub process_alive: bool,
+    /// stdio 桥是否仍被标记为可用（stdout 读线程未退出）
+    pub bridge_live: bool,
+    /// 最近一次 `/health` 探测结果（"ok" / "timeout" / "http 503" / "bridge dead" …）
+    pub last_probe: String,
+    /// 启动期致命失败（spawn 失败 / 启动即崩，含子进程 stderr）；空串 = 没有
+    pub boot_error: String,
+}
+
+#[tauri::command]
+pub async fn backend_diagnosis(
+    state: tauri::State<'_, AppState>,
+) -> Result<BackendDiagnosis, String> {
+    let process_alive = {
+        let mut sb = state.sidecar.lock().map_err(|e| e.to_string())?;
+        sb.is_running()
+    };
+    let last_probe = LAST_PROBE
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_else(|e| e.into_inner().clone());
+    Ok(BackendDiagnosis {
+        process_alive,
+        bridge_live: crate::stdio_bridge::is_live(),
+        last_probe,
+        boot_error: crate::boot_error(),
+    })
+}
+
 /// Real liveness probe used by `BackendStatus` and `checkBackendHealth`.
 ///
 /// Round-trips an actual `/health` frame through the bridge instead of
@@ -484,31 +549,67 @@ pub async fn backend_channel_send(channel: String, payload: String) -> Result<()
 #[tauri::command]
 pub async fn backend_ready() -> bool {
     if !crate::stdio_bridge::is_live() {
+        // 桥已死但子进程可能还活着（子进程退出 / 被替换 / stdout 读线程已收尾）。
+        // 这一支此前**一行日志都没有**，是「进程在、界面未连接」查不到线索的
+        // 直接原因。
+        note_probe("bridge dead (no live stdio bridge)");
         return false;
     }
     let Some(bridge) = crate::stdio_bridge::global() else {
+        note_probe("bridge missing (never initialised)");
         return false;
     };
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        bridge.http_request("GET", "/health", None),
-    )
-    .await
+    // 预算收在桥内部（request_with_budget）：外层再套 timeout 会把 future
+    // 连同它的挂起项清理分支一起丢掉——hung 型后端下每次探针泄漏一条
+    // pending_http 条目，直到 stdout EOF 才被整批回收。
+    match bridge
+        .request_with_budget("GET", "/health", None, std::time::Duration::from_secs(2))
+        .await
     {
         // 信封是 `{"status":N,"body":"…"}`；200 即真正在位。
-        Ok(Ok(reply)) => serde_json::from_str::<serde_json::Value>(&reply)
-            .ok()
-            .and_then(|v| v.get("status").and_then(|s| s.as_u64()))
-            .is_some_and(|s| (200..300).contains(&s)),
-        Ok(Err(e)) => {
-            eprintln!("[Hermix] backend_ready: probe failed: {e}");
-            false
+        Ok(reply) => {
+            let status = serde_json::from_str::<serde_json::Value>(&reply)
+                .ok()
+                .and_then(|v| v.get("status").and_then(|s| s.as_u64()));
+            match status {
+                Some(s) if (200..300).contains(&s) => {
+                    note_probe("ok");
+                    true
+                }
+                Some(s) => {
+                    // 子进程活着、桥也通，但 /health 回非 2xx：服务在跑却自认不健康。
+                    let body = serde_json::from_str::<serde_json::Value>(&reply)
+                        .ok()
+                        .and_then(|v| v.get("body").and_then(|b| b.as_str()).map(str::to_owned))
+                        .unwrap_or_default();
+                    note_probe(&format!("health returned HTTP {s}: {}", truncate_for_log(&body, 200)));
+                    false
+                }
+                None => {
+                    note_probe(&format!(
+                        "unparseable health envelope: {}",
+                        truncate_for_log(&reply, 200)
+                    ));
+                    false
+                }
+            }
         }
-        Err(_) => {
-            eprintln!("[Hermix] backend_ready: probe timed out");
+        Err(e) => {
+            // 探测失败是「进程活着但不应答」（hung 型断开）的唯一现场证据，
+            // GUI 进程 eprintln! 无处可去，必须落盘。
+            note_probe(&format!("probe failed: {e}"));
             false
         }
     }
+}
+
+/// 日志文案截断：`/health` 应答里的 body 可能很长，只留够定位的头部。
+fn truncate_for_log(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(max_chars).collect();
+    format!("{head}…")
 }
 
 /// Expand Windows environment-variable segments (`%TEMP%\x\y.csv`,
@@ -838,18 +939,28 @@ pub async fn restart_sidecar(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    // 必须 async：`restart()` → `stop()` 会等最多 3s 优雅退出再 kill/wait，
-    // 同步命令会在主线程上把这 3s 卡死，窗口直接无响应（用户点"重启"
+    // 必须 async：`restart()` → `stop()` 会等优雅退出再 kill/wait，
+    // 同步命令会在主线程上把这 5s 卡死，窗口直接无响应（用户点"重启"
     // 看到的就是界面冻住）。spawn_blocking 把它挪到阻塞线程池，
     // 命令立即返回、UI 保持可交互。
+    //
+    // 这里必须留日志：2026-10-29 排查「后端自己断了」时，server.log 只有
+    // `shutdown frame received`（即外壳主动停机），但外壳侧完全没有记录是谁
+    // 触发的 —— 无从区分「用户点了重连」与「退出流程误触发」。
+    crate::desktop_log!("[Hermix] restart_sidecar: request from frontend");
     let sb = state.sidecar.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let mut guard = sb.lock().map_err(|e| format!("lock: {e}"))?;
         guard.restart(&app)?;
         Ok::<_, String>("restarted".to_string())
     })
     .await
-    .map_err(|e| format!("restart task failed: {e}"))?
+    .map_err(|e| format!("restart task failed: {e}"))?;
+    match &result {
+        Ok(_) => crate::desktop_log!("[Hermix] restart_sidecar: done"),
+        Err(e) => crate::desktop_log!("[Hermix] restart_sidecar: failed: {e}"),
+    }
+    result
 }
 
 

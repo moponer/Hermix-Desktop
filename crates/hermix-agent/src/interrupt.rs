@@ -77,8 +77,17 @@ impl InterruptController {
         // Set the flag AFTER storing the message so readers always see
         // a consistent (flag=true, message=Some) pair.
         self.flag.store(true, Ordering::Release);
-        // Wake any async waiter (O1.2).
-        self.notify.notify_one();
+        // Wake **every** async waiter (O1.2). `notify_one` only wakes one,
+        // and there are now several concurrent waiters on the same
+        // controller: the in-flight LLM race (`llm_retry`), the tool
+        // executor's per-call / batch-drain selects, and the streaming
+        // chunk loop. With `notify_one` a stop request could be consumed
+        // by whichever waiter happened to be first, leaving the others
+        // waiting until their own timeout — the user-visible symptom was
+        // "I pressed stop and nothing happened". Losing the wake-up when
+        // nobody is waiting is harmless: `wait_for_interrupt` checks the
+        // flag first and returns immediately.
+        self.notify.notify_waiters();
     }
 
     /// Clear any pending interrupt request.

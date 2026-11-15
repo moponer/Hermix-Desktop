@@ -127,6 +127,19 @@ pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchema
         // the reason again — it exists (`tool_search.rs::register`, called
         // from `tools/mod.rs`).
         "list_tools".to_string(),
+        // skill_view / skills_list must be always-forwarded — the whole skill
+        // system is **progressive disclosure**: the prompt carries the
+        // `<available_skills>` index, the body is loaded on demand. Two things
+        // break when routing drops them:
+        //   1. `skills_system_prompt` only renders the index when one of
+        //      `skills_list` / `skill_view` / `skill_manage` is in the active
+        //      set — no tool, no index, skills become invisible for the turn;
+        //   2. auto-matched large skills inject a **pointer** (`skill_view`),
+        //      which is a dead end if the tool isn't there.
+        // Both schemas are tiny; the failure they prevent (model never learns
+        // the skill exists) is silent.
+        "skill_view".to_string(),
+        "skills_list".to_string(),
         // workbench_manager must be always-forwarded so workbench-bound
         // sessions (skill pinned every turn, MODULE_DESIGN §13 layer 3)
         // can actually call it. KeywordRouter scores it ≈ 0 on

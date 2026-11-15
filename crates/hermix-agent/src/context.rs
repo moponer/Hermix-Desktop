@@ -30,11 +30,15 @@
 //! ## Layer 3: Conversation History
 //! - **Contents**: User messages, assistant messages (with thinking blocks),
 //!   tool calls, tool results. This is the largest and most volatile layer.
-//! - **Invalidation**: Every turn (new messages added).
-//! - **Cache**: No cache — recomputed every turn via `messages_for_api_call`.
-//! - **Compression**: `ContextCompressor` triggers at 80% of budget.
+//! - **Invalidation**: Append-only. Rows already sent to the provider are
+//!   **frozen** — see `docs/notes/implemented/architecture/2026-10-29-write-once-prefix-cache.md`.
+//! - **Cache**: Provider prefix cache covers everything except the newly
+//!   appended tail; `messages_for_api_call` projects (never mutates) ctx.
+//! - **Compression**: `ContextCompressor` triggers at 80% of budget; that is
+//!   the one place allowed to rewrite history (it pays a full cache reset).
 //! - **Filtering**: `messages_for_api_call` normalizes messages (merge
-//!   consecutive user, strip stale errors, strip old `reasoning_content`).
+//!   consecutive user, strip stale errors, drop **all** `reasoning_content`).
+//!   Every step must be stable across calls: same input row ⇒ same bytes.
 //!
 //! ## Layer 4: Memory
 //! - **Contents**: Built-in memory snapshot, memory router blocks, skills
@@ -655,8 +659,8 @@ pub const BUILTIN_PERSONALITY_DUZI: &str = "\
 /// 助手阿黎（Twin）：桌面端常驻的「分身助理」人格。
 ///
 /// 她与 coder/writer 这类「风格人格」不同——她定义的是一个**执行主体**：
-/// 在用户的电脑上用全部工具做事、随时派子 agent 分头干活、只在需要用户
-/// 拍板时才停。`twin:ali` 会话默认绑定到她（ws.rs），桌面 TwinView 与
+/// 在用户的电脑上用全部工具做事、把长任务派成团队工单并跟进验收、只在需要
+/// 用户拍板时才停。`twin:ali` 会话默认绑定到她（ws.rs），桌面 TwinView 与
 /// 手机端两个入口看到的是同一个她。
 pub const BUILTIN_PERSONALITY_ALI: &str = r#"你是助手阿黎（Ali），用户的分身助理。
 
@@ -664,10 +668,20 @@ pub const BUILTIN_PERSONALITY_ALI: &str = r#"你是助手阿黎（Ali），用�
 
 你**在用户的电脑上**替他做事：
 - 手上的工具就是这台电脑的全部能力：读写文件、跑命令、检索、浏览器自动化、定时任务。
-- 可以随时派出子 agent 分头干活（delegation），用 get_subagent_result 收结果，汇总后再答复。
-- 汇报风格：先说结论，再说做了什么、还差什么；需要用户拍板时把选项和依据一起摆出来。
-- 主动推进：不要每一步都问；只在无法替用户决定（花钱、删数据、对外发送）时停下来问。
-- 你在手机端也有入口：手机只是遥控器，执行永远在这台电脑上。"#;
+- 汇报风格：先说结论，再说做了什么、证据是什么；需要用户拍板时把选项和依据一起摆出来。
+- 一次做完：接到任务就自己规划、自己查、自己推进，直到目标达成。中间的每一个疑问都自己分析——缺信息就用工具去取，不要拿问题回问用户。「还差什么」只在最终结论里当风险项写，不用来问「要不要继续」。
+- 只有这些情况才停下来问：花钱、删数据、对外发送、真正二选一且不可逆的决定。
+- 禁止用「要我接着往下推，还是这轮先到这？」「需要我接着做吗？」这类问句收尾——没做完就继续做，做完了给结论。
+- 你在手机端也有入口：手机只是遥控器，执行永远在这台电脑上。
+
+## 怎么把活干完：三条通道，按活的性质选
+
+- **自己动手**：几秒钟到一两分钟能收尾的（读一个文件、跑一条命令、改一处代码、查一条资料）——直接做，别为小事建团队。
+- **建团队（dispatch_member）**：需要多轮自驱、几十分钟以上、或要产出交付物的活（写代码、修 bug、长调查、批量处理、评审）。派单时写清目标、边界和 `acceptance_criteria`；派完**立即返回**去做别的事，用 `get_member_result` 跟进，完成后用 `review_member` 独立验收，再把结论汇报给用户。
+- **取数据（delegate_task）**：只用来"读一大堆东西、只要一个结论"——大文件摘要、多文件检索、PDF/图片分析。它是**同步**的，会把这一轮卡住直到返回，所以**绝不用它跑任务**。
+
+团队纪律：同一件事沿用同一张工单，不重复开工；成员之间不互相转述，所有汇总结论由你说；member 的最终报告是给用户看的交付物，汇报时消化成结论与关键证据，不整份转发。
+派单后不要原地等——先回应用户"已经派出去、谁在做、判断标准是什么"，后续用 `get_member_result` 查回来再补汇报。"#;
 
 pub const BUILTIN_PERSONALITIES: &[(&str, &str)] = &[
     ("ali", BUILTIN_PERSONALITY_ALI),
@@ -1294,7 +1308,8 @@ impl SystemPromptBuilder {
 
     /// Add current date/time and optional metadata.
     pub fn with_timestamp(self, model: Option<&str>, provider: Option<&str>) -> Self {
-        let now = chrono::Local::now().to_rfc3339();
+        // 北京时间（产品面向中国用户，不依赖机器时区；2026-11-14）。
+        let now = hermix_core::time::beijing_rfc3339_secs();
         self.with_timestamp_at(model, provider, &now)
     }
 
@@ -1309,9 +1324,11 @@ impl SystemPromptBuilder {
         provider: Option<&str>,
         started_at: &str,
     ) -> Self {
+        // 渲染为北京墙钟：模型看到的时间必须是用户实际所在时区（中国），
+        // 不能依赖机器 TZ（2026-11-14）。
         let parsed = chrono::DateTime::parse_from_rfc3339(started_at)
-            .map(|dt| dt.with_timezone(&chrono::Local))
-            .unwrap_or_else(|_| chrono::Local::now());
+            .map(|dt| dt.with_timezone(&hermix_core::time::beijing()))
+            .unwrap_or_else(|_| hermix_core::time::beijing_now());
         let mut line = format!(
             "Conversation started: {}",
             parsed.format("%A, %B %d, %Y %I:%M %p")
@@ -2361,6 +2378,35 @@ let ctx = RouteContext {
         assert!(prompt.contains("Be concise."));
         assert!(prompt.contains("User likes Rust"));
         assert!(prompt.contains("gpt-4o"));
+    }
+
+    /// 回归钉（2026-11-14）：系统提示词的 Conversation started 必须是
+    /// **北京墙钟**（UTC+8 固定），不依赖机器时区——机器 TZ 配成 UTC 时
+    /// 模型会看到慢 8 小时的时间。
+    #[test]
+    fn test_conversation_started_renders_beijing_wall_clock() {
+        let mut builder = SystemPromptBuilder::new().with_timestamp_at(
+            None,
+            None,
+            // 2026-11-14 周六，UTC 02:30 → 北京 10:30 AM
+            "2026-11-14T02:30:00+00:00",
+        );
+        let prompt = builder.build();
+        assert!(
+            prompt.contains("Conversation started: Saturday, November 14, 2026 10:30 AM"),
+            "应为北京墙钟 10:30 AM，实际 prompt:\n{prompt}"
+        );
+        // 跨日边界：UTC 11-13 19:00 → 北京已是 11-14 03:00 AM
+        let mut builder = SystemPromptBuilder::new().with_timestamp_at(
+            None,
+            None,
+            "2026-11-13T19:00:00+00:00",
+        );
+        let prompt = builder.build();
+        assert!(
+            prompt.contains("Conversation started: Saturday, November 14, 2026 03:00 AM"),
+            "跨日应落在 11-14（周六），实际 prompt:\n{prompt}"
+        );
     }
 
     #[test]

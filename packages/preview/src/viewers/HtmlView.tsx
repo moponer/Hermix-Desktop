@@ -15,6 +15,18 @@
 // 已知边界（与沙箱一致的诚实说明，不是 bug）：预览页继承宿主 CSP，所以
 // 走 https 的外部样式表/脚本不加载；相对路径图片不解析。需要完整网络
 // 环境时用工具条上的「浏览器打开」。
+//
+// 内联 <style>/<script> 能不能用，取决于宿主 style-src/script-src 里
+// 'unsafe-inline' 是不是**唯一**的放行方式：按 CSP3，一旦指令里出现
+// nonce-source 或 hash-source，'unsafe-inline' 对行内内容立即失效，而
+// srcdoc 子文档继承父策略、拿不到父文档的 nonce → 页面自己的样式表会被
+// 整块丢弃（只剩浏览器默认样式，h1 变大、表格无边框，与"样式丢了"一样）。
+// Tauri 编译期会主动给 index.html 的内联 <style> 注入 nonce、给内联
+// <script> 注入 sha256 并追加到 CSP——于是 desktop-tauri 的
+// tauri.conf.json 必须保留 `dangerousDisableAssetCspModification` 里的
+// style-src/script-src，否则这条链在打包版里必然复发（dev 走 devUrl，
+// codegen 不注入，看不到）。实证与取舍见
+// docs/notes/implemented/bug-fix/2026-10-30-html-preview-inline-style-csp.md。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Monitor, Tablet, Smartphone, ExternalLink, Scan } from "lucide-react";

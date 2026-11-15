@@ -561,8 +561,23 @@ impl PtySessionRegistry {
             }
             text.truncate(cut);
         }
+        let timed_out = status.is_none();
         let exit_code = status.map(|s| s.exit_code() as i32).unwrap_or(-1);
         drop(pair.master);
+        if timed_out {
+            // 超时必须如实报错：返回 `Ok(exit_code=-1)` 会让模型以为命令
+            // 正常结束（只是没输出），与沙箱/非沙箱路径的 `Err(Timeout)`
+            // 语义也不一致。
+            tracing::warn!(
+                timeout_secs,
+                output_bytes = text.len(),
+                "PTY command timed out; partial output discarded"
+            );
+            return Err(AgentError::Timeout(format!(
+                "Command timed out after {} seconds",
+                timeout_secs
+            )));
+        }
         Ok(CommandOutput {
             exit_code,
             stdout: text,

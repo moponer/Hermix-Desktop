@@ -495,6 +495,11 @@ impl ContextCompressor {
             result.push(messages[i].clone());
         }
 
-        result
+        // ★ 这一刀在**中间**切：尾部起点可能落在某个 tool 组内部（ai: tool_use
+        // 在 head/被丢段里、tool_result 在尾部），于是这里会造出孤儿
+        // tool_result —— provider 侧每轮请求都会丢弃它们（2026-11-06 实机
+        // `dropped=88` 持续 18 分钟）。collapse 本身是只读投影，产出必须
+        // 自带配对修复，不能指望下游兜（下游是每请求重建的副本）。
+        crate::compression::engine::sanitize_tool_pairs(result, true)
     }
 }

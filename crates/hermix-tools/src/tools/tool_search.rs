@@ -300,10 +300,15 @@ impl ToolHandler for ToolSearchHandler {
         // 存在的理由：按关键词盲搜永远可能漏 —— 一个不知道自己有哪些工具
         // 的助理，谈不上"知道你能做到什么"。
         if action == "list" {
+            // 默认**不限量**（2026-11-10）：此前默认 200 但模型常自带
+            // limit（实测传了 60），而 list 动作没有 offset 参数——字母序
+            // 尾段（terminal…web_search…）从此不可达，total:81 挂在旁边
+            // 也取不回，模型据此认定"没有 web 工具"。全量返回，超长交给
+            // model-visible 预算截断 + spill 指针兜底。
             let limit = params
                 .get("limit")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(200) as usize;
+                .unwrap_or(u64::MAX) as usize;
             let all_defs = self.registry.get_definitions();
             let (resident, deferred) = classify_tools(&all_defs);
             let tools: Vec<Value> = all_defs
@@ -456,7 +461,10 @@ impl ToolHandler for ToolDescribeHandler {
             }
         }
         Err(ToolError::ExecutionFailed(format!(
-            "'{name}' not found. Use tool_search to find available tools."
+            "'{name}' not found. It may be a deferred-loaded tool: \
+             discover it with tool_search({{\"query\": \"...\"}}), \
+             then invoke it via tool_call({{\"name\": \"<tool>\", \
+             \"arguments\": {{...}}}})."
         )))
     }
 }
@@ -604,7 +612,10 @@ impl ToolHandler for ToolCallHandler {
         let found = all_defs.iter().find(|s| s.name == name);
         if found.is_none() {
             return Err(ToolError::ExecutionFailed(format!(
-                "'{name}' not found. Use tool_search to find available tools."
+                "'{name}' not found. It may be a deferred-loaded tool: \
+                 discover it with tool_search({{\"query\": \"...\"}}), \
+                 then invoke it via tool_call({{\"name\": \"<tool>\", \
+                 \"arguments\": {{...}}}})."
             )));
         }
 

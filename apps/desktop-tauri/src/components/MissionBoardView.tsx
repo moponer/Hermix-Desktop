@@ -217,7 +217,17 @@ function fmtGiB(bytes: number | null): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GiB`;
 }
 
-export function MissionBoardView({ embedded = false }: { embedded?: boolean } = {}) {
+export function MissionBoardView({
+  embedded = false,
+  since = null,
+}: {
+  embedded?: boolean;
+  /**
+   * 只看这个时刻（ms）之后开工的工单 = 「本批需求派出去的活」。
+   * `null` = 不筛（独立任务台页签看全部）。
+   */
+  since?: number | null;
+} = {}) {
   const [tab, setTab] = useState<BoardTab>("tickets");
   const [members, setMembers] = useState<MemberSummary[] | null>(null);
   const [roles, setRoles] = useState<RoleEntry[] | null>(null);
@@ -310,11 +320,25 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
     }
   }, []);
 
+  /**
+   * 本批口径（2026-11-06）：阿黎页的「团队看板」按批次起点筛工单，
+   * 只回答"这一批需求派出去了什么、做到哪一步"。工单本身没有需求 id，
+   * 用开工时刻筛是唯一诚实的连接方式（不猜、不改后端结构）。
+   */
+  const scoped = useMemo(() => {
+    const list = members ?? [];
+    if (since == null) return list;
+    return list.filter((m) => {
+      const t = Date.parse(m.started_at);
+      return Number.isNaN(t) ? false : t >= since;
+    });
+  }, [members, since]);
+
   const grouped = useMemo(() => {
     const cols: MemberSummary[][] = [[], [], [], []];
-    for (const m of members ?? []) cols[columnOf(m)].push(m);
+    for (const m of scoped) cols[columnOf(m)].push(m);
     return cols;
-  }, [members]);
+  }, [scoped]);
 
   // 看板内容（工单/团队/资源 + 详情 Modal）：独立页与阿黎值守页「任务」
   // 页签共用（总管方案 D8：任务台是阿黎能力的展示面，不是另一个应用）。
@@ -331,11 +355,26 @@ export function MissionBoardView({ embedded = false }: { embedded?: boolean } = 
               <LoadError what="工单列表" text={error ?? ""} onRetry={() => void refreshMembers()} />
             ) : members.length === 0 ? (
               <EmptyState variant="plain" title="还没有成员工单" />
+            ) : since != null && scoped.length === 0 ? (
+              <EmptyState
+                variant="plain"
+                title="本批还没有派出工单"
+                description={`这里只显示本批需求开工之后的工单；此前还有 ${members.length} 单历史记录。`}
+              />
             ) : embedded ? (
               /* 值守页「任务」页签的窄容器：四列看板塞进来每列只剩两指宽、
                  大半列还是「空」占位（2026-10-25 用户实测「排版差得要命」）。
                  嵌入态改**按状态分组的紧凑列表**：只显示非空组，一行一单。 */
               <div className="flex flex-col gap-5">
+                {/* 四组全空时此前渲染成一片空白（每组都 `? null`），
+                    用户看不出「是没数据还是坏了」。 */}
+                {grouped.every((g) => g.length === 0) && (
+                  <EmptyState
+                    variant="plain"
+                    title="四个状态组都是空的"
+                    description="任务派出去后会出现在这里。"
+                  />
+                )}
                 {COLUMNS.map((col, i) =>
                   grouped[i].length === 0 ? null : (
                     <section key={col.key} aria-label={col.title}>

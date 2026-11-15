@@ -91,7 +91,17 @@ code ::selection,
 }
 :focus-visible {
   box-shadow: var(--shadow-focus-flat);
-  border-radius: var(--radius-sm);
+}
+/* 注意：这里**不要**写 `border-radius`。焦点光晕必须跟随控件自己的形状——
+   2026-10-30 之前强制 `--radius-sm`，圆按钮/胶囊控件一聚焦就被掰成 6px 方角，
+   是"焦点态变形"的唯一成因。 */
+
+/* 占位符：此前只有 3 个局部 CSS 定义 `::placeholder`，其余输入框吃
+   Tailwind 默认的 `currentColor/50%`（浅色主题约 2.2:1）——看起来像禁用态。
+   统一到 `--color-text-faint`（浅色 #6a6a6a / 暗色 #8f8f8f，均 ≥4.5:1）。 */
+::placeholder {
+  color: var(--color-text-faint);
+  opacity: 1;
 }
 /* 输入框：**不加任何焦点环**（2026-10-23）。
    文本输入有插入符作为焦点指示，再套一圈 2px 光晕，在白色输入面上读起来

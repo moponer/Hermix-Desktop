@@ -479,13 +479,15 @@ pub(crate) fn approval_wait_bounds(primary_secs: u64) -> (u64, u64) {
     (primary_secs, net_secs)
 }
 
-/// Max delegation nesting depth, env-overridable. Default 4 when the
-/// env var is absent or unparseable.
+/// Max delegation nesting depth, env-overridable. Default falls back to the
+/// declared safety authority (`sub_agent_safety::MAX_DELEGATE_DEPTH = 2`) —
+/// the two used to drift (执行默认 4，声明权威 2)，代理树按深度指数放大
+/// 请求与费用。确需更深层的场景用 env 显式放大。
 pub(crate) fn resolve_max_delegate_depth() -> u32 {
     env_compat("HERMIX_MAX_DELEGATE_DEPTH", "HERMES_MAX_DELEGATE_DEPTH")
         .and_then(|v| v.parse::<u32>().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(4)
+        .unwrap_or(crate::sub_agent_safety::MAX_DELEGATE_DEPTH)
 }
 
 /// Cap concurrent `delegate_task` calls based on config. Non-delegate

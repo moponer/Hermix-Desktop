@@ -15,6 +15,7 @@
 // 风险 chip 用后端 `meta.riskLevel`; batch 卡改用 `items[].risk`(服务端工具注册表判定),
 // 不再按工具名猜测.
 import { useEffect, useState } from "react";
+import { APPROVAL_RISK_LABEL } from "./approvalRisk";
 import {
   AlertCircle,
   Check,
@@ -53,9 +54,8 @@ function toolIcon(tool: string) {
 
 /** Risk level → 中文标签. 默认 dangerous（防御性 — legacy 老数据无 riskLevel 字段时降级为最高风险）. */
 type Risk = "dangerous" | "caution" | "safe";
-const RISK_LABEL: Record<Risk, string> = {
-  dangerous: "高风险", caution: "中风险", safe: "低风险",
-};
+// 文案与另外三张审批卡共用一份（`approvalRisk.ts`），避免「高风险/高危」两套说法。
+const RISK_LABEL: Record<Risk, string> = APPROVAL_RISK_LABEL;
 
 /** Best-effort file path extraction (与 ApprovalBatchBubble 共享语义).
  *  Many tools store the file path under `path` / `file` / `filePath` / `target`. */

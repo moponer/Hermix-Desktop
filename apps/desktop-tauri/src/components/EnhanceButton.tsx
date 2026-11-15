@@ -110,18 +110,16 @@ export function EnhanceButton({
       onClick={handleClick}
       disabled={!canAct}
       title={title}
-      className="flex items-center gap-1 px-2 py-1 rounded transition-colors text-[length:var(--text-meta)] text-text-muted hover:text-text-primary hover:bg-bg-tertiary disabled:opacity-30 disabled:cursor-not-allowed"
+      className={`composer-chip ${compact ? "composer-chip--compact" : ""} disabled:opacity-30 disabled:cursor-not-allowed`}
     >
       {loading ? (
-        <Loader2 className="icon-sm animate-spin" />
+        <Loader2 className="animate-spin" />
       ) : showingEnhanced ? (
-        <RotateCcw className="icon-sm" />
+        <RotateCcw />
       ) : (
-        <Wand2 className="icon-sm" />
+        <Wand2 />
       )}
-      <span className={compact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}>
-        {showingEnhanced ? "还原" : "增强"}
-      </span>
+      <span>{showingEnhanced ? "还原" : "增强"}</span>
     </button>
   );
 }

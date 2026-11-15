@@ -96,7 +96,28 @@ async fn main() -> Result<(), AgentError> {
             // Promise.all 绑在一起的「团队」页签一起拖死。run_server 挂了的
             // builder，stdio 路径必须逐个对齐——这是同一类坑的第二次。
             .with_resource_patrol();
-        return hermix_server::stdio_session::run_stdio_server(state).await;
+        let result = hermix_server::stdio_session::run_stdio_server(state).await;
+
+        // ── 显式退出（2026-10-29：修「每次重启都被强杀 + 每次都留 panic」）──
+        //
+        // 不能让 `#[tokio::main]` 在 main 返回后 drop runtime 来收尾：
+        //  1) drop 会等阻塞池与分离任务，而 MCP 60s 重试 / relay / 资源巡检 /
+        //     模型目录刷新这些循环从不结束 → 进程卡住不退。桌面外壳等 3s 便
+        //     TerminateProcess，每次重启都跳过 SQLite/WAL 收尾。
+        //  2) drop 期间仍有任务被 poll 并注册定时器 → 退出时必留一份
+        //     `A Tokio 1.x context was found, but it is being shutdown`
+        //     （tokio runtime/time/entry.rs:539），把真问题淹在噪音里。
+        // 收尾（IM 通道停止、日志刷盘）已在 run_stdio_server 内做过，这里直接
+        // 以退出码结束进程，不进 runtime 析构。
+        let code = match &result {
+            Ok(()) => 0,
+            Err(e) => {
+                tracing::error!("stdio: 主循环异常退出: {e}");
+                1
+            }
+        };
+        hermix_telemetry::flush_logs();
+        std::process::exit(code);
     }
 
     let addr: SocketAddr = env_compat("HERMIX_SERVER_ADDR", "HERMES_SERVER_ADDR")

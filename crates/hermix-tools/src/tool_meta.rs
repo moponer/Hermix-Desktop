@@ -306,6 +306,7 @@ pub const DEFAULT_RESIDENT_TOOLS: &[&str] = &[
     "patch",
     "search_files",
     "list_files",
+    "list_dir",
     "edit_file",
     // Binary / multimodal file readers — MUST be resident so the LLM
     // can see them without going through tool_search bridge. Without

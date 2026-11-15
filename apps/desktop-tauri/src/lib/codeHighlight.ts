@@ -59,94 +59,146 @@ if (
   delete refractorWithLanguages.languages.javascript;
 }
 
-// Core languages — registered eagerly at module load so `highlight`
-// works without further setup.
-import python from "refractor/lang/python";
+// Core languages — 首屏图里的常驻语法。
+//
+// 为什么不是全部：这个模块曾经静态引入 66 个语法，`vendor-highlight` 因此
+// 604KB，且所有语法在**模块求值**时就注册（一次几十毫秒的长任务），而真实
+// 会话里 90% 的代码块是 ts/tsx/js/python/rust/bash/json/yaml（见
+// `LANG_LABEL` 与历史会话）。**长尾语法改成按需 import**：第一次遇到才取，
+// 取回来注册并通知订阅者重渲染（见 `subscribeLangLoads`）。
 import typescript from "refractor/lang/typescript";
 import javascript from "refractor/lang/javascript";
 import jsxLang from "refractor/lang/jsx";
 import tsxLang from "refractor/lang/tsx";
+import python from "refractor/lang/python";
 import rust from "refractor/lang/rust";
 import go from "refractor/lang/go";
 import java from "refractor/lang/java";
-import kotlin from "refractor/lang/kotlin";
 import c from "refractor/lang/c";
 import cpp from "refractor/lang/cpp";
 import csharp from "refractor/lang/csharp";
-import ruby from "refractor/lang/ruby";
-import php from "refractor/lang/php";
 import bash from "refractor/lang/bash";
+import powershell from "refractor/lang/powershell";
 import css from "refractor/lang/css";
 import cssExtras from "refractor/lang/css-extras";
-import scss from "refractor/lang/scss";
-import less from "refractor/lang/less";
 import json from "refractor/lang/json";
 import json5 from "refractor/lang/json5";
 import yaml from "refractor/lang/yaml";
 import toml from "refractor/lang/toml";
 import xml from "refractor/lang/markup";
 import sql from "refractor/lang/sql";
-// Extended / niche languages
 import diff from "refractor/lang/diff";
-import docker from "refractor/lang/docker";
 import markdown from "refractor/lang/markdown";
-import powershell from "refractor/lang/powershell";
-import swift from "refractor/lang/swift";
-import lua from "refractor/lang/lua";
-import ini from "refractor/lang/ini";
-import batch from "refractor/lang/batch";
-import makefile from "refractor/lang/makefile";
-import cmake from "refractor/lang/cmake";
-import ignore from "refractor/lang/ignore";
-import properties from "refractor/lang/properties";
-import graphql from "refractor/lang/graphql";
-import nginx from "refractor/lang/nginx";
-import http from "refractor/lang/http";
-import git from "refractor/lang/git";
-import regex from "refractor/lang/regex";
-import rLang from "refractor/lang/r";
-import latex from "refractor/lang/latex";
-import dart from "refractor/lang/dart";
-import scala from "refractor/lang/scala";
-import elixir from "refractor/lang/elixir";
-import haskell from "refractor/lang/haskell";
-import vim from "refractor/lang/vim";
-import zig from "refractor/lang/zig";
-import nim from "refractor/lang/nim";
-import julia from "refractor/lang/julia";
-import solidity from "refractor/lang/solidity";
-import protobuf from "refractor/lang/protobuf";
-import mermaid from "refractor/lang/mermaid";
-import jsonp from "refractor/lang/jsonp";
 import jsExtras from "refractor/lang/js-extras";
 import jsTemplates from "refractor/lang/js-templates";
-import wiki from "refractor/lang/wiki";
-import rest from "refractor/lang/rest";
-import pug from "refractor/lang/pug";
-import handlebars from "refractor/lang/handlebars";
-import asciidoc from "refractor/lang/asciidoc";
-import csv from "refractor/lang/csv";
 
 // `safeRegister` swallows individual failures (missing internal
 // dependency, broken grammar) so one bad language never blocks the
 // rest from installing or breaks the module load.
-safeRegister(python); safeRegister(typescript); safeRegister(javascript);
-safeRegister(jsxLang); safeRegister(tsxLang); safeRegister(rust); safeRegister(go);
-safeRegister(java); safeRegister(kotlin); safeRegister(c); safeRegister(cpp);
-safeRegister(csharp); safeRegister(ruby); safeRegister(php); safeRegister(bash);
-safeRegister(css); safeRegister(cssExtras); safeRegister(scss); safeRegister(less);
+safeRegister(typescript); safeRegister(javascript);
+safeRegister(jsxLang); safeRegister(tsxLang); safeRegister(python);
+safeRegister(rust); safeRegister(go); safeRegister(java);
+safeRegister(c); safeRegister(cpp); safeRegister(csharp);
+safeRegister(bash); safeRegister(powershell);
+safeRegister(css); safeRegister(cssExtras);
 safeRegister(json); safeRegister(json5); safeRegister(yaml); safeRegister(toml);
-safeRegister(xml); safeRegister(sql);
-safeRegister(diff); safeRegister(docker); safeRegister(markdown); safeRegister(powershell);
-safeRegister(swift); safeRegister(lua); safeRegister(ini); safeRegister(batch);
-safeRegister(makefile); safeRegister(cmake); safeRegister(ignore); safeRegister(properties);
-safeRegister(graphql); safeRegister(nginx); safeRegister(http); safeRegister(git);
-safeRegister(regex); safeRegister(rLang); safeRegister(latex); safeRegister(dart);
-safeRegister(scala); safeRegister(elixir); safeRegister(haskell); safeRegister(vim);
-safeRegister(zig); safeRegister(nim); safeRegister(julia); safeRegister(solidity);
-safeRegister(protobuf); safeRegister(mermaid); safeRegister(jsonp); safeRegister(jsExtras);
-safeRegister(jsTemplates); safeRegister(wiki); safeRegister(rest); safeRegister(pug);
-safeRegister(handlebars); safeRegister(asciidoc); safeRegister(csv);
+safeRegister(xml); safeRegister(sql); safeRegister(diff); safeRegister(markdown);
+safeRegister(jsExtras); safeRegister(jsTemplates);
+
+/**
+ * 长尾语法的按需加载表（key = refractor 的 canonical 名，与
+ * `toRefractorLang` 的输出对齐）。只在真的遇到该语言时才发请求。
+ */
+const LAZY_LANGS: Record<string, () => Promise<unknown>> = {
+  kotlin: () => import("refractor/lang/kotlin"),
+  ruby: () => import("refractor/lang/ruby"),
+  php: () => import("refractor/lang/php"),
+  scss: () => import("refractor/lang/scss"),
+  less: () => import("refractor/lang/less"),
+  docker: () => import("refractor/lang/docker"),
+  swift: () => import("refractor/lang/swift"),
+  lua: () => import("refractor/lang/lua"),
+  ini: () => import("refractor/lang/ini"),
+  batch: () => import("refractor/lang/batch"),
+  makefile: () => import("refractor/lang/makefile"),
+  cmake: () => import("refractor/lang/cmake"),
+  ignore: () => import("refractor/lang/ignore"),
+  properties: () => import("refractor/lang/properties"),
+  graphql: () => import("refractor/lang/graphql"),
+  nginx: () => import("refractor/lang/nginx"),
+  http: () => import("refractor/lang/http"),
+  git: () => import("refractor/lang/git"),
+  regex: () => import("refractor/lang/regex"),
+  r: () => import("refractor/lang/r"),
+  latex: () => import("refractor/lang/latex"),
+  dart: () => import("refractor/lang/dart"),
+  scala: () => import("refractor/lang/scala"),
+  elixir: () => import("refractor/lang/elixir"),
+  haskell: () => import("refractor/lang/haskell"),
+  vim: () => import("refractor/lang/vim"),
+  zig: () => import("refractor/lang/zig"),
+  nim: () => import("refractor/lang/nim"),
+  julia: () => import("refractor/lang/julia"),
+  solidity: () => import("refractor/lang/solidity"),
+  protobuf: () => import("refractor/lang/protobuf"),
+  mermaid: () => import("refractor/lang/mermaid"),
+  jsonp: () => import("refractor/lang/jsonp"),
+  wiki: () => import("refractor/lang/wiki"),
+  rest: () => import("refractor/lang/rest"),
+  pug: () => import("refractor/lang/pug"),
+  handlebars: () => import("refractor/lang/handlebars"),
+  asciidoc: () => import("refractor/lang/asciidoc"),
+  csv: () => import("refractor/lang/csv"),
+};
+
+const langListeners = new Set<() => void>();
+let langVersion = 0;
+const loadingLangs = new Set<string>();
+
+/** 订阅"某个语法已加载"（CodeBlock 用它触发一次重渲染，把纯文本升级成高亮）。 */
+export function subscribeLangLoads(fn: () => void): () => void {
+  langListeners.add(fn);
+  return () => {
+    langListeners.delete(fn);
+  };
+}
+
+/** 版本号快照：语法加载完成时 +1，配合 `useSyncExternalStore` 使用。 */
+export function langLoadVersion(): number {
+  return langVersion;
+}
+
+function isLangRegistered(name: string): boolean {
+  const langs = refractorWithLanguages.languages;
+  return !!langs && name in langs;
+}
+
+/**
+ * 需要时异步取回语法并注册；取回后 `langVersion++` 通知订阅者。
+ *
+ * 返回 `false` 表示"本次还高亮不了"（正在加载或没有这个语法的加载器），
+ * 调用方应当先退回纯文本 —— 下次渲染就会拿到高亮的版本。
+ */
+function ensureLang(name: string): boolean {
+  if (isLangRegistered(name)) return true;
+  const loader = LAZY_LANGS[name];
+  if (!loader) return false;
+  if (!loadingLangs.has(name)) {
+    loadingLangs.add(name);
+    void loader()
+      .then((mod) => {
+        // refractor/lang/* 是 CJS：默认导出即语法对象
+        const grammar = (mod as { default?: unknown }).default ?? mod;
+        safeRegister(grammar as Parameters<typeof register>[0]);
+        langVersion += 1;
+        langListeners.forEach((fn) => fn());
+      })
+      .catch(() => {
+        /* 语法包缺失/损坏：保持纯文本，下次不再重试同一语言 */
+      });
+  }
+  return false;
+}
 
 // Language alias map: LLM-produced tags (e.g. `html`, `vue`, `sh`)
 // → the refractor-registered name. Keep in sync with the imports
@@ -339,6 +391,9 @@ export function highlightToReact(
 
   const refractorLang = toRefractorLang(language);
   if (!refractorLang) return source;
+  // 长尾语法还没取回来（见 LAZY_LANGS）：先出纯文本，加载完成后
+  // `subscribeLangLoads` 的订阅者会重渲染，把这一块升级成高亮。
+  if (!ensureLang(refractorLang)) return source;
 
   try {
     const result = highlight(source, refractorLang);

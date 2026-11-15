@@ -99,6 +99,10 @@ pub const BLOCKED_TOOLS_FOR_SUBAGENT: &[&str] = &[
     "send_message",
     "cronjob",
     "terminal",
+    // 与 terminal 同一条安全边界的补口：本地解释器执行就是"运行任意命令"
+    // 的另一条路（python -c 能做到 powershell -Command 的一切）。只堵
+    // terminal 不堵它，General 角色的子代理照样能无监督执行。
+    "code_execution",
 ];
 
 /// Maximum delegate depth. The parent is depth 0, a direct

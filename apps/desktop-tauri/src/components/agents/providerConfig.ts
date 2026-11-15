@@ -54,7 +54,7 @@ export interface ProviderConfig {
  * fetch. On any failure returns the user's stored values (may be empty).
  *
  * Stdio transport: backend calls go through `fetchJSON` (which is the
- * `invoke("backend_http_request")` chokepoint). The local-backend
+ * `invoke(IPC.backendHttpRequest)` chokepoint). The local-backend
  * auto-detect path used to compare the user-supplied `apiUrl` against
  * the old `API_BASE` sentinel ("http://127.0.0.1:3000"); that sentinel
  * is gone now, so the comparison drops — anything the user explicitly

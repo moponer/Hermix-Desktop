@@ -29,6 +29,7 @@ mod dispatch_policy;
 mod messages;
 mod prefetch_adapter;
 mod reply_fallback;
+mod timeline_limits;
 mod turn_registry;
 use dispatch_policy::relabel_automation_turn;
 use messages::*;
@@ -678,7 +679,7 @@ impl LocalAgentService {
         agent_config.session_id = Some(session_id.to_string());
         // 会话内恒定的"会话起始时间"，供系统提示尾部的 Conversation
         // started 块使用（缓存稳定性：每 turn 变化会打碎 provider 前缀缓存）。
-        agent_config.session_started_at = Some(chrono::Local::now().to_rfc3339());
+        agent_config.session_started_at = Some(hermix_core::time::beijing_rfc3339_secs());
 
         //compute the wire-format id of the upcoming assistant
         // message so `ToolCallContext.message_id` can carry it.
@@ -1145,22 +1146,27 @@ impl AgentService for LocalAgentService {
             messages_len = messages.len(),
             "send_message_stream: reached early_persist"
         );
-        if let Err(e) = self
-            .session_persistence
-            .persist_session_with_compression(
-                session_id,
-                &messages,
-                None, // model — not yet resolved; skip for early persist
-                None, // platform — same rationale
-                None, // title — not available yet
-                None, // system_prompt — not available yet
-                None, // parent_session_id — not needed for early persist
-                // workspace / expert_id: leave unchanged on early
-                // persist (COALESCE keeps any createSession binding).
-                None,
-                None,
-                None, // compression — haven't run the agent yet
-            ) {
+        // Same blocking-pool discipline as the pre-run persist above: this is
+        // synchronous SQLite (up to a 2s BUSY retry budget) and must never run
+        // inline on a runtime worker — doing so starves the stream forwarder
+        // and the health probe while several sessions start at once.
+        if let Err(e) = crate::session_persistence::run_blocking(|| {
+            self.session_persistence
+                .persist_session_with_compression(
+                    session_id,
+                    &messages,
+                    None, // model — not yet resolved; skip for early persist
+                    None, // platform — same rationale
+                    None, // title — not available yet
+                    None, // system_prompt — not available yet
+                    None, // parent_session_id — not needed for early persist
+                    // workspace / expert_id: leave unchanged on early
+                    // persist (COALESCE keeps any createSession binding).
+                    None,
+                    None,
+                    None, // compression — haven't run the agent yet
+                )
+        }) {
             tracing::warn!(
                 session_id = %session_id,
                 error = %e,
@@ -1350,20 +1356,26 @@ impl AgentService for LocalAgentService {
                 });
                 {
                     let mut buf = code_exec_timeline_buffer.lock().unwrap();
-                    buf.push(ExecutionTimelineEvent {
-                        event_type: "tool_stdout".to_string(),
-                        tool: Some("code_execution".to_string()),
-                        content: Some(line.to_string()),
-                        arguments: None,
-                        chunk_index: None,
-                        chunk_total: None,
-                        created_at: chrono::Utc::now().to_rfc3339(),
-                        tool_call_id: Some(tool_call_id),
-                        file_path: None,
-                        change_type: None,
-                        file_summary: None,
-                        is_error: None,
-                    });
+                    // 逐行追加 + 按调用封顶：code_execution 一次跑几分钟能把
+                    // 时间线喂到几百 KB（见 timeline_limits 的起因说明）。
+                    timeline_limits::push_stdout_capped(
+                        &mut buf,
+                        ExecutionTimelineEvent {
+                            event_type: "tool_stdout".to_string(),
+                            tool: Some("code_execution".to_string()),
+                            content: Some(line.to_string()),
+                            arguments: None,
+                            chunk_index: None,
+                            chunk_total: None,
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                            tool_call_id: Some(tool_call_id),
+                            file_path: None,
+                            change_type: None,
+                            file_summary: None,
+                            is_error: None,
+                        },
+                        timeline_limits::STDOUT_CAP_PER_CALL,
+                    );
                 }
             },
         ));
@@ -1666,20 +1678,28 @@ impl AgentService for LocalAgentService {
                         // card's collapsible "查看输出" section.
                         {
                             let mut buf = timeline_buffer.lock().unwrap();
-                            buf.push(ExecutionTimelineEvent {
-                                event_type: "tool_stdout".to_string(),
-                                tool: Some(tool_name.to_string()),
-                                content: Some(part.clone()),
-                                arguments: None,
-                                chunk_index: Some((idx + 1) as u64),
-                                chunk_total: Some(total_chunks as u64),
-                                created_at: chrono::Utc::now().to_rfc3339(),
-                                tool_call_id: Some(tool_call_id.to_string()),
-                                file_path: None,
-                                change_type: None,
-                                file_summary: None,
-                                is_error: None,
-                            });
+                            // 按单次调用封顶（见 timeline_limits）：一次 50KB 输出
+                            // 若按 16KB 分片全留，落库就是 4 个事件、几十 KB，且
+                            // 和 tool_complete 的预览重复。这里合并成一个事件并
+                            // 只留头尾。
+                            timeline_limits::push_stdout_capped(
+                                &mut buf,
+                                ExecutionTimelineEvent {
+                                    event_type: "tool_stdout".to_string(),
+                                    tool: Some(tool_name.to_string()),
+                                    content: Some(part.clone()),
+                                    arguments: None,
+                                    chunk_index: Some((idx + 1) as u64),
+                                    chunk_total: Some(total_chunks as u64),
+                                    created_at: chrono::Utc::now().to_rfc3339(),
+                                    tool_call_id: Some(tool_call_id.to_string()),
+                                    file_path: None,
+                                    change_type: None,
+                                    file_summary: None,
+                                    is_error: None,
+                                },
+                                timeline_limits::STDOUT_CAP_PER_CALL,
+                            );
                         }
                         tool_complete_forwarder(StreamChunk {
                             delta: Some(StreamDelta {
@@ -1707,9 +1727,10 @@ impl AgentService for LocalAgentService {
                 //
                 // content 只留 2KB 预览：前端对 tool_complete.content
                 // 的唯一消费是 classifyToolOutcome（clip 120 字符）；
-                // 全量输出已由 tool_stdout 分片投递（卡片"查看输出"读
-                // stdout）。全量内嵌曾让 5MB 输出变成单帧 5MB JSON 过
-                // 桥 + 前端整体 parse，单帧即可冻住 WebView。
+                // 正文由 tool_stdout 承载（卡片"查看输出"读 stdout，且已按
+                // 24K 字符/调用封顶，见 timeline_limits）。全量内嵌曾让 5MB
+                // 输出变成单帧 5MB JSON 过桥 + 前端整体 parse，单帧即可冻住
+                // WebView。
                 let output_preview = {
                     const TOOL_COMPLETE_PREVIEW: usize = 2048;
                     fn truncate_chars(s: &str, max: usize) -> &str {
@@ -1725,7 +1746,11 @@ impl AgentService for LocalAgentService {
                     let t = truncate_chars(output, TOOL_COMPLETE_PREVIEW);
                     if t.len() < output.len() {
                         let mut s = t.to_string();
-                        s.push_str(&format!("\n…（完整输出已按 stdout 分片投递，共 {} 字符）", output.chars().count()));
+                        s.push_str(&format!(
+                            "\n…（完整输出共 {} 字符；时间线只保留头尾 {} 字符，见 timeline_limits）",
+                            output.chars().count(),
+                            timeline_limits::STDOUT_CAP_PER_CALL
+                        ));
                         s
                     } else {
                         output.to_string()

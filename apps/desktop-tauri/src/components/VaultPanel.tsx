@@ -21,7 +21,7 @@ import {
   type VaultEntryMeta,
 } from "../api/vault";
 import { openExternalUrl } from "../desktopBridge";
-import { ConfirmDialog, Modal, PageHeader, SkeletonCard } from "./ui";
+import { ConfirmDialog, EmptyState, Modal, PageHeader, SkeletonCard } from "./ui";
 import {
   buildBlobMap,
   filterEntries,
@@ -365,9 +365,14 @@ export function VaultPanel() {
               ))}
             </div>
           ) : visible.length === 0 ? (
-            <div className="py-8 text-center text-sm text-text-secondary">
-              {entries.length === 0 ? "还没有凭据" : "没有匹配的条目"}
-            </div>
+            entries.length === 0 ? (
+              <EmptyState
+                title="还没有凭据"
+                description="第一次新增后，这里会列出你的站点与账号。"
+              />
+            ) : (
+              <EmptyState title="没有匹配的条目" />
+            )
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-1">
               {visible.map((e) => {

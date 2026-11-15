@@ -214,6 +214,58 @@ impl EffectLog {
         };
         self.record_outcome(&outcome)
     }
+
+    /// 把「拖得太久」的未决 intent 一次性收口成 `stale`。
+    ///
+    /// 崩溃恢复扫描原本只会告警，没有任何路径能消除一条未决记录：实机
+    /// 36 条从 33 → 34 → 36 单调增长，每次启动把这 36 条重打一遍
+    /// （累计 2042 条 WARN），而它们对应的会话早就结束了。超过
+    /// `older_than_secs` 的未决项已经不可能再"接上"（进程、会话、工具中间态
+    /// 全没了），诚实的处置是记账时写明按陈旧收口，而不是永远悬着。
+    pub fn close_stale_unfinished(&self, older_than_secs: i64) -> Result<usize, EffectLogError> {
+        let now = chrono::Utc::now().timestamp();
+        let cutoff = now - older_than_secs;
+        self.with_conn(|conn| {
+            let n = conn.execute(
+                "INSERT INTO tool_outcomes (id, intent_id, status, summary, created_at)
+                 SELECT 'out-stale-' || i.id, i.id, 'stale',
+                        'startup: closed as stale — no outcome was ever recorded',
+                        ?1
+                 FROM tool_intents i
+                 LEFT JOIN tool_outcomes o ON o.intent_id = i.id
+                 WHERE o.intent_id IS NULL AND i.created_at < ?2",
+                rusqlite::params![now, cutoff],
+            )?;
+            Ok(n)
+        })
+    }
+
+    /// 删除超过保留期的效果记录（先删 outcome，再删 intent）。
+    ///
+    /// 这张表只服务于崩溃恢复：`args_json` 存的是**工具入参原文**
+    /// （实机最大单条 46 KB，是 `write_file` 的整篇文件内容），行数近万后
+    /// 文件涨到 13.9 MB 且永不清空。保留 `older_than_secs` 足够覆盖
+    /// 「进程崩溃 → 用户重启 → 看到待裁决」这个窗口。
+    pub fn prune_older_than(&self, older_than_secs: i64) -> Result<usize, EffectLogError> {
+        let cutoff = chrono::Utc::now().timestamp() - older_than_secs;
+        self.with_conn(|conn| {
+            let outcomes = conn.execute(
+                "DELETE FROM tool_outcomes WHERE created_at < ?1",
+                rusqlite::params![cutoff],
+            )?;
+            let intents = conn.execute(
+                "DELETE FROM tool_intents WHERE created_at < ?1",
+                rusqlite::params![cutoff],
+            )?;
+            // intent 被删后，它的 outcome 成了无主行（outcome 的 created_at
+            // 是执行后写入的，可能比 intent 新，上面那刀切不到）。
+            let orphaned = conn.execute(
+                "DELETE FROM tool_outcomes WHERE intent_id NOT IN (SELECT id FROM tool_intents)",
+                [],
+            )?;
+            Ok(outcomes + intents + orphaned)
+        })
+    }
 }
 
 pub fn new_intent_id() -> String {
@@ -273,6 +325,41 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(actions.contains(&RecoveryAction::Replay(idem)));
         assert!(actions.contains(&RecoveryAction::NeedsReview(non_idem)));
+    }
+
+    #[test]
+    fn stale_unfinished_effects_are_closed_not_reported_forever() {
+        let log = log();
+        let mut ancient = intent(false);
+        ancient.created_at = chrono::Utc::now().timestamp() - 10 * 86_400;
+        log.record_intent(&ancient).expect("ancient intent");
+        let fresh = intent(false);
+        log.record_intent(&fresh).expect("fresh intent");
+
+        assert_eq!(log.close_stale_unfinished(86_400).expect("close stale"), 1);
+        let left = log.scan_unfinished().expect("scan");
+        assert_eq!(left.len(), 1, "只有新鲜那条仍待裁决: {left:?}");
+        assert!(matches!(left[0], RecoveryAction::NeedsReview(_)));
+
+        // 幂等：再跑一次没有新的可收口项。
+        assert_eq!(log.close_stale_unfinished(86_400).expect("close again"), 0);
+    }
+
+    #[test]
+    fn prune_older_than_removes_expired_intents_and_outcomes() {
+        let log = log();
+        let mut old = intent(true);
+        old.created_at = chrono::Utc::now().timestamp() - 40 * 86_400;
+        let old_id = old.id.clone();
+        log.record_intent(&old).expect("old intent");
+        log.resolve_intent(&old_id, "ok", "done").expect("old outcome");
+
+        let fresh = intent(true);
+        log.record_intent(&fresh).expect("fresh intent");
+
+        // 只删 30 天以前的：旧的那一对（intent + outcome）消失，新的留下。
+        assert_eq!(log.prune_older_than(30 * 86_400).expect("prune"), 2);
+        assert_eq!(log.scan_unfinished().expect("scan").len(), 1);
     }
 
     #[test]

@@ -1,7 +1,6 @@
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import { PinWindow } from "./PinWindow";
 import { currentWindowLabel } from "./windowRole";
 import { startViewerControl } from "./viewerControl";
 import "./styles.css";
@@ -20,6 +19,17 @@ import "./system-panel.css";
  */
 const isPinWindow = currentWindowLabel().startsWith("pin-");
 
+/**
+ * 钉住浮窗**懒加载**：它 import 的是 `@hermix/preview` 的 barrel，而 barrel
+ * 会带进整条预览栈（PreviewSurface / pdf.js / docx-preview / xlsx）。静态
+ * import 时这条链进首屏图，`index.html` 的 modulepreload 直接把 2.6MB 资源
+ * 预载出来 —— 而浮窗只在用户点「钉住」时才会出现。浏览文件是主窗口的常态，
+ * 不该替它付这份钱。
+ */
+const PinWindow = lazy(() =>
+  import("./PinWindow").then((m) => ({ default: m.PinWindow })),
+);
+
 // AI 自控面：听 MCP 下发的动作 + 定时上报界面状态（只在主窗口开；浮窗是
 // 轻量只读入口，不需要自控面）。
 if (!isPinWindow) {
@@ -27,5 +37,13 @@ if (!isPinWindow) {
 }
 
 createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>{isPinWindow ? <PinWindow /> : <App />}</React.StrictMode>,
+  <React.StrictMode>
+    {isPinWindow ? (
+      <Suspense fallback={null}>
+        <PinWindow />
+      </Suspense>
+    ) : (
+      <App />
+    )}
+  </React.StrictMode>,
 );

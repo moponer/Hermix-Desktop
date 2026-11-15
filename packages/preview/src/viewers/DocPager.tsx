@@ -31,6 +31,12 @@ const ZOOM_STEP = 0.25;
 export const THUMB_WIDTH = 104;
 /** 视口外多远就开始画：一屏的距离足够让滚动不出现白块。 */
 const PRE_RENDER_MARGIN = "800px 0px";
+/**
+ * 画过页缓存上限（LRU）。一张整页 canvas 位图在高清屏上是十几 MB 级
+ * （~1200×1550×dpr²×4B），50 页文档全保留会逼近 GB 级——滚出预渲染范围
+ * 最久的页先淘汰，滚回来重画（重画比爆内存便宜）。
+ */
+const PAINTED_CAP = 12;
 
 /** 一页的原始尺寸（任意单位，只用比例与最大宽算"适应宽度"）。 */
 export interface PageSize {
@@ -42,6 +48,9 @@ export interface PageSize {
  * 进入视口附近才渲染的占位盒子。尺寸先占好，内容后到——滚到哪画到哪。
  * 缩略图侧栏里也用它：侧栏自己的滚动会让"被祖先裁剪后的可见区域"变化，
  * 所以 root 用默认的视口就够（IntersectionObserver 会算上祖先的裁剪）。
+ *
+ * 双向切换（进出都响应）：滚走的缩略图卸载位图，滚回来重画——几百页的
+ * 文档不该为侧栏留住几百张缩略图位图。
  */
 export function NearSlot({
   width,
@@ -60,7 +69,12 @@ export function NearSlot({
     if (!el) return;
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries.some((e) => e.isIntersecting)) setNear(true);
+        for (const e of entries) {
+          if (e.target === el) {
+            setNear(e.isIntersecting);
+            break;
+          }
+        }
       },
       { rootMargin: "200px 0px" },
     );
@@ -102,8 +116,12 @@ export function DocPager({
   const [scale, setScale] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [thumbsOpen, setThumbsOpen] = useState(false);
-  /** 已进入过预渲染范围的页（只增不减：画过的页滚回来不重画）。 */
+  /** 当前画着位图的页（镜像 paintedOrder；LRU 淘汰由 observer 回调维护）。 */
   const [painted, setPainted] = useState<ReadonlySet<number>>(() => new Set());
+  /** 画过页的 LRU 顺序（队首最旧）。真相源在这，painted 是渲染镜像。 */
+  const paintedOrder = useRef<number[]>([]);
+  /** 还在预渲染范围内的页（进出都记）：淘汰时跳过它们，正在看的页不被清。 */
+  const nearPages = useRef<Set<number>>(new Set());
   const thumbsInit = useRef(false);
   const anchorRef = useRef<PageAnchor | null>(null);
   const thumbEls = useRef<Array<HTMLButtonElement | null>>([]);
@@ -120,6 +138,8 @@ export function DocPager({
   // 换文档（sizes 换了新数组）：已画页集合与缩放/旋转回到初始，
   // 别让上一份文件的状态漏过来（同一份文档缩放时 sizes 不变）。
   useEffect(() => {
+    paintedOrder.current = [];
+    nearPages.current = new Set();
     setPainted(new Set());
     setScale(1);
     setRotation(0);
@@ -143,24 +163,36 @@ export function DocPager({
     if (stageWidth >= 520) setThumbsOpen(true);
   }, [stageWidth]);
 
-  // 惰性渲染：一个 observer 管所有页，进过视野就永久算"画过"。
+  // 惰性渲染 + LRU：一个 observer 管所有页。进预渲染范围 → 画（记入 LRU）；
+  // 超过 PAINTED_CAP 时淘汰"离开范围最久"的页（正被看到的页不淘汰）。
   useEffect(() => {
     if (!stageEl) return;
     const io = new IntersectionObserver(
       (entries) => {
-        const add: number[] = [];
         for (const e of entries) {
-          if (!e.isIntersecting) continue;
           const n = Number((e.target as HTMLElement).dataset.page);
-          if (n > 0) add.push(n);
+          if (n <= 0) continue;
+          if (e.isIntersecting) nearPages.current.add(n);
+          else nearPages.current.delete(n);
         }
-        if (add.length === 0) return;
-        setPainted((prev) => {
-          if (add.every((n) => prev.has(n))) return prev;
-          const next = new Set(prev);
-          for (const n of add) next.add(n);
-          return next;
-        });
+        const entered: number[] = [];
+        for (const e of entries) {
+          const n = Number((e.target as HTMLElement).dataset.page);
+          if (e.isIntersecting && n > 0) entered.push(n);
+        }
+        if (entered.length === 0) return;
+        const order = paintedOrder.current;
+        for (const n of entered) {
+          const idx = order.indexOf(n);
+          if (idx >= 0) order.splice(idx, 1);
+          order.push(n);
+        }
+        while (order.length > PAINTED_CAP) {
+          const victim = order.findIndex((n) => !nearPages.current.has(n));
+          if (victim < 0) break;
+          order.splice(victim, 1);
+        }
+        setPainted(new Set(order));
       },
       { root: stageEl, rootMargin: PRE_RENDER_MARGIN },
     );

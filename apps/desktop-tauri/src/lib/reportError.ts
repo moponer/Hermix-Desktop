@@ -1,5 +1,5 @@
+import { IPC } from "../ipc/commands";
 import { invoke } from "../ipc";
-
 /**
  * 上报一条前端错误。
  *
@@ -28,7 +28,7 @@ export function reportError(scope: string, err: unknown): void {
   console.warn(`[${scope}] ${message}`);
 
   try {
-    void invoke("report_frontend_error", { scope, message }).catch(() => {
+    void invoke(IPC.reportFrontendError, { scope, message }).catch(() => {
       // 上报本身失败不再制造新错误。
     });
   } catch {

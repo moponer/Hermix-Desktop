@@ -154,14 +154,37 @@
   border: 2px dashed color-mix(in srgb, var(--color-chip-workspace-fg) 55%, transparent);
 }
 
-/* 发送钮两态。inverse-surface / bg-composer 这对组合只在发送钮上出现，
-   且 Tailwind 未为 inverse-* 生成原子类（全仓 0 处使用），所以这里显式给类。
-   待发态用卡面色而非 quaternary：发送钮站在底栏托盘（quaternary）上，
-   同色会让这颗按钮整个消失。 */
+/* 发送钮两态（2026-11-07 随 Composer 单面重构更新）。inverse-surface
+   这档只在发送钮上出现（Tailwind 未为 inverse-* 生成原子类，全仓 0 处
+   使用），所以这里显式给类。
+   就绪 = inverse-surface 深墨实心 —— 控制条上唯一的实心元素，主行动靠
+   位置（右下角）+ 唯一实底表达，不用强调色（结构件不是 CTA）。
+   空闲 = 透明底 + 淡墨图标 —— 没有内容时不假装是一颗按钮，hover 才显面。 */
+.send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border: 0;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  margin-left: 2px;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
+}
 .send-btn--ready { background: var(--color-inverse-surface); color: var(--color-inverse-on-surface); }
-.send-btn--idle  {
-  background: var(--color-bg-composer, var(--color-bg-quaternary));
+.send-btn--ready:hover { opacity: 0.9; }
+.send-btn--idle {
+  background: transparent;
   color: var(--color-text-faint);
+}
+.send-btn--idle:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
 }
 
 /* 代码块「展开」遮罩：渐变必须收在代码块底色上，是唯一依赖 --color-bg-code

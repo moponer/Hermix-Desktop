@@ -79,6 +79,8 @@ pub fn viewer_state_report(state: Value) {
 /// 这条通道与模式无关 ✓。
 #[tauri::command]
 pub fn viewer_open_path(app: AppHandle, path: String) {
+    // agent 让开文件 = 真实使用：预热实例不再降级退出。
+    crate::webview_host::mark_used();
     let _ = app.emit("viewer-open-file", path);
 }
 
