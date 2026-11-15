@@ -25,9 +25,11 @@
 
 ## 界面截图
 
-| 对话主界面 · 浅色 | 对话主界面 · 深色 | 斜杠命令面板 |
-| :---: | :---: | :---: |
-| ![](docs/prototype/shots/01-chat-light.png) | ![](docs/prototype/shots/02-chat-dark.png) | ![](docs/prototype/shots/03-command-palette.png) |
+| ![](docs/screenshots/home-light.png) | ![](docs/screenshots/twin-dark.png) |
+| :---: | :---: |
+| *对话主界面（浅色）* | *Twin 工作台（深色）* |
+| ![](docs/screenshots/settings-model.png) | ![](docs/screenshots/chat-tools.png) |
+| *模型设置* | *工具执行与审批* |
 
 ## 背景
 
