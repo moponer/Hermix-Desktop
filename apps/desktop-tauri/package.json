@@ -1,5 +1,6 @@
 {
   "name": "hermix-desktop",
+  "description": "本地优先的 Windows 桌面 AI 助手：Rust 后端 + React 前端，经 Tauri v2 打包为便携应用；对话、工具执行、定时自动化与手机伴侣端全部在本机闭环。",
   "private": true,
   "version": "0.1.0",
   "type": "module",

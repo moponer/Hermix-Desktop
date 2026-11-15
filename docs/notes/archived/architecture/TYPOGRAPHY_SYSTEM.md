@@ -1,7 +1,10 @@
 # 字体规范 v1
 
+Archived: 2026-11-15
+已落地进 tokens.css；UI 经 10-23 扁平化、10-27 Notion 风格两轮重设计后，本文仅作令牌层历史参照（AGENTS.md 仍引用其字重/字号约束）。
+
 > 2026-09-28 · 已落地到 `tokens.css` / `themes/dark.css` / `components-helpers.css`
-> 标本屏：[`prototype/index.html`](prototype/index.html) 屏 ⑦ → `shots/07-typography.png`
+> 标本屏：[`prototype/index.html`](../../../prototype/index.html) 屏 ⑦ → `shots/07-typography.png`
 
 ---
 

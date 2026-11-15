@@ -1,4 +1,6 @@
-# 输入框上方的 Token 消耗明细卡片
+# Decision Note: 输入框上方的 Token 消耗明细卡片
+
+Status: implemented — 2026-10-27 落地
 
 ## Decision
 

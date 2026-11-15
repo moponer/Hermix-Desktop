@@ -1,4 +1,6 @@
-# 使用统计口径做真：本地锚点 + 逐调用落库 + 公开价目表
+# Decision Note: 使用统计口径做真：本地锚点 + 逐调用落库 + 公开价目表
+
+Status: implemented — 2026-10-27 落地
 
 ## Decision
 

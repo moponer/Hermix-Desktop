@@ -1,5 +1,8 @@
 # MCPHub Desktop 对照分析：可借鉴点
 
+Archived: 2026-11-15
+对照分析类文档；借鉴项的去留已由后续决策笔记记录，本文存档备查。
+
 > 分析对象：<https://github.com/skrstop/MCPHub-Desktop>（Tauri 2 + Rust + SQLite，
 > clone 于 2026-10-12，`/tmp/mcphub`，584 文件）。它是 samanhappy/mcphub（Web 版 MCP
 > 聚合服务）的桌面端 Rust 重写，自带 Skills 分发、RAG 知识库、嵌入模型管理。

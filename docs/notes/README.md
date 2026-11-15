@@ -5,7 +5,7 @@
 这些是代码和普通文档装不下的内容。
 
 制度抄自 deepseek-ai/deepseek-harness 的 Agent Notes（见
-`docs/DEEPSEEK_HARNESS_BORROWINGS.md`），按本项目规模裁剪。
+`docs/notes/archived/process/DEEPSEEK_HARNESS_BORROWINGS.md`），按本项目规模裁剪。
 
 ## 目录结构与命名
 
