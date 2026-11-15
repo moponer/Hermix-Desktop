@@ -1,3 +1,5 @@
+<div align="center">
+
 # Hermix Desktop
 
 [![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg?style=flat-square)](https://github.com/RichardLitt/standard-readme)
@@ -7,8 +9,11 @@
 
 **Windows x64（MSVC）单平台**，无跨平台目标，无云服务依赖——会话、记忆与文件索引全部落在本机数据目录，删除安装目录即完成卸载。
 
+</div>
+
 ## 目录
 
+- [界面截图](#界面截图)
 - [背景](#背景)
 - [安装](#安装)
 - [用法](#用法)
@@ -17,6 +22,12 @@
 - [发版](#发版)
 - [如何贡献](#如何贡献)
 - [许可证](#许可证)
+
+## 界面截图
+
+| 对话主界面 · 浅色 | 对话主界面 · 深色 | 斜杠命令面板 |
+| :---: | :---: | :---: |
+| ![](docs/prototype/shots/01-chat-light.png) | ![](docs/prototype/shots/02-chat-dark.png) | ![](docs/prototype/shots/03-command-palette.png) |
 
 ## 背景
 
