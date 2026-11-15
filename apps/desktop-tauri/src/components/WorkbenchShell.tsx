@@ -1,0 +1,130 @@
+// 宿主外壳：左画布渲染工作台代码，右对话栏由宿主渲染。
+//
+// 折叠按钮与对话栏都属宿主 chrome —— 工作台代码无权改动或隐藏，
+// 否则工作台能把自己锁死，也能屏蔽掉需要用户知情的操作。
+//
+// 宿主同时是**唯一的能力网关**：iframe 内的代码没有 IPC 入口，只能
+// postMessage 过来，由这里转发给 Rust 网关再把结果发回去。这样「数据和
+// 本机文件怎么被访问」始终是宿主说了算，代码层改不出花来。
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { workbenchEntryUrl, workbenchGateway, type WorkbenchManifest } from "../workbench/api";
+import { WorkbenchChat } from "./WorkbenchChat";
+import { FloatingChat } from "./FloatingChat";
+
+type GatewayMethod = "db.query" | "db.exec" | "fs.read" | "fs.write" | "fs.list";
+
+interface WorkbenchShellProps {
+  manifest: WorkbenchManifest;
+  chatNode: ReactNode;
+  /** 开一条本工作台的新会话（WorkbenchView 实现）。 */
+  onNewSession: () => void;
+  /** 切到本工作台的历史会话。 */
+  onSelectSession: (id: string) => void;
+  /** 当前激活会话 id —— 历史下拉高亮。 */
+  activeSessionId: string | null;
+}
+
+export function WorkbenchShell({ manifest, chatNode, onNewSession, onSelectSession, activeSessionId }: WorkbenchShellProps) {
+  // chatNode 包上工作台专属 chrome（chip + 改动状态条），让右栏一眼区别于主对话。
+  const chat = <WorkbenchChat manifest={manifest} chatNode={chatNode} />;
+  const [entryUrl, setEntryUrl] = useState<string | null>(null);
+  // 画布没有构建步骤，重载就是热更新：key 变化强制重建 iframe 元素。
+  const [reloadToken, setReloadToken] = useState(0);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    let alive = true;
+    workbenchEntryUrl(manifest.id)
+      .then((url) => {
+        if (alive) setEntryUrl(url);
+      })
+      .catch(() => {
+        if (alive) setEntryUrl(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [manifest.id]);
+
+  // agent 改完代码后宿主发事件，这里收到就重建画布。
+  useEffect(() => {
+    const un = listen<string>("workbench://changed", (e) => {
+      if (e.payload === manifest.id) setReloadToken((t) => t + 1);
+    });
+    return () => {
+      void un.then((fn) => fn());
+    };
+  }, [manifest.id]);
+
+  // 画布底色由父容器承担（workbench.css 的 .wb-canvas 铺 --color-bg-base）。
+  // iframe 文档的 html 背景由工作台 SDK（wb-sdk.js）设为透明 —— 它跑在
+  // iframe 自己的文档里，是唯一真正生效的通道：宿主读不到 iframe 的 DOM
+  // （asset:// 跨源，contentDocument 恒为 null），此前宿主侧那段
+  // contentDocument 兜底从来没生效过。
+
+  useEffect(() => {
+    const onMessage = async (e: MessageEvent) => {
+      const d = e.data as
+        | { source?: string; type?: string; id?: number; method?: string; params?: Record<string, unknown> }
+        | undefined;
+      if (!d || d.source !== "hermix-workbench" || d.type !== "request") return;
+      // 只认自己画布里来的请求，别的窗口发同名消息一概不理。
+      if (e.source !== frameRef.current?.contentWindow) return;
+      const target = frameRef.current?.contentWindow;
+      if (!target || d.id === undefined || !d.method) return;
+      try {
+        const result = await workbenchGateway(
+          manifest.id,
+          d.method as GatewayMethod,
+          d.params ?? {},
+        );
+        target.postMessage(
+          { source: "hermix-host", type: "response", id: d.id, ok: true, result },
+          "*",
+        );
+      } catch (err) {
+        target.postMessage(
+          {
+            source: "hermix-host",
+            type: "response",
+            id: d.id,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          },
+          "*",
+        );
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [manifest.id]);
+
+  return (
+    <div className="wb-shell">
+      <div className="wb-canvas">
+        {entryUrl ? (
+          <iframe
+            key={reloadToken}
+            ref={frameRef}
+            className="wb-frame"
+            src={entryUrl}
+            title={manifest.name}
+          />
+        ) : (
+          <div className="wb-canvas-empty">工作台入口未就绪</div>
+        )}
+      </div>
+      {/* 对话改成悬浮体：收起是一个可拖的球，展开是一扇可拖可缩的浮窗。
+          画布因此拿到 100% 宽度 —— 固定右栏曾永久切掉它三分之一。 */}
+      <FloatingChat
+        manifestId={manifest.id}
+        manifestName={manifest.name}
+        chatNode={chat}
+        onNewSession={onNewSession}
+        onSelectSession={onSelectSession}
+        activeSessionId={activeSessionId}
+      />
+    </div>
+  );
+}

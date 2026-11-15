@@ -1,0 +1,24 @@
+[package]
+name = "hermix-voice"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "L3 voice bridge: HTTP-friendly STT/TTS endpoints over hermix-tools voice_mode + tts_streaming"
+
+[dependencies]
+hermix-core = { workspace = true }
+hermix-tools = { workspace = true }
+hermix-config = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+futures = { workspace = true }

@@ -1,0 +1,182 @@
+// localStorage compatibility shim for the hermes → hermix rename.
+// On read: try the new `hermix.*` key first, then fall back to the
+// legacy `hermes.*` key so users on a pre-rename install don't lose
+// their settings. On write: write only to the new key — the legacy
+// key is left in place until the explicit `removeLegacy` form.
+//
+// `STORAGE_KEYS` is the only canonical source for these strings; the
+// rest of the codebase must import from here (not use literals) so a
+// future rebrand touches one file.
+
+const LEGACY_PREFIX = "hermes";
+const CURRENT_PREFIX = "hermix";
+
+// Strips the leading `hermix.` / `hermes.` prefix; returns the bare
+// suffix like `desktop.theme`.
+function bareKey(fullKey: string): string {
+  if (fullKey.startsWith(`${CURRENT_PREFIX}.`)) {
+    return fullKey.slice(CURRENT_PREFIX.length + 1);
+  }
+  if (fullKey.startsWith(`${LEGACY_PREFIX}.`)) {
+    return fullKey.slice(LEGACY_PREFIX.length + 1);
+  }
+  return fullKey;
+}
+
+function newKey(bare: string): string {
+  return `${CURRENT_PREFIX}.${bare}`;
+}
+
+function legacyKey(bare: string): string {
+  return `${LEGACY_PREFIX}.${bare}`;
+}
+
+export const storage = {
+  // Reads `hermix.<key>` then falls back to `hermes.<key>`. Returns
+  // null when neither exists (matches `localStorage.getItem`).
+  getItem(fullKey: string): string | null {
+    const bare = bareKey(fullKey);
+    const v = window.localStorage.getItem(newKey(bare));
+    if (v !== null) return v;
+    return window.localStorage.getItem(legacyKey(bare));
+  },
+
+  // Writes only to `hermix.<key>`; the legacy `hermes.<key>` is NOT
+  // deleted automatically — use `removeLegacy` for the explicit form.
+  setItem(fullKey: string, value: string): void {
+    const bare = bareKey(fullKey);
+    window.localStorage.setItem(newKey(bare), value);
+  },
+
+  // Removes `hermix.<key>` (the user-clears-a-setting path).
+  // Use `removeLegacy` to delete the old `hermes.<key>` instead.
+  removeItem(fullKey: string): void {
+    const bare = bareKey(fullKey);
+    window.localStorage.removeItem(newKey(bare));
+  },
+
+  // Removes the legacy `hermes.<key>` entry. Safe to call when the
+  // legacy key doesn't exist; used after migrate-on-boot confirms
+  // the value has been copied forward.
+  removeLegacy(fullKey: string): void {
+    const bare = bareKey(fullKey);
+    window.localStorage.removeItem(legacyKey(bare));
+  },
+
+  // One-shot migration: for each full `hermix.*` key, copy the
+  // legacy `hermes.*` value forward when the new key is missing.
+  // Run once on startup (gated by `hermix.compat.migrated` so it
+  // runs at most once per browser profile).
+  //
+  // Set `hermix.compat.debug=1` (or run a dev build) to log every
+  // visited key and flag conflicts where both namespaces hold data.
+  // On conflict we keep the current `hermix.*` value (conservative —
+  // never silently overwrite user data).
+  migrateLegacyKeys(keys: readonly string[]): void {
+    if (typeof window === "undefined") return;
+    const debug =
+      window.localStorage.getItem(`${CURRENT_PREFIX}.compat.debug`) === "1" ||
+      (typeof import.meta !== "undefined" &&
+        (import.meta as { env?: { DEV?: boolean } }).env?.DEV === true);
+    if (window.localStorage.getItem(`${CURRENT_PREFIX}.compat.migrated`) === "1") {
+      return;
+    }
+    for (const fullKey of keys) {
+      const bare = bareKey(fullKey);
+      const lk = legacyKey(bare);
+      const nk = newKey(bare);
+      const legacyVal = window.localStorage.getItem(lk);
+      const currentVal = window.localStorage.getItem(nk);
+      if (legacyVal === null) continue;
+      if (currentVal !== null) {
+        // Both namespaces hold data — keep the current `hermix.*`
+        // value, leave the legacy key in place (never silently
+        // overwrite). Surface it when debug is on.
+        if (debug) {
+          console.info(
+            `[storageCompat] conflict on "${bare}": keeping hermix value, legacy hermes value ignored. ` +
+              `set hermix.compat.debug=0 or clear hermes.${bare} to silence.`,
+          );
+        }
+        continue;
+      }
+      if (debug) {
+        console.info(`[storageCompat] migrating hermes.${bare} → hermix.${bare}`);
+      }
+      window.localStorage.setItem(nk, legacyVal);
+    }
+    window.localStorage.setItem(`${CURRENT_PREFIX}.compat.migrated`, "1");
+  },
+};
+
+// Canonical list of localStorage keys used by desktop-tauri. Add new
+// keys here; reference them as `STORAGE_KEYS.<name>` from the hook
+// or component that needs them.
+export const STORAGE_KEYS = {
+  theme: "hermix.desktop.theme",
+  /** L1（2026-10-01）：用户自选强调色（CSS 十六进制）。空/缺 = 跟随主题。 */
+  accentColor: "hermix.desktop.accent_color",
+  sidebarWidth: "hermix.desktop.sidebar.width",
+  rightWidth: "hermix.desktop.right.width",
+  rightOpen: "hermix.desktop.right.open",
+  activeSession: "hermix.desktop.active_session_id",
+  agents: "hermix-agents",
+  recentExperts: "hermix.desktop.recent_experts",
+  permissionLevel: "hermix.desktop.permission_level",
+  domainMode: "hermix.desktop.domain_mode",
+  /** L3.8：发送快捷键。`enter` = Enter 发送 / Shift+Enter 换行；`ctrl_enter` 反之。 */
+  sendKey: "hermix.desktop.send_key",
+  /** L3.4：明暗三选的第三态「跟随系统」。缺 = 不跟随（即用户显式选了某主题）。 */
+  followSystemTheme: "hermix.desktop.follow_system_theme",
+  /** L4：回复完成时弹桌面通知。"1" = 开；缺 = 关（默认不发）。 */
+  notifyOnComplete: "hermix.desktop.notify_on_complete",
+  /** 运行会话时保持电脑唤醒。"true" = 开；缺 = 关。自动化页的开关写入。 */
+  keepAwake: "hermix.desktop.keep_awake",
+  modelConfig: "hermix.desktop.model_config",
+  modelCache: "hermix.desktop.model_cache",
+  workspaceRoot: "hermix.desktop.workspace_root",
+  workspaces: "hermix.desktop.workspaces",
+  // Welcome-state draft selections — chosen before a session exists,
+  // migrated to per-session storage on first send.
+  draftExpertId: "hermix.desktop.draft.expertId",
+  draftWorkspace: "hermix.desktop.draft.workspace",
+  mcpServers: "hermix.mcp.servers",
+  // Agents view generate-flow: backend URL + key (per-user override).
+  agentsServerUrl: "hermix.agents.server_url",
+  agentsApiKey: "hermix.agents.api_key",
+  advancedConfig: "hermix.desktop.advanced_config",
+  pythonOverride: "hermix.python.override",
+  // Sidebar: 置顶 / 归档（按 scope 分 key,避免一类对象的 ID 影响另一类）。
+  pinnedSessions:    "hermix.desktop.pinned.sessions",
+  pinnedWorkspaces:  "hermix.desktop.pinned.workspaces",
+  archivedSessions:  "hermix.desktop.archived.sessions",
+  archivedWorkspaces:"hermix.desktop.archived.workspaces",
+  // 本地用户档案（无登录体系，纯本机可编辑）：{displayName, avatarDataUrl, handle}
+  userProfile: "hermix.user.profile",
+  // 系统截图偏好：{enabled, hotkey}。启动时回放给 screenshot_apply_config，
+  // 未存储时 Rust setup 的默认 Alt+Q 继续生效。
+  screenshotConfig: "hermix.config.screenshot",
+  // 消息赞/踩（本地缓存）。后端无 vote 端点（2026-10-18 审查确认保留为
+  // 本地功能），此处登记 key 以守「canonical source」约定。
+  messageVotes: "hermix.messageVotes",
+  /** 阿黎的任务面板队列（待拉取的需求，顺序 = 优先级）。见 lib/twinQueue.ts。 */
+  twinQueue: "hermix.desktop.twin_queue",
+  /**
+   * 实验开关：巡查发现异常时自动叫她看一眼（她可能自行处理）。
+   * 默认关 —— 这是唯一会让她"自己动手"的开关，成本与后果都由用户显式承担。
+   */
+  twinAutoIntervene: "hermix.desktop.twin_auto_intervene",
+} as const;
+
+export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];
+
+// Flat list of every canonical storage key, derived from `STORAGE_KEYS`.
+// `migrateLegacyKeys` consumes this so any new key added to
+// `STORAGE_KEYS` is automatically included in the hermes → hermix pass —
+// no second hand-maintained list to keep in sync.
+export const KNOWN_KEYS: readonly string[] = Object.values(STORAGE_KEYS);
+
+// Builds the namespaced per-session key, e.g. `hermix.session.<id>.expertId`.
+export function sessionKey(sessionId: string, suffix: string): string {
+  return `${CURRENT_PREFIX}.session.${sessionId}.${suffix}`;
+}

@@ -1,0 +1,1748 @@
+/* ─────────────────────────────────────────────────────────────────────
+   Tool card & approval card styles.
+   Split from components-prose.css (2026-09-29) — CI 红线 2500 行。
+   内容：tool timeline、tool event card、consecutive tool grouping、
+   git diff stats、error hint、approval card、approval action buttons。
+   ─────────────────────────────────────────────────────────────────────
+*/
+/* ── Tool timeline ── */
+.tool-rail { position: relative; padding-left: 16px; }
+.tool-rail::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  bottom: 4px;
+  width: 1.5px;
+  background: var(--color-border-subtle);
+  border-radius: 0.75px;
+}
+.tool-row {
+  position: relative;
+  margin-bottom: 2px;
+  padding: 1px 0;
+}
+.tool-row .rail-dot {
+  position: absolute;
+  left: -16px;
+  top: 9px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-bg-primary);
+  border: 1.5px solid var(--color-text-faint);
+  transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.tool-row.tool-done    .rail-dot { border-color: var(--color-success); }
+.tool-row.tool-error   .rail-dot { border-color: var(--color-error); }
+.tool-row.tool-running .rail-dot {
+  border-color: var(--color-warning);
+  background: var(--color-warning-soft);
+  animation: tool-pulse 1.6s ease-in-out infinite;
+}
+@keyframes tool-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--color-warning-soft); }
+  50%      { box-shadow: 0 0 0 4px transparent; }
+}
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  user-select: none;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  transition: background var(--duration-fast) ease;
+}
+.tool-head:hover { background: var(--color-bg-secondary); }
+.tool-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+/* One-line preview of the call's arguments (e.g. the command line
+   for `terminal`, the path for `read_file`/`write_file`, the URL
+   for `browser`). Renders right after the tool name in a slightly
+   muted monospace so the eye still parses it as "the same row". */
+.tool-args[data-ltr="1"],
+
+/* Inline progress note attached from a `status` event (e.g. "正在处理").
+   Sits next to the running tool's "执行中" badge so the user can see
+   what the LLM is doing mid-flight without spawning a separate row
+   in the timeline — that was the source of the "3 rows per tool call"
+   visual chaos. */
+/* Same hint, used by the inline role=tool message card. Slightly
+   wider allowed because the row is single-line. */
+
+/* ── Tool result panel (collapsible, no header bar) ───────────────
+   折叠面板不保留头部：头部 "(运行中/输出/已中断)" 标签 + 脉冲绿点
+   与行头的状态徽章/spinner 完全重复, 且脉冲绿点视觉上过于刺眼。
+   只保留一个轻量等宽面板, 复制按钮右上角 hover 才显示以减少常驻 chrome。
+   面板的 `data-running` 属性预留状态 hook (当前未用, 留作扩展)。 */
+.tw-msg-output {
+  position: relative;
+  margin-top: 4px;
+  padding: 8px 30px 8px 12px;
+  background: transparent;  /* 与父容器 (chat-assistant) 同底, 不额外"贴"出面板感 */
+  border: 0;
+  border-radius: 5px;
+  max-height: 320px;
+  overflow: auto;
+  /* 字体策略:
+     · ASCII / 标点: Cascadia Code / Consolas (Windows 内置, 真等宽)
+     · CJK: 浏览器会按字符回退到 Cascadia Code 没有的字符, 我们主动
+            放一个 sans-serif 中文 (Microsoft YaHei) 在 cascade 末尾,
+            否则 Windows 默认会回退到 SimSun (宋体, 老式衬线), 与现代
+            UI 风格冲突, 显得老气未打磨.
+     · 末位 monospace 兜底, 确保非 Windows 环境也有等宽 fallback. */
+  font-family: "Cascadia Code", "JetBrains Mono", "Sarasa Mono SC", Consolas, ui-monospace, "Microsoft YaHei", "微软雅黑", monospace;
+  font-size: var(--text-meta);
+  line-height: 1.55;
+  color: var(--color-text-primary);
+  font-variant-ligatures: none;
+  letter-spacing: 0.2px;
+}
+.tw-msg-output[data-empty="true"] {
+  padding: 8px 12px;
+  font-family: var(--font-sans, system-ui);
+}
+.tw-msg-output::-webkit-scrollbar { width: 8px; height: 8px; }
+.tw-msg-output::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-text-faint) 40%, transparent);
+  border-radius: 4px;
+}
+.tw-msg-output::-webkit-scrollbar-track { background: transparent; }
+.tw-msg-output-text {
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  background: transparent;
+}
+.tw-msg-output-empty {
+  display: block;
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  font-style: italic;
+  font-family: var(--font-sans, system-ui);
+}
+/* Copy chip — floats top-right, hidden until the user hovers the
+   panel. We keep it minimal (icon only) so it doesn't compete with
+   the result text for attention. */
+.tw-msg-output-copy {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease, color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.tw-msg-output:hover .tw-msg-output-copy,
+.tw-msg-output-copy:focus-visible {
+  opacity: 1;
+}
+.tw-msg-output-copy[data-copied="true"] {
+  opacity: 1;
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+}
+
+/* ── Legacy `.tool-terminal*` (defence-in-depth) ──────────────
+   Kept so any leftover call site that hasn't migrated to
+   `.tool-output*` still renders something sensible instead of
+   unstyled markup. New code should use `.tool-output`. ──────── */
+@keyframes terminal-dot-pulse {
+  0%, 100% { filter: brightness(0.85); }
+  50%      { filter: brightness(1.15); }
+}
+@keyframes h-caret {
+  0%, 50%   { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+.tool-terminal:hover .tool-terminal-copy,
+
+/* ── Premium tool event card ──────────────────────────────────────
+   WorkBuddy-style compact row per tool, with a click-to-expand
+   terminal block for stdout / output. Each card is a discrete
+   object — bordered, rounded, hover-reactive — so completed tool
+   calls read at a glance instead of melting into the prose.
+
+   Visual contract:
+     · Done   — bordered card, neutral bg, status-tinted icon,
+                left-edge stays neutral (success feels quiet)
+     · Error  — bordered card with a static red left bar, red icon
+     · Running — pulsing accent left bar, accent-tinted bg, icon
+                 tinted, terminal body auto-expanded
+
+   Format:
+     ┌────────────────────────────────────────────────────────┐
+     │ [icon]  已执行命令  cargo build --release  0.4s  ✓ 成功 │
+     ├────────────────────────────────────────────────────────┤
+     │ ● ● ●  输出                                       📋   │
+     │ Compiling hermix v0.1.0                               │
+     │ Finished `release` profile...                         │
+     └────────────────────────────────────────────────────────┘
+   ─────────────────────────────────────────────────────────── */
+.tw-msg {
+  margin: 2px 0;
+  border-radius: var(--radius-md);
+  border: 0;
+  background: transparent;
+  transition: none;
+  overflow: visible;
+  padding-left: 0;
+}
+.tw-msg:hover { border: 0; box-shadow: none; background: transparent; }
+.tw-msg--run,
+.tw-msg--err,
+.tw-msg--ok { border: 0; background: transparent; position: static; }
+
+/* ── Consecutive tool calls (same agent): visually grouped ───────
+   .msg-stream > * + * 的全局 12px 间距会让同一 agent 连续调用工具时
+   看起来松散 (12 + 3+3 = 18px)。同一 agent 内的连续 tool call 紧贴 4px,
+   不同来源 (user → assistant → tool) 仍走 12px。 */
+.tw-msg + .tw-msg {
+  margin-top: 4px;
+}
+
+/* Status bar on the left edge — pulses for running, static for
+   error. Done state has no bar (success stays quiet). */
+/* Header row — compact single-line, 30px min-height. */
+.tw-msg-row {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  line-height: 1.4;
+  cursor: pointer;
+  min-height: 0;
+  border-radius: var(--radius-md);
+  transition: color var(--duration-fast) ease;
+  color: var(--color-text-secondary);
+}
+.tw-msg-row:hover,
+.tw-msg-row[data-open="true"],
+.tw-msg-row:focus-visible {
+  /* v7 层次: hover/focus 高亮 (与 components.css 同名规则同步) */
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.tw-msg-row:focus-visible { outline: none; }
+.tw-msg-row[data-open="true"] + .tw-msg-body {
+  background: transparent;
+  border-top: none;
+}
+
+/* ── Colored icon tile — matches FileTypeIcon style
+   Small rounded square with a brand-colored background, white icon.
+   Replaces the old plain outline icon (`.tw-msg-icon`). The tile
+   colour comes from the inline `style={{background: cat.bg}}` set
+   by `classifyTool` in the React component. */
+.tw-msg-icon-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 0;
+  flex-shrink: 0;
+  margin-right: 6px;
+  box-shadow: none;
+  background: transparent !important;
+}
+.tw-msg-icon-svg {
+  color: inherit !important;
+  display: block;
+}
+
+/* ── Result peek — one-line summary shown between primary arg and
+   status. Muted monospace, truncated with ellipsis on narrow rows.
+   Only shown for completed tools that produced output. Error
+   results use the tw-msg-err-hint block instead (below). */
+.tw-msg-result-peek {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  min-width: 0;
+  flex-shrink: 10;
+  margin-left: 5px;
+  padding-left: 5px;
+}
+
+/* Icon — plain outline glyph, no coloured chip, no background.
+   Colour comes from the row's `data-state` (running/ok/error).
+   Kept for backward compatibility with non-tool icon usage. */
+.tw-msg-row:hover .tw-msg-verb,
+.tw-msg-row:focus-visible .tw-msg-verb,
+.tw-msg-row:hover .tw-msg-primary,
+.tw-msg-row:focus-visible .tw-msg-primary {
+  color: var(--color-text-primary);
+}
+.tw-msg-row:hover .tw-msg-icon-tile,
+.tw-msg-row:focus-visible .tw-msg-icon-tile {
+  filter: saturate(0.8) brightness(0.8);
+}
+.tw-msg-main {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Inline separator `|` between command and result peek. */
+.tw-msg-sep {
+  color: var(--color-border-secondary);
+  flex-shrink: 0;
+  font-size: var(--text-tiny);
+  user-select: none;
+  margin: 0 2px;
+}
+
+/* Result peek — truncated first line of tool output, muted. */
+.tw-msg-peek {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  min-width: 0;
+  flex-shrink: 10;
+}
+
+.tw-msg-spin {
+  color: var(--color-accent);
+  animation: tw-spin 1s linear infinite;
+}
+@keyframes tw-spin { to { transform: rotate(360deg); } }
+
+/* Verb label (e.g. "已执行命令") — secondary text weight so it
+   reads as a category tag rather than competing with the
+   command itself. */
+.tw-msg-verb {
+  font-size: var(--text-meta);
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  margin-right: 5px;
+  letter-spacing: 0;
+  flex-shrink: 0;
+}
+
+/* Run-count badge for coalesced tool calls (LLM retry loop indicator).
+   Renders as "×3" right after the verb — neutral colour, small font, no
+   background. Loud enough to draw the eye, quiet enough not to fight the
+   primary command on the row. */
+.tw-msg-xn {
+  font-size: var(--text-tiny);
+  font-weight: 500;
+  color: var(--color-text-faint);
+  margin-right: 4px;
+  flex-shrink: 0;
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+}
+
+/* Primary arg — normal weight, regular proportion font (NOT
+   monospace, NOT bold).  Paths render as link-styled spans
+   (--link colour, hover underline) so users see they are
+   clickable.
+   flex: 0 1 auto (而非 flex: 1) 让 primary 保持自然宽度, peek 与
+   `|` 紧跟其后左对齐; primary 仍可按 flex-shrink + text-overflow
+   截断, 但优先级高于 peek (10x)。 */
+.tw-msg-primary {
+  font-size: var(--text-meta);
+  font-weight: 400;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+  font-family: inherit;
+  direction: ltr;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: none;
+  /* 截断长路径/长命令: 主消息工具行紧凑, 完整内容进 ToolGroupCard 折叠详情。
+     max-width 适配主消息宽度 (父 chat-tool-call 通常 ~600px 宽, icon/verb/status
+     大约占 200px, 留给 primary 约 360px). */
+  max-width: min(360px, 50vw);
+}
+.tw-msg-primary--link {
+  color: var(--color-link);
+}
+
+/* Compact chip — e.g. the memory auto-archive marker ("已归档N条" /
+   "整理记忆"). Neutral zinc/gray, never a success/error colour, so it
+   reads as an informational tag and respects the no-blue/purple theme. */
+.tw-msg-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-tiny);
+  font-weight: 500;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: 4px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+}
+.tw-msg-archive-chip {
+  /* distinguished only by a faint accent border; keeps the
+     "整理记忆" action noticeable without shouting */
+  border-color: var(--color-border-strong);
+}
+.tw-msg-primary--link:hover {
+  text-decoration: underline;
+  color: var(--color-link-hover);
+}
+
+/* Inline status note attached to a running tool row (e.g. "正在处理").
+   Renders as muted prose right after the primary arg, so the user
+   sees "已读取 path · 正在处理" on a single line instead of a
+   separate card. */
+
+/* Right-side meta group (duration / stats / state / chevron).
+   `padding-left` keeps the badge from colliding with the
+   truncated command when the row is narrow. */
+.tw-msg-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: 8px;
+  padding-left: 0;
+}
+
+/* Duration shown on the right of the row, before the status badge.
+   Tiny monospace so it aligns with the badge baseline. */
+.tw-msg-dur {
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  color: var(--color-text-faint);
+  /* 等宽纯数字，负字距只影响拉丁字形，不涉及中文，保留。 */
+  letter-spacing: -0.01em;
+}
+
+/* (): thin progress strip rendered under a
+   running tool row. The fill width is set inline from
+   `progressFraction()` in ToolEventCard.tsx; this stylesheet
+   just provides the rail + fill colour so the bar reads as
+   "this tool is in flight" without competing with the spinner
+   icon for attention. Width fills the row's horizontal extent
+   minus the existing 8px inset. */
+.tw-msg-progress {
+  height: 2px;
+  margin: 4px 12px 0;
+  border-radius: 1px;
+  background: var(--color-bg-inset);
+  overflow: hidden;
+}
+
+.tw-msg-progress-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(
+    90deg,
+    var(--color-accent) 0%,
+    var(--color-accent-soft) 100%
+  );
+  /* Soft shimmer so the bar feels "alive" instead of frozen
+     when the underlying interval ticks. Disabled under
+     prefers-reduced-motion for accessibility.
+     2026-10-06 impeccable layout-transition：宽度动画每帧触发布局，
+     改为 scaleX（合成器通道）；进度值由 ToolEventCard 直接内联
+     transform。 */
+  transform-origin: left center;
+  transition: transform 0.6s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tw-msg-progress-fill {
+    transition: none;
+  }
+}
+
+/* Status text — small icon + label, NO background, NO border, NO pill.
+   状态只用图标 + 文字表达, 不渲染原始蓝/红字符: 已完成用 success 绿
+   (非 info 蓝), 失败/中断用 warning 琥珀 (非 error 红), 运行中用
+   accent 品牌色。Color 只作用图标 + 文字, 没有 chip 背景。 */
+.tw-msg-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-tiny);
+  font-weight: 400;
+  line-height: 1;
+  white-space: nowrap;
+  letter-spacing: 0;
+  color: var(--color-text-faint);
+}
+
+/* Status pill — used in the ACUI right panel (ToolEventCard) to
+   surface the run state in a small icon+text chip. 状态用 muted/success/warning
+   色图标 + 文字 (不渲染原始蓝/红字符): 完成→Check+绿, 失败→AlertTriangle+琥珀,
+   运行中→Loader2+accent, 中断→AlertTriangle+琥珀。 */
+.tw-msg-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px 1px 5px;
+  border-radius: 4px;
+  font-size: var(--text-tiny);
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: nowrap;
+  font-family: var(--font-sans, system-ui);
+  /* Subtle, color-only differentiation. No border, no gradient. */
+}
+.tw-msg-run-badge {
+  /* 墨与纸 v4：运行中是状态不是行动，中性化 */
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+}
+.tw-msg-err-badge {
+  /* 错误状态用 warning 琥珀而非 error 红, 避免刺眼。 */
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+.tw-msg-done-badge {
+  /* done 徽章用 success 绿但中性表达"工具执行完毕", 不断言成功:
+     真正的 success/failure 由结果内容决定 (如 exit code 1、错误文本)。 */
+  color: var(--color-success);
+  background: var(--color-success-soft);
+}
+
+/* ── Git-style diff stats (+62 / −3) ─────────────────────────────
+   Shown between the primary arg and the status badge for write /
+   patch / edit tools so the user can see at a glance how much the
+   tool changed. Green = additions, red = deletions, monospace so
+   the +/- sign aligns cleanly across rows. Numbers are NOT bold. */
+.tw-msg-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  font-weight: 400;
+  line-height: 1;
+  margin-right: 2px;
+}
+.tw-msg-stat {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  /* 2026-09-30：这里混排中文（"+62 −3 行"），负字距会粘连。 */
+  letter-spacing: 0;
+  font-weight: 400;
+}
+/* L0（2026-10-01）：diff 增删统计的绿/红原为字面色（暗色 #22c55e/#ef4444，
+   亮色再覆盖成更浓的 #16a34a/#dc2626）。改走语义令牌后跟随主题与强调色；
+   亮色变体用 color-mix 保留"更浓一点"的原意。 */
+.tw-msg-stat--add { color: var(--color-success); }
+.tw-msg-stat--del { color: var(--color-error); }
+
+[data-theme="light"] .tw-msg-stat--add {
+  color: color-mix(in srgb, var(--color-success) 88%, black);
+}
+[data-theme="light"] .tw-msg-stat--del {
+  color: color-mix(in srgb, var(--color-error) 88%, black);
+}
+
+/* Chevron expand — square button, brighter on row hover so the
+   affordance is discoverable but doesn't visually compete at rest. */
+.tw-msg-chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--color-text-faint);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+.tw-msg-row:hover .tw-msg-chev,
+.tw-msg-row:focus-visible .tw-msg-chev {
+  background: transparent;
+  color: var(--color-text-primary);
+}
+
+/* Body (tool result panel) — animated container, no decorative
+   border. The visual separation between the row and the panel
+   below comes from the panel's own subtle background color
+   (`.tw-msg-output` uses `var(--color-bg-secondary)`), not a
+   hairline. Animates in on expand; collapses immediately when
+   hidden (no exit animation — saves layout thrash on the rapid
+   sequence of tool calls during a turn). */
+.tw-msg-body {
+  background: transparent;
+  overflow: hidden;
+  margin: 0 0 0 22px;
+  animation: tw-msg-body-in 180ms var(--ease-out);
+}
+@keyframes tw-msg-body-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Error hint row (inline, auto-collapsible) ───────────────────
+   错误表达 = 浅红底 + 图标，无边框无标题栏。
+   浅红底与外层 tool 行的 data-state="err" 联动，仅靠底色区分。
+   ─────────────────────────────────────────────────────────────── */
+.tw-msg-err-hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 8px;
+  margin: 2px 0 0 0;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-error);
+  font-size: var(--text-tiny);
+  line-height: 1.4;
+  border: 0;  /* 无边框 */
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);  /* 浅红底 */
+  transition: background var(--duration-fast) ease;
+}
+.tw-msg-err-hint:hover {
+  background: color-mix(in srgb, var(--color-error) 16%, transparent);
+}
+.tw-msg-err-hint > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tw-msg-chev-err {
+  color: var(--color-error);
+  opacity: 0.5;
+  transition: opacity var(--duration-fast) ease;
+}
+.tw-msg-err-hint:hover .tw-msg-chev-err {
+  opacity: 1;
+}
+
+/* ── Approval card (role="approval") ──────────────────────────────
+   设计意图：一个真正的「卡片」——中性微妙边框 + 柔和投影撑起立体感，
+   决定状态只用极淡底色晕染 + 彩色状态徽章表达，绝不靠描边或左侧色条。
+   左侧 accent 色条 (.approval-accent) 已移除, 改为纯卡片表达。
+   ─────────────────────────────────────────────────────────────── */
+/* Card surface — a *real* elevated card, not a line-framed box.
+   A neutral subtle border + soft layered shadow give it "card"
+   presence; decision state is shown by a faint tinted wash + the
+   colored status pill, never by painting the card's edges. The old
+   left accent bar (.approval-accent) is gone — state is carried by
+   the tinted wash + status pill instead. */
+/* ================================================================
+   Approval card — redone:
+   * Two-zone layout: risk-tinted title bar (header) + body.
+   * Command text is never truncated — full command shown verbatim
+     with a copy button (legacy `.approval-desc` clipped with ellipsis,
+     which silently hid the dangerous part of long commands).
+   * Countdown removed — safety-net timeout is 24h (`cf739ae`), the
+     user must click; no countdown UI.
+   * Decision pills replaced with single `.approval-result` row
+     (status badge + one-line text) for the resolved state.
+   ================================================================ */
+.approval-card {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+  margin-bottom: 12px;
+  border-radius: var(--radius-lg, 10px);
+  background: var(--color-bg-secondary);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  /* backdrop-filter 不参与 transition（Chromium 上过渡该属性代价极高）
+     2026-10-06 impeccable layout-transition：max-height 过渡移除 ——
+     动画布局属性每帧触发布局。决策后的收合改瞬时（overflow:hidden 裁剪），
+     只保留背景色过渡。 */
+  transition: background-color var(--duration-base, 160ms) ease;
+  /* 两行布局高度: padding 11+11 + 图标 22 + 命令块 head 26 + 命令 pre 28~ */
+  max-height: 320px;
+  padding: 0;
+}
+/* 浅色基线（暖纸）走 liquid glass；暗色族保持上方 .approval-card 实色样式 */
+:root[data-theme="light"] .approval-card {
+  /* Liquid glass — 禁装饰性边框铁律：去掉 border，改用 inset shadow + glass shadow 做边缘 */
+  background: var(--glass-liquid-bg);
+  backdrop-filter: var(--glass-liquid-blur);
+  -webkit-backdrop-filter: var(--glass-liquid-blur);
+  box-shadow:
+    var(--glass-inset-highlight),
+    var(--glass-inset-shadow),
+    var(--glass-shadow);
+}
+/* Inline approval card lives inside .msg-bubble-body (avatar is already
+   offset via the parent's gap:10px). The generic .footer-block
+   margin-left:32px was designed for standalone footer blocks and
+   double-offsets the card, leaving it visibly indented. Flush to the
+   message body edge and stretch to full width. */
+.approval-card.footer-block {
+  margin-left: 0;
+  width: 100%;
+  max-width: 100%;
+}
+.approval-card.is-resolved {
+  max-height: 48px;
+}
+.approval-card.is-done { opacity: 0.92; }
+
+/* ── 标题栏 (approval-head) — 卡片顶部一行"栏" ──
+   工具名 + reason 文字 (LLM 解释的意图). 按"reason 行做标题栏"布局，
+   移除右侧"等待你的决定"状态文本(状态信息由风险色 + 按钮隐性传达).
+   风险时整栏染浅红/浅橙, 满足"层次" + "不分割"双诉求. */
+
+/* Full-card layout (pending state). Wrapper carries an opacity fade so
+   the visible swap is animated, not a flash.
+   2026-10-06 impeccable layout-transition：max-height 塌缩动画移除，
+   收合瞬时完成（外层 .approval-card overflow:hidden 裁剪），只保留淡出。 */
+.approval-full {
+  display: flex;
+  flex-direction: column;
+  max-height: 820px;
+  opacity: 1;
+  transition: opacity 200ms ease;
+}
+.approval-card.is-resolved .approval-full {
+  max-height: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Collapsed one-line summary (resolved state). summary 在 TSX 里随
+   `decided` 条件挂载（挂载时 .is-resolved 已生效），height/opacity/
+   padding 过渡从未真正跑过 —— 死代码，2026-10-06 连同 impeccable
+   layout-transition 告警一并移除。 */
+.approval-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  overflow: hidden;
+}
+
+.approval-summary-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.approval-summary-tool {
+  font-size: var(--text-meta);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+}
+
+.approval-summary-desc {
+  font-size: var(--text-tiny);
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+.approval-summary-sep {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-tiny);
+  flex-shrink: 0;
+}
+
+/* 右侧状态文字 — push to end via margin-left: auto on parent gap,
+   or use flex:1 + text-align right approach. Simpler: status gets ml-auto */
+.approval-summary-status {
+  font-size: var(--text-tiny);
+  color: var(--color-text-tertiary);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+
+
+/* ================================================================
+   Approval card v2 — `.tw-msg` family integration.
+   The card lives inside the existing `.tw-msg` / `.tw-msg-row` /
+   `.tw-msg-body` classes (same treatment as read_file / grep
+   tool events), so this block only adds the bits those classes
+   don't cover: the inline allow/deny buttons in the row,
+   the reason pill, and the full command block in the body.
+   ================================================================ */
+.approval-btn {
+  font-size: var(--text-meta);
+  font-weight: 500;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 120ms ease;
+}
+.approval-btn:hover { opacity: 0.86; }
+
+
+
+
+/* Title bar — risk color tints create clear header/body hierarchy */
+/* Body zone */
+
+/* LLM-supplied rationale — shown above the command so the user
+   reads intent before evidence (the command itself). */
+
+/* Risk tint — 风险色集中在标题栏(.approval-head)上, is-danger 红 /
+   is-warn 橙, reason/命令/按钮不染色. 标题栏是整卡唯一的色层,
+   body 保持中性 — 满足"上面做成标题栏" + "不分割"双诉求.
+   注意主题适配: dark 模式略加深. */
+.approval-card.is-danger .approval-head {
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+}
+.approval-card.is-warn .approval-head {
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+}
+
+
+/* Batch approval card — `kind: "approval_request_batch"` step in the
+   process timeline. Renders one card with a list of sub-actions;
+   the `.tl-approval--leaving` collapse-out keyframe (above) drives
+   the resolved-state fold so the visual contract matches the
+   single-card path. */
+.tl-approval-step--batch .approval-card {
+  /* no accent border — clean flat card */
+}
+.apv-batch-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  border-top: 1px solid color-mix(in srgb, var(--color-text-faint) 18%, transparent);
+  padding-top: 10px;
+}
+.apv-batch-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-meta);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  padding: 5px 0;
+}
+.apv-batch-tool {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+.apv-batch-sep {
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+}
+.apv-batch-intent {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Resolve-then-collapse for inline timeline approval cards. Pinned
+   to the wrapper `<div class="tl-approval-step">` so the collapse
+   takes down the whole card row in the assistant's process timeline,
+   not just the inner `.approval-card` body. Timing: a brief summary
+   beat (~0.6s) gives the user time to read the resolved status,
+   then the wrapper folds to 0 height over 280ms. With `forwards` the
+   card stays in its zero-height state for the rest of the live turn
+   (preventing the ~1s dead-air that an instant unmount would leave
+   until the next LLM event arrives). */
+@keyframes tl-approval-leave {
+  to {
+    max-height: 0;
+    opacity: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-width: 0;
+    overflow: hidden;
+  }
+}
+.tl-approval-step.tl-approval--leaving {
+  animation: tl-approval-leave 280ms cubic-bezier(0.4, 0, 0.2, 1) 600ms forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tl-approval-step.tl-approval--leaving {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+  }
+}
+
+/* Command block — full text, no ellipsis, with copy button */
+
+
+/* Pending state — waiting pulse + buttons */
+.approval-btn-deny,
+.approval-btn-deny:active:not(:disabled),
+.approval-btn-deny:focus-visible,
+
+/* Resolved state — status badge + one-line text */
+
+/* Legacy class shims — kept so any leftover references in the
+   codebase don't error during the migration window; nothing new
+   should reference these. */
+.approval-countdown-pill.is-danger {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+  border-color: transparent;
+  font-weight: 600;
+}
+.approval-countdown-pill.is-danger svg {
+  animation: approval-countdown-pulse 1s ease-in-out infinite;
+}
+@keyframes approval-countdown-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.25); opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .approval-countdown-pill.is-danger svg { animation: none; }
+}
+
+/* Right-side: decision badge or action buttons */
+.approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+/* Decision state text (after user responds) */
+
+/* ── Action buttons (pending state) ──
+   重做：按钮默认就有实色，不依赖 hover。
+   · 拒绝：浅红底 + 红字，hover 加深为实心红
+   · 允许：绿色实色底 + 白字，hover 加深
+   两个按钮同等大小、同等醒目，让"红色按钮"本身作为视觉警示。 */
+.approval-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 30px;
+  min-width: 72px;
+  padding: 0 16px;
+  border-radius: 7px;
+  font-size: var(--text-meta);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  font-family: inherit;
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease,
+    box-shadow 150ms ease;
+}
+.approval-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.approval-btn:focus-visible {
+  outline: 2px solid var(--color-success);
+  outline-offset: 2px;
+}
+.approval-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Deny — soft red wash, always visible */
+
+/* Approve — solid green fill, always visible */
+
+/* ── Decision-state — FLAT, color lives in the pill ──
+   卡片无背景; 决策色走 .approval-summary 系列里的 icon + badge. */
+.approval-card--ok,
+.approval-card--deny,
+
+/* ── Resolved footer text — spacing only, NO divider line ──
+   The old 1px dashed border-top read as a "stitched box". The card's
+   own surface + the gap above the footer are enough separation. */
+
+/* ── Thinking dots (processing gap) ───────────────────────────────
+   Three animated dots with staggered delay. Inline flow, sits at
+   the bottom of the current assistant message as a "still working"
+   hint. ─────────────────────────────────────────────────────────── */
+.tdots {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 0;
+}
+.tdots-label {
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  margin-right: 2px;
+}
+.tdots-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-text-faint);
+  /* 命名曾是 tdots-bounce —— 实际是 scale+opacity 脉冲，没有位移弹跳。
+     impeccable bounce-easing 按命名匹配，2026-10-06 改名 pulse 正名。 */
+  animation: tdots-pulse 1.4s ease-in-out infinite;
+}
+@keyframes tdots-pulse {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
+  40%           { transform: scale(1);   opacity: 1; }
+}
+
+/* ── Old tool message classes (legacy, kept for backward compat) ── */
+@keyframes tool-row-pulse-bar {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+/* ── Status note (chip) ── */
+
+/* ════════════════════════════════════════════════════════════════════
+   审批卡 — 严格两行布局 (原布局层级过多 → 砍层级)
+   第 1 行: 信息 + 决策 — 工具图标/名 + 意图摘要(左对齐),
+            拒绝 / 允许 按钮(最右侧)
+   第 2 行: 命令块 — 标题栏"将执行"+ 复制按钮 + 命令文本
+   风险等级通过工具图标染色隐式传达 (高危红 / 中危橙 / 低危默认),
+   不再单独显示徽章, 砍掉旧的头部 / 主体 / 底部三层, 砍掉意图
+   callout 独立块 (意图并入第 1 行).
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 第 1 行: 信息 + 决策 ──────────────────────────────────────── */
+.apv-decision-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 16px;
+}
+.apv-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  /* 允许 intent 长文本收缩截断, 不挤压按钮组 */
+}
+.apv-tool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm, 4px);
+  flex-shrink: 0;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  /* 风险染色: 高危红 / 中危橙, 默认灰 */
+}
+.apv-tool-icon.is-danger {
+  background: var(--color-error-soft);
+  color: var(--color-error);
+}
+.apv-tool-icon.is-warn {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+.apv-tool-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+}
+.apv-sep {
+  color: var(--color-text-faint);
+  font-size: var(--text-meta);
+  flex-shrink: 0;
+  user-select: none;
+}
+.apv-intent-text {
+  font-size: var(--text-meta);
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+  /* 长意图截断避免挤按钮; hover 看全文本 tooltip 由父容器另接 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.apv-deny,
+.apv-allow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 30px;
+  min-width: 64px;
+  padding: 0 14px;
+  border-radius: var(--radius-md, 6px);
+  font-size: var(--text-meta);
+  font-weight: 600;
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--duration-fast, 120ms) ease,
+              border-color var(--duration-fast, 120ms) ease,
+              color var(--duration-fast, 120ms) ease,
+              transform var(--duration-fast, 120ms) ease,
+              box-shadow var(--duration-fast, 120ms) ease;
+}
+.apv-deny:active:not(:disabled),
+.apv-allow:active:not(:disabled) { transform: scale(0.96); }
+.apv-deny:focus-visible,
+.apv-allow:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.apv-deny:disabled,
+.apv-allow:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 拒绝: 描边可见 (非透明灰字), 红字警示, hover 填红 */
+.apv-deny {
+  background: var(--color-bg-primary);
+  border-color: color-mix(in srgb, var(--color-error) 35%, transparent);
+  color: var(--color-error);
+}
+.apv-deny:hover:not(:disabled) {
+  background: var(--color-error);
+  color: var(--color-on-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+
+/* 允许: 近黑主按钮 (设计稿: 主按钮 #1A1A1A 白字) */
+.apv-allow {
+  background: var(--color-btn-primary-bg);
+  border-color: var(--color-btn-primary-bg);
+  color: var(--color-btn-primary-text);
+  box-shadow: var(--shadow-card);
+}
+.apv-allow:hover:not(:disabled) {
+  background: var(--color-btn-primary-hover);
+  border-color: var(--color-btn-primary-hover);
+  box-shadow: var(--shadow-pop);
+}
+
+/* 以后自动允许: 第三档，描边淡，hover 时次主调强调；不带阴影 */
+.apv-always {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--color-btn-primary-bg) 28%, transparent);
+  color: var(--color-btn-primary-bg);
+}
+.apv-always:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-btn-primary-bg) 8%, transparent);
+  border-color: var(--color-btn-primary-bg);
+}
+
+/* ── 第 2 行: 命令块 (仅命令文本, 标题栏/复制已移除) ───────────── */
+.apv-cmd {
+  /* margin-top 拉出与决策行的视觉间距 (替代 border-bottom 贴脸分隔);
+     margin-left/right 14px 跟 .apv-decision-row (padding 11px 14px)
+     的左右内边距对齐 — 同一条隐形垂直线. */
+  margin: 12px 14px 14px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-primary);
+  overflow: hidden;
+}
+.apv-cmd-pre {
+  margin: 0;
+  padding: 11px 14px;
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+}
+
+/* 暗色适配 — 用 dark 主题真定义的 token (--color-border-subtle 等),
+   不依赖未定义的 --color-bg-quaternary */
+
+/* ════════════════════════════════════════════════════════════════════
+   § 19.  APPROVAL BATCH — 现代重设计 (2026-08-30)
+   ──────────────────────────────────────────────────────────────────
+   5 层信息架构: 头(标签+风险+项数) → 动词+目标 → 文件块 → diff 折叠 → 决策区.
+   旧 .apv-decision-row / .apv-info / .apv-btns / .apv-allow / .apv-deny /
+   .apv-always 类保留不动, 供 ApprovalBubble 复用 — ApprovalBubble
+   同步改造留作下轮. 新类用 apv-shell / apv-header / 等前缀. */
+
+.apv-shell {
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ① Header */
+.apv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.apv-header-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.apv-header-label {
+  font-size: var(--text-tiny);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.apv-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+}
+.apv-header-sep { color: var(--color-text-faint); }
+.apv-header-count { font-variant-numeric: tabular-nums; }
+
+/* Risk chip — 复用 ApprovalBubble 既有 .approval-pill 配色哲学 */
+.risk-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: var(--text-micro);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.risk-chip.is-dangerous {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+}
+.risk-chip.is-caution {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+}
+.risk-chip.is-safe {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+
+/* ② Verb row */
+.apv-verb-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 2px 0 2px;
+}
+.apv-verb {
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  /* 中文动词（"读取了 5 个文件"），去掉负字距。 */
+  letter-spacing: 0;
+}
+.apv-target {
+  font-size: var(--text-ui);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+/* ③ File block */
+.apv-file-block {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--color-bg-secondary);
+  border-radius: 7px;
+}
+.apv-file-path {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  color: var(--color-text-primary);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apv-file-stats {
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ④ Diff toggle */
+.apv-diff-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  background: transparent;
+  border: 1px dashed var(--color-border-primary);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: var(--text-meta);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  align-self: flex-start;
+  transition: background var(--duration-fast, 120ms) ease,
+              border-color var(--duration-fast, 120ms) ease,
+              color var(--duration-fast, 120ms) ease;
+}
+.apv-diff-toggle:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-secondary);
+  color: var(--color-text-primary);
+}
+.apv-diff-toggle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.apv-diff-content {
+  padding: 9px 11px;
+  background: var(--color-bg-secondary);
+  border-radius: 6px;
+  animation: apv-diff-enter var(--duration-fast, 120ms) ease-out both;
+}
+.apv-diff-placeholder {
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+  font-style: italic;
+  line-height: 1.55;
+}
+/* .apv-cmd-pre 嵌套在 .apv-diff-content 时由外层容器接管 padding/bg,
+   避免双重 padding + 双背景. */
+.apv-diff-content .apv-cmd-pre {
+  padding: 0;
+  background: transparent;
+}
+/* Batch diff stacking — 每个文件一块, 上方贴个文件头.
+   分割线规则（2026-10-11）：卡片内不留虚线"缝线"——块头 .apv-diff-header
+   的文件名 + 间距已建立层级，虚线读作"缝合的盒子"。 */
+.apv-diff-block + .apv-diff-block {
+  margin-top: 16px;
+}
+.apv-diff-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.apv-diff-file {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  color: var(--color-text-primary);
+}
+.apv-diff-kind {
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+}
+@keyframes apv-diff-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .apv-diff-content { animation: none; }
+}
+
+/* ③½ Steps block — 多步程序（browser_ptc 等）逐步骤展开。
+   批准卡的可读性底线：用户批准前必须看到每一步要干什么。 */
+.apv-steps-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 11px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-primary);
+}
+.apv-step-item {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+.apv-step-index {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-faint);
+}
+.apv-step-op {
+  flex-shrink: 0;
+  font-size: var(--text-tiny);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+/* js 步骤是整个审批里风险最高的载荷，标签用警示色提醒 */
+.apv-step-op.is-js {
+  color: var(--color-error);
+}
+.apv-step-arg {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* 短载荷（js 表达式 / 输入文本）不套折叠壳，直接 pre 全文 */
+.apv-step-payload-pre {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--color-bg-secondary);
+}
+/* 超长载荷：折叠但默认展开（open），summary 只标字符数 */
+.apv-step-detail {
+  flex: 1;
+  min-width: 0;
+}
+.apv-step-detail > summary {
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 4px;
+}
+.apv-step-detail .apv-cmd-pre {
+  padding: 6px 9px;
+  border-radius: 4px;
+  background: var(--color-bg-secondary);
+  max-height: 220px;
+  overflow: auto;
+}
+
+/* ⑤ Actions */
+.apv-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  /* 分割线规则（2026-10-11）：操作条上方不留虚线——间距承担分隔。 */
+  margin-top: 14px;
+}
+.apv-shortcut {
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.apv-shortcut kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  padding: 1px 5px;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  margin-right: 3px;
+}
+.apv-btns {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Buttons — 现代化替换 .apv-allow/.apv-deny/.apv-always;
+   ApprovalBubble 仍用旧类 (下轮再同步改造). */
+.apv-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 30px;
+  min-width: 72px;
+  padding: 0 14px;
+  border-radius: var(--radius-md, 6px);
+  font-size: var(--text-meta);
+  font-weight: 600;
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--duration-fast, 120ms) ease,
+              border-color var(--duration-fast, 120ms) ease,
+              color var(--duration-fast, 120ms) ease,
+              transform var(--duration-fast, 120ms) ease,
+              box-shadow var(--duration-fast, 120ms) ease;
+}
+.apv-btn:active:not(:disabled) { transform: scale(0.96); }
+.apv-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.apv-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.apv-btn-primary {
+  background: var(--color-btn-primary-bg);
+  border-color: var(--color-btn-primary-bg);
+  color: var(--color-btn-primary-text);
+  box-shadow: var(--shadow-card);
+}
+.apv-btn-primary:hover:not(:disabled) {
+  background: var(--color-btn-primary-hover);
+  border-color: var(--color-btn-primary-hover);
+  box-shadow: var(--shadow-pop);
+}
+
+.apv-btn-danger {
+  background: var(--color-bg-primary);
+  border-color: color-mix(in srgb, var(--color-error) 35%, transparent);
+  color: var(--color-error);
+}
+.apv-btn-danger:hover:not(:disabled) {
+  background: var(--color-error);
+  color: var(--color-on-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+
+
+/* ── 从 components.css 迁入（2026-09-29）────────────────────────
+   components.css 是 components-*.css 的陈旧副本，两者曾同时加载且后者
+   胜出，288 个选择器被双定义。以下是仅存在于旧副本里的规则，随该文件
+   一并删除。 */
+/* `.composer` 的 light 玻璃态覆盖已删除（2026-10-27）：light 主题已在
+   同日从 themes/registry 移除（只留 notion / notion-dark），这条
+   `:root[data-theme="light"]` 规则永不命中，且一旦命中会用 rgba(251,251,251,.82)
+   的玻璃底 + --glass-shadow 压掉输入区的实色面与聚焦反馈。输入区材质
+   归 components-controls.css 单一归属。 */
+
+:root[data-theme="light"] .popover {
+  position: absolute;
+  z-index: 50;
+  margin-top: 6px;
+  border-radius: var(--radius-xl);
+  background: var(--glass-liquid-strong-bg);
+  backdrop-filter: var(--glass-liquid-strong-blur);
+  -webkit-backdrop-filter: var(--glass-liquid-strong-blur);
+  
+  box-shadow:
+    var(--glass-inset-highlight),
+    var(--glass-inset-shadow),
+    var(--glass-shadow);
+  padding: 6px;
+  min-width: 200px;
+  animation: modal-scale-in var(--duration-base, 160ms) var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+}
+
+/* ⚠️ 不要在本文件中定义 `.md-path-link`（或它的任何属性）。
+   本文件在 components-prose.css **之后**加载，同特异性下本文件胜出 ——
+   在此处写重复声明会静默压掉那边的 `display: inline-flex`。链接一旦退化成
+   非 flex 容器，Tailwind preflight 的 `svg { display: block }` 随之生效，
+   文件图标变成块级、独占一行，文件名被挤到下一行，看上去就是"图标浮在
+   文字上面一层"。`.md-path-link` 的唯一定义只在 components-prose.css。
+
+   `.file-pill.* svg` 系列选择器已删除：`file-pill` 类名在组件中不存在，
+   无声明块的选择器永不命中。 */
+
+.preview-pane {
+  scrollbar-gutter: stable;
+}
+
+/* 预览面板里的等宽强制**只作用在代码视图上**。
+   以前这条写成 `.preview-pane *`，把整个预览面板压成等宽 + 字重 400：
+     · 共享渲染层的 Markdown 正文（.preview-md-body）变成等宽代码字体，
+       标题不再加粗、标题上边距被归零 —— 与 components-prose.css 里
+       "不能扩展到整个 .preview-pane，Markdown 预览正文必须走正文字体"
+       的既定意图直接冲突；
+     · 预览头的文件名（font-weight:600）、类型徽章（500）被压回 400。
+   components-prose.css 已经把等宽限定在 .code-viewport 系列，这里
+   补上 font-style / font-weight 两项，语义一致。 */
+.preview-pane .code-viewport,
+.preview-pane .code-viewport *,
+.preview-pane .code-status,
+.preview-pane .code-status *,
+.preview-pane .code-empty,
+.preview-pane .code-copy-btn,
+.preview-pane .code-copy-btn * {
+  font-family: var(--font-mono) !important;
+  font-style: normal !important;
+  font-weight: 400 !important;
+}
+
+.preview-pane-inner pre,
+.preview-pane-inner pre > code {
+  background: transparent !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* 旧 markdown 注入的兜底。
+   这里刻意**不加 !important**：共享渲染层的排版由
+   @hermix/preview/styles/preview-doc.css 拥有，它的
+   `.preview-pane .preview-md-body h1` 等规则特异性更高（0,2,1），
+   本条（0,1,1）不加 !important 才压不过它 —— 之前带 !important 时
+   标题上边距被归零、段落间距压到 0.4em，Markdown 正文排版整体塌陷。 */
+.preview-pane h1,
+.preview-pane h2,
+.preview-pane h3,
+.preview-pane h4,
+.preview-pane h5,
+.preview-pane h6,
+.preview-pane p,
+.preview-pane ul,
+.preview-pane ol,
+.preview-pane li,
+.preview-pane strong,
+.preview-pane em,
+.preview-pane blockquote,
+.preview-pane a,
+.preview-pane img,
+.preview-pane hr {
+  font-family: inherit;
+  margin-top: 0;
+  margin-bottom: 0.4em;
+  max-width: 100%;
+}
+
+/* `.preview-filename` 不在这条兜底里：它是头部主标题，字号由 code-view.css
+   的组件规则决定，这里再用 !important 压成 tiny 会把标题压没。 */
+.preview-pane .preview-path-row,
+.preview-pane .preview-path-row * {
+  font-weight: 500 !important;
+  font-size: var(--text-tiny);
+  letter-spacing: 0;
+}
+
+.file-pill-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border-radius: 0;
+  font-size: var(--text-meta);
+  color: var(--color-link);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: color var(--duration-fast) ease;
+}
+
+.file-pill-toggle:hover {
+  color: var(--color-link-hover);
+  text-decoration: underline;
+}
+
+:root[data-theme="light"] .tw-msg-output {
+  background: var(--color-bg-code);
+  border: 1px solid var(--color-bg-code-border);
+  padding: 9px 30px 9px 12px;
+  border-radius: 6px;
+  max-height: 320px;
+}
+
+.tw-msg-icon-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  margin-right: 6px;
+  box-shadow: var(--shadow-card);
+
+  background: var(--color-bg-tertiary);
+}
+
+.tw-msg-icon-tile .tw-msg-icon-svg {
+  color: var(--color-accent) !important;
+}
+
+.tw-msg-row[data-state="run"] .tw-msg-icon-tile {
+  background: var(--color-accent-soft-strong);
+}
+
+.tw-msg-row[data-state="err"] .tw-msg-icon-tile {
+  background: var(--color-error-soft);
+}
+
+.tw-msg-row[data-state="err"] .tw-msg-icon-tile .tw-msg-icon-svg {
+  color: var(--color-error) !important;
+}
+
+.tw-msg-icon-svg {
+  display: block;
+}
+
+.tw-msg-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin-right: 6px;
+  color: var(--color-text-faint);
+}
+
+.tw-msg-row[data-state="run"] .tw-msg-icon { color: var(--color-accent); }
+
+.tw-msg-row[data-state="ok"]  .tw-msg-icon { color: var(--color-text-muted); }
+
+.tw-msg-row[data-state="err"] .tw-msg-icon { color: var(--color-error); }
+
+.tw-msg-icon-svg { color: inherit; }

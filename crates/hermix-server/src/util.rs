@@ -1,0 +1,710 @@
+//! Shared approval side-effect helpers, redaction, and wire-image conversion.
+
+
+
+
+use super::*;
+use hermix_tools::extract_trust_signature;
+
+pub(crate) fn record_approval_side_effect(
+    state: &HttpServerState,
+    session_id: &str,
+    tool: &str,
+    params: &serde_json::Value,
+    choice: hermix_transport::ApprovalChoice,
+) {
+    match choice {
+        hermix_transport::ApprovalChoice::Session => {
+            // Extract the per-tool signature and append a regex
+            // match for it to the session's bypass list. Tool-
+            // aware: a write_file bypass doesn't accidentally
+            // match a terminal call (the pre-checker computes
+            // the same signature per call).
+            let Some(signature) = extract_trust_signature(tool, params) else {
+                tracing::warn!(tool, "session-bypass: no extractable signature; side effect skipped");
+                return;
+            };
+            // Session scope grants the same thing `always` does, minus
+            // restart survival: hit ⇔ identical trust signature. The
+            // signature is itself a fully-anchored regex fragment
+            // (`^sudo\b.*`, ...), so it must be stored as an **escaped
+            // literal** — compiling it as a raw pattern would try to
+            // match the anchor/meta characters in the rebuilt text and
+            // never hit anything.
+            let pattern = format!("^{}$", regex::escape(&signature));
+            match Regex::new(&pattern) {
+                Ok(re) => {
+                    if let Ok(mut map) = state.session_bypass.lock() {
+                        map.entry(session_id.to_string())
+                            .or_default()
+                            .push(re);
+                        tracing::info!(
+                            session = %session_id,
+                            tool = %tool,
+                            signature = %signature,
+                            "session-bypass: added"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        tool = %tool,
+                        signature = %signature,
+                        error = %e,
+                        "session-bypass: failed to compile pattern; side effect skipped"
+                    );
+                }
+            }
+        }
+        hermix_transport::ApprovalChoice::Always => {
+            let Some(signature) = extract_trust_signature(tool, params) else {
+                tracing::warn!(tool, "always-allow: no extractable signature; side effect skipped");
+                return;
+            };
+            // Pick a human-readable hint for the entry (command →
+            // path → url → tool). The hint shows up in the
+            // allowlist list output; matching is against the
+            // compiled pattern, not the hint.
+            let hint = params
+                .get("command")
+                .or_else(|| params.get("cmd"))
+                .or_else(|| params.get("path"))
+                .or_else(|| params.get("url"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(tool)
+                .to_string();
+            if let Ok(mut guard) = state.user_allowlist.lock() {
+                if guard.is_none() {
+                    *guard = Some(UserAllowlist::new());
+                }
+                if let Some(al) = guard.as_mut() {
+                    if let Err(e) = al.add_literal_for(tool, &signature, &hint) {
+                        tracing::warn!(
+                            tool = %tool,
+                            signature = %signature,
+                            error = %e,
+                            "always-allow: failed to add entry; side effect skipped"
+                        );
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            } else {
+                return;
+            }
+            // Persist the updated allowlist. Failure here is
+            // logged but not propagated to the user — the
+            // in-memory state is already correct and a failed
+            // save just means the next restart loses this one
+            // entry (the user can re-pick `always` next time).
+            let path = hermix_config::paths::approval_allowlist_path();
+            if let Ok(guard) = state.user_allowlist.lock() {
+                if let Some(al) = guard.as_ref() {
+                    if let Err(e) = al.save(&path) {
+                        tracing::warn!(
+                            error = %e,
+                            path = %path.display(),
+                            "always-allow: failed to persist allowlist; \
+                             in-memory state is correct but the change \
+                             won't survive a restart"
+                        );
+                    } else {
+                        tracing::info!(
+                            tool = %tool,
+                            path = %path.display(),
+                            "always-allow: persisted to disk"
+                        );
+                    }
+                }
+            }
+        }
+        _ => {
+            // `Once` / `Deny` don't need a side effect — the
+            // registry's resolve is the whole story for them.
+        }
+    }
+}
+
+/// P6 : resource-scope side effect. Used when the
+/// approval request carries `risk: "resource"` (P6 direction 1),
+/// meaning the user is authorising access to a specific path or
+/// command prefix the agent requested. `Always` persists the
+/// grant into `GatewayConfig.permission_profile` and writes it
+/// back to `config.yaml`; `Session` keeps the grant in-memory only
+/// (the existing `session_bypass` mechanism is for terminal
+/// commands and doesn't carry paths). `Once` / `Deny` are no-ops.
+pub(crate) async fn record_resource_approval_side_effect(
+    state: &HttpServerState,
+    session_id: &str,
+    request_id: &str,
+    choice: hermix_transport::ApprovalChoice,
+) {
+    let (path, command) = match ws::lookup_pending_resource(state, session_id, request_id).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(
+                request_id = %request_id,
+                error = %e,
+                "resource-approval: failed to look up pending row; side effect skipped"
+            );
+            return;
+        }
+    };
+    if path.is_none() && command.is_none() {
+        // Non-resource approval (e.g. the existing Dangerous-tier
+        // terminal approval) — fall through to the regular
+        // command-based side effect path.
+        return;
+    }
+    match choice {
+        hermix_transport::ApprovalChoice::Always => {
+            // 1. Pull a fresh GatewayConfig snapshot (the user may
+            // have edited it via Settings since startup).
+            let mut cfg: hermix_config::GatewayConfig = state
+                .agent_service
+                .current_config_value()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_else(|| state.config.as_ref().clone());
+            // 2. Apply grants. Mirrors the
+            // `PendingGrant::from_tool_call` heuristic in
+            // hermix-core so server- and client-side agree on
+            // what "grant this resource" means.
+            if let Some(p) = &path {
+                cfg.permission_profile.grant_path(p);
+            }
+            if let Some(c) = &command {
+                cfg.permission_profile.grant_command(c);
+            }
+            // 3. Persist to config.yaml so the grant survives
+            // server restart. Failure is logged but does not
+            // abort the request — the in-memory state is
+            // already pushed to the agent service below.
+            let config_path = state.hermix_home.join("config.yaml");
+            if let Err(e) = hermix_config::save_config_yaml(&config_path, &cfg) {
+                tracing::warn!(
+                    error = %e,
+                    path = %config_path.display(),
+                    "permission_profile: failed to persist config.yaml; \
+                     in-memory state is correct but the change won't survive a restart"
+                );
+            } else {
+                tracing::info!(
+                    path = ?path,
+                    command = ?command,
+                    config = %config_path.display(),
+                    "permission_profile: persisted Always-grant to config.yaml"
+                );
+            }
+            // 4. Push the updated config to the live agent service
+            // so the next chat's `build_agent_config` picks up
+            // the new profile without a server restart.
+            match serde_json::to_value(&cfg) {
+                Ok(value) => state.agent_service.set_config(value),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "permission_profile: failed to serialise GatewayConfig for set_config"
+                ),
+            }
+        }
+        hermix_transport::ApprovalChoice::Session => {
+            // In-memory only: live-push to the agent service.
+            // Persisting session-scoped grants to disk would muddy
+            // the "session" semantics — restart should clear them.
+            let mut cfg: hermix_config::GatewayConfig = state
+                .agent_service
+                .current_config_value()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_else(|| state.config.as_ref().clone());
+            if let Some(p) = &path {
+                cfg.permission_profile.grant_path(p);
+            }
+            if let Some(c) = &command {
+                cfg.permission_profile.grant_command(c);
+            }
+            if let Ok(value) = serde_json::to_value(&cfg) {
+                state.agent_service.set_config(value);
+            }
+            tracing::info!(
+                session_id = %session_id,
+                path = ?path,
+                command = ?command,
+                "permission_profile: in-memory Session-grant applied (no persistence)"
+            );
+        }
+        _ => {
+            // `Once` / `Deny` are no-ops at the profile layer; the
+            // agent already has the immediate grant via the
+            // on_pre_tool_approved hook for this turn only.
+        }
+    }
+}
+
+pub(crate) fn redact_sensitive(input: &str) -> String {
+    let mut out = input.to_string();
+    let patterns = [
+        ("sk-", "sk-***"),
+        ("ghp_", "ghp_***"),
+        ("xoxb-", "xoxb-***"),
+    ];
+    for (needle, replacement) in patterns {
+        if out.contains(needle) {
+            out = out.replace(needle, replacement);
+        }
+    }
+    out
+}
+
+/// Canonical 4-state decision string for the DB / REST payload.
+/// Older rows that store legacy 2-state values keep working unchanged;
+/// the UI reads `extra.decision` verbatim.
+pub(crate) fn approval_decision_str(choice: hermix_transport::ApprovalChoice) -> &'static str {
+    match choice {
+        hermix_transport::ApprovalChoice::Once => "once",
+        hermix_transport::ApprovalChoice::Session => "session",
+        hermix_transport::ApprovalChoice::Always => "always",
+        hermix_transport::ApprovalChoice::Deny => "deny",
+    }
+}
+
+/// Side-effects for one resolved approval — `resolve_approval_message`
+/// in the DB plus, for Session/Always choices, the resource-scope
+/// `permission_profile` push and the durable allowlist entry. The
+/// registry resolve itself is the caller's responsibility (so the
+/// batch path can iterate the registry's `resolve_batch` result
+/// without re-resolving already-resolved members).
+///
+/// `matched` gates the side effects to the **first** successful resolve:
+/// a duplicate response would otherwise re-grant the same path / re-add
+/// the same allowlist regex. Batch paths pass `true` (they already
+/// filtered `resolve_batch` members by `ok`); single-item paths pass the
+/// `registry.resolve` return value.
+pub(crate) async fn record_approval_resolution(
+    state: &HttpServerState,
+    session_id: &str,
+    request_id: &str,
+    choice: hermix_transport::ApprovalChoice,
+    matched: bool,
+) {
+    let decision_str = approval_decision_str(choice);
+    let _ = state
+        .session_persistence
+        .resolve_approval_message(session_id, request_id, decision_str);
+    if matched
+        && matches!(
+            choice,
+            hermix_transport::ApprovalChoice::Session | hermix_transport::ApprovalChoice::Always
+        )
+    {
+        record_resource_approval_side_effect(state, session_id, request_id, choice).await;
+        if let Ok(Some((tool, params, _expires_at))) =
+            ws::lookup_pending_approval(state, session_id, request_id).await
+        {
+            record_approval_side_effect(state, session_id, &tool, &params, choice);
+        }
+    }
+}
+
+/// turn a raw `AgentError` from the agent loop into a
+/// user-facing `(code, message)` pair.
+/// Each classified category prepends a short actionable Chinese prefix
+/// (e.g. "AI 服务过载:") followed by the **original provider error
+/// message**, so the user can see what actually happened (which model,
+/// which provider, what the API returned) instead of a generic
+/// one-size-fits-all banner. Everything else falls back to
+/// `e.to_string()` so we never lose diagnostic detail.
+pub(crate) fn user_facing_agent_error(e: &str) -> (String, String) {
+    let s = e.to_string();
+    let lower = s.to_lowercase();
+
+    /// Extract the human-readable message from a raw error string.
+    /// Provider responses are often nested JSON like:
+    /// `API error 529 <unknown status code>: {"type":"error","error":{"message":"负载较高..."}}`
+    /// This function strips the `API error NNN` prefix and extracts
+    /// the inner `message` field if present, falling back to the
+    /// stripped string otherwise.
+    fn extract_provider_message(raw: &str) -> String {
+        // Strip repeated "LLM API error: API error:" wrappers
+        // (replace is global — one pass removes every occurrence;
+        // a second identical replace would be a no-op)
+        let stripped = raw
+            .replace("LLM API error: ", "")
+            .replace("API error ", "");
+        // Try to extract the provider's own message from JSON
+        // e.g. `529 <unknown status code>: {"type":"error","error":{"message":"负载较高..."}}`
+        if let Some(json_start) = stripped.find('{') {
+            let json_part = &stripped[json_start..];
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_part) {
+                if let Some(msg) = parsed
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                {
+                    return msg.to_string();
+                }
+                if let Some(msg) = parsed.get("message").and_then(|m| m.as_str()) {
+                    return msg.to_string();
+                }
+            }
+        }
+        // Not JSON or no message field — return the stripped version
+        stripped.trim().to_string()
+    }
+
+    let provider_msg = extract_provider_message(&s);
+
+    if lower.contains("429")
+        || lower.contains("too many requests")
+        || lower.contains("rate_limit")
+        || lower.contains("rate limit")
+        || lower.contains("用量上限")
+        || lower.contains("token plan")
+        || lower.contains("quota")
+    {
+        (
+            "quota_exhausted".to_string(),
+            format!("用量已达上限: {provider_msg}"),
+        )
+    } else if lower.contains("529")
+        || lower.contains("overloaded")
+        || lower.contains("负载较高")
+        || lower.contains("server is overloaded")
+        || lower.contains("service unavailable")
+        || lower.contains("503")
+    {
+        (
+            "provider_overloaded".to_string(),
+            format!("AI 服务过载: {provider_msg}"),
+        )
+    } else if lower.contains("401")
+        || lower.contains("unauthorized")
+        || lower.contains("authentication")
+        || lower.contains("invalid api key")
+    {
+        (
+            "auth_error".to_string(),
+            format!("API 密钥认证失败: {provider_msg}"),
+        )
+    } else {
+        ("agent_error".to_string(), s)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Visible-text sanitizer for raw tool-call markers in LLM output.
+// The redactor itself lives in `hermix_core::tool_call_sanitizer`
+// (see `hermix_core::ToolCallSanitizer`). It is a *stateful*
+// state-machine: opening and closing XML tags may arrive in different
+// streaming chunks, and a per-chunk regex pass (the previous
+// implementation) would leak any block whose opener and closer were
+// split across a chunk boundary. The new implementation holds the
+// in-between chunks until the matching close arrives.
+// ## Why this lives in two places
+// The agent loop (`hermix_agent::agent_loop::apply_stream_collect_chunk`)
+// runs one copy so the *persisted* assistant message is clean on
+// reload. The WS layer (`hermix_server::lib` on_chunk) runs a second
+// copy so the *live* stream never shows leaked XML. The two passes
+// are idempotent (the second pass is a no-op once the text is
+// already clean), so the doubling is intentional belt-and-suspenders
+// and not a bug.
+// ## What it does NOT do
+// It does NOT try to *execute* the embedded tool call. That would
+// require either (a) telling the agent loop to use a different
+// text-based parser as the authoritative source, or (b) pre-parsing
+// the streamed text and synthesising `tool_start` / `tool_complete`
+// events out-of-band. Both are bigger surface-area changes; the
+// narrow "don't show the XML to the user" fix is enough to stop the
+// visible leak today.
+// The original regression tests for this leak have been moved to
+// `hermix_core::tool_call_sanitizer::tests`.
+
+/// Map the `permission` field of [`SendMessageRequest`] (a free-form string
+/// the frontend hands us) to the strongly-typed [`PermissionLevel`]. Unknown
+/// values fall back to `Default` so a malformed payload never escalates
+/// privileges silently.
+pub(crate) fn parse_permission_level(value: Option<&str>) -> Option<PermissionLevel> {
+    match value.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("default") | None => Some(PermissionLevel::Default),
+        Some("full") => Some(PermissionLevel::Full),
+        Some(other) => {
+            tracing::warn!(
+                permission = %other,
+                "unknown permission level in SendMessageRequest; falling back to Default"
+            );
+            Some(PermissionLevel::Default)
+        }
+    }
+}
+
+/// Convert wire-format images (raw bytes) to agent-format images (base64).
+/// 单张图片的硬上限（与 WS 帧上限对齐）。
+///
+/// 图片在这里被编码成 base64 塞进 LLM 请求体，体积再涨 33%；没有上限时
+/// 一张 50MB 的图会直接把请求体和内存一起撑爆（P2-8）。
+const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+
+/// 一轮全部图片的总上限。
+const MAX_TOTAL_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+
+/// 多图支持 — client sends `Vec<ImageAttachment>` with binary
+/// `bytes`; the LLM API needs `data:<mime>;base64,<...>` URLs, so we
+/// encode here.
+///
+/// 超限的图片整张跳过（写 warn），与附件走同一套"跳过而非截断"策略：
+/// 半张图对多模态模型来说是不可解析的输入。
+pub(crate) fn convert_wire_images(
+    images: &Option<Vec<hermix_transport::ImageAttachment>>,
+) -> Option<Vec<hermix_core::traits::AgentImage>> {
+    images.as_ref().map(|imgs| {
+        let mut out = Vec::with_capacity(imgs.len());
+        let mut total: usize = 0;
+        for img in imgs {
+            if img.bytes.len() > MAX_IMAGE_BYTES {
+                tracing::warn!(
+                    bytes = img.bytes.len(),
+                    limit = MAX_IMAGE_BYTES,
+                    "convert_wire_images: image exceeds per-image limit; skipped"
+                );
+                continue;
+            }
+            total = total.saturating_add(img.bytes.len());
+            if total > MAX_TOTAL_IMAGE_BYTES {
+                tracing::warn!(
+                    total,
+                    limit = MAX_TOTAL_IMAGE_BYTES,
+                    "convert_wire_images: total image budget exhausted; remaining skipped"
+                );
+                break;
+            }
+            out.push(hermix_core::traits::AgentImage {
+                base64: base64::engine::general_purpose::STANDARD.encode(&img.bytes),
+                mime_type: img.mime_type.clone(),
+            });
+        }
+        out
+    })
+}
+
+// ---------------------------------------------------------------------------
+// L3: Voice bridge — HTTP endpoints for STT + TTS
+// ---------------------------------------------------------------------------
+
+/// `POST /v1/voice/transcribe` — accept base64-encoded 16-bit PCM
+/// and return transcribed text. Body shape matches
+/// `hermix_voice::TranscribeRequest`; response matches
+/// `hermix_voice::TranscribeResponse`.
+pub(crate) fn extract_llm_probe_url(config: &GatewayConfig) -> Option<(String, Option<String>)> {
+    // 1) Try the active model string ("provider:model")
+    if let Some(ref model_str) = config.model {
+        if let Some((prov, _)) = model_str.split_once(':') {
+            if let Some(p) = config.llm_providers.get(prov) {
+                if let Some(ref url) = p.base_url {
+                    return Some((prov.to_string(), Some(url.clone())));
+                }
+                // No base_url set, but we can still return provider name so
+                // the runtime can infer a default URL from it.
+                if p.api_key.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
+                    || std::env::var(os_env_var(prov)).ok().map(|s| !s.is_empty()).unwrap_or(false)
+                {
+                    return Some((prov.to_string(), None));
+                }
+            }
+        }
+    }
+    // 2) Fall back to the first provider that is "configurable" (api_key OR env
+    // var OR explicit base_url). Without an api_key/env, the runtime can't
+    // actually authenticate, but returning the provider name + base_url lets
+    // the caller at least surface a useful default (and probe it).
+    for (name, p) in &config.llm_providers {
+        let has_key = p.api_key.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
+            || std::env::var(os_env_var(name)).ok().map(|s| !s.is_empty()).unwrap_or(false);
+        let has_url = p.base_url.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+        if has_key || has_url {
+            return Some((name.clone(), p.base_url.clone()));
+        }
+    }
+    None
+}
+
+/// Map a provider name to its canonical env var name for key detection.
+pub(crate) fn os_env_var(provider: &str) -> &'static str {
+    match provider {
+        "openai" => "OPENAI_API_KEY",
+        "anthropic" => "ANTHROPIC_API_KEY",
+        "openrouter" => "OPENROUTER_API_KEY",
+        "qwen" | "dashscope" => "DASHSCOPE_API_KEY",
+        "deepseek" => "DEEPSEEK_API_KEY",
+        "kimi" | "moonshot" => "MOONSHOT_API_KEY",
+        "minimax" => "MINIMAX_API_KEY",
+        "nous" => "NOUS_API_KEY",
+        "copilot" => "GITHUB_COPILOT_TOKEN",
+        "siliconflow" => "SILICONFLOW_API_KEY",
+        "zhipu" => "ZHIPU_API_KEY",
+        "volcengine" => "ARK_API_KEY",
+        _ => "UNKNOWN_API_KEY",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 轮次收尾回执
+// ---------------------------------------------------------------------------
+
+/// 这轮是被**用户**停掉的吗（IM `/stop`、WS 断连）？
+///
+/// 判据在 `hermix_core::traits::AgentReply::was_user_interrupted`——本仓库
+/// 有两处消费它（这里的三态回执、hermix-agent 的轮次终态记录），判据必须
+/// 只有一份，所以这里只做转发。
+pub(crate) fn was_interrupted(reply: &hermix_core::traits::AgentReply) -> bool {
+    reply.was_user_interrupted()
+}
+
+/// 出站请求前的地址检查：只允许 http/https，并拒绝云元数据端点。
+///
+/// **不拒环回/私网是有意的**：自定义 provider 的首要用例就是本机模型
+/// （Ollama `http://127.0.0.1:11434`、LM Studio `:1234`），把这些拒掉等于让
+/// 「测试连接」对最常见的配置永久失败。真正没有合法用途的是云元数据端点 ——
+/// 那是「借 hermix 的身份读云主机凭据」。
+pub(crate) fn safe_outbound_url(raw: &str) -> Result<reqwest::Url, String> {
+    let url = reqwest::Url::parse(raw.trim()).map_err(|e| format!("地址不合法：{e}"))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        other => return Err(format!("只支持 http/https，收到 `{other}`")),
+    }
+    let host_raw = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    // IPv6 字面量在 `host_str()` 里带方括号（`[fd00:ec2::254]`），比较时去掉。
+    let host = host_raw.trim_start_matches('[').trim_end_matches(']');
+    if host.is_empty() {
+        return Err("地址缺少主机名".to_string());
+    }
+    const BLOCKED: [&str; 6] = [
+        "169.254.169.254", // AWS / Azure / GCP IMDS
+        "169.254.170.2",   // AWS ECS task metadata
+        "100.100.100.200", // 阿里云 metadata
+        "fd00:ec2::254",   // AWS IPv6 IMDS
+        "metadata.google.internal",
+        "metadata.goog",
+    ];
+    if BLOCKED.contains(&host) {
+        return Err("该地址是云元数据端点，不允许作为 provider 地址".to_string());
+    }
+    Ok(url)
+}
+
+/// 重定向逐跳复查 [`safe_outbound_url`]。
+///
+/// 不能直接关掉重定向：正常 provider 常用 302 落到 API 域名。但「第一跳合法、
+/// 第二跳指向元数据端点」是标准的 SSRF 绕过，所以每一跳都要过同一个检查。
+pub(crate) fn safe_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error(std::io::Error::other("too many redirects"));
+        }
+        if let Err(e) = safe_outbound_url(attempt.url().as_str()) {
+            return attempt.error(std::io::Error::other(e));
+        }
+        attempt.follow()
+    })
+}
+
+/// 按**字符**截到 `max_chars`，超长补省略号。
+///
+/// 不按字节：中文一字 3 字节，`&s[..n]` 会切在多字节中间 panic 或切出乱码。
+pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
+    // 切分走 core 的单一实现；这里只负责省略号语义（超出时补 …）。
+    if text.chars().count() <= max_chars {
+        text.to_string()
+    } else {
+        format!("{}…", hermix_core::text_utils::truncate_chars(text, max_chars))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hermix_core::traits::AgentReply;
+
+    fn reply() -> AgentReply {
+        AgentReply {
+            text: "好了".to_string(),
+            message_count: 2,
+            finish_reason: Some("stop".to_string()),
+            last_error: None,
+            interrupted: false,
+            // `was_interrupted` 不看这个字段；给一个正常的单轮值，让
+            // 本辅助函数对"跑了几轮"的其他断言也不会读到 0。
+            total_turns: 1,
+        }
+    }
+
+    #[test]
+    fn 正常完成不算中断() {
+        assert!(!was_interrupted(&reply()), "自然结束不得报成用户中断");
+    }
+
+    #[test]
+    fn 用户停掉算中断() {
+        let r = AgentReply {
+            interrupted: true,
+            finish_reason: Some("interrupted".to_string()),
+            ..reply()
+        };
+        assert!(was_interrupted(&r));
+    }
+
+    #[test]
+    fn 后端失败不算用户中断() {
+        // 致命失败也走 graceful 落盘，`interrupted` 同样为 true，
+        // 但 finish_reason 是 "error"——这正是不能只看 bool 的原因。
+        let r = AgentReply {
+            interrupted: true,
+            finish_reason: Some("error".to_string()),
+            last_error: Some("500 internal".to_string()),
+            ..reply()
+        };
+        assert!(
+            !was_interrupted(&r),
+            "后端失败不得报成「已按 /stop 中断」"
+        );
+    }
+
+    #[test]
+    fn 截断轮次不算中断() {
+        let r = AgentReply {
+            finish_reason: Some("length".to_string()),
+            ..reply()
+        };
+        assert!(!was_interrupted(&r), "被 token 上限砍断不算用户中断");
+    }
+
+    #[test]
+    fn 出站地址只允许_http_https() {
+        assert!(safe_outbound_url("https://api.deepseek.com/v1").is_ok());
+        assert!(safe_outbound_url("http://127.0.0.1:11434/v1").is_ok(), "本地模型必须可测");
+        assert!(safe_outbound_url("file:///C:/Windows").is_err());
+        assert!(safe_outbound_url("gopher://x/").is_err());
+        assert!(safe_outbound_url("not a url").is_err());
+    }
+
+    #[test]
+    fn 云元数据端点被拒() {
+        for raw in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://169.254.170.2/v2/credentials",
+            "http://100.100.100.200/latest/meta-data/",
+            "http://metadata.google.internal/computeMetadata/v1/",
+            "http://[fd00:ec2::254]/latest/meta-data/",
+        ] {
+            assert!(safe_outbound_url(raw).is_err(), "{raw} 必须被拒");
+        }
+    }
+
+    #[test]
+    fn 截断按字符不切坏中文() {
+        assert_eq!(truncate_chars("中文结尾", 200), "中文结尾");
+        assert_eq!(truncate_chars("中文结尾", 2), "中文…");
+        // 边界：正好等于上限时不加省略号
+        assert_eq!(truncate_chars("中文", 2), "中文");
+        assert_eq!(truncate_chars("", 5), "");
+    }
+}
+

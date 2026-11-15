@@ -1,0 +1,382 @@
+/* ════════════════════════════════════════════════════════════════════
+   § 8.  BUTTONS
+   ════════════════════════════════════════════════════════════════════ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  /* 按钮文字 = 界面文本档（13px）。此前是 meta(12px)，比正文还小一档，
+     是整站"字碎"的直接来源；.btn-sm 仍保留 12px 作为紧凑变体。 */
+  font-size: var(--text-ui);
+  font-weight: 500;
+  font-family: inherit;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease,
+              border-color var(--duration-fast) ease,
+              color var(--duration-fast) ease,
+              transform var(--duration-fast) ease;
+}
+.btn:active:not(:disabled) { transform: scale(0.97); }
+/* 焦点统一走 base.css 的 `--shadow-focus-flat` 光晕（2026-10-23 扁平化决议）。
+   这里曾各写一条 2px 实线 outline —— 与那条决议直接冲突，且是"三套焦点环"
+   的来源之一。禁用态同理：此前完全没有 `:disabled` 规则，禁用后仍像可点。 */
+.btn:disabled,
+.icon-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btn-sm { padding: 4px 10px; font-size: var(--text-meta); }
+
+.btn-primary {
+  background: var(--color-btn-primary-bg);
+  color: var(--color-btn-primary-text);
+  border-color: var(--color-btn-primary-bg);
+}
+.btn-primary:hover:not(:disabled) { background: var(--color-btn-primary-hover); border-color: var(--color-btn-primary-hover); }
+
+.btn-secondary {
+  background: var(--color-btn-secondary-bg);
+  color: var(--color-btn-secondary-text);
+  border-color: var(--color-border-primary);
+}
+.btn-secondary:hover:not(:disabled) { background: var(--color-btn-secondary-hover); }
+
+
+
+/* ── Icon button (square, no text) ── */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
+}
+.icon-btn:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.icon-btn:active:not(:disabled) { transform: scale(0.93); }
+
+/* ── Connection indicator (sidebar dot) ── */
+.connection-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+.connection-indicator:hover { background: var(--color-bg-hover); }
+.connection-indicator:active:not(:disabled) { transform: scale(0.9); }
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  transition: background var(--duration-fast) ease;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 9.  FORM FIELDS
+   ════════════════════════════════════════════════════════════════════ */
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+
+.input,
+.textarea,
+.select {
+  width: 100%;
+  padding: 7px 10px;
+  /* 表单文字与按钮同档（13px）：12px 的输入内容在 125% 缩放下最难读。 */
+  font-size: var(--text-ui);
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color var(--duration-fast) ease;
+}
+.input:focus, .textarea:focus, .select:focus,
+.input:focus-visible,
+.textarea:focus-visible,
+.select:focus-visible {
+  outline: none;
+  /* 聚焦反馈 = 描边着色 + 3px 中性晕圈（墨与纸 v4：阴影零色相——
+     暗色下品牌绿晕发脏，晕圈改用主题自身的墨色：暗=柔白雾、浅=淡灰雾）。 */
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-text-primary) 9%, transparent);
+}
+.textarea { min-height: 70px; resize: vertical; line-height: 1.5; font-family: var(--font-mono); }
+
+/* Strip chrome for fields embedded in a parent (e.g. chat composer) */
+[data-no-border] {
+  border: none !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 10.  PANE HEADER (right sidebar / empty state / etc.)
+   ════════════════════════════════════════════════════════════════════ */
+
+
+.divider {
+  height: 1px;
+  background: var(--color-border-primary);
+  border: 0;
+  margin: 0;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 11.  TAGS & STATUS DOTS
+   ════════════════════════════════════════════════════════════════════ */
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  font-family: var(--font-mono);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════
+   § 12.  PILLS (status inline, no bg)
+   ════════════════════════════════════════════════════════════════════ */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: var(--text-tiny);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: transparent;
+  border: 0;
+}
+.pill-success { color: var(--color-success); }
+.pill-error { color: var(--color-error); }
+.pill-warning { color: var(--color-warning); }
+/* 「跳过」专用中性色：工具因审批超时 / 用户拒绝而**没有真正跑**。
+   它不是错误也不是成功 —— 涂成红色会让真失败被淹掉，涂成绿色等于
+   宣布它完成了。用 tertiary：既不指控也不庆祝。 */
+.pill-muted { color: var(--color-text-tertiary); }
+
+/* ════════════════════════════════════════════════════════════════════
+   § 13.  COMPOSER (chat input area)
+   ════════════════════════════════════════════════════════════════════ */
+
+/* 一张纸 + 一条控制线（2026-11-07 重构）。
+   上一版是「灰卡（tertiary）+ 深一档托盘（quaternary）」两级灰阶叠在
+   白纸上，空态占三行高、顶部还浮一行迷路小字 —— 整块读起来像一张
+   禁用的表单（用户：「输入框有点难看，整体效果不好」）。现在：
+     · 卡面 = bg-composer（主题钦定的输入框面，近纸白），层次交给
+       发丝环（--shadow-paper）+ 一层极淡的浮起影，不再自己涂灰；
+     · 控制条与正文**同面**，无独立底色：左 = 本轮设置（目录/权限/
+       专家/模式），右 = 模型 + 动作（附件/语音/增强）+ 发送。
+       设置在左、动作在右，一行扫完；全卡唯一的实心元素是发送钮；
+     · textarea 单行起步，随内容长高（上限 200px 由 mention-input 滚动）。 */
+.composer {
+  border-radius: var(--radius-composer, var(--radius-2xl));
+  background: var(--color-bg-composer);
+  box-shadow:
+    var(--shadow-paper),
+    0 6px 24px color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+  overflow: visible;
+  transition: box-shadow var(--duration-base) ease;
+}
+/* 聚焦：环加深一档 + 浮起略抬，仍然不加边框。 */
+.composer:focus-within {
+  box-shadow:
+    var(--shadow-card),
+    0 10px 32px color-mix(in srgb, var(--color-text-primary) 9%, transparent);
+}
+
+/* ⓪ 队列条住在输入卡**外**：它描述的是「还没轮到说的话」，
+   不是本次草稿的一部分。给自己的面 + 自己的阴影，和下面的输入卡
+   留 8px 缝，读起来是两张叠放的卡，而不是卡里的一段内衬。 */
+.composer-queue {
+  background: var(--color-bg-secondary);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+  border-radius: var(--radius-lg);
+  padding: 4px 8px;
+  margin-bottom: 8px;
+}
+
+/* 控制条：左设置、右动作，与正文同一张面。
+   左右内边距 7px + chip 自身 7px = 正文左缘（14px），竖向三条对齐。 */
+.composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 7px 7px;
+  min-width: 0;
+}
+.composer-scope,
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+}
+.composer-actions {
+  margin-left: auto;
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+/* 控制条 chip：ghost 面小按钮（24px 档）。墨色退到 tertiary/faint，
+   hover 才回主墨 —— 工具条是「能做什么」的清单，不与正文抢墨。 */
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--control-h-sm);
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 0;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.composer-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer-chip svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  color: var(--color-text-faint);
+  flex: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+.composer-chip:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.composer-chip:hover svg {
+  color: var(--color-text-secondary);
+}
+.composer-chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+/* compact（容器过窄）：只留图标。模型 chip 不参加 —— 模型名是
+   这一行里唯一必须始终可读的信息。 */
+.composer-chip--compact span {
+  display: none;
+}
+
+/* 激活态（已选专家 / 放手模式 / 编码模式 / 已绑目录）：
+   淡底 + 主墨 + 中字重 —— 是「状态」不是「行动」，不给色相。 */
+.composer-chip--on {
+  background: var(--color-chip-model-bg);
+  color: var(--color-chip-model-fg);
+  font-weight: var(--font-weight-medium);
+}
+.composer-chip--on svg {
+  color: var(--color-chip-model-fg);
+}
+.composer-chip--on:hover {
+  background: var(--color-chip-model-bg);
+  color: var(--color-chip-model-fg);
+}
+
+/* 需要行动的缺口（模型未配置）：软底 + 文字安全档语义色。
+   短文案「未配置模型」—— 长句塞进工具条会把整行读散。 */
+.composer-chip--alert {
+  background: var(--color-warning-soft);
+  color: var(--color-text-warning);
+  font-weight: var(--font-weight-medium);
+}
+.composer-chip--alert svg {
+  color: var(--color-text-warning);
+}
+.composer-chip--alert:hover {
+  background: color-mix(in srgb, var(--color-warning) 18%, transparent);
+  color: var(--color-text-warning);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════
+   § 14.  EMPTY STATES
+   ════════════════════════════════════════════════════════════════════ */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 15.  POPOVER (white card / 1px border / soft shadow)
+   ════════════════════════════════════════════════════════════════════ */
+
+.popover {
+  position: absolute;
+  z-index: 50;
+  margin-top: 6px;
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-modal);
+  padding: 6px;
+  min-width: 200px;
+}
+.popover-item.active { color: var(--color-text-primary); background: var(--color-bg-hover); font-weight: 500; }
+@keyframes modal-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-scale-in { from { opacity: 0; transform: scale(0.96) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+.modal-icon-info { background: var(--color-bg-tertiary);  color: var(--color-text-primary); }
+.modal-footer .btn { flex: 1; }
+
+
+/* ════════════════════════════════════════════════════════════════════
+   § 17.  CARDS
+   ════════════════════════════════════════════════════════════════════ */
+
+.card {
+  background: var(--color-bg-card);
+  border-radius: var(--radius-xl);
+  padding: 16px;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+
+

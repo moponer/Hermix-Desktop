@@ -1,0 +1,30 @@
+[package]
+name = "hx-shell"
+version = "0.2.0"
+edition = "2021"
+description = "Hermix 自定义应用壳 — Wry/WebView2 单文件模板壳"
+license = "MIT"
+
+# 独立工程：不属于 hermix workspace（避免污染主 workspace 编译）
+[workspace]
+
+[profile.release]
+strip = true
+opt-level = 1
+
+[dependencies]
+# devtools: release 构建下也保留 WebView2 的 OpenDevToolsWindow 能力，
+# 让 dev 运行模式（--dev / --html）能用 F12 打开开发者工具。
+# 不加该 feature 时 wry 的 open_devtools() 只有 debug 构建才存在。
+wry = { version = "0.55.1", features = ["protocol", "devtools"] }
+tao = "0.35.3"
+windows-sys = { version = "0.52", features = ["Win32_System_LibraryLoader", "Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+serde_json = "1"
+http = "1"
+flate2 = "1"
+resvg = "0.43"
+rfd = "0.14"
+notify = "6"
+
+[build-dependencies]
+# 可选：未来放版本探针

@@ -1,0 +1,172 @@
+# AGENTS.md
+
+## What this is
+
+Hermix Desktop — a portable, zero-install AI assistant. Windows-only (MSVC). Rust backend (23 crates, ~200K lines) + React 19 + Tauri v2 frontend.
+
+## Build & verify
+
+**Windows-only (MSVC)**: linker (rust-lld.exe + explicit LIBPATH rustflags) is configured in `.cargo/config.toml`, so plain `cargo` commands work in any terminal (Git Bash / PowerShell / IDE) with no env sourcing. Rust is installed at `C:\Program Files\Rust stable MSVC 1.92`.
+
+```bash
+cargo check --workspace --all-targets
+```
+
+Full CI gate (compile + tests + TS typecheck):
+
+```bash
+./scripts/ci-gate.sh
+```
+
+Quick commands:
+
+```bash
+cargo test --workspace --lib          # ~1,834 tests
+cargo test -p hermix-agent --lib      # single crate
+cargo check --workspace --all-targets # compile check
+cd apps/desktop-tauri && ./node_modules/.bin/tsc --noEmit  # frontend types (~25s)
+```
+
+**Windows 上跑 tauri crate 的 Rust 测试**：`cargo test -p hermix-viewer --lib` 会报
+`0xC0000139`（测试二进制没有 comctl32 v6 的 SxS 清单 → 静态导入
+`comctl32.dll!TaskDialogIndirect` 解析不到）。改成「`cargo test --no-run` → 用 SDK 的
+`mt.exe` 给测试二进制注入清单 → 直接跑 exe」，步骤见
+`docs/notes/implemented/process/2026-10-21-tauri-rust-test-binary-comctl32-v6.md`。
+（**别当成代码坏了**；也别试图拷 DLL —— comctl32 在 KnownDLLs 里，只认清单。）
+
+`tsc` 必须直接调二进制。`pnpm tsc --noEmit` 不会真正执行类型检查——它只跑 pnpm
+自己的 install 流程就返回（~0.8s、输出 `Already up to date`、exit 0），是一个
+看起来全绿的假信号。
+
+Build artifacts default to repo-internal `target/` dirs (gitignored). `CARGO_TARGET_DIR` env var overrides the location if a unified path is needed (e.g. CI packaging).
+
+## Structure
+
+- `crates/` — 23 Rust crates. Core dependency chain: `hermix-core` → `hermix-config` → `hermix-agent` → `hermix-server` / `hermix-cli`
+- `apps/desktop-tauri/` — Tauri v2 desktop app (React 19 + Tailwind 4 + Vite)
+- `scripts/` — CI gate, smoke tests, fixture recording
+- `crates/hermix-parity-tests/` — Python↔Rust golden fixtures (run: `cargo test -p hermix-parity-tests`)
+
+Key crates:
+- `hermix-cli` — binary entrypoint (`hermix`)
+- `hermix-server` — HTTP/WebSocket API + Dashboard
+- `hermix-agent` — agent loop, LLM providers, memory
+- `hermix-tools` — 30+ tool backends, approval engine
+- `hermix-config` — config loading, path management
+- `hermix-intelligence` — tool router, thinking modes
+- `hermix-focus` — FocusStack, memory salience scoring
+
+## Conventions
+
+- **Windows MSVC only** — no cross-compilation to macOS/Linux
+- **PR template required** — must include test evidence (`cargo check`, `cargo test`, `tsc --noEmit` via `node_modules/.bin`), pre-existing cleanup status, and `ci-gate.sh` passing
+- **Pre-existing bug markers** — scan for `TODO: pre-existing` / `FIXME: pre-existing` in CI gate; don't introduce them
+- **fastembed is optional** — `hermix-intelligence` has `fastembed` feature for local embeddings; `cdn.pyke.io` is geo-blocked in some regions, so default build doesn't require it
+- **Parity fixtures** — `hermix-parity-tests/fixtures/` has golden JSON; `pending/` is excluded from test runs
+- **读 token 用量先认口径（2026-10-21 实测）** — `sessions.db` 的 `token_usage` 表**一行 = 一个 agent turn**（`accumulated_usage`，该轮所有 API 调用的累加），不是「一次 API 调用」。而 kilo/free 代理报的 `prompt_tokens` 是**累计计数**、不是单次请求大小（会话第 7 分钟的记录就报 2.8M，而 `prompt_cache` 组装出来的真实 prompt 恒为 ~17K）→ **别拿它当真实上下文长度看**；真实单次请求大小看 `server.log` 的 `prompt_cache: assembled prompt ... total=Nt`，活上下文看其中的 `context=` 那一项。**且 `total=Nt` 本身是 `chars÷4` 的估算**（`prompt_assembly.rs` 的 `*_est`）——中文 1 字 ≈ 1 token 不是 1/4，本仓库的系统提示中文占比约 20~25%，所以真实值比日志大 ~1.8 倍（2026-10-21 实测：日志 17.2K ↔ 实际 6.9 万字符 ↔ 真实约 28~32K）。**另外那 17.2K 只算系统提示**，不含 109 个工具的 JSON schema（31,381 字符 ≈ 10K token）和 messages 数组。
+- **Desktop app frontend** — `apps/desktop-tauri/src/`, uses `@` alias for `src/`
+- **界面改动必读内置设计 skill** — `crates/hermix-server/src/dashboard/skills/impeccable-design.md`（仓库里唯一的界面设计规范）。改完 UI 必跑 `npx -y impeccable@4.1.0 detect <路径>`，退出码 0 才算干净；报告「已修好」之前检测结果就是证据。令牌层规范另见 `docs/notes/archived/architecture/TYPOGRAPHY_SYSTEM.md` + `npm run check:tokens`。注意 detect 对**解析不了的文件会静默返回 0**，所以先跑 `tsc --noEmit` 再信它的绿灯。
+- **界面审查先做减法（2026-10-26，前端审查常设）** — 审查或改动任何界面，第一步是删文字而不是加文字：**标语/宣传口号**、**说明文字**（标题下一段"这块能干什么"）、**次要标签**（副标题、单位后缀、重复的字段名、面包屑式路径、"点击这里"式引导）一律删。判据两条：这段文字是**内容本身**（用户数据、名称、数值）还是**操作标签**（按钮/字段名）？都不是就删。
+  - **删完看不懂 = 布局有问题，重排而不是把字加回来**：拿掉那行解释后用户就看不出「这是什么 / 能做什么 / 当前什么状态」，说明信息本该由**结构**承载 —— 用层级、位置、分组、图标、状态色、placeholder、空状态承接。重排后仍讲不清，是这块功能本身没想清楚。
+- **三端体验同进（2026-10-26，每次改动都适用）** — 任何修改同时结算三笔账，**三边都不许变差**，且不得破坏现有功能：用户体验（可读性、可发现性、操作步数）；开发体验（复用既有原语/令牌/组件，不新增第二份同类实现）；AI agent 体验（`aria-label`、语义标签、稳定类名、无歧义状态文案 —— 让模型选得中、读得对）。三赢做不到就换方案，禁止「牺牲一端换另一端」。
+- **前端 UI 纪律（DesignGuard，2026-10-18）** — `scripts/check-design-guard.mjs`（`npm run check:design`，进 ci-gate 的 `[4c/14]`）把 impeccable/typography 的硬约束做成 grep 门禁：TSX 禁字面色值/禁 `dark:` 变体/视图文件禁 `加载中…` 字面量与 `window.confirm`。此前同类规则只写在文档里，CSS 层与既有组件的违规从未被检出。新增约束优先写进门禁而不是靠自觉。**「图标按钮必须 `aria-label`」一条已从本脚本移出**（全量扫 `<button>` 的正则误报率过高而移除），改由 `scripts/check-design-primitives.mjs` 以**限定 class 名**（`icon-btn`/`titlebar-btn`/`icon-button`/`modal-close`）的方式恢复。
+- **前端 UI 纪律（DesignPrimitives，2026-10-21）** — `scripts/check-design-primitives.mjs`（进 ci-gate 的 `[4e/14]`，**阻断**）管「不许漏什么」：G3 图标按钮无障碍名 / G6a 虚线描边 / G6b 单侧色条 side-tab / G7 图标尺寸偏离 `--icon-size-*` 档位 / G8 表单控件高度偏离档位 / G9 原始语义色当文字色 / P0 `ui/` 原语零调用。路径从脚本自身位置推导（不像 guard 那样按 `cwd` 拼 `src/`），任何目录跑结果一致。依据：`docs/notes/proposed/architecture/2026-10-21-frontend-design-audit.md`。
+- **主题可覆盖结构性令牌（2026-10-27）** — `themes/notion.css` 证明主题块能压过 `@theme`：Tailwind v4 的工具类产物是 `border-radius:var(--radius-xl)`，所以在 `:root[data-theme="notion"]:root` 里改 `--radius-*` 即全局生效、且只影响该主题。需要这么做时只写在自己那个主题块里，**不要**改 `tokens.css` 的基线值（会波及全部主题）。
+- **禁止内联样式与硬编码色值（2026-10-23，硬纪律）** — 颜色 / 字号 / 圆角 / 阴影**只能**来自令牌（`--color-*` / `--text-*` / `--radius-*` / `--shadow-*`），并且只通过语义类或共享组件使用。
+  - `.tsx` 里**禁止** `style={{ background|color|border|fontSize|borderRadius|boxShadow: … }}` 这类静态样式。只允许两类例外：① 运行时几何（拖拽宽度、坐标、进度百分比、表格列宽、动态 z-index）；② 数据自带色（专家色板、渠道品牌色）。
+  - 类目身份色只走 `--color-tone-*`（8 档），状态语义色只走 `--color-{success,warning,error,info}`，**两者不复用**（否则「数据库」会被读成「成功」）。
+  - 页面容器只用 `settings/SettingsSection.tsx` 的 `SettingsSection` / `SettingsGrid` / `SettingsStatBar`；列表行只用 `config/ToolListRow`；开关只用 `ToggleSwitch`；按钮只用 `btn-flat` / `chip-flat` 类族。**不要在页面里另写一份同类结构。**
+  - 门禁：`check-design-guard` 的 **G1**（禁字面色值）+ **G6**（内联静态配色，基线 0）+ **G11**（**CSS 层**中性结构描边，基线 0）+ `check-theme-tokens` 的 bare-color / contrast 全部阻断。
+- **列表行图标走实心色块（2026-10-23）** — 列表行 / 设置行 / 卡片图标一律用 `components/ui/IconTile.tsx`（共享层 `.cat-tile`：身份色实底 + 反白字形，28/36/48 三档）。**导航是例外**：主侧栏与设置左导航的图标保持**单色描边**（随文字色）—— 侧栏是"位置"不是"内容"，18 项各带彩色底会变成一条彩虹（2026-10-24 用户复核后维持 2026-10-23 的方案）。**不要新写第三种形态**：`.cat-icon`（中性底 + 彩字）只留给**字母**（头像）与**品牌 logo** —— 字母是文字，8 档色相里没有任何单一前景能让它在所有实底上过 4.5:1；品牌 logo 自带多色，铺在同色实底上是"logo 压 logo"。
+  - 字形前景一律 `--color-on-tone`（浅色白字 / 深色深墨），**不写死白色** —— 深色主题的 tone 是"暗底提亮档"，白字只有 2.0~2.6:1。该配对（8 档 tone × 3 主题）已进 `check-theme-tokens` 的 contrast 规则。
+  - 只给**功能/能力型**的行配图标，参数型行（数值、下拉、状态表）不给。
+  - 依据：`docs/notes/implemented/architecture/2026-10-23-solid-icon-tile-list.md`。
+  - **CSS 层同样受管**（2026-10-23 补）：脚本此前只扫 `tsx/ts`，于是 129 处 `border: 1px solid` 在 CSS 里长期无人管 —— 这是「改了很多轮、界面上还是到处有线」的真正原因。现在 G11 扫 `src/**/*.css`，只放行功能性描边：`2px dashed`（拖放落点）、`transparent`（hover 占位）、语义色描边（error/warning 状态框）。
+  - **旁注轨道等功能性标记用 `background` 渐变画 2px 实心条，不写 `border`**（2026-10-26）：G11 禁的是「结构框线」，而轨道标记的是内容性质（这是旁注）、不承担分区职责 —— 写 border 会被门禁拦下，用 background 画则与门禁共存。依据：`docs/notes/implemented/process/2026-10-26-css-border-gate-and-functional-rails.md`。
+- **对比度是硬约束（2026-10-21）** — `check-theme-tokens.mjs` 的 `contrast` 规则实测 29 组前景/背景配对的 WCAG 比值（半透明底**合成**到纸面上再算），<4.5:1 退出 1。语义四色因此各有一个「文字安全档」`--color-text-{success,warning,error,info}`（保持色相、只压暗解出，纸面与各自 `-soft` 底都 ≥4.5:1）—— 12px 以下的小字一律走它，别用原始语义色。
+- **共享预览层纪律（preview-layer gate，2026-10-19）** — `scripts/check-preview-layer.mjs`（进 ci-gate 的 `[4d/14]`）守 `@hermix/preview` 的一致性：共享组件的类名必须在 `packages/preview/src/styles/preview-doc.css` 里有规则（**禁 Tailwind 原子类**——viewer 刻意不装 Tailwind，原子类在那边是空操作），共享 CSS 用到的每个 `var(--token)` 两侧都要定义（`var()` 解析失败 = 整条声明被丢弃）。渲染器样式（image/pdf/pptx/纯文本/状态/头部按钮）必须住在共享包里，桌面端 `code-view.css` 只留 `.code-*` 与桌面外壳。依据：`docs/notes/implemented/architecture/2026-10-19-shared-preview-layer-ownership.md`。
+- **右键菜单是应用菜单（2026-10-24）** — 桌面端**不端出浏览器的网页菜单**（重新加载/检查/后台打开）。全局由 `components/GlobalContextMenu.tsx` 接管 `contextmenu`（捕获阶段 preventDefault），菜单本体是共享原语 `components/ui/ContextMenu.tsx`。**新增窗口（独立 React 根）必须挂 `<GlobalContextMenu />`**，否则那个窗口仍会弹网页菜单；组件自己处理右键时用 `markContextMenuHandled(e)` 让位。工作台 iframe 由 SDK 转发（跨源，宿主读不到它的 DOM）。依据：`docs/notes/implemented/feature/2026-10-24-app-native-context-menu.md`。
+- **窄容器里不许用视口断点（2026-10-26）** — 响应式断点（`lg:` / `md:` …）看的是**视口**宽度，不是**容器**宽度；值守页中轴只有 ~300px 但窗口 1280px，`lg:grid-cols-4` 会命中 → 四列硬塞进 300px → 每列 40px → 中文逐字竖排（2026-10-25 用户实测截图，同类问题在截图工具条上又犯一次）。**组件被塞进窄容器时一律用容器查询**：父级加 `@container`，子级用 `@2xl:` / `@5xl:` 这类容器尺寸变体。
+- **独立窗口没有 Tailwind / 令牌（2026-10-26）** — 截图覆盖窗（`index.html#/screenshot-overlay`）与文件搜索窗是**独立入口**：只加载各自那一份 CSS，`globals.css` / `tokens.css` 全都不在图里。后果两条：① `var(--color-accent)` 等令牌**无定义**（整条声明被丢弃 → 按钮没底色、选区框没边）——覆盖窗已自带一份令牌层（`screenshot-overlay.css` 顶部），改主题强调色要同步改那里；② Tailwind 原子类在那边是空操作，图标尺寸只能在本地 CSS 给死。在独立窗口里写界面前先确认「这个入口到底加载了哪几份 CSS」。依据：`docs/notes/implemented/bug-fix/2026-10-26-screenshot-toolbar-layout.md`。
+- **文件关联要清 UserChoice（2026-10-26）** — Windows 查「扩展名用谁打开」有三层，`HKCU\...\Explorer\FileExts\.ext\UserChoice`（用户点过「打开方式」后 Explorer 写的）**压过** `HKCU\Software\Classes\.ext` 默认值。只写默认值 = 勾了不生效（本机 17 个扩展名里 12 个带这条记录）。写完还要广播 `SHChangeNotify(SHCNE_ASSOCCHANGED)`，否则 Explorer 继续用旧缓存。依据：`docs/notes/implemented/bug-fix/2026-10-26-file-association-toggle.md`。
+
+## Core principles (2026-07-23, applies to all work — code, design, bug fix, doc)
+
+1. **First principles** — every design decision must derive from physical / architectural constraints, not analogies or "we always did it this way". Examples:
+   - "LLM 单次响应能发几个 tool_call" → derive L1 batch capacity
+   - "每个 read 进 ctx 都要在每轮付 token 费" → derive 派单原则
+   - 问"在什么物理约束下我的方案会崩"比"参考别人怎么做"更重要
+
+2. **Adversarial review** — every plan must explicitly answer "in what scenarios will this break?". If you can't enumerate failure modes, the plan is incomplete. Examples:
+   - LLM fan-out 100 个 → 第 4 轮 LLM 偷懒？第 8 轮静默丢失？
+   - Sub-agent 拿到 task 字符串含 50KB → 子 agent ctx 爆？
+   - 主 agent 自己 read 50MB 文件 → parent ctx 永久膨胀？
+
+3. **Zero-context-bloat is the core constraint**: ANY data operation that could inflate context MUST go through sub-agent isolation. This is NOT image-specific — it applies to:
+   - Images (attachments) ✅ (already enforced)
+   - PDFs > 5 pages (read_pdf in main ctx → 30K+ tokens)
+   - Files > 50 KB / 1500 lines (read_file whole → ctx bloat)
+   - Long command output (`cat huge.log`, `dir /s`, `find /`)
+   - Web extraction at scale (3+ URLs)
+   - Code exploration across 20+ files
+   - Any task where output > ~4,000 chars and you don't branch on intermediates
+   
+   Mechanism: sub-agent isolation — sub-agent pays the read cost once, returns concise conclusion, parent context stays clean. See `directions.rs::TOOL_USAGE_GUIDANCE` (Context-bloat prevention — absolute rules) and `sub_agent_orchestrator.rs::sub_agent_guidance` (Context-bloat self-defense) for the operational rules.
+
+4. **delegate_task is the universal fan-out tool** — it is NOT image-specific. The `attachments` field is just one (image) data path; `task` + `context` paths + sub-agent reading files itself cover everything else. Architecture: see `docs/ARCHITECTURE_REFACTOR_PLAN.md §7` for L1/L2/L3 batch scaling plan.
+
+## Code simplification discipline (六步决策阶梯, 2026-08-15 起常设)
+
+所有在本项目落地的代码（Rust / TS / 配置 / skill）默认走六步决策阶梯，**质量、安全、统一为前提，不可妥协**：
+
+1. **YAGNI** — 不需要就跳过，一句话说明即可。
+2. **标准库** — 优先用语言/运行时自带能力，不引依赖。
+3. **原生平台** — 浏览器/OS/DB 原生特性优先于库（`<input type="date">` > 日期库；CSS > JS；DB 约束 > 应用代码）。
+4. **现有依赖** — 已安装的 crate/npm 包优先；不为几行逻辑加新依赖。
+5. **单行代码** — 能一行解决的绝不写多行。
+6. **最小实现** — 只有走到这步才写"能跑的最小代码"。
+
+**不可削减项**：信任边界校验、防数据丢失的错误处理、安全措施、无障碍基础、用户明确要求的功能。注释从简，只写功能/技术根因，杜绝过度工程与"为以后预留"的脚手架。参考 WorkBuddy `ponytail` skill（上游 DietrichGebert/ponytail）的七级阶梯，二者等价。
+
+**量化目标**：
+- 长期把全项目源码总量控制在 **10 万行以内**（当前基线 ≈14 万行，含 node_modules/target 已排除）。
+- `scripts/ci-gate.sh` 增加单文件 **> 2500 行即告警**，防止上帝文件复发。
+- 拆分/重写时优先砍重复（平行复制的平台/provider/工具）与搬测试到独立文件，而非单纯切文件。
+
+## 文档制度（2026-09-30 起）
+
+- **决策记录唯一入口是 `docs/notes/`**（三态：proposed/implemented/rejected，闭集 class，格式与规则见 `docs/notes/README.md`）。影响代码库的持久决策（为什么做、放弃了什么、击败了哪些方案）写 Decision Note；机械性/局部改动豁免。
+- **方案/规划不得散落**：新规划写成 `docs/notes/proposed/{class}/yyyy-mm-dd-topic.md`，拍板后移入 implemented 同名路径；被否决的写进 rejected 留论证。**禁止再新建** `docs/XXX_PLAN.md` 式顶层文档。
+- **每篇笔记强制节**：`## Decision` / `## Alternatives considered` / `## Consequences`；simplification 类加 `## Reintroduction conditions`。`scripts/check-notes.sh` 在 CI gate 中强制。
+- **写新笔记时当场检查是否取代旧笔记**，是则同一 PR 内归档旧笔记（移入 `archived/{class}/` 并加 `Archived:` 行）。归档件冻结，不再编辑、不作为现行依据。
+- **事实单一归属**：一个事实只有一个"家"（AGENTS.md 只放每会话必读的 standing orders，1-3 行 + 链接；机制细节归笔记；操作步骤归 README/ cookbook）。在其他地方提到事实时链接过去，不复述。
+- **文档只描述现状**：历史留在提交记录与笔记里；正文不写"已实现！/ 未来将…"式的状态标注。implemented 笔记用现在时描述已交付现实。
+
+## Gotchas
+
+- **Rust 里没有正则字面量**（Rust 1.92 起，edition 2021 也不再解析 `/…/` 为正则）：
+  写 `if !/^[0-9a-f]{64}$/.test(s)` 会报 `expected expression, found '/'`，
+  看起来像括号配平错误，其实是语言特性没了。一律用 `regex::Regex::new(&pat)?`
+  （见 `crates/hermix-server/src/util.rs:35`）或手写 `chars().all(...)`。
+- **打包必须含最新前端/后端/资源（每次打包前强制）**: `beforeBuildCommand` 统一跑 `apps/desktop-tauri/scripts/prepare-build.mjs`——先 `vite build` 产出 `release/frontend`（tauri 的 `frontendDist`），再 `ensure-sidecar.mjs` 编译 sidecar + 拷 binaries/ + sha256 逐字节校验；任一步失败即断。`npm run build`（dev.mjs）不再单独调用这两步，全部经钩子，**绕过 dev.mjs 直接 `cargo tauri build` 也跳不过**。**禁止手工 copy 产物**；build.rs 在 release 缺源时直接 panic。打包前仍跑 `./scripts/check-sidecar-freshness.sh`（exit 1 = 过期，禁止打包）：
+  ```bash
+  npm run build                # dev.mjs 全链路（钩子内构建前端 + sidecar）
+  ./scripts/check-sidecar-freshness.sh   # 必须 exit 0
+  ```
+  教训：2026-10-06 / 10-08 两次"修了但新装的包里没有"（sidecar 停在旧二进制）；2026-10-19 同类事故复发在前端——钩子当时只刷 sidecar，前端靠人工 `vite build`，于是 10-14 的 exe 配 10-16 的 UI、源码已到 10-18。两条根因现都由 prepare-build 钩子收口；单 workspace 决策记录：`docs/notes/implemented/architecture/2026-10-09-single-workspace-target-dir.md`。
+- `.cargo/config.toml` hardcodes MSVC linker path — don't override
+- Linker is `rust-lld.exe` (`.cargo/config.toml`), which bypasses Git Bash's `link.exe` shadow entirely — no env script needed
+- **Rust 里有两处"环境性"测试失败，不是代码坏了**（2026-10-24 实测）：`cargo test --workspace --lib` 在本机会红在这两个 crate 上 —— ① `hermix-environments`：Windows 沙箱要给临时目录授 ACL，`SetNamedSecurityInfoW failed (Win32 error 5)`（本机权限不够）；② `hermix-viewer`：测试二进制没有 comctl32 v6 的 SxS 清单 → `0xC0000139`（**别当成代码坏了，也别试图拷 DLL —— comctl32 在 KnownDLLs 里，只认清单**，修法见 `docs/notes/implemented/process/2026-10-21-tauri-rust-test-binary-comctl32-v6.md`）。要验证自己的改动，用 `cargo test --workspace --lib --exclude hermix-environments --exclude hermix-viewer`。
+- **全局热键走 `hotkey.rs` 的槽（2026-10-24）**：新增全局热键功能**不要**自己 `app.global_shortcut().register()`，用 `apps/desktop-tauri/src-tauri/src/hotkey.rs` 的 `HotkeySlot`（幂等注册 / 冲突自动兜底 / 规范化比较）。两个坑：① `HotKey` 的 `Display` 是 `"alt+KeyQ"` 而不是 `"alt+Q"`，写死字符串比较**永远不成立** —— 热键注册成功、按了没反应（用户看到的是"热键被占"）；② 插件对同一实例重复注册同一个键报 `AlreadyRegistered`，setup 兜底 + 前端启动回放必然撞上 → 前端误报"热键未生效"并回滚 UI。依据：`docs/notes/implemented/bug-fix/2026-10-24-global-hotkey-slot.md`。
+- **sccache 缓存必须 H 盘 + server 在跑**：`[profile.*] incremental` 禁止改回 `true`（否则 sccache 命中率静默归零、无报错），server 掉则静默回退 C 盘。依据与运维见 `docs/notes/implemented/process/2026-10-15-sccache-h-shared-cache.md`；起 server 用 `scripts/start-sccache.ps1`（已建开机任务 `HermixSccacheServer`）
+- Tauri v2.9.2 doesn't support standalone zip bundle — NSIS produces portable archive
+- `hermix-server` has `test-helpers` feature for integration tests
+- PR禁区: no multi-platform distribution, no external resource sensing, no cross-platform targets
+- **Agent Loop 正常流程**: LLM 思考 → `<think>` 进折叠块；LLM 输出可见文本 → Markdown 渲染给用户；LLM 调工具 → 结果写入 ctx → 下轮 LLM 自然总结。系统提示含 `THINKING_DISCIPLINE_GUIDANCE` + `REPORT_SECTIONING`（单一真相源，think.full 与 format.short 运行时拼接）+ `TOOL_FAILURE_GUIDANCE` 等（directions.rs）。`TOOL_EXECUTION_SUMMARY_GUIDANCE` / `STOPPING_SUMMARY_GUIDANCE` 已删除（曾导致 filler 压力），勿再引用。
+- **Finalize 路径 (简化 2026-07-09)**: `process_post_response` 返回 `Finalize` 时，有可见文本 → 直接结束；无可见文本（thinking-only）→ 落入 `decide_empty_response` 处理边缘情况（Codex ack / 自治模式预工具 nudge）。**不再有多轮 nudge，不再有 PatchLastAssistant** — 信任 LLM + 系统提示自然工作，不伪造 LLM 输出。**例外（2026-09-29）**：自治模式下可见文本 + 尚未用过任何工具 + nudge 额度在（`nudge_eligible`）时仍会发**一次**预工具 nudge——该豁免位于 run_loop.rs 空名过滤 finalize 处，勿删。
+- **架构改进计划**: 见 `docs/ARCHITECTURE_REFACTOR_PLAN.md` §6 — Agent Loop 核心引擎修复进度跟踪
+- **显式状态机 (AL-6)**: `LoopPhase` 枚举在 `agent_loop/types.rs` 中定义 9 个阶段，通过 `tracing::debug!` 在 `run()` / `run_stream()` 每个阶段边界发射
+- **统一工具验证 (AL-7)**: `tool_call_validator.rs` 模块集中了无效名称 + 无效 JSON 验证逻辑，返回 `ValidationOutcome` + `ApplyResult` 枚举
+- **收敛检测 (AL-8)**: `convergence_detector.rs` — 双阈值：`NoProgressWithTools` 15 轮 / `SimilarContent` 5 轮先 **advisory WARN**，到 25 轮 / 10 轮升级 **hard stop**（曾短暂改纯 advisory，但 LLM 倾向固守当前策略，commit d4d7bc9f 回退升级）；`ErrorLoop`（连续 3 轮全错）hard stop。阈值见 `convergence_detector.rs:95-121`。
+- **上下文分层 (AL-9)**: `context.rs` 模块文档定义 5 层上下文模型（System Prompt / Tool Definitions / Conversation History / Memory / Dynamic Suffix）
+- **Turn Report (AL-10)**: `turn_report.rs` 模块提供可序列化的 `TurnReport` 结构体用于每轮可观测性

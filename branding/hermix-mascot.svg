@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Hermix fox mascot">
+  <!-- shoulders / body -->
+  <path d="M150 472 C150 402 200 360 256 360 C312 360 362 402 362 472 Z" fill="#E0E7FF"/>
+  <!-- ears (behind head) -->
+  <path d="M196 150 L150 58 L250 120 Z" fill="#4F46E5"/>
+  <path d="M316 150 L362 58 L262 120 Z" fill="#4F46E5"/>
+  <path d="M205 140 L172 86 L238 122 Z" fill="#06B6D4"/>
+  <path d="M307 140 L340 86 L274 122 Z" fill="#06B6D4"/>
+  <!-- head -->
+  <path d="M256 110 C205 110 160 145 150 205 C143 250 158 305 205 345 C232 368 280 368 307 345 C354 305 369 250 362 205 C352 145 307 110 256 110 Z" fill="#4F46E5"/>
+  <!-- white muzzle -->
+  <path d="M256 248 C220 248 200 284 205 320 C210 350 235 366 256 366 C277 366 302 350 307 320 C312 284 292 248 256 248 Z" fill="#FFFFFF"/>
+  <!-- eyes -->
+  <ellipse cx="215" cy="236" rx="20" ry="26" fill="#1E1B4B"/>
+  <ellipse cx="297" cy="236" rx="20" ry="26" fill="#1E1B4B"/>
+  <circle cx="209" cy="228" r="6" fill="#FFFFFF"/>
+  <circle cx="291" cy="228" r="6" fill="#FFFFFF"/>
+  <!-- nose -->
+  <ellipse cx="256" cy="306" rx="14" ry="10" fill="#1E1B4B"/>
+  <!-- smile -->
+  <path d="M256 318 C246 330 236 330 230 324 M256 318 C266 330 276 330 282 324" stroke="#1E1B4B" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <!-- headset band -->
+  <path d="M170 178 C200 122 312 122 342 178" stroke="#06B6D4" stroke-width="14" stroke-linecap="round" fill="none"/>
+  <!-- ear cup -->
+  <rect x="130" y="212" width="42" height="48" rx="18" fill="#06B6D4"/>
+  <rect x="138" y="220" width="26" height="32" rx="13" fill="#0891B2"/>
+  <!-- mic boom -->
+  <path d="M150 258 C150 302 200 322 234 324" stroke="#06B6D4" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <circle cx="234" cy="324" r="9" fill="#0891B2"/>
+</svg>

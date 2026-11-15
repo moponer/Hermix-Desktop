@@ -1,0 +1,17 @@
+[package]
+name = "hermix-store"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Single SQLite entry point for Hermix: unified journal mode, busy timeout and crash-recovery pragmas."
+
+[dependencies]
+rusqlite = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

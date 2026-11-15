@@ -1,0 +1,1595 @@
+/* ════════════════════════════════════════════════════════════════════
+   components-layout.css — App shell, panes, navigation, list items (§1-7)
+   ──────────────────────────────────────────────────────────────────
+   Part of the components.css split. Every UI pattern used in the app
+   has ONE class. Components compose these classes instead of stacking
+   Tailwind utilities.
+
+   Design philosophy: 克制、留白、呼吸感
+   · Default spacing: 8/12/16/20/24 px — generous, not cramped
+   · Radius: 6/8/10/12 — small, never bubbly
+   · Shadow: none by default, modal-only
+   · Hover: subtle gray shift, no outlines
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ════════════════════════════════════════════════════════════════════
+   § 1.  APP SHELL & PANES
+   ════════════════════════════════════════════════════════════════════ */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  /* 用 100% 而非 100vh：界面缩放走的是根元素 `zoom`（App.tsx / UserMenuPopover.tsx），
+     而 `zoom` 只改布局尺寸、不改视口单位 —— 100vh 仍是 100% 物理视口。放大到 1.3
+     时外壳实际占 130% 视口高，超出部分被裁掉（底部输入框消失）；缩小到 0.85 时
+     外壳只占 85%，底部留一条空白。html/body 都是 height:100%，所以 100%
+     天然跟随当前缩放后的可用高度。 */
+  height: 100%;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  overflow: hidden;
+}
+
+.app-body {
+  display: grid;
+  /* 三列布局，关闭任一列时彻底归零 track。
+     - 左列 minmax(0, var(--ab-left-w, 200px)) → 默认 200，可拖到 360；
+       min 取 0 而非 --left-min，否则左列本身就成了整行 min-content 宽度的下限。
+     - 主列 minmax(0, 1fr) → 下限取 0，让主区在窄视口能被压缩。
+     - 右列 minmax(0, var(--ab-right-w, 640px)) → 上限跟随 App.tsx 的
+       right.width（用户拖动的当前值，默认 640）。硬编码 minmax(0px, 480px)
+       会把 max 锁死在 480，right.width 设到 640 也没用，track 仍被夹到 480。
+     **为什么不给主列写 580 硬下限**：580 + 200 + 右侧宽度一旦超过视口，
+     grid 会把整行撑出 .app-body，而 .app-body 是 overflow: hidden ——
+     溢出不产生滚动条，直接被裁掉，右侧/右列凭空消失。窗口缩到 780、
+     或界面缩放到 1.3（等效视口 = 视口 / 1.3）都必然触发。
+     最小可读宽度改由下方 @container 规则在窄视口下接管，而不是写死 track。
+     ⚠ 改 track 前先读 .app-shell 的 `height: 100%` 注释：界面缩放的实现方式
+     （根元素 zoom）决定了这里不能出现「像素硬下限」。
+     视口 < 1140 时右列自动关闭 (见 .app-shell[data-right-open="false"])。
+     左侧栏折叠时要把第一列归零 (见 .app-shell[data-left-open="false"])：否则只把
+     外层 div translate-x-full 移走，grid 仍占 200px，main 不扩张，视觉上
+     留下一条空白，像"sidebar 没真正折叠"。
+
+     ⚠ --col-left / --col-right 定义在 .app-shell 上（见 §1 开头），本块**只消费
+     不定义**。在这里再写一次会让它遮蔽壳上的开合覆盖，侧栏折叠随之失效。 */
+  grid-template-columns:
+    var(--col-left)
+    minmax(0, 1fr)
+    var(--col-right);
+  grid-template-rows: minmax(0, 1fr);  /* minmax(0, ...) not bare 1fr —
+                        bare `1fr` expands to `minmax(auto, 1fr)` where the
+                        `auto` minimum can resolve to the grid items'
+                        min-content size in some browser implementations,
+                        letting the row grow beyond the container's height
+                        during streaming output. `minmax(0, 1fr)` forces
+                        the minimum to 0 unambiguously. */
+  flex: 1;
+  min-height: 0;     /* critical: .app-body is a flex item of .app-shell
+                        (column flex). Default `min-height: auto` lets its
+                        grid children (Sidebar/Chat/Right) expand the
+                        container past the flex-allocated height. The grid
+                        track 1fr then grows beyond 100vh, .pane-main
+                        inherits the bloated height, ChatView's scroll
+                        container (also flex-1 + min-h-0) ends up the
+                        same size as its content → no scrollbar, and the
+                        composer input wrapper is pushed off the bottom
+                        of the viewport. Setting min-height: 0 here
+                        caps .app-body at the flex-allocated 100vh - 40px
+                        titlebar, which is the same root cause the .pane
+                        rule below already documents for the second
+                        level of the same chain. */
+  overflow: hidden;
+  position: relative;
+  background: var(--color-bg-secondary);
+  /* No grid-template-columns transition — causes the "squished"
+     mid-animation state visible when resizing panes. Immediate
+     snap is preferred over an ugly animated collapse.
+     Also: no grid animation mid-resize → columns snap instantly,
+     no overlapping/overlay flash. */
+}
+
+/* 三栏轨道的**唯一**定义处。原先放在 .app-body 上，但标题栏也要用同一组
+   值做对齐，而 CSS 变量不往上继承 —— 于是定义上提到壳，.app-body 与
+   .titlebar 各自消费，**任何一方都不得再本地重定义**（本地定义会把壳上的
+   开合覆盖遮蔽掉，侧栏折叠随之失效）。 */
+.app-shell {
+  --col-left:  minmax(0, var(--ab-left-w, 200px));
+  --col-right: minmax(0, var(--ab-right-w, 640px));
+}
+
+/* 左列关闭 → track 归零, 主列吃满左半边空间. */
+.app-shell[data-left-open="false"] {
+  --col-left: 0px;
+  --tb-left-w: 0px;
+}
+
+/* 右列关闭 → track 归零, 主列吃满右半边空间. */
+.app-shell[data-right-open="false"] {
+  --col-right: 0px;
+  --tb-right-w: 0px;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;     /* critical: without this, flex/grid children with
+                        overflowing content expand the parent beyond its
+                        allocated height, pushing bottom components (sidebar
+                        status bar, chat input) off-screen. */
+  overflow: hidden;
+  flex-shrink: 0;
+  width: 100%;       /* fill parent wrapper (the wrapper controls the actual width) */
+}
+.pane-left { background: var(--theme-bg-sidebar, var(--color-bg-secondary)); }
+/* .pane-main 的 min-width 故意不再写 — 由 .app-body 的 grid-template-columns
+   里 minmax(var(--pane-main-min), 1fr) 声明性保证, 避免与 grid track 的 min
+   双重约束造成溢出 (同时给 track 和 item 设 min-width 会让列在窄视口被压扁)。 */
+/* 主区 surface —— 单一纯色背景（2026-08-31 起不再做层次对比/拼贴色带）。
+   .pane-main 是底层骨架，.chat-surface 是 ChatView 实际铺满可见的那一层，
+   两者共用同一套规则，保证主区圆角边缘与聊天区视觉连续。
+   层次全部由浮层（glass 组件 + 阴影）表达，背景保持素净。 */
+.pane-main,
+.chat-surface {
+  background-color: var(--theme-bg-chat, var(--color-bg-primary));
+}
+
+/* 中栏 = 一张「纸」卡片：白底 + 四角圆角，浮在 .app-body 的案面（灰）上。
+   此前只有上两角圆角 + 与右栏共用一条 1px 分隔线，两栏读起来像「一张表格被
+   切开」，而不是两块可以各自滚动的内容。现在底边也留出 8px 案面，右栏同理
+   从左侧留 8px —— 中栏与右栏之间因此是「两张并排的卡片」而非一条线。
+
+   为什么顶部不内缩：标题栏就在 .app-body 正上方，内容贴住标题栏下沿才连成
+   一条完整的水平带（参考界面也是这样）；卡片感由侧边与底边的案面 + 圆角给出。 */
+.pane-main {
+  flex: 1;
+  /* 2026-10-12：主人指示去掉对话区圆角——与底边 8px 案面一起废除，
+     主区改为通铺到底，卡片隐喻只留给右栏。 */
+  overflow: hidden;
+}
+
+.pane-resizer {
+  position: absolute;
+  top: 0;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
+  transition: background var(--duration-fast) ease;
+}
+.pane-resizer:hover { background: var(--color-bg-hover); }
+.pane-resizer:active { background: var(--color-bg-active); }
+.pane-resizer-right { right: 0; }
+.pane-resizer-left { left: 0; }
+
+.pane-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--color-overlay-scrim);
+  z-index: 10;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 2.  TITLE BAR
+   ════════════════════════════════════════════════════════════════════ */
+
+.titlebar {
+  background: var(--theme-bg-titlebar, var(--color-bg-secondary));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  /* 三栏网格，与下方 .app-body 的三列共用同一组列宽 —— 标题栏里每一栏的
+     边界都对齐到正下方那一列的边界，而不是「左一点 / 右一点」。这是与参考
+     界面的核心差异：那边标题栏横跨整窗并按列分栏，我们此前是「品牌 + 弹性
+     空白 + 窗口按钮」，中栏没有任何东西，视觉上三栏根本不存在。
+
+     ⚠ 这里用的是**长度**变量 --tb-left-w / --tb-right-w，不是 .app-body 那
+     对 --col-*。后者是 minmax() 轨道函数，套进 max() 是无效 CSS，整条
+     grid-template-columns 会被构建器静默丢弃 —— 标题栏随即退回单列，三个
+     zone 竖着堆成三行（品牌 / 标题 / 窗口按钮各占一行）。曾踩过。
+
+     两端的 max() 是下限保护：
+     - 左：侧栏折叠时左列归零，但品牌不能跟着消失，保底 104px。
+     - 右：右栏收起时右列归零，但右栏 5 颗按钮（40px × 5 + 4×6px 间距 +
+       10px 右边距 ≈ 234px）必须有地方放，保底 240px。
+     窗口按钮因此在两种状态下都停在窗口最右侧（基准相同），变化的只有中栏
+     标题的可用宽度 —— 这正是期望的行为。 */
+     --tb-left-w: var(--ab-left-w, 200px);
+     --tb-right-w: var(--ab-right-w, 640px);
+     display: grid;
+     grid-template-columns:
+     max(var(--tb-left-w), 104px)
+     minmax(0, 1fr)
+     max(var(--tb-right-w), 240px);
+  align-items: center;
+  height: 40px;
+  position: relative;
+  z-index: 100;
+  flex-shrink: 0;
+  user-select: none;
+  /* 不设 overflow:hidden — 让 titlebar 内下拉（如 ThemeToggle）能向下溢出显示 */
+}
+
+.titlebar-zone {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+}
+.titlebar-zone--left { gap: 7px; padding-left: 10px; }
+.titlebar-zone--center { gap: 6px; padding: 0 12px; }
+/* 右栏 6px 统一间距 + 右端 10px 内边距：五个按钮原本 0 间距平铺，图标挤成
+   一团；关闭钮不加内边距会视觉贴住窗口右缘（无边框窗口无系统边框兜底）。
+   6px 与左/中栏的间距同一档，10px 右边距给 × 留出呼吸位。 */
+.titlebar-zone--right { justify-content: flex-end; gap: 6px; padding-right: 10px; }
+
+/* 中栏标题：单行省略。不用 JS 硬截断 —— 省略号由 CSS 按**实际可用宽度**
+   决定，标题栏宽度会随三栏开关变化，硬编码 80 字在窄栏下会提前吃掉省略。 */
+.titlebar-doc {
+  font-size: var(--text-ui);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.titlebar-doc-icon { color: var(--color-text-muted); flex-shrink: 0; }
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  /* 品牌区左侧 10px 边距 — 与 macOS 标题栏视觉锚点对齐 */
+  padding-left: 10px;
+  user-select: none;
+}
+.titlebar-brand .titlebar-title { pointer-events: none; }
+/* 墨与纸 v4：titlebar-logo（吉祥物图版）已移除，品牌 = 纯文字。
+   名字升为 text-primary 满对比（WorkBuddy 文字 logo 规律）。 */
+.titlebar-title {
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  /* 2026-09-30：负字距对中文小字是负优化（字面粘连）。改 0。 */
+  letter-spacing: 0;
+  pointer-events: none;
+}
+
+/* ── 侧栏头部：版本 + 折叠 / 搜索 ──────────────────────────────
+   这一行是侧栏自身的头部，宽度 = 侧栏宽度，按钮离它控制的对象最近。
+   品牌不放这里：窗口标题栏已有 logo + 应用名，重复一份是噪音。
+   高度对齐标题栏的 40px，两行在视觉上接成同一水平带。 */
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 6px 0 10px;
+  user-select: none;
+}
+/* 版本号用最小字级 + faint 色：它是"确认自己跑的是哪版"的信息，
+   不需要参与视觉竞争，扫一眼能找到即可。空占位保持右侧按钮靠右。 */
+.sidebar-head-version {
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  white-space: nowrap;
+}
+.sidebar-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* 侧栏折叠后，主区顶部的动作行（展开 + 搜索）。
+   真实行而非绝对定位浮层：对话标题、「专家」「自动化」等页头都在主区
+   左上，浮层必然压住其一；真实行把页面内容整体推下去，谁都不被盖。
+   对话中不渲染此行 —— 按钮直接嵌进 ModelStatusBar 标题行（同一行）。 */
+.sidebar-reveal-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 6px;
+}
+
+.titlebar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  /* 32px 而非撑满 40px 栏高：悬停/焦点底色是 40×32 的横向长方形（常规
+     标题栏的比例），而不是一整块全高方块；zone 的 align-items:center 兜住垂直居中。 */
+  height: 32px;
+  /* 右栏轨道被压窄（右栏收起时轨道只剩下限）时按钮不得被压扁成竖条 */
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  border-radius: 0;
+}
+/* 无描边：原先每个按钮一条 border-right 分隔，四个框把右上角切成一排格子，
+   在浅色下尤其像「贴上去的四个按钮」而不是窗口控件的一部分。层次交给 hover
+   底色——和全站「UI 一律不用描边」一致。 */
+.titlebar-btn:focus-visible {
+  outline: 0;
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+}
+.titlebar-btn:hover { background: var(--color-bg-hover); color: var(--color-text-secondary); }
+.titlebar-btn-danger:hover { background: var(--color-error); color: var(--color-on-accent); }
+
+/* ── Connection indicator in titlebar ── */
+.titlebar-conn-indicator {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: default;
+  transition: background var(--duration-fast) ease;
+}
+.titlebar-conn-indicator:hover { background: var(--color-bg-hover); }
+.titlebar-conn-indicator:active:not(:disabled) { transform: scale(0.9); }
+.titlebar-conn-indicator:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+}
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  transition: background var(--duration-fast) ease;
+  position: relative;
+  z-index: 1;
+}
+.conn-pulse-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-success);
+  opacity: 0.4;
+  animation: conn-pulse 1.5s ease-in-out infinite;
+}
+.conn-spin {
+  position: absolute;
+  animation: spin 1s linear infinite;
+  color: var(--color-warning);
+}
+@keyframes conn-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.4; }
+  50% { transform: scale(1.6); opacity: 0; }
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* (品牌已上移至 TitleBar,Sidebar 不再单独显示 — 避免双层标题栏) */
+
+/* ════════════════════════════════════════════════════════════════════
+   § 4.  NAVIGATION
+   ════════════════════════════════════════════════════════════════════ */
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  /* 2026-09-30：8px 上下内边距让 nav 行高到 37px，会话行只有 30px ——
+     两种行在同一个侧栏里错位，这就是"乱"的直接来源。压到 6px → 30px，
+     与会话行同高，整栏落在同一条基线网格上。 */
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  /* 2026-10-15：ui(13) → body(14)。导航是侧栏的主操作行，对照参考侧栏
+     偏小；会话标题同步升到 ui(13)，meta 时间戳保持 tiny(11) —— 一屏 3 档。 */
+  font-size: var(--text-body);
+  font-weight: 500;
+  /* 2026-10-23：secondary → primary。功能入口是侧栏的**主操作**（它们是
+     页面的入口，等同于按钮），不是次级说明；#565656 压在 #f5f5f5 上虽有
+     6.73:1（达 AA），但 14px/500 的观感偏灰，整条侧栏"发灰"。提到 primary
+     = 16.29:1，入口一眼可读。选中态仍靠字重 600 + 行底色区分。 */
+  color: var(--color-text-primary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
+}
+.nav-item:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.nav-item:active:not(:disabled) { transform: scale(0.98); }
+.nav-item:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.nav-item-active {
+  /* 2026-09-30：cc-haha 的功能导航**没有激活底色**（那一层是页面级的，
+     由主区承担指示）。我们此前给激活项一整块 --color-bg-active 圆角灰，
+     和下面的选中会话行撞成两颗"按钮"。改为只加深文字 + 字重。 */
+  background: transparent;
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.nav-item-active:hover { background: var(--color-bg-hover); }
+.nav-item svg { flex-shrink: 0; }
+
+/* 渠道选中态（ImChannelsCard 左栏）：**只靠底色差**，不加左缘强调条。
+   与 .nav-item-active 同属「选中怎么表达」的同一族决策，一致收敛到只用底色
+   加深：强调条在 232px 窄栏里把行切成了两半，读起来像分栏而不是选中。 */
+
+/* ════════════════════════════════════════════════════════════════════
+   § 5.  SECTION HEADER (collapsible group label)
+   ════════════════════════════════════════════════════════════════════
+
+   Hierarchy level 1 — the faintest, smallest "label" tier.
+   Visually separates major sections (Workspaces / Ungrouped / Chat Rooms). */
+
+.section-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  /* 2026-09-29：抄 cc-haha 分区标签 —— 11px 更小的字、更宽的 tracking，
+   * 视觉上是纯标签，不会和内容行抢注意力。 */
+  font-size: var(--text-meta);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--color-text-faint);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+  border-radius: var(--radius-sm);
+}
+.section-header-toggle:hover { color: var(--color-text-muted); background: var(--color-bg-hover); }
+.section-header-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.section-header-count {
+  /* 2026-09-30：计数胶囊（底色 + 等宽 + 18px 最小宽 + 999px 圆角）在标题
+     右侧形成一个小色块，和 cc-haha 的纯文字计数差一个量级。降为 tiny 档
+     弱化文字，保留 tabular-nums 防跳动。 */
+  font-family: var(--font-sans);
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+
+
+
+.sidebar-tree-section .section-header-toggle {
+  min-height: 28px;
+  gap: 7px;
+  font-size: var(--text-ui);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--color-text-secondary);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 6.  LIST ITEMS (chat session / workspace / chat room)
+   ════════════════════════════════════════════════════════════════════ */
+
+
+/* Main row: title + time + pulse indicator */
+/* Time — right-aligned, faint
+ *
+ * 会话列表不再显示相对时间戳 ("几小时前 / 几天前")：SessionItem 已不再
+ * 渲染这个 span，规则保留原始样式只作为占位（其它位置如有需要可恢复使用）。 */
+/* Pulse dot — shows when model is actively streaming into this session
+   keyframes 见 components.css (li-pulse 单一定义, 跨文件共享) */
+
+/* Active dot — static indicator that "this is the active session".
+ * 激活项用小圆点区分，非激活项显示相对时间。 */
+
+/* Message count meta (below title)
+ *
+ * 会话列表项不再显示 "N 条" / "X 小时前" 的冗余 metadata，SessionItem.tsx
+ * 已不再渲染这个 span，所以这条规则在会话列表上不再生效。但聊天室
+ * (ChatRoom) 列表仍用它显示 "N 个成员"，所以保留原始样式，只是不再被
+ * 会话列表触发。
+ */
+.list-item:hover .list-item-time,
+.list-item:hover .list-item-action,
+
+/* ── List group (嵌套 children, e.g. workspace 下的 session) ──
+ *
+ * Hierarchy level 3 — children indented under their parent row.
+ * 16px left margin + 2px faint accent-left border = clear depth cue.
+ * 工作区下的会话列表不使用左侧粗分隔线, 只用细 accent 左边框表达层级。
+ */
+
+/* ── List row (workspace / chat room header with chevron) ──
+ *
+ * Hierarchy level 2 — parent folder / category row.
+ * 2026-09-30：图标去强调色（此前 accent 字 + 10% 底）。cc-haha 的项目/容器
+ * 行图标是灰的 —— 侧栏靠字号与字重分层，不靠颜色分层；强调色留给主区。 */
+.list-row-chevron { color: var(--color-text-faint); flex-shrink: 0; }
+.list-row-icon {
+  width: 22px;
+  height: 22px;
+  padding: 5px;
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  background: transparent;
+  flex-shrink: 0;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 7.  USER CARD (sidebar bottom)
+   ════════════════════════════════════════════════════════════════════ */
+
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  /* 2026-10-02：去掉独立胶囊底色（此前 bg-tertiary + radius-lg），改由
+     Sidebar.tsx 的包裹层画一条 border-top 承担分隔。
+     这块与上方会话列表是**同一个连续表面**——底色差一档，视觉上就成了
+     "侧栏到此为止，下面另有一块"，可它其实还是侧栏的一部分。线只说"边界
+     在哪"，填充色才有"这是什么"的暗示。
+     transparent 而非写 sidebar 色，是为了让 --theme-bg-sidebar 换肤时
+     自动跟随，不必同步改两处。 */
+  background: transparent;
+  /* 不再 position: sticky — user-card 是 .pane-left 的直接子代,跟 .sidebar-sections
+     (flex: 1 撑满中间) 平级,文档流里永远在 aside 底部。之前的 sticky bottom: 0
+     在 zoom 改变 aside 可视边界时会被 overflow: hidden 切掉,视觉上消失。 */
+}
+.user-card-name {
+  flex: 1;
+  font-size: var(--text-meta);
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-card-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
+}
+.user-card-action:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.user-card-action:active:not(:disabled) { transform: scale(0.9); }
+.user-card-action:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+
+/* ── Top action (菜单样式的新建对话等) ── */
+.sidebar-topnav {
+  padding: 10px 12px;
+}
+/* 「新建对话」= 普通一行，和下面「定时任务 / 技能」完全同权重。
+   2026-09-30：此前先后试过实心底、淡强调底，都不对 —— cc-haha 的侧栏
+   本身几乎无彩色（强调色只花在主区 logo 上），主操作靠**位置**而不是
+   颜色来凸显：它永远是第一行。 */
+.sidebar-topnav .nav-item-primary {
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  position: relative;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-topnav .nav-item-primary:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.sidebar-topnav .nav-item-primary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 50%, transparent);
+  outline-offset: 1px;
+}
+.sidebar-topnav .nav-item-loading {
+  color: var(--color-text-muted);
+  cursor: progress;
+}
+/* 使首项与下方的横向导航有视觉分隔, 而不是顶着顶边 */
+.sidebar-topnav::after {
+  content: "";
+  display: block;
+  height: 1px;
+  background: var(--color-border-subtle);
+  margin: 8px 8px 0;
+}
+
+
+/* ── Sidebar Projects (项目 section, 参考 Notion/Apple 文件树) */
+
+.sidebar-projects-header .section-header-toggle {
+  flex: 1;
+  justify-content: flex-start;
+  min-height: 26px;
+  padding: 2px 4px;
+  font-size: var(--text-meta);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.02em;
+}
+.sidebar-projects-header:hover .sidebar-projects-actions,
+
+
+.sidebar-project { display: flex; flex-direction: column; gap: 1px; }
+
+.sidebar-project-row {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 4px;
+  border-radius: var(--radius-md);
+  transition: background var(--duration-fast) ease;
+}
+.sidebar-project-row:hover { background: var(--color-bg-hover); }
+
+.sidebar-project-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  padding: 0 4px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--color-text-primary);
+  text-align: left;
+}
+.sidebar-project-toggle .list-row-chevron { color: var(--color-text-faint); flex-shrink: 0; }
+.sidebar-project-toggle .list-row-icon {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  width: auto;
+  height: auto;
+  padding: 0;
+  background: none;
+  border-radius: 0;
+}
+.sidebar-project-name {
+font-size: var(--text-meta);
+font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.sidebar-project-row:hover .sidebar-project-row-actions,
+.sidebar-project-row:focus-within .sidebar-project-row-actions { opacity: 1; }
+
+.sidebar-project-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 0 2px 20px;
+}
+
+.sidebar-project-session {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--text-meta);
+  color: var(--color-text-secondary);
+  text-align: left;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-project-session:hover {
+  background: var(--color-bg-hover-subtle);
+  color: var(--color-text-primary);
+}
+.sidebar-project-session.is-active {
+  background: var(--color-bg-selected);
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+/* streaming indicator now rendered via JSX (Loader2 spin) — see Sidebar.tsx */
+.sidebar-project-session > .truncate-1 { flex: 1; min-width: 0; }
+
+
+/* ── Sidebar sections: compact, content-sized groups ──
+ *
+ * The middle area lists 对话 / 项目 / 聊天室. Each section is only
+ * as tall as its content; empty sections do NOT stretch and create
+ * huge fixed gaps. When the total list exceeds sidebar height the
+ * whole area scrolls. */
+
+.sidebar-sections {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* 与上方 nav 组拉开 10px，让"功能区"和"内容区"分层。 */
+  margin-top: 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 10px 0;
+}
+
+/* ── Sidebar tabs：对话 / 项目 用一体分段控件（segmented control）切换 ──
+ * 一个圆角容器包住两个选项，激活项用实底色块 + 阴影浮起，一眼可辨。 */
+.sidebar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 3px;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-tertiary);
+}
+
+.sidebar-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 3px);
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--text-ui); /* 2026-10-15：裸 12px 换令牌并升一档，与导航/会话行对齐 */
+  /* 2026-10-23：muted → secondary（5.86:1 → 6.73:1）。这两个 tab 是视图
+     切换，属于"次级但可读"的层级——比会话标题弱一档，比分组标签强一档。 */
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+.sidebar-tab:hover { color: var(--color-text-primary); }
+.sidebar-tab.is-active {
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-card);
+}
+.sidebar-tab-name {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-tab-count {
+  font-size: var(--text-micro);
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--color-bg-hover);
+  color: var(--color-text-faint);
+}
+.sidebar-tab.is-active .sidebar-tab-count {
+  background: var(--color-accent-soft, var(--color-bg-hover));
+  color: var(--color-accent, var(--color-text-secondary));
+}
+/* 当前项目 tab 底部的项目操作入口（⋯ 菜单） */
+.sidebar-tab-project-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 4px;
+}
+
+.sidebar-section {
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* 组与组之间 14px。之前完全没有间距，两个分组标题挤在一起，
+     眼睛分不出"到这里换组了"。 */
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.sidebar-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  /* 上 5px（离开上一组）下 4px（贴近自己的行）—— 上大下小，
+     标题就明确"属于"下面那一段。 */
+  padding: 5px 6px 4px;
+}
+
+.sidebar-section-header .section-header-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  justify-content: flex-start;
+  min-height: 26px;
+  padding: 3px 6px;
+  font-size: var(--text-meta);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  letter-spacing: 0.03em;
+  border-radius: 5px;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-section-header .section-header-toggle:hover,
+.sidebar-section-header .section-header-toggle:focus-visible {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.sidebar-section-header:hover .sidebar-section-actions,
+.sidebar-section-header:focus-within .sidebar-section-actions,
+
+/* section header 右侧的 +号：直接触发新建动作（对话/项目/群聊），
+   不再弹层。hover 才显，避免常驻按钮破坏极简感。 */
+
+.sidebar-action-btn {
+display: inline-flex;
+align-items: center;
+justify-content: center;
+width: 26px;
+height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
+}
+.sidebar-action-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.sidebar-action-btn:active:not(:disabled) { transform: scale(0.9); }
+.sidebar-action-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+
+/* ── Sidebar Popover (三点 / +号 弹出的菜单) ──
+ * 极简卡片：白底圆角 + 细分割 + 阴影。每项带左侧图标，danger 项用 error 红。
+ * 主题：默认/深色/雨林/日落 全部通过 var(--color-*) 自适应。 */
+.sidebar-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 180px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-pop);
+  z-index: 1000;
+  /* tiny enter animation — fade + slide up 4px */
+  animation: sidebar-popover-in 100ms ease-out;
+}
+@keyframes sidebar-popover-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.sidebar-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: var(--text-meta);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-popover-item:hover {
+  background: var(--color-bg-hover);
+}
+.sidebar-popover-item.is-danger {
+  color: var(--color-error);
+}
+.sidebar-popover-item.is-danger:hover {
+  background: var(--color-error-soft);
+}
+.sidebar-popover-item .sidebar-popover-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: inherit;
+  opacity: 0.85;
+}
+.sidebar-popover-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--color-border-subtle);
+}
+
+.sidebar-section-body {
+  flex: 0 0 auto;
+  overflow: visible;
+  padding: 0 2px 4px;
+}
+
+.sidebar-section-empty {
+  padding: 8px 10px;
+  font-size: var(--text-meta);
+  color: var(--color-text-muted);
+}
+
+/* ── 展开显示（会话/项目过多时的提示行） ──
+   仿参考图：贴在列表底部的小号 muted 文字按钮 */
+.sidebar-show-more {
+  display: block;
+  width: 100%;
+  padding: 4px 10px 6px;
+  margin-top: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-tiny);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  /* 文案含计数与（"查看全部"场景下的）项目名，长名字会把这行撑成两行。
+     截断比换行好：它是列表尾部的辅助行，不该抢条目的视觉重量。 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.sidebar-show-more:hover {
+  color: var(--color-text-secondary);
+  background: var(--color-bg-hover);
+}
+.sidebar-show-more-inset {
+  /* 项目内嵌列表需要再缩进一点，对齐子项文本 */
+  padding-left: 24px;
+}
+
+/* ── Sidebar row (session / room / leaf item) ── */
+
+.sidebar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 8px;
+  /* sm(6px) 而非 md(10px)：大圆角在 30px 高的行上会读成"胶囊按钮"。 */
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+  /* 2026-10-23：secondary → primary。会话标题是侧栏的**正文**（用户在这
+     一栏里找对话），不是元信息；元信息是右边的时间戳（保持 muted）。
+     6.73:1 → 16.29:1，13px 的会话名不再"灰得看不清"。 */
+  color: var(--color-text-primary);
+}
+.sidebar-row:hover {
+  /* 悬停只做"可点"暗示：极淡 accent（7%），比中性灰 hover 令牌浅得多。
+     此前用 --color-bg-hover（#dbe3de）在侧栏 #e8eeea 上是一块明显的脏灰，
+     用户原话「这个极其恶心」——灰块式 hover 是这套列表里最刺眼的地方。 */
+  background: var(--color-bg-hover-subtle);
+}
+.sidebar-row.is-active {
+  /* 「当前会话」是侧栏唯一需要 wayfinding 的地方——本仓库自己的规矩就是
+     「品牌色相只给主行动 / 当前选中」。2026-10-23 起这个值统一到
+     --color-bg-selected（accent 14% 自淡染），与全站选中项同一枚令牌；
+     hover 走 --color-bg-hover-subtle（7%），两者同色系、只是深浅差一档，
+     悬停 ≠ 选中但仍然在同一个"绿"的语言里，不会再出现灰块。 */
+  background: var(--color-bg-selected);
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+/* streaming indicator now rendered via JSX (Loader2 spin) — see Sidebar.tsx */
+
+.sidebar-row-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+  /* 2026-10-15：meta(12) → ui(13)。会话标题是侧栏的正文，12px 对照参考
+     明显偏小；时间戳保持 tiny(11)，主次关系不变。 */
+  font-size: var(--text-ui);
+  text-align: left;
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-fast) ease, transform var(--duration-fast) ease;
+}
+.sidebar-row-main:hover { background: var(--color-bg-hover); }
+.sidebar-row-main:active:not(:disabled) { transform: scale(0.985); }
+.sidebar-row-main:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.sidebar-row-main .truncate-1 {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+  flex-shrink: 0;
+}
+.sidebar-row:hover .sidebar-row-actions,
+.sidebar-row:focus-within .sidebar-row-actions { opacity: 1; }
+
+.sidebar-row-meta {
+  font-size: var(--text-tiny);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+/* 置顶小图标 — 紧贴标题右侧，淡淡的 accent 色 */
+.sidebar-row-pin {
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+/* 归档态：标题颜色变淡，附加斜体，hover 时还原 */
+.sidebar-row.is-archived .sidebar-row-main,
+.sidebar-row.is-archived .truncate-1,
+.sidebar-row.is-archived .sidebar-row-meta {
+  color: var(--color-text-faint);
+  font-style: italic;
+}
+
+/* Delete animation: user confirmed → fade + slide out, then dispatch
+   real delete. 2026-10-06 impeccable layout-transition：原先伴随
+   max-height/padding/margin 塌缩动画，每帧触发布局重排；改为纯
+   opacity + transform（合成器通道）。高度回缩由卸载时一次完成 ——
+   元素此刻已完全透明，视觉上不存在跳变。TSX 的
+   removing→deleting→delete 定时序列不受影响。 */
+.sidebar-row.is-removing,
+.sidebar-project.is-removing,
+.sidebar-project-session.is-removing {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-8px);
+  transition: opacity 240ms ease, transform 240ms ease;
+}
+.sidebar-row.is-deleting,
+.sidebar-project.is-deleting,
+.sidebar-project-session.is-deleting {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+/* ── New chat room inline form in sidebar ── */
+
+.sidebar-new-room {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 6px 8px;
+}
+
+.sidebar-new-room-error {
+  font-size: var(--text-meta);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sidebar-new-room-error button {
+  opacity: 0.6;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+.sidebar-new-room-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sidebar-new-room-row .input {
+  flex: 1;
+  padding: 5px 10px;
+  font-size: var(--text-ui);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   GroupChat composer — visible input box with focus-within lift
+   ════════════════════════════════════════════════════════════════════ */
+
+.groupchat-composer {
+  background: var(--color-bg-primary);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  transition: border-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+}
+.groupchat-composer:focus-within {
+  border-color: var(--color-accent);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 0 0 3px color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.groupchat-composer[data-disabled="true"] {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-border-subtle);
+  box-shadow: none;
+}
+
+/* ── 预览栏（右侧栏改造）──────────────────────────────────────
+   标签条只做「有哪些预览 + 切/关」，文件内容头部由 PreviewPanel 自己出，
+   两层是不同语义（标签 vs 文件工具条），不是重复标题。 */
+.preview-bar__strip {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  background: var(--color-bg-secondary);
+  /* 40px：与 .sidebar-head、ChatView 标题行同高，三段头部接成一条水平带。 */
+  height: 40px;
+}
+.preview-bar__icon {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.preview-bar__icon:hover,
+.preview-bar__icon.is-active {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.preview-bar__tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.preview-bar__tabs::-webkit-scrollbar { display: none; }
+.preview-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 140px;
+  padding: 2px 4px 2px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.preview-tab:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.preview-tab.is-active {
+  background: var(--color-bg-primary);
+  border-color: var(--color-border);
+  color: var(--color-text-primary);
+}
+.preview-tab__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-tab__close {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.preview-tab__close:hover { background: var(--color-bg-tertiary); color: var(--color-text-primary); }
+.preview-bar__empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px;
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
+  text-align: center;
+}
+
+/* 空态 = 入口卡片，不是一句"暂无内容"。 */
+.preview-bar__empty-title {
+  font-size: var(--text-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.preview-bar__cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  max-width: 300px;
+  margin-top: 6px;
+}
+.preview-bar__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 14px 8px;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: var(--text-ui);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+.preview-bar__card:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border);
+}
+.preview-bar__card-sub {
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  text-align: center;
+  line-height: 1.4;
+}
+/* ── 审查 / 辅助对话 两个聚合视图 ────────────────────────────
+   与文件预览共用右栏的纵向布局：头部一行摘要（.cs-spacer 推开右段），
+   下面是可滚动列表。配色沿用项目状态 token，不引入蓝紫色。 */
+.review-list,
+.subagent-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+.review-list__head,
+.subagent-list__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  background: var(--color-bg-secondary);
+  font-size: var(--text-tiny);
+  color: var(--color-text-muted);
+}
+.subagent-list__running { color: var(--color-accent); }
+
+/* 分割线规则（2026-10-11）：列表逐行线禁止——hover 底色 + 6px 行距
+   已承担扫描分隔；.review-list__head 的容器顶边线保留。 */
+.review-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: var(--text-meta);
+  text-align: left;
+  cursor: pointer;
+}
+.review-row:hover { background: var(--color-bg-hover); }
+.review-row__name { flex: 1; min-width: 0; }
+.review-row__hits {
+  flex-shrink: 0;
+  font-size: var(--text-micro);
+  color: var(--color-text-faint);
+}
+.review-row__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-micro);
+  font-weight: var(--font-weight-semibold, 600);
+}
+.review-row__tag.is-created { background: var(--color-success-soft); color: var(--color-success); }
+.review-row__tag.is-modified { background: var(--color-accent-soft-strong); color: var(--color-accent); }
+.review-row__tag.is-deleted { background: var(--color-error-soft); color: var(--color-error); }
+.review-row__tag.is-renamed { background: var(--color-bg-tertiary); color: var(--color-text-muted); }
+
+.review-empty,
+.subagent-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--color-text-faint);
+}
+.review-empty__title,
+.subagent-empty__title {
+  font-size: var(--text-ui);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+/* 子代理卡片用 <details>：默认折叠（大多数子代理已结束，不需要占屏），
+   失败项强制展开（fail-open 原则：出错时最该被看见）。
+   分割线规则（2026-10-11）：逐卡片 border-bottom 取消——相位色点 +
+   任务文本已区分，卡片靠间距分隔；头部容器线（.subagent-list__head）保留。 */
+.subagent-card + .subagent-card {
+  margin-top: 2px;
+}
+.subagent-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.subagent-card__head::-webkit-details-marker { display: none; }
+.subagent-card__head:hover { background: var(--color-bg-hover); }
+.subagent-card__task {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-meta);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagent-card__chevron {
+  flex-shrink: 0;
+  color: var(--color-text-faint);
+  transition: transform var(--duration-fast) ease;
+}
+.subagent-card[open] .subagent-card__chevron { transform: rotate(90deg); }
+.subagent-card__phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-micro);
+  font-weight: var(--font-weight-semibold, 600);
+}
+.subagent-card__phase.is-spawned,
+.subagent-card__phase.is-started {
+  background: var(--color-accent-soft-strong);
+  color: var(--color-accent);
+}
+.subagent-card__phase.is-done { background: var(--color-success-soft); color: var(--color-success); }
+.subagent-card__phase.is-failed { background: var(--color-error-soft); color: var(--color-error); }
+.subagent-card__meta {
+  display: flex;
+  gap: 10px;
+  padding: 0 10px 6px;
+  font-size: var(--text-tiny);
+  color: var(--color-text-muted);
+}
+.subagent-card__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 0 10px 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  font-size: var(--text-tiny);
+  line-height: 1.5;
+}
+.subagent-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.subagent-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--text-tiny);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+.subagent-step__idx {
+  flex-shrink: 0;
+  min-width: 15px;
+  text-align: right;
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.subagent-step__text { min-width: 0; overflow-wrap: anywhere; }
+
+/* ── 窗口缩放/最大化/还原期间的性能护栏 ───────────────────────
+   最大化与还原是「整窗重排 + 重绘」最重的时刻：backdrop-filter 每帧要
+   重新采样背景、常驻 infinite 动画每帧要重绘、transition 会在尺寸变化
+   时被误触发。缩放期间统一关掉，停手 120ms 后恢复 —— 视觉上察觉不到，
+   卡顿却能明显减轻。 */
+.is-resizing *,
+.is-resizing {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  animation-play-state: paused !important;
+  transition: none !important;
+}
+
+
+/* ── 从 components.css 迁入（2026-09-29）────────────────────────
+   components.css 是 components-*.css 的陈旧副本，两者曾同时加载且后者
+   胜出，288 个选择器被双定义。以下是仅存在于旧副本里的规则，随该文件
+   一并删除。 */
+.user-menu-popover {
+  min-width: 220px;
+  border-radius: var(--radius-xl);
+  /* 墨与纸 v4 · 弹层纪律：无描边 + 底部单向投影（模拟顶光，浮层"坐"在
+     页面上）；背景用 elevated（暗 #262626，接近参考的 #242424）。 */
+  background: var(--color-bg-elevated);
+  box-shadow:
+    var(--shadow-modal);
+  overflow: hidden;
+  animation: menu-slide-up 0.15s ease-out;
+}
+
+.user-menu-main {
+  padding: 4px;
+}
+
+/* 危险项前的独立分隔线（墨与纸 v4）：断开视觉流，让危险操作"隔一段"出现 */
+.user-menu-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--color-border-subtle);
+}
+
+.user-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-ui);
+  color: var(--color-text-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+  text-align: left;
+}
+
+.user-menu-row:hover { background: var(--color-bg-hover); }
+
+.user-menu-row.is-open { background: var(--color-bg-tertiary); }
+
+.user-menu-row.is-danger { color: var(--color-error); }
+
+.user-menu-row.is-danger:hover { background: var(--color-error-soft); }
+
+.user-menu-sub {
+  margin: 2px 0 2px 22px;
+  padding: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.user-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-meta);
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  text-align: left;
+}
+
+.user-menu-item:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+
+.user-menu-item.is-active { color: var(--color-accent); }
+
+/* 用户菜单弹出动画。
+   2026-09-29 从已删除的 components.css 迁回——唯一定义在被删的副本里。 */
+@keyframes menu-slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 搜索行（cc-haha 位置：功能导航之下、分组之上）
+   一条安静的胶囊：放大镜 + 占位文案 + Ctrl K 提示。整行可点，作用是唤起
+   既有搜索弹窗（onOpenSearch），不在侧栏内做输入 —— 侧栏宽度只有
+   240px，塞一个真输入框会把会话列表挤没。
+   ════════════════════════════════════════════════════════════════════ */
+.sidebar-search {
+  padding: 0 10px;
+  margin-top: 8px;
+  flex-shrink: 0;
+}
+.sidebar-search-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-faint);
+  font-family: inherit;
+  font-size: var(--text-ui);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-search-btn:hover {
+  background: var(--color-bg-active);
+  color: var(--color-text-secondary);
+}
+.sidebar-search-label { flex: 1; text-align: left; }
+.sidebar-search-kbd {
+  font-family: var(--font-sans);
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  opacity: 0.8;
+}

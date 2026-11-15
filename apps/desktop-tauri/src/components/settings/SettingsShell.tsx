@@ -1,0 +1,667 @@
+import {
+  lazy, Suspense,
+  useCallback, useEffect, useMemo, useRef, useState,
+  type ReactNode,
+} from "react";
+import { IPC } from "../../ipc/commands";
+import { invoke } from "../../ipc";import {
+  ArrowLeft, Search, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
+  Plug, Sparkles, Network, Image as ImageIcon, Activity, Shield,
+  Archive, Palette, Brain, AppWindow, Mic, X, Camera, FlaskConical,
+} from "lucide-react";
+
+import { cx } from "../../lib/cx";
+import { type IconTone } from "../../lib/categoryTone";
+import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
+import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
+import { Switch, SettingsGroup, SettingsRow, SegmentedControl, Input, IconTile } from "../ui";
+import { toastWarning } from "../../hooks/useToast";
+/**
+ * 设置页**全部**懒加载：每一页都自带负载（模型列表要拉 `/v1/models`、诊断页
+ * 要跑探测、归档页要扫库、记忆页拖着 ~1MB 的 echarts）。打开设置弹窗只该付
+ * 「外壳 + 当前那一页」的钱。
+ *
+ * 统一成一个 `Suspense`（兜底是空盒子而非「加载中」文案：本地 chunk 通常
+ * <50ms，闪一行字比不闪更差，DesignGuard 也禁止视图里写加载文案）。
+ */
+const PluginsTab = lazy(() =>
+  import("../config/ToolTabs").then((m) => ({ default: m.PluginsTab })),
+);
+const SkillsTab = lazy(() =>
+  import("../config/ToolTabs").then((m) => ({ default: m.SkillsTab })),
+);
+const ConnectorsTab = lazy(() =>
+  import("../config/ToolTabs").then((m) => ({ default: m.ConnectorsTab })),
+);
+const ToolsetsTab = lazy(() =>
+  import("../config/ToolTabs").then((m) => ({ default: m.ToolsetsTab })),
+);
+const ModelListTab = lazy(() =>
+  import("./ModelListTab").then((m) => ({ default: m.ModelListTab })),
+);
+const SecurityTab = lazy(() =>
+  import("./SecurityTab").then((m) => ({ default: m.SecurityTab })),
+);
+const BackendTab = lazy(() =>
+  import("./BackendSettingsTab").then((m) => ({ default: m.BackendTab })),
+);
+const AdvancedTab = lazy(() =>
+  import("./AdvancedSettingsTab").then((m) => ({ default: m.AdvancedTab })),
+);
+const DiagnosticsTab = lazy(() =>
+  import("./DiagnosticsTab").then((m) => ({ default: m.DiagnosticsTab })),
+);
+const RuntimesTab = lazy(() =>
+  import("./RuntimesTab").then((m) => ({ default: m.RuntimesTab })),
+);
+const DevicesTab = lazy(() =>
+  import("./DevicesTab").then((m) => ({ default: m.DevicesTab })),
+);
+const VoiceTab = lazy(() =>
+  import("./VoiceTab").then((m) => ({ default: m.VoiceTab })),
+);
+const GeneralTab = lazy(() =>
+  import("./GeneralTab").then((m) => ({ default: m.GeneralTab })),
+);
+const AppearanceTab = lazy(() =>
+  import("./AppearanceTab").then((m) => ({ default: m.AppearanceTab })),
+);
+const ArchiveTab = lazy(() =>
+  import("./ArchiveTab").then((m) => ({ default: m.ArchiveTab })),
+);
+const MemoryTab = lazy(() =>
+  import("./MemoryTab").then((m) => ({ default: m.MemoryTab })),
+);
+
+/**
+ * 设置：左导航（分组 + 搜索）+ 右内容区。
+ *
+ * **2026-10-19 起是浮层弹窗（dialog）**。此前一度改成整页
+ * （`NavPage="systemconfig"`），理由写在这里存档：整页意味着设置与
+ * 「应用 / 工作台」同级、切走时顺带关右栏。用户重新拍板要弹窗形态——
+ * 调完设置就关、不打断当前会话，这是弹窗的价值；因此外壳交回
+ * `ui/Modal`（焦点陷阱 / Esc / 点击外部关闭由它统一负责），本组件只
+ * 保留 `variant="dialog"` 的布局能力，不再承担整页路由。
+ *
+ * 为什么从平铺分类改成分组：7 个平铺项在 780px 高的面板里要靠图标 +
+ * 两行文字才能区分"工具"和"插件/技能/连接器/工具集"这四件同源的事。
+ * 分组后"插件组四项"和"偏好组两项"的关系一眼可见，导航项也从 7 变 15
+ * 但认知负担反而降——因为组名承担了归类信息。
+ *
+ * 四个工具子 tab 提升为一级导航项（原先藏在"工具"下面的横条里），
+ * 与 ZCode 的"插件组直接列插件/技能/MCP/Agents"一致：它们本来就是四件
+ * 独立的配置，不该挤在一条 200px 宽的横条里互相挤掉标签。
+ */
+export type SettingsPage =
+  | "general" | "appearance" | "model" | "image"
+  | "plugins" | "skills" | "connectors" | "toolsets"
+  | "backend" | "runtimes" | "devices" | "voice" | "security" | "fileassoc" | "archive"
+  | "memory" | "diagnostics" | "advanced";
+
+interface PageDef {
+  id: SettingsPage;
+  label: string;
+  /** 侧栏搜索命中用（不渲染）。 */
+  hint: string;
+  icon: React.ElementType;
+  /** 预留的类目色相（8 档 `--color-tone-*`）。**导航当前不上色**
+   *  （2026-10-24 用户复核后维持 2026-10-23 的单色方案），所以这个字段
+   *  暂不参与渲染；留在这里是为了记录"每个设置页属于哪一类"，
+   *  内容区将来若需要按类目着色不必再推一遍。 */
+  tone: IconTone;
+  /** 搜索命中用；不写就只能靠标题字面匹配。 */
+  keywords?: string;
+}
+
+interface GroupDef {
+  label: string;
+  items: PageDef[];
+}
+
+const GROUPS: GroupDef[] = [
+  {
+    label: "偏好",
+    items: [
+      { id: "general", label: "通用", hint: "工作模式、输入快捷键、系统能力与数据位置", icon: SlidersHorizontal, tone: "slate", keywords: "mode domain 编程 办公 通知 自启 索引" },
+      { id: "appearance", label: "外观", hint: "主题、强调色与壁纸，立即生效并持久保存", icon: Palette, tone: "rose", keywords: "theme 主题 深色 浅色 跟随系统 强调色 accent 对比度" },
+      { id: "model", label: "模型", hint: "统一管理内置与自定义模型；内置供应商只需填 API Key", icon: Cpu, tone: "violet", keywords: "model llm provider api key 供应商" },
+      { id: "image", label: "截图", hint: "系统截图热键与开关", icon: ImageIcon, tone: "orange", keywords: "image 截图 screenshot 热键 hotkey 快捷键" },
+    ],
+  },
+  {
+    label: "插件",
+    items: [
+      { id: "plugins", label: "插件", hint: "内置插件开关", icon: Plug, tone: "slate", keywords: "plugin 插件" },
+      { id: "skills", label: "技能", hint: "技能库与启停", icon: Sparkles, tone: "violet", keywords: "skill 技能" },
+      { id: "connectors", label: "连接器", hint: "MCP 服务端接入与社区目录", icon: Network, tone: "blue", keywords: "mcp connector 连接器 服务器" },
+      { id: "toolsets", label: "工具集", hint: "工具白名单", icon: Boxes, tone: "cyan", keywords: "toolset 工具 工具集" },
+    ],
+  },
+  {
+    label: "管理",
+    items: [
+      { id: "backend", label: "后端服务", hint: "本地服务与健康状态", icon: Server, tone: "blue", keywords: "backend server 服务 端口 健康" },
+      { id: "runtimes", label: "内置运行时", hint: "Node / Python / Git 便携内置，优先于系统 PATH", icon: Boxes, tone: "cyan", keywords: "runtime node python git 运行时" },
+      { id: "devices", label: "设备管理", hint: "IM 机器人与桌面配对两条通道；高危工具一律在桌面端强制确认", icon: Smartphone, tone: "slate", keywords: "device 设备 配对 权限" },
+      { id: "voice", label: "手机语音识别", hint: "配置云端语音识别 provider，手机端长按说话直发该 provider；未开启则手机仅支持文字", icon: Mic, tone: "orange", keywords: "voice 语音 识别 asr stt minimax 转文字 手机" },
+      { id: "security", label: "安全", hint: "覆盖写入前先备份旧版本，误改可回滚", icon: Shield, tone: "amber", keywords: "security 安全 备份 backup" },
+      { id: "fileassoc", label: "文件关联", hint: "勾选后由 Hermix 文件查看器接管对应扩展名；取消即恢复原程序", icon: AppWindow, tone: "green", keywords: "file association 关联 打开方式 viewer 查看器 md pdf png" },
+      { id: "archive", label: "已归档", hint: "归档只是从侧栏收起，数据仍在本机，取消归档即可恢复", icon: Archive, tone: "slate", keywords: "archive 归档 已归档" },
+      { id: "memory", label: "记忆管理", hint: "记忆图谱、角色提示词、全局记忆文本与每日记忆的查看与编辑", icon: Brain, tone: "rose", keywords: "memory 记忆 图谱 记忆库 persona 角色 soul 长期记忆 每日记忆 遗忘" },
+    ],
+  },
+  {
+    label: "诊断",
+    items: [
+      { id: "diagnostics", label: "诊断", hint: "日志、审计与网络出口；后端日志写入 hermix_home/logs/", icon: Activity, tone: "cyan", keywords: "diagnostics 日志 log 审计 出网" },
+      { id: "advanced", label: "高级", hint: "压缩、子 Agent 等内部参数；修改后需重启生效", icon: FlaskConical, tone: "slate", keywords: "advanced 高级 实验 config yaml" },
+    ],
+  },
+];
+
+const ALL_PAGES = GROUPS.flatMap((g) => g.items);
+
+/** 旧 `ConfigCategory` 的 id → 新页。保留是为了不打断既有调用点。 */
+const LEGACY_ALIAS: Record<string, SettingsPage> = {
+  tools: "connectors",
+  diagnostics: "diagnostics",
+};
+
+export function resolvePage(id?: string): SettingsPage {
+  if (!id) return "general";
+  const hit = ALL_PAGES.find((p) => p.id === id);
+  if (hit) return hit.id;
+  return LEGACY_ALIAS[id] ?? "general";
+}
+
+export interface SettingsShellProps {
+  /** 关闭设置（dialog）或返回上一页（page）。 */
+  onBack: () => void;
+  initialPage?: string;
+  /** `page`：带"返回工作区"条的整页；`dialog`：浮层内使用，无返回条，
+   *  由外层 Modal 的标题栏和关闭按钮承担。默认 `page`。 */
+  variant?: "page" | "dialog";
+}
+
+export function SettingsShell({ onBack, initialPage, variant = "page" }: SettingsShellProps) {
+  const [page, setPage] = useState<SettingsPage>(() => resolvePage(initialPage));
+  const [query, setQuery] = useState("");
+  const [toolQuery, setToolQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // cmd+K 聚焦搜索；ESC 先清空搜索、再返回上一页。搜索框抢走焦点后 ESC
+  // 若直接返回，用户"只想退出搜索"却会被踢出设置页 —— 所以分两级。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
+      if (e.key === "Escape") {
+        if (query) { setQuery(""); return; }
+        onBack();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onBack, query]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return GROUPS;
+    const terms = q.split(/\s+/);
+    return GROUPS.map((g) => ({
+      ...g,
+      items: g.items.filter((p) => {
+        const hay = `${p.label} ${p.hint} ${p.keywords ?? ""}`.toLowerCase();
+        return terms.every((t) => hay.includes(t));
+      }),
+    })).filter((g) => g.items.length > 0);
+  }, [query]);
+
+  const current = useMemo(
+    () => ALL_PAGES.find((p) => p.id === page) ?? ALL_PAGES[0],
+    [page],
+  );
+
+  const go = useCallback((id: SettingsPage) => {
+    setPage(id);
+    setQuery("");
+  }, []);
+
+  const dialog = variant === "dialog";
+
+  const navNode = (
+    /* 无右边线：侧栏与内容区同底色，靠内容区自己的内边距与卡片分界。
+       加一条竖线等于在已经平整的面上再画一刀。 */
+    <nav className="flex w-[228px] shrink-0 flex-col bg-[var(--color-bg-secondary)]">
+      <div className="px-3 pb-1 pt-3">
+        <div className="relative">
+          <Search className="icon-md pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
+          <Input
+            ref={searchRef}
+            size="md"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="搜索设置…"
+            aria-label="搜索设置"
+            className="pl-8"
+          />
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        {filtered.length === 0 ? (
+          <div className="px-3 py-6 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+            没有匹配「{query}」的设置项
+          </div>
+        ) : (
+          filtered.map((g) => (
+            <div key={g.label} className="mb-2">
+              <div className="px-3 pb-1 pt-4 text-[length:var(--text-meta)] font-medium text-[var(--color-text-faint)]">
+                {g.label}
+              </div>
+              {g.items.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => go(id)}
+                  aria-current={page === id ? "page" : undefined}
+                  className={cx(
+                    "m-tint m-press flex w-full items-center gap-2.5 rounded-[var(--radius-md)] px-3 py-2 text-left",
+                    /* 选中态用「深一档的底 + 满墨文字」，强调色只留给开关和
+                       主按钮——导航是位置，不是行动。把强调色铺在导航上，
+                       整块侧栏会抢走内容的注意力。 */
+                    page === id
+                      ? "bg-bg-selected text-[var(--color-text-primary)]"
+                      : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]",
+                  )}
+                >
+                  {/* 导航图标**不上色**（2026-10-23 决定，2026-10-24 用户复核后维持）：
+                      侧栏是"位置"，不是"内容"。18 项各带一块彩色底时，整条侧栏
+                      变成一条彩虹，抢夺右内容区的注意力，而且彩色块本身比文字重，
+                      扫视时先看到色块再读字，反而更慢。
+                      改为随文字色的单色描边图标：选中态跟 primary、未选中
+                      跟 secondary，与文字一起进退，侧栏退成背景。
+                      彩色身份色只留在**内容区**（类目卡片 / 功能行的实心块），
+                      那里才需要"这是什么"的线索。
+
+                      （2026-10-23 曾按"参照样式"把它改成实心彩色块，实测截图后
+                      用户明确要求"这个菜单的图标不要颜色"，故回退到本方案。彩色
+                      块保留在内容区的设置行与配置页列表上。） */}
+                  <Icon className="icon-md shrink-0" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate text-[length:var(--text-ui)]">{label}</span>
+                </button>
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+    </nav>
+  );
+
+  /* 右内容：与侧栏同为案面（#f5f5f5），卡片才是抬起的白面。
+     2026-10-19 反转了「页面最亮、卡片后退」的方向——那套让每张卡都得靠
+     描边撑存在感；反过来（灰案 + 白卡 + 极淡投影）一眼就是「信息块」，
+     也不需要边框。`--color-bg-card` 在这里被重写成 elevated，
+     所有子页面里的 bg-card 自动变成白卡，无需逐页改类名。 */
+  /* key={current.id}：切页时整块重挂，配合 .settings-page-fade 做一次淡入。
+     没有它，17 个页面之间切换是硬切 —— 内容完全替换而外框不动，视觉上
+     像「闪了一下」。淡入 160ms 足够表达「换了一页」，又不会拖慢连点。 */
+  const contentNode = (
+    <div
+      key={current.id}
+      className="settings-page-fade min-w-0 flex-1 overflow-y-auto bg-[var(--color-bg-primary)]"
+    >
+      <PageBody def={current} toolQuery={toolQuery} onToolQuery={setToolQuery} />
+    </div>
+  );
+
+  if (dialog) {
+    return (
+      <div className="flex h-full min-h-0">
+        {navNode}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* 36px 拖拽条只压在内容列上：左导航保持通天，避免出现一条横贯
+              面板的标题带（用户实测 56px 头部"又高又不舒服"）。整条都是
+              移动把手，关闭钮除外。 */}
+          <div
+            data-modal-drag-handle
+            className="flex h-9 shrink-0 cursor-grab select-none items-center justify-between bg-[var(--color-bg-secondary)] pl-6 pr-2 active:cursor-grabbing [touch-action:none]"
+          >
+            <span className="text-[length:var(--text-meta)] font-medium text-[var(--color-text-faint)]">
+              设置
+            </span>
+            <button
+              onClick={onBack}
+              aria-label="关闭设置"
+              className="grid size-7 cursor-pointer place-items-center rounded-full text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+          <div className="flex min-h-0 flex-1 overflow-hidden">{contentNode}</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-[var(--color-bg-app)]">
+      <div className="flex shrink-0 items-center gap-3 bg-[var(--color-bg-secondary)] px-4 py-2.5">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+        >
+          <ArrowLeft className="icon-sm" />
+          返回工作区
+        </button>
+        <span className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+          设置
+        </span>
+      </div>
+
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        {navNode}
+        {contentNode}
+      </div>
+    </div>
+  );
+}
+
+/** 内容区页头：页名。页名下方不再挂说明句 —— 与侧栏同一条 label 复述
+ *  两遍不产生信息（AGENTS.md「界面审查先做减法」）。`PageDef.hint` 只留作
+ *  侧栏搜索的命中词，不再渲染。 */
+function PageHeading({ def }: { def: PageDef }) {
+  const { icon: Icon } = def;
+  return (
+    <header className="mb-6 flex items-center gap-3">
+      {/* 页头与侧栏同形同色（单色描边）：它们是同一件事的两个位置，
+          位置标记不承担"类目"语义 —— 类目色只出现在内容区的卡片图标上。 */}
+      <Icon className="icon-lg shrink-0 text-[var(--color-text-muted)]" aria-hidden />
+      <h2 className="text-[length:var(--text-title)] font-semibold text-[var(--color-text-primary)]">{def.label}</h2>
+    </header>
+  );
+}
+
+function PageBody({
+  def, toolQuery, onToolQuery,
+}: {
+  def: PageDef;
+  toolQuery: string;
+  onToolQuery: (q: string) => void;
+}) {
+  return (
+    <Suspense fallback={<div className="h-40" aria-hidden />}>
+      <PageBodyInner def={def} toolQuery={toolQuery} onToolQuery={onToolQuery} />
+    </Suspense>
+  );
+}
+
+function PageBodyInner({
+  def, toolQuery, onToolQuery,
+}: {
+  def: PageDef;
+  toolQuery: string;
+  onToolQuery: (q: string) => void;
+}) {
+  switch (def.id) {
+    case "general": return <Section><PageHeading def={def} /><GeneralTab /></Section>;
+    case "appearance": return <Section><PageHeading def={def} /><AppearanceTab /></Section>;
+    case "model": return <ModelListTab />;
+    case "image": return <Section><PageHeading def={def} /><ScreenshotSettingsCard /></Section>;
+    case "plugins": return <ToolSection><PageHeading def={def} /><PluginsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "skills": return <ToolSection><PageHeading def={def} /><SkillsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "connectors": return <ToolSection><PageHeading def={def} /><ConnectorsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "toolsets": return <ToolSection><PageHeading def={def} /><ToolsetsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "backend": return <Section><PageHeading def={def} /><BackendTab /></Section>;
+    case "runtimes": return <Section wide><PageHeading def={def} /><RuntimesTab /></Section>;
+    case "devices": return <Section wide><PageHeading def={def} /><DevicesTab /></Section>;
+    case "voice": return <Section><PageHeading def={def} /><VoiceTab /></Section>;
+    case "security": return <Section wide><PageHeading def={def} /><SecurityTab /></Section>;
+    case "fileassoc": return <Section><PageHeading def={def} /><FileAssocTab /></Section>;
+    case "archive": return <Section><PageHeading def={def} /><ArchiveTab /></Section>;
+    // 空占位而非文案：本地 chunk 加载通常 <50ms，闪一下「加载中」比不闪更差
+    // （DesignGuard 也禁止视图里写字面量加载文案）。
+    case "memory": return (
+      <Section wide>
+        <PageHeading def={def} />
+        <Suspense fallback={<div className="h-40" aria-hidden />}>
+          <MemoryTab />
+        </Suspense>
+      </Section>
+    );
+    case "diagnostics": return <Section wide><PageHeading def={def} /><DiagnosticsTab /></Section>;
+    case "advanced": return <Section><PageHeading def={def} /><AdvancedTab /></Section>;
+  }
+}
+
+/* 内容左对齐（不再 mx-auto）：侧栏选中项与内容块共用同一条左起始线，
+   扫视路径是直的；居中对齐会让每页的左边界随宽度漂移。 */
+function Section({ children, wide }: { children: ReactNode; wide?: boolean }) {
+  return (
+    <div className="px-7 py-6">
+      <div className={wide ? undefined : "max-w-[760px]"}>{children}</div>
+    </div>
+  );
+}
+
+function ToolSection({ children }: { children: ReactNode }) {
+  return <div className="px-7 py-6">{children}</div>;
+}
+
+// ── 图像页：只剩系统截图偏好。图片生成设置已于 2026-10-18 移除——
+// 无后端能力支撑，纯 localStorage 摆设（决策见前后端对接审查）。
+
+// ── 图像：系统截图偏好（前端持久化 + Rust 即时应用） ──────────────
+// 持久化走 localStorage（screenshotConfig），与 imageConfig 同模式；生效
+// 走 screenshot_apply_config 命令即时重注册全局热键，启动时 main.tsx 回放。
+//
+// **本地存的是"用户请求的键"，真正生效的键可能不是它** —— 热键被别的
+// 程序占着时 Rust 会自动换备选键（hotkey.rs）。所以页面要显示 Rust 侧
+// 的真实状态，而不是本地配置的回显。
+
+interface ScreenshotConfig {
+  enabled: boolean;
+  hotkey: string;
+}
+
+/** Rust 侧 hotkey.rs::HotkeyStatus 的前端对应物。 */
+interface HotkeyStatus {
+  /** 真正生效的热键展示名（"Alt+Q"）；null = 没注册。 */
+  active: string | null;
+  /** 用户请求的热键展示名。 */
+  requested: string | null;
+  /** true = 请求的键被占用，实际用的是备选键。 */
+  substituted: boolean;
+}
+
+// 显式宽化成 string：否则 const 字面量把 SegmentedControl 的泛型推成
+// 字面量联合，与 cfg.hotkey（string）不兼容。
+const SCREENSHOT_HOTKEYS: { value: string; label: string }[] = [
+  { value: "alt+Q", label: "Alt+Q" },
+  { value: "ctrl+Alt+A", label: "Ctrl+Alt+A" },
+  { value: "printscreen", label: "PrtSc" },
+  { value: "F4", label: "F4" },
+];
+
+function loadScreenshotConfig(): ScreenshotConfig {
+  try {
+    const raw = storage.getItem(STORAGE_KEYS.screenshotConfig);
+    if (raw) return { enabled: true, hotkey: "alt+Q", ...(JSON.parse(raw) as Partial<ScreenshotConfig>) };
+  } catch { /* ignore */ }
+  // 无存储 = 从未配置过：保持 Rust setup 已注册的默认 Alt+Q，不触发 apply。
+  return { enabled: true, hotkey: "alt+Q" };
+}
+
+function ScreenshotSettingsCard() {
+  const [cfg, setCfg] = useState<ScreenshotConfig>(loadScreenshotConfig);
+  const prevRef = useRef<ScreenshotConfig>(cfg);
+  /** Rust 侧真正生效的热键（可能被占用后换了备选键）。 */
+  const [active, setActive] = useState<string | null>(null);
+
+  // 进页时读一次真实状态：本地配置只是"用户请求的键"。
+  useEffect(() => {
+    let alive = true;
+    void invoke<HotkeyStatus>(IPC.screenshotHotkeyStatus)
+      .then((st) => { if (alive) setActive(st.active); })
+      .catch(() => { /* 旧版 exe 没这条命令：忽略，页面照常用 */ });
+    return () => { alive = false; };
+  }, []);
+
+  // 变更 → 持久化 + 即时应用。Rust 侧顺序是"先注册新、再解旧"，
+  // 注册彻底失败时旧热键仍在 —— 那才回滚 UI。
+  // 注册成功但**换了备选键**（原键被占）不算失败：保留用户选的配置，
+  // 另行提示"已改用 X"，并把生效键显示出来。
+  const apply = (next: ScreenshotConfig) => {
+    const prev = prevRef.current;
+    setCfg(next);
+    prevRef.current = next;
+    storage.setItem(STORAGE_KEYS.screenshotConfig, JSON.stringify(next));
+    void invoke<HotkeyStatus>(IPC.screenshotApplyConfig, { enabled: next.enabled, hotkey: next.hotkey })
+      .then((st) => {
+        setActive(st.active);
+        if (st.substituted) {
+          toastWarning(
+            `截图热键 ${st.requested ?? next.hotkey} 被其他程序占用，已自动改用 ${st.active}`,
+          );
+        }
+      })
+      .catch((err) => {
+        setCfg(prev);
+        prevRef.current = prev;
+        storage.setItem(STORAGE_KEYS.screenshotConfig, JSON.stringify(prev));
+        toastWarning(`截图热键未生效：${String(err)}`);
+      });
+  };
+
+  // 选中的键与实际生效的键不一致 → 说明被占用后换了备选键，必须写出来，
+  // 否则用户看着"我选了 Alt+Q"，实际按的是别的键。
+  const substituted = active !== null && !cfg.enabled
+    ? false
+    : active !== null && !SCREENSHOT_HOTKEYS.some((h) => h.label === active);
+
+  return (
+    <div className="mt-6 space-y-6">
+      <SettingsGroup>
+        <SettingsRow
+          icon={<IconTile icon={<Camera className="icon-md" />} tone="orange" />}
+          title="启用系统截图"
+          description="选区直接进剪贴板。"
+          control={
+            <Switch
+              checked={cfg.enabled}
+              onChange={(v) => apply({ ...cfg, enabled: v })}
+              label="启用系统截图"
+            />
+          }
+        />
+        <SettingsRow
+          title="截图热键"
+          description="任何应用内可用。"
+        >
+          <SegmentedControl
+            label="截图热键"
+            size="sm"
+            options={SCREENSHOT_HOTKEYS}
+            value={cfg.hotkey}
+            onChange={(v) => apply({ ...cfg, hotkey: v })}
+            className="mt-2"
+          />
+          {substituted && (
+            <p className="mt-2 text-[length:var(--text-meta)] text-text-secondary">
+              当前实际生效：{active}
+            </p>
+          )}
+        </SettingsRow>
+      </SettingsGroup>
+    </div>
+  );
+}
+
+// ── 文件关联：viewer 接管扩展名（HKCU 登记，显式授权） ─────────────
+
+interface FileAssocEntry {
+  ext: string;
+  /** 真正生效：系统会用 Hermix 查看器打开该扩展名。 */
+  owned: boolean;
+  /** 登记了，但系统「打开方式」记录（UserChoice）压着 → 勾了也不生效。 */
+  blocked: boolean;
+  /** 登记了，但查看器路径已失效 → 双击打不开。 */
+  stale: boolean;
+}
+
+/** 一行关联的真实状态说明（不复述「勾了没有」，只说清「现在到底是谁在打开」）。 */
+function fileAssocStatus(e: FileAssocEntry): string {
+  if (e.owned) return "已由查看器接管";
+  if (e.blocked) return "被系统「打开方式」记录压住，重新勾选可接管";
+  if (e.stale) return "查看器路径已失效，重新勾选可修复";
+  return "当前由其他程序处理";
+}
+
+function FileAssocTab() {
+  const [entries, setEntries] = useState<FileAssocEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  /** 回读真实状态：开关显示的是「真正生效」，不是「我们写进去了」。 */
+  const refresh = useCallback(
+    () =>
+      invoke<FileAssocEntry[]>(IPC.fileAssocList)
+        .then(setEntries)
+        .catch((e) => setError(String(e instanceof Error ? e.message : e))),
+    [],
+  );
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const toggle = (ext: string, enable: boolean) => {
+    setBusy(ext);
+    setError(null);
+    void invoke(IPC.fileAssocSet, { ext, enable })
+      .then(() => refresh())
+      .catch((e) => {
+        setError(String(e instanceof Error ? e.message : e));
+        // 失败也回读：注册表可能已改了一半（写了默认值但没清掉系统记录），
+        // 界面必须显示真实状态而不是乐观值。
+        void refresh();
+      })
+      .finally(() => setBusy(null));
+  };
+
+  return (
+    <div>
+      {error && (
+        <p className="mb-3 text-[length:var(--text-meta)] text-text-error">{error}</p>
+      )}
+      <SettingsGroup
+        title="由 Hermix 文件查看器打开"
+        description="取消勾选会恢复原来的打开方式；只写当前用户注册表，不需要管理员权限。"
+      >
+        {entries.map((e) => (
+          <SettingsRow
+            key={e.ext}
+            title={
+              <span className="flex items-center gap-2">
+                <FileTypeIcon name={`sample.${e.ext}`} size={16} />
+                {`.${e.ext}`}
+              </span>
+            }
+            description={fileAssocStatus(e)}
+            control={
+              <Switch
+                checked={e.owned}
+                disabled={busy === e.ext}
+                onChange={(v) => toggle(e.ext, v)}
+                label={`由 Hermix 文件查看器打开 .${e.ext} 文件`}
+              />
+            }
+          />
+        ))}
+      </SettingsGroup>
+    </div>
+  );
+}

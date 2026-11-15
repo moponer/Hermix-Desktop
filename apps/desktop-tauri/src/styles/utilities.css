@@ -1,0 +1,68 @@
+/* ════════════════════════════════════════════════════════════════════
+   utilities.css — Small helpers for edge cases Tailwind doesn't cover.
+   Use sparingly — prefer semantic component classes from components.css.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Cursor helpers ── */
+
+/* ── Screen-reader-only text ──────────────────────────────────────
+   过程行把「已完成 / 失败 / 运行中 / 已跳过」从**视觉**标签改成
+   图标形状（形状在颜色不可辨时仍可读，且省下横向空间），代价是
+   状态名不再出现在屏幕上。屏幕阅读器用户必须仍能读到，所以每个
+   状态图标旁都挂一份 .sr-only 文本。
+
+   不要拿 `display:none` 或 `visibility:hidden` 代替 —— 那会把内容
+   从无障碍树里摘掉，等于对读屏用户隐藏。 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ── Layout helpers (only for places where semantic class is overkill) ── */
+.grow { flex: 1; min-width: 0; min-height: 0; }
+.center { display: flex; align-items: center; justify-content: center; }
+
+/* ── No-drag for Tauri titlebar items ── */
+.no-drag { -webkit-app-region: no-drag; }
+.drag { -webkit-app-region: drag; }
+
+/* ── Truncate text ── */
+.truncate-1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.truncate-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.truncate-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── Hide scrollbar but keep scrollable ── */
+
+/* ── 首字图标里的字形（InitialIcon）─────────────────────────────
+   与 .cat-icon 的档位对齐：sm(28)=14 · md(36)=16 · lg(48)=18。
+   600 字重 + line-height 1：汉字在小方块里上下留白才均等；用 500 会显得
+   比同排文字轻，看起来像「没对齐」。 */
+.initial-glyph {
+  font-size: var(--text-ui);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+}
+.cat-icon--md .initial-glyph { font-size: var(--text-body); }
+.cat-icon--lg .initial-glyph { font-size: var(--text-title); }

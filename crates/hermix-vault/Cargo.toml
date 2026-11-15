@@ -1,0 +1,26 @@
+[package]
+name = "hermix-vault"
+version = "0.1.0"
+edition = "2021"
+description = "本地凭据保险库：AES-256-GCM 落盘 + 主密钥 Windows Credential Manager（notes/implemented/feature/2026-10-09-vault-credentials.md）"
+license = "MIT"
+
+[dependencies]
+hermix-store = { workspace = true }
+rusqlite = { workspace = true }
+aes-gcm = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+# 主密钥内存清零（Drop 时擦除）。
+zeroize = "1"
+# OS 熵源（主密钥生成 + GCM nonce）；0.2 与 aes-gcm 0.10 内部同代（锁内已有）。
+getrandom = "0.2"
+# 数据目录解析（HERMIX_PORTABLE_DATA_DIR → HERMIX_HOME → ~/.hermix）单一真相源。
+hermix-config = { path = "../hermix-config" }
+
+[target.'cfg(windows)'.dependencies]
+# CredReadW/CredWriteW（主密钥托管）；Foundation 是 WIN32_ERROR/BOOL 所在 feature。
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security_Credentials"] }

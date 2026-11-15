@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>文章 —— Hermix</title>
+<meta name="description" content="从实现笔记改写的机制说明：讲一个机制怎么运转、当时为什么这么选、放弃了什么。" />
+<link rel="icon" type="image/png" href="favicon.png" />
+<link rel="stylesheet" href="assets/site.css?v=2" />
+</head>
+<body>
+<a class="skip" href="#doc">跳到正文</a>
+
+<nav class="nav" data-nav></nav>
+
+<div class="reader">
+  <aside class="rail" id="rail" aria-label="全部文章"></aside>
+  <article class="doc" id="doc">
+    <!-- 正文由 articles.js 渲染。索引没读到时这里是失败态，不留「加载中」占位。 -->
+    <div class="empty err" id="doc-fallback">文章索引没加载出来。<a href="articles.html">回文章列表</a>看全部篇目。</div>
+    <noscript><div class="empty err">这篇需要 JavaScript 才能渲染。<a href="articles.html">回文章列表</a>看全部篇目。</div></noscript>
+  </article>
+</div>
+
+<footer class="ft" data-footer></footer>
+
+<script src="assets/site.js?v=4"></script>
+<script src="assets/articles.js"></script>
+<script>
+  HERMIX.boot('articles');
+  (function () {
+    var all = window.ARTICLES || [];
+    var names = { desktop: 'Hermix Desktop', mobile: 'Hermix 手机端', spiker: 'Spiker' };
+    var links = { desktop: 'hermix.html', mobile: 'hermix.html', spiker: 'spiker.html' };
+    var order = ['desktop', 'mobile', 'spiker'];
+    var id = new URLSearchParams(location.search).get('id');
+    var doc = document.getElementById('doc');
+    var rail = document.getElementById('rail');
+
+    function fail(html) {
+      doc.innerHTML = '<div class="crumb"><a href="articles.html">文章</a></div>' + html;
+      rail.innerHTML = '';
+    }
+
+    // 索引为空是加载失败，不是「这个 id 不存在」——两种失败要给不同的下一步。
+    if (!all.length) {
+      fail('<h1>文章索引没加载出来</h1><p>articles.js 没能提供数据。<a href="article.html">刷新重试</a>，或<a href="articles.html">回文章列表</a>。</p>');
+      return;
+    }
+
+    rail.innerHTML = order.map(function (c) {
+      var items = all.filter(function (a) { return a.client === c; });
+      if (!items.length) return '';
+      return '<div class="k">' + names[c] + '</div>' + items.map(function (a) {
+        return '<a href="article.html?id=' + a.id + '" data-id="' + a.id + '"' +
+          (a.id === id ? ' class="on"' : '') + '>' + a.title + '</a>';
+      }).join('');
+    }).join('') + '<div class="all"><a href="articles.html">全部 ' + all.length + ' 篇 →</a></div>';
+
+    var i = all.findIndex ? all.findIndex(function (a) { return a.id === id; }) : -1;
+    if (i < 0) {
+      fail('<h1>没找到这篇</h1><p>链接里的文章不存在或已改名。<a href="articles.html">回文章列表</a>挑一篇。</p>');
+      return;
+    }
+
+    var a = all[i];
+    document.title = a.title + ' —— Hermix';
+    // 分享卡片随文章更新：静态 meta 是兜底，这里换成当篇的标题与摘要。
+    HERMIX.setMeta({
+      title: document.title,
+      description: a.sub || '',
+      url: location.href
+    });
+
+    var cur = rail.querySelector('[data-id="' + a.id + '"]');
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
+
+    var prev = i > 0 ? all[i - 1] : null;
+    var next = i < all.length - 1 ? all[i + 1] : null;
+    var pager = '<div class="pager">' +
+      (prev ? '← <a href="article.html?id=' + prev.id + '">' + prev.title + '</a>' : '') +
+      (next ? '<a href="article.html?id=' + next.id + '">' + next.title + '</a> →' : '') + '</div>';
+
+    doc.innerHTML =
+      '<div class="crumb"><a href="articles.html">文章</a> · ' +
+      '<a href="' + links[a.client] + '">' + names[a.client] + '</a></div>' +
+      '<h1>' + a.title + '</h1>' +
+      '<p class="meta">约 ' + a.words + ' 字 · ' + a.cat + '</p>' +
+      a.body.join('') +
+      '<div class="src">改写自实现笔记：' + a.source + '</div>' +
+      pager;
+  })();
+</script>
+</body>
+</html>

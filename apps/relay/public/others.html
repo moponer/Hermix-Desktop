@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>其他应用 —— Hermix</title>
+<meta name="description" content="Hermix 体系之外的其他应用：Spiker 车队合规监控台，双源 GPS、路单核验、四档判定、违规动车自动下发报文。" />
+<link rel="icon" type="image/png" href="favicon.png" />
+<link rel="stylesheet" href="assets/site.css?v=2" />
+</head>
+<body>
+<a class="skip" href="#main">跳到主要内容</a>
+
+<nav class="nav" data-nav></nav>
+
+<div class="hero">
+  <div class="wrap">
+    <h1>其他应用</h1>
+    <p class="sub">同一套工程纪律做出来的其他工具。它们各自独立发布，更新与校验值也走同一个发布源。</p>
+  </div>
+</div>
+
+<main id="main">
+
+<div class="sec">
+  <div class="wrap">
+    <h2>Spiker · 车队合规监控台</h2>
+    <p class="lead">车队什么状态，打开就看得到。</p>
+    <div class="picks">
+      <a class="pick main" href="spiker.html">
+        <div class="n">Spiker</div>
+        <div class="p">实时定位 + 四档合规判定，违规动车启程那一刻自动下发报文；路单接入、历史归档在同一个界面。双源 GPS 5 秒一轮，路单断了自动降级为纯 GPS 判定。Rust 后端，便携 zip 解压即用。</div>
+        <div class="v"><span data-ver="spiker.version">—</span> · <span data-ver="spiker.date">—</span></div>
+        <span class="go">查看 →</span>
+      </a>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="wrap">
+    <h2>下载</h2>
+    <p class="lead">Windows 便携 zip，解压即用。</p>
+    <div class="dlbar">
+      <div class="ver" data-ver="spiker.version">—</div>
+      <div class="info">
+        Windows x64 · <span data-ver="spiker.date">—</span> · SHA-256 <span class="mono" data-ver="spiker.shaShort">—</span>
+      </div>
+      <div class="go2">
+        <a class="btn sm" data-ver-href="spiker.url" href="spiker/latest.zip">下载 Spiker</a>
+        <a class="btn sm ghost" href="changelog.html">更新日志</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="wrap">
+    <h2>相关</h2>
+    <div class="cols3">
+      <div class="it"><b>Hermix</b><span>桌面端 + 手机端，跑在你自己电脑上的 AI 助手。<br><a href="hermix.html">查看 →</a></span></div>
+      <div class="it"><b>四档怎么判</b><span>合规不是「有手续 / 没手续」两个状态，判错任何一种都会误报或漏报。<br><a href="spiker.html#tiers">阅读 →</a></span></div>
+      <div class="it"><b>更新日志</b><span>三个通道的版本与校验值，和客户端检查更新读的是同一份清单。<br><a href="changelog.html">查看 →</a></span></div>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<footer class="ft" data-footer></footer>
+
+<script src="assets/site.js?v=4"></script>
+<script>HERMIX.boot('others');</script>
+</body>
+</html>

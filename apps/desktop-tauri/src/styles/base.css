@@ -1,0 +1,328 @@
+/* ════════════════════════════════════════════════════════════════════
+   base.css — Reset, body, scrollbar, global rules
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Body ────────────────────────────────────────────────────────── */
+body {
+  overflow: hidden;
+  user-select: text;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  /* 2026-09-29：原先这里硬编码了第二套字体栈，与 tokens.css 的 --font-sans
+     并不相同（多了 Source Han Sans CN / Noto Sans CJK SC / Roboto /
+     Helvetica Neue，少了 Segoe UI Variable）。现在统一引用唯一真相源。 */
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.5;
+  /* 2026-10-02：禁用**合成**粗体 / 斜体。
+   *
+   * 触发这条规则的是一次已撤销的字体尝试（留档见 `tokens.css --font-sans`
+   * 处的留档）：本机的 Alibaba PuHuiTi 2.0 55 只有 Regular 一个字重，
+   * 600 只能合成 —— 横向涂抹把汉字笔画糊成块，18px 实测墨量 2463，
+   * 比雅黑**真粗体**（1877）还重 31%。
+   *
+   * 字体换回微软雅黑后，中文 600 会命中 `msyhbd`（真 700），这条规则对
+   * **粗体不再有任何影响**。保留它是为了另外两件事：
+   *   1) 汉字不合成斜体 —— 汉字斜排是排版忌讳；`.prose em` 本来就用
+   *      secondary 颜色区分，不靠倾斜。
+   *   2) 以后谁再往字体链里加一个单字重字体，这里是兜底：宁可少一层
+   *      强调，也不要一个糊掉的字面。
+   *
+   * 撤销只需删掉这一行。 */
+  font-synthesis: none;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  transition: background-color var(--duration-base) ease,
+              color var(--duration-base) ease;
+}
+
+/* ── Scrollbar (克制:窄+中性) ───────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-tertiary);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-faint);
+}
+
+::selection {
+  background: var(--color-accent-soft-strong);
+  color: var(--color-text-primary);
+}
+
+/* 代码区选区: 极轻 alpha (15%) — 让用户能感知自己在 select, 但不抢
+   token 颜色本身的注意力. 38% accent 时容易被误认为 "行 stripe". */
+pre ::selection,
+code ::selection,
+.code-pre ::selection,
+.code-body ::selection {
+  background: color-mix(in srgb, var(--color-info) 15%, transparent);
+  color: var(--color-text-primary);
+}
+
+/* Chrome Ctrl+F 搜索高亮: 默认 ::target-text 给所有匹配字符加橘黄色矩形,
+   跨 token 时叠加成"每行矩形背景"假象.
+   重置为透明 + 用浏览器原生 ::selection 即可 (用户仍然能看出哪里匹配).
+   这是 code 区 "行背景" 的真正根因 (非 selection, 是 target-text). */
+::target-text {
+  background: transparent;
+  color: var(--color-text-primary);
+}
+
+/* ── Focus —— 扁平化：不用描边 ──────────────────────────────────
+   2026-10-23 改。旧版给每个可聚焦元素套一圈 2px 实线 outline —— 在扁平
+   界面上那等于给每个控件再加一层边框，正是「又要扁平又有描边」的根源。
+
+   新方案两层：
+     1) 鼠标点击不出现任何焦点外观（:focus 全清）—— 焦点反馈只服务键盘。
+     2) 键盘焦点用**无边界的强调色淡晕**（--shadow-focus-flat）。它是
+        color-mix 到透明的软光晕，没有硬边线，不构成长出一圈框；同时满足
+        WCAG 2.4.7（焦点可见）。
+
+   为什么必须是光晕而不是「什么都不做」：键盘用户靠焦点定位，去掉全部焦点
+   指示会让整站无法用键盘操作。光晕是「可见」与「无描边」的唯一交点。 */
+:focus,
+:focus-visible {
+  outline: none;
+}
+:focus-visible {
+  box-shadow: var(--shadow-focus-flat);
+}
+/* 注意：这里**不要**写 `border-radius`。焦点光晕必须跟随控件自己的形状——
+   2026-10-30 之前强制 `--radius-sm`，圆按钮/胶囊控件一聚焦就被掰成 6px 方角，
+   是"焦点态变形"的唯一成因。 */
+
+/* 占位符：此前只有 3 个局部 CSS 定义 `::placeholder`，其余输入框吃
+   Tailwind 默认的 `currentColor/50%`（浅色主题约 2.2:1）——看起来像禁用态。
+   统一到 `--color-text-faint`（浅色 #6a6a6a / 暗色 #8f8f8f，均 ≥4.5:1）。 */
+::placeholder {
+  color: var(--color-text-faint);
+  opacity: 1;
+}
+/* 输入框：**不加任何焦点环**（2026-10-23）。
+   文本输入有插入符作为焦点指示，再套一圈 2px 光晕，在白色输入面上读起来
+   就是一整圈粗灰边框 —— 用户反复反馈的"难看的粗描边"多半是它。
+   注意：这条覆盖必须写在上面全局 `:focus-visible` 之后，且选择器特异性
+   （元素+伪类）足够高，否则会被全局规则重新加上光晕。 */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* ── Reduced motion ─────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    /* 循环动画必须同时压成一次（2026-10-28）：只压时长不压次数，等于让
+       infinite 动画以 10 万次/秒重启，合成器与主线程一直在忙 —— 这是
+       "无障碍降级"反而变成高耗电的经典坑。压成 1 次后动画瞬间结束，
+       fill 状态由各规则自己声明，视觉上停在正常态。 */
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Glass backdrop-filter 降级兜底（A 方案 · 仅 light 主题） ─────
+   不支持 backdrop-filter 的环境（老 WebView / 极端配置）走不透明白底
+   保证内容可读。暗色族（dark/rainforest/sunset）走各自主题的玻璃化方案
+   （暂未启用，保留原实色样式，不在此块影响）。 */
+@supports not (backdrop-filter: blur(1px)) {
+  :root[data-theme="light"] {
+    --glass-frosted-bg: rgba(255, 255, 255, 0.95);
+    --glass-liquid-bg: rgba(255, 255, 255, 0.98);
+    --glass-liquid-strong-bg: rgba(255, 255, 255, 1);
+  }
+}
+
+/* ── Tauri drag region helpers ──────────────────────────────────── */
+[data-tauri-drag-region] { -webkit-app-region: drag; }
+[data-tauri-no-drag] { -webkit-app-region: no-drag; }
+
+/* ── ErrorBoundary fallback ────────────────────────────────────── */
+.error-boundary-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+  padding: 32px;
+  background: var(--color-bg-app);
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+}
+.error-boundary-fallback__icon { font-size: 48px; margin-bottom: 16px; }
+.error-boundary-fallback__title { font-size: var(--text-title); font-weight: 600; margin: 0 0 8px; color: var(--color-text-primary); }
+.error-boundary-fallback__desc { font-size: var(--text-body); margin: 0 0 24px; text-align: center; max-width: 480px; line-height: 1.5; }
+.error-boundary-fallback__actions { display: flex; gap: 12px; }
+.error-boundary-fallback__btn { padding: 8px 20px; border-radius: var(--radius-md); cursor: pointer; font-size: var(--text-body); }
+.error-boundary-fallback__btn--primary { border: none; background: var(--color-bg-tertiary); color: var(--color-text-primary); font-weight: 500; }
+.error-boundary-fallback__btn--secondary {  background: transparent; color: var(--color-text-muted); }
+.error-boundary-fallback__details { margin-top: 24px; max-width: 560px; width: 100%; }
+.error-boundary-fallback__summary { cursor: pointer; font-size: var(--text-meta); color: var(--color-text-faint); }
+.error-boundary-fallback__pre { margin-top: 8px; padding: 12px; background: var(--color-bg-secondary); border-radius: var(--radius-md); font-size: var(--text-meta); overflow: auto; max-height: 200px; white-space: pre-wrap; word-break: break-word; color: var(--color-error); }
+
+/* ── Toast notifications（C 方向：右下角紧凑条，2026-10-12 重设计）──
+   四方向预览（design-previews/2026-10-12-toast-redesign）主人选定 C。
+   三条硬约束，改动前先读：
+
+   1. **右下角案面**：与 composer 同侧的低打扰位，语义色小圆点承担状态
+      标识，不用图标区 / 圆底 / 进度条 —— 状态类消息要安静。
+   2. **紧凑单行**：padding 6/10、radius 8px（比卡片小一号的浮层语言）、
+      无 min-width，宽度跟内容走；关闭按钮 hover 才出现。
+   3. **颜色全走语义 token**：`--color-*` 系列，禁字面色值，跟随主题。
+   ───────────────────────────────────────────────────────────────── */
+.toast-container {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0 16px 16px;
+  pointer-events: none;
+}
+.toast {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 6px 8px 6px 10px;
+  border-radius: 8px;
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-pop);
+  color: var(--color-text-primary);
+  pointer-events: auto;
+  cursor: pointer;
+  font-size: var(--text-meta);
+  animation: toast-in 0.18s var(--ease-out);
+  transition:
+    box-shadow var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+.toast:hover {
+  border-color: var(--color-border-secondary);
+  box-shadow: var(--shadow-modal);
+}
+/* 状态标识 = 语义色小圆点。错误/警告靠点的颜色区分，不靠加大音量。 */
+.toast--error   { --toast-accent: var(--color-error);   }
+.toast--warning { --toast-accent: var(--color-warning); }
+.toast--info    { --toast-accent: var(--color-info);    }
+.toast--success { --toast-accent: var(--color-success); }
+.toast__dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--toast-accent);
+}
+.toast__msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.45;
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+.toast__close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--color-text-muted);
+  /* 低打扰：关闭控件 hover / focus 才现身 */
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+.toast:hover .toast__close,
+.toast__close:focus-visible {
+  opacity: 0.7;
+}
+.toast__close:hover {
+  opacity: 1;
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+/* 从右侧滑入 —— toast 停在右下角，起点必须来自窗外同侧。 */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+}
+
+/* ── Spreadsheet cell borders ─────────────────────────────────── */
+.cell-border-subtle {
+}
+.cell-border-right-subtle {
+}
+.cell-border-right-code {
+  border-right: 1px solid var(--color-bg-code-border);
+}
+.cell-border-bottom-code {
+  border-bottom: 1px solid var(--color-bg-code-border);
+}
+
+/* ── Cursor affordance fallback ─────────────────────────────────
+   组件层 cursor-pointer 覆盖率极低（18 处 vs 395 个 onClick），
+   大量可点元素无指针反馈。这里做全局兜底：可点即 pointer，
+   禁用态即 not-allowed。组件仍可显式覆盖。 */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+summary,
+label[for] {
+  cursor: pointer;
+}
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* ── L1（2026-10-01 建立 / 2026-10-04 修正）：强调色派生家族 ──────────
+   主题层与使用层已合并——`--color-accent` 由 tokens.css 的 @theme（亮色
+   字面量）与 themes/dark.css（暗色覆写）直接供给。本文件只负责从它派生
+   hover / soft / soft-strong / on-text。原先这里还有一条把使用槽指向
+   `--color-accent-base` 的接桥声明，2026-10-04 删除：桥接使
+   `--color-accent` 停留在 @theme 之外，Tailwind v4 因此不生成任何
+   `*-accent` 工具类，117 处调用静默失效（详见 tokens.css 同名注释）。
+
+   为什么派生档必须跟着 `--color-accent` 而不是留一份 @theme 静态值：用户
+   注入一个绿 accent 后，若 hover 仍是主题自带的绿，就是绿配绿，hover 形同
+   失效（2026-10-01 审核 agent 指出）。派生链是 CSS 级的，用户改
+   --color-accent 一处，家族整体联动。
+
+   用户选色时 useTheme 在 documentElement.style 上设 `--color-accent`，
+   行内样式优先级高于本文件的 :root 规则与 themes/*.css，无需额外选择器。
+
+   `--color-on-accent`（压在 accent 实色块上的文字色）**无法用 color-mix
+   推导**——它必须随 accent 明度在浅/深文字间切换。自由取色时没有正确
+   答案，故保持静态（白），等 L3.5 的策展调色板把 on-accent 与 accent
+   一起注入。 */
+:root {
+  /* accent 的派生档（hover / on-text / soft / soft-strong）已于 2026-10-04
+     移入 tokens.css 的 @theme：它们是 --color-accent 的 color-mix 派生，
+     留在别名层时 Tailwind v4 不生成对应工具类。别名层只剩本体以外真正
+     与主题无关的两条。 */
+
+  /* 压在 accent 实色上的文字。自由取色下无正解，L3.5 由调色板注入。 */
+  --color-on-accent: #ffffff;
+}

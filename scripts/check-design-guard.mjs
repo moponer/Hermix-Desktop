@@ -1,0 +1,190 @@
+#!/usr/bin/env node
+// DesignGuard — impeccable / typography 硬约束的 grep 门禁（硬门禁）。
+//
+// 背景：设计规范（impeccable-design.md、docs/notes/archived/architecture/TYPOGRAPHY_SYSTEM.md、tokens.css）
+// 此前只存在于文档与评审里，CSS 层与既有组件的违规从未被机械检出——
+// check-theme-tokens.mjs 只扫 tsx、且「行内含 var(--color- 即整行豁免」
+// 的规则放过了一批 `var(--x, #hex)` 式违规。本脚本补上 TSX 侧的
+// 高价值断言；CSS 层量化扫描仍是 TODO（误报率高，先不硬门禁）。
+//
+// 规则（全部来自 2026-10-18 设计审查的确认项）：
+//  G1 TSX 禁字面色值（#hex / rgb(/rgba(）——主题只换令牌值
+//     （tokens.css:4-20 契约）。只扫 .tsx：.ts 里的色板常量
+//     （agents/types.ts 专家色板）是数据表不是样式。字符串字面量行
+//     （title/label 类）豁免。
+//  G2 禁 `dark:` 变体（globals.css:23-24 已废除）。
+//  G3（已移除）：图标按钮 aria-label 检查。跨行 JSX 的
+//     children/attributes 解析用 regex 启发式误报率不可接受
+//     （首轮 270 条里 G3 占 90%+ 且多为文本按钮误报）；真正的
+//     结构检查需要 TS AST（ts-morph），等有既有依赖再加。无障碍
+//     覆盖靠评审 + impeccable detect。
+//  G4 视图/组件文件禁「加载中…」字面量（ui/Skeleton.tsx:6-8：加载态
+//     用骨架屏替代文字；ui/ 原语内部的文案豁免）。
+//  G5 禁 window.confirm（Sidebar.tsx:245 确立应用内 ConfirmDialog 约定）。
+//
+// 白名单：
+//  - 行内含 `design-guard: allow` 注释的行豁免（类似 eslint-disable，
+//     用于固定品牌色 / 恒暗浮层装饰色等「不随主题」的合法固定色）。
+//  - 本脚本自身的规则名出现不算（不扫 scripts/）。
+
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+
+const ROOT = join(process.cwd(), "src");
+/* 2026-10-23：把 .css 纳入扫描。此前只扫 tsx/ts，于是**CSS 层的 129 处
+   `border: 1px solid` 完全在门禁盲区里** —— 这正是「改了很多轮，界面上还是
+   到处有描边」的根因：tsx 侧的 G10 一路在清，CSS 侧从没人管。 */
+const EXT = /\.(tsx|ts|css)$/;
+const SKIP = /(\.test\.|\.d\.ts$)/;
+
+/* 白名单：CSS 里允许保留的描边（功能性，非装饰）：
+   · 2px dashed —— 拖放落点提示（"松手放到这里"）
+   · transparent —— 占位，避免 hover 时跳版
+   · 语义色描边（error/warning/…）—— 状态标识
+   中性结构描边（var(--color-border-*) / var(--twin-line*)）一律不允许多。 */
+const CSS_NEUTRAL_BORDER_BASELINE = 0;
+let cssNeutralBorders = 0;
+
+// 行内出现这些形态视为「已在令牌体系内」，整行豁免 G1 —— 与
+// check-theme-tokens 的差异：豁免条件是**只有令牌**，而不是
+// 「含令牌即可」。
+const TOKEN_LINE = /^\s*(\/\/|\/\*|\*|\}|else|\{).*/;
+
+function* walk(dir) {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    const st = statSync(p);
+    if (st.isDirectory()) yield* walk(p);
+    else if (EXT.test(name) && !SKIP.test(p.replaceAll("\\", "/"))) yield p;
+  }
+}
+
+const violations = [];
+const push = (file, line, rule, text) =>
+  violations.push(`${relative(process.cwd(), file)}:${line} [${rule}] ${text.trim().slice(0, 120)}`);
+
+/* ── G6：内联样式里的静态配色不得超过基线（棘轮）────────────────────
+   用户要求「配色是完整体系、一键可换」—— 那么**样式的来源必须唯一**
+   （令牌 → 语义类 → 组件）。`style={{ background: "var(--color-x)" }}`
+   正是破坏这件事的写法：
+     · 它绕过 className，无法被 Tailwind 的语义类统一改写；
+     · 它拿不到 :hover / :focus / 响应式变体（所以这些地方交互永远是死的）；
+     · 换主题时它虽然跟着令牌变，但**换布局/密度/圆角体系时它不跟**。
+   历史上这类写法一路涨到 100+ 处，因为没有任何门禁拦它。
+
+   2026-10-23 已清零，BASELINE = 0 —— 这条规则现在**是一道硬门禁**，
+   不是棘轮：新增任何「内联写静态配色」都会立刻变红。
+
+   天然豁免（不含 `var(--color-*)`，因此不进统计）：
+     · 运行时几何：`style={{ width: pct + "%" }}`、坐标、表格列宽；
+     · 数据自带色：`style={{ background: c.brand }}`（渠道品牌色）、
+       `style={{ background: accent }}`（用户当场选的颜色）。
+   这两类是「值由数据决定」，确实无法类化；把它们改写成类只会制造
+   假的静态类。判断标准很简单：**值里有没有 var(--color-*)**。 */
+const INLINE_COLOR_BASELINE = 0;
+let inlineColorHits = 0;
+
+for (const file of walk(ROOT)) {
+  const lines = readFileSync(file, "utf8").split("\n");
+
+  let lastAllow = -99;
+  let lastStyleStart = -99;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    // 内联样式块起点（多行 style={{ … }} 的配色行也算）
+    if (/style=\{\{/.test(ln)) lastStyleStart = i;
+    // 只统计 tsx/ts：CSS 文件里出现 `style={{ … }}` 只可能是注释中的反例写法。
+    if (!/\.css$/.test(file) && i - lastStyleStart <= 4 && /var\(--color/.test(ln) && /style=\{\{|background|color:|border/.test(ln)) {
+      // 只有当它确实处于内联样式块里才算（4 行窗口内出现过 style={{）
+      if (i >= lastStyleStart && lastStyleStart >= 0 && i - lastStyleStart <= 4) {
+        inlineColorHits++;
+      }
+    }
+    // 当前行带 allow 标记，或处于 allow 标记后的 3 行窗口内
+    // （注释行 + 被标注的多行块）即豁免。
+    if (/design-guard:\s*allow/.test(ln)) {
+      lastAllow = i;
+      continue;
+    }
+    if (i - lastAllow <= 3) continue;
+
+    // G11 — CSS 层中性结构描边（2026-10-23 新增，基线 0）
+    // 注释行豁免：文档里引用的示例写法不算违规。
+    if (
+      /\.css$/.test(file) &&
+      !/^\s*(\/\*|\*)/.test(ln) &&
+      /border(-top|-bottom|-left|-right)?:\s*1px\s+solid\s+var\(--(?:color-)?(?:border-[a-z]+|twin-line[a-z-]*)/.test(ln)
+    ) {
+      cssNeutralBorders++;
+    }
+    // G2 — dark: 变体已废除
+    if (/\bdark:[a-z]/.test(ln) && !/^\s*(\/\/|\*|import )/.test(ln)) {
+      push(file, i + 1, "G2-dark-variant", ln);
+      continue;
+    }
+    // G5 — window.confirm
+    if (/window\.confirm\(/.test(ln) && !/^\s*(\/\/|\*)/.test(ln)) {
+      push(file, i + 1, "G5-window-confirm", ln);
+      continue;
+    }
+    // G4 — 「加载中…」字面量（ui/ 原语与测试豁免已由 SKIP 覆盖测试；
+    // ui/ 目录内允许——原语本身可以有加载文案）
+    if (/加载中…/.test(ln) && !/\\?u?i\//i.test(file) && !/^\s*(\/\/|\*)/.test(ln)) {
+      push(file, i + 1, "G4-loading-literal", ln);
+      continue;
+    }
+    // G1 — TSX 字面色值（只扫 .tsx；.ts 数据色板豁免）
+    // 字面色有四种写法：#hex / rgb() / rgba() / hsl()。2026-10-21 补 hsl() ——
+    // 此前只拦 #hex 与 rgb(，Sidebar.tsx 的 4 处 hsl() 字面色一路漏网。
+    // 只拦**字面量**（数字开头）；`hsl(${计算})` 是程序化派生（MemoryGraph 的
+    // 色相环），不是写死的颜色。
+    if (
+      /\.tsx$/.test(file) &&
+      /#[0-9a-fA-F]{3,8}\b|rgba?\(|(?<![$\w])hsla?\(\s*[\d.]/.test(ln) &&
+      !TOKEN_LINE.test(ln)
+    ) {
+      const hasToken = /var\(--/.test(ln);
+      // 色板数据行豁免：`{ bg: "#…", label: … }` / banner / avatar /
+      // chip 等键值对是「固定品牌色 / 文件类型官方色」的数据表
+      // （PDF 永远红、Office 官方色不随主题），不是主题样式。
+      const paletteData =
+        /[{,]\s*(bg|fg|banner|avatar|chip|label)\s*:/.test(ln) ||
+        /\bkey\s*:\s*"/.test(ln) ||
+        // `{ providerId: "#brand" }` 形态的品牌色表（ProviderIcon 等）
+        /^\s*\w+:\s*"#/.test(ln);
+      const inStringOnly =
+        /^(\s*(title|label|alt|aria-label|name|id|className)\s*[:=])/.test(ln) ||
+        /["'`][^"'`]*["'`],?\s*$/.test(ln);
+      if (!hasToken && !inStringOnly && !paletteData) {
+        push(file, i + 1, "G1-hex-color", ln);
+      }
+    }
+  }
+}
+
+if (cssNeutralBorders > CSS_NEUTRAL_BORDER_BASELINE) {
+  violations.push(
+    `[G11-css-border] CSS 层中性结构描边 ${cssNeutralBorders} 处 > 基线 ${CSS_NEUTRAL_BORDER_BASELINE} 处`,
+    "  → 删掉 border，用底色差（--color-bg-primary/secondary/card/elevated）+ 间距分层。",
+    "     功能性描边（dashed 拖放区 / transparent 占位 / 语义色状态框）不在统计内。",
+  );
+}
+
+if (inlineColorHits > INLINE_COLOR_BASELINE) {
+  violations.push(
+    `[G6-inline-color] 内联样式的静态配色 ${inlineColorHits} 处 > 基线 ${INLINE_COLOR_BASELINE} 处`,
+    "  → 改用语义类（bg-bg-tertiary / text-text-muted / bg-accent …）。",
+    "     内联样式拿不到 hover / focus / 响应式变体，是「组件不可复用」的根源。",
+  );
+} else if (inlineColorHits < INLINE_COLOR_BASELINE) {
+  console.log(
+    `DesignGuard: 内联配色已降到 ${inlineColorHits} 处，请把 INLINE_COLOR_BASELINE 下调到该值。`,
+  );
+}
+
+if (violations.length > 0) {
+  console.error(`DesignGuard: ${violations.length} violation(s)\n`);
+  for (const v of violations) console.error("  " + v);
+  process.exit(1);
+}
+console.log("DesignGuard: clean");

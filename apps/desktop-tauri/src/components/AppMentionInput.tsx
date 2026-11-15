@@ -1,0 +1,314 @@
+// AppMentionInput — chat textarea with @app mentions.
+//
+// Architecture: a transparent <textarea> sits on top of a backdrop <div> that
+// renders the same text with "@app <name>" segments coloured.
+// The textarea owns input/caret; the backdrop owns colour. When the user types
+// "@app" an inline card lists the installed custom apps.
+// Picking one inserts a resolved "<trigger> <name> " token.
+// No extra deps, no contentEditable.
+//
+// 长文本处理：滚动交给外层的 scroll host，textarea 自身高度始终等于完整
+// 内容高度、永不内部滚动。原因是 textarea 一旦自己滚动，caret 的绘制位置
+// 就会跟 scrollTop 耦合，在祖先存在 CSS `zoom` 的页面上（本应用用根元素
+// zoom 做界面缩放）caret 会被画到明显偏离实际字符的位置 —— 文本看着对、
+// 光标却跑到别处。让 textarea 保持 scrollTop === 0 可以从根上消除这个偏移。
+
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Plus } from "lucide-react";
+import type { CustomAppSummary } from "../lib/customAppApi";
+import {
+  MENTION_COLOR,
+  MENTION_TRIGGER_APP,
+  applyMention,
+  detectActiveMention,
+  splitMentions,
+  type ActiveMention,
+} from "../lib/appMention";
+
+// 虚拟"创建新应用"快捷项 id — 始终作为 @app 面板的第一项。
+// 选中后插入 "@app 创建新应用 应用要求："，引导用户描述需求，
+// agent 收到后按 custom-app-development 规范走创建流程（需求梳理→方案规划→开发→验证）。
+const CREATE_NEW_APP_ID = "__create_new_app__";
+
+// 输入框可视高度上限：超过就由外层容器滚动，textarea 本身不滚。
+const COMPOSER_MAX_HEIGHT = 200;
+
+interface Props {
+  value: string;
+  onChange: (v: string) => void;
+  /** Parent's keydown handler (Enter → submit). We intercept when the popup is open. */
+  onKeyDown: (e: React.KeyboardEvent) => void;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  apps: CustomAppSummary[];
+  disabled?: boolean;
+  isStreaming?: boolean;
+  placeholder?: string;
+  onFilesAttach?: (files: File[]) => void;
+}
+
+type ActiveMentionWithTrigger = ActiveMention & { trigger: string };
+
+interface MentionItemView {
+  id: string;
+  name: string;
+  description?: string;
+  isCreate: boolean;
+}
+
+function AppMentionInputImpl({
+  value,
+  onChange,
+  onKeyDown,
+  textareaRef,
+  apps,
+  disabled,
+  isStreaming,
+  placeholder,
+  onFilesAttach,
+}: Props) {
+  const [active, setActive] = useState<ActiveMentionWithTrigger | null>(null);
+  const [selIdx, setSelIdx] = useState(0);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const scrollHostRef = useRef<HTMLDivElement>(null);
+  const pendingCaret = useRef<number | null>(null);
+  const blurTimer = useRef<number | null>(null);
+
+  const filtered = useMemo(() => {
+    const q = (active?.query ?? "").trim().toLowerCase();
+    if (!q) return apps;
+    return apps.filter((a) => a.name.toLowerCase().includes(q));
+  }, [apps, active]);
+
+  // 列表首项恒为虚拟创建快捷项，其余为已装应用。
+  const items = useMemo<MentionItemView[]>(() => {
+    const head = {
+      id: CREATE_NEW_APP_ID,
+      name: "创建新应用 应用要求：",
+      description: "让 AI 从零开发一个新的桌面应用",
+      isCreate: true,
+    };
+    const rest = filtered.map((it) => ({
+      id: it.id,
+      name: it.name,
+      description: "description" in it ? (it.description as string | undefined) : undefined,
+      isCreate: false,
+    }));
+    return [head, ...rest];
+  }, [filtered]);
+
+  useEffect(() => {
+    if (pendingCaret.current != null && textareaRef.current) {
+      const pos = pendingCaret.current;
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(pos, pos);
+      pendingCaret.current = null;
+    }
+  }, [value, textareaRef]);
+
+  // textarea 撑到完整内容高度；超过上限时由外层 scroll host 滚动，
+  // 光标在末尾时把可视区跟着推到最新一行。
+  useLayoutEffect(() => {
+    const ta = textareaRef.current;
+    const host = scrollHostRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+    if (!host) return;
+    const atTail =
+      ta.selectionStart === value.length && ta.selectionEnd === value.length;
+    if (document.activeElement === ta && atTail) {
+      host.scrollTop = host.scrollHeight - host.clientHeight;
+    }
+  }, [value, textareaRef]);
+
+  const selectItem = (item: MentionItemView) => {
+    if (!active) return;
+    const { text, caret } = applyMention(value, active, active.trigger, item.name);
+    pendingCaret.current = caret;
+    onChange(text);
+    setActive(null);
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const v = e.target.value;
+    const caret = e.target.selectionStart ?? v.length;
+    onChange(v);
+    const appM = detectActiveMention(v, caret, MENTION_TRIGGER_APP);
+    let next: ActiveMentionWithTrigger | null = null;
+    if (appM) {
+      next = { ...appM, trigger: MENTION_TRIGGER_APP };
+    }
+    setActive(next);
+    setSelIdx(0);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (active && items.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelIdx((i) => (i + 1) % items.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelIdx((i) => (i - 1 + items.length) % items.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        selectItem(items[selIdx]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setActive(null);
+        return;
+      }
+    }
+    onKeyDown(e);
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (files.length > 0) {
+      e.preventDefault();
+      onFilesAttach?.(files);
+    }
+  };
+
+  const handleFocus = () => {
+    if (blurTimer.current) {
+      clearTimeout(blurTimer.current);
+      blurTimer.current = null;
+    }
+  };
+  const handleBlur = () => {
+    blurTimer.current = window.setTimeout(() => setActive(null), 120);
+  };
+
+  const backdropText = value.endsWith("\n") ? value + " " : value;
+  const segments = splitMentions(backdropText, [MENTION_TRIGGER_APP]);
+
+  const panelTitle = `自定义应用 · ${apps.length}`;
+
+  return (
+    <div className="relative mention-input">
+      {/* 滚动容器：长文本时由它滚动，textarea 自身保持不滚动。 */}
+      <div
+        ref={scrollHostRef}
+        className="relative overflow-y-auto"
+        style={{ maxHeight: COMPOSER_MAX_HEIGHT }}
+      >
+        <div className="relative">
+          {/* Highlight backdrop — mirrors the textarea's box & font metrics. */}
+          <div
+            ref={backdropRef}
+            aria-hidden
+            className="absolute inset-0 pointer-events-none overflow-hidden whitespace-pre-wrap break-words px-3.5 pt-3.5 pb-2.5 text-text-primary"
+            style={{
+              fontSize: "var(--text-body)",
+              lineHeight: 1.5,
+              boxSizing: "border-box",
+            }}
+          >
+            {segments.map((seg, i) =>
+              seg.mention ? (
+                <span
+                  key={i}
+                  style={{ color: MENTION_COLOR }}
+                >
+                  {seg.text}
+                </span>
+              ) : (
+                <span key={i}>{seg.text}</span>
+              ),
+            )}
+            {value.length === 0 && (
+              <span className="text-text-muted">{placeholder}</span>
+            )}
+          </div>
+
+          {/* Real textarea — transparent text, visible caret. */}
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
+            disabled={disabled}
+            placeholder={isStreaming ? "输入消息加入队列…" : placeholder}
+            data-no-border
+            className="relative z-[1] w-full bg-transparent resize-none outline-none px-3.5 pt-3.5 pb-2.5 min-h-[50px]"
+            style={{
+              fontSize: "var(--text-body)",
+              lineHeight: 1.5,
+              border: "none",
+              borderRadius: 0,
+              boxShadow: "none",
+              background: "transparent",
+              color: "transparent",
+              caretColor: "var(--color-text-primary)",
+              overflow: "hidden",
+            }}
+            rows={1}
+          />
+        </div>
+      </div>
+
+      {/* mention card */}
+      {active && (
+        <div
+          className="absolute bottom-full left-0 mb-2 z-20 rounded-xl overflow-hidden"
+          style={{
+            width: 320,
+            maxWidth: "calc(100% - 1rem)",
+            maxHeight: 260,
+            boxShadow: "var(--shadow-pop)",
+          }}
+        >
+          <div
+            className="px-3 py-2 text-[length:var(--text-meta)] font-medium text-text-muted"
+          >
+            {panelTitle}
+          </div>
+          <div className="overflow-y-auto" style={{ maxHeight: 212 }}>
+            {items.map((item, i) => {
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onMouseEnter={() => setSelIdx(i)}
+                  onClick={() => selectItem(item)}
+                  className={`w-full text-left px-3 py-2 flex flex-col gap-0.5 transition-colors ${
+                    i === selIdx ? "bg-bg-hover" : ""
+                  }`}
+                >
+                  <span
+                    className={`flex items-center gap-1.5 text-[length:var(--text-ui)] font-medium ${
+                      item.isCreate ? "text-accent" : "text-text-primary"
+                    }`}
+                  >
+                    {item.isCreate && <Plus className="icon-md" />}
+                    {item.isCreate ? "创建新应用" : item.name}
+                  </span>
+                  {item.description && (
+                    <span
+                      className="text-[length:var(--text-meta)] truncate text-text-muted"
+                    >
+                      {item.description}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export const AppMentionInput = memo(AppMentionInputImpl);

@@ -1,0 +1,41 @@
+[package]
+name = "hermix-plugin"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "Custom app system for user-facing desktop applications with zero-toolchain packaging"
+
+[dependencies]
+hermix-core = { workspace = true }
+hermix-config = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+walkdir = "2"
+base64 = "0.22"
+regex-lite = "0.1"
+# 工作台数据层：每工作台一个 SQLite 库，与代码层物理分离
+rusqlite = { workspace = true }
+# SQLite 打开的单一入口（WAL / busy_timeout / 只读 flags 收口，P1-14）
+hermix-store = { workspace = true }
+sha2 = "0.10"
+# 内置图标库: 纯 Rust SVG 栅格化 (无系统字体依赖) + 轻量绘制
+resvg = "0.42"
+usvg = "0.42"
+tiny-skia = "0.11"
+# PNG 解码 + 多分辨率缩放 (打 exe 图标补丁时需要)
+# 任务: 收到 manifest.icon_file (任意尺寸 PNG), 缩放到 16/32/48/256 多种
+# 尺寸, 编码成多帧 ICO 嵌入 dist exe Windows 资源 — 让任务栏/资源管理器
+# 显示应用自己的图标, 而非 hx-shell.exe 默认图标。
+image = { version = "0.25", default-features = false, features = ["png"] }
+# 打包时为复制出的 app-shell.exe 打内嵌图标补丁 (仅 Windows)
+# 窗口居中在 hx-shell 内部解决 (tao WindowBuilder::with_outer_position) — 此处无需 Win32 API
+windows-sys = { version = "0.52", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+] }

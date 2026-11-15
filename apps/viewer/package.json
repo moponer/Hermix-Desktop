@@ -1,0 +1,34 @@
+{
+  "name": "hermix-viewer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev:vite": "vite",
+    "build:vite": "vite build"
+  },
+  "dependencies": {
+    "@hermix/preview": "workspace:*",
+    "@tauri-apps/api": "^2.12.1",
+    "docx-preview": "^0.4.1",
+    "exceljs": "^4.4.0",
+    "hast-util-to-jsx-runtime": "^2.3.6",
+    "lucide-react": "^0.511.0",
+    "papaparse": "^5.5.4",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.3.289",
+    "pptx-browser": "^4.1.5",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "satteri": "^0.10.5",
+    "xlsx": "^0.18.5",
+    "@lobehub/icons": "^5.10.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.5.2",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

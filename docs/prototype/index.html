@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>Hermes 界面方案 v3 · 保留原结构，只改该改的</title>
+<style>
+/* 宣纸 / 夜墨 —— 取值与 src/styles 实际落地一致 */
+[data-theme="light"]{
+  --desk-outer:#f0eee7; --desk:#edeae2; --desk-deep:#e4e0d6;
+  --paper:#f7f5f0;      --card:#fcfbf8;  --overlay:#ffffff;
+  --line-1:#e6e2d7;     --line-2:#d8d3c5;  --line-3:#c3bda9;
+  --ink-1:#2b2a27; --ink-2:#565349; --ink-3:#837e70; --ink-4:#9a9484;
+  --accent:#1d8a72; --accent-soft:rgba(29,138,114,.10);
+  --ok:#35854a; --warn:#96750f; --err:#a32b54;
+  --shadow-card:0 1px 2px rgba(43,42,39,.04);
+  --shadow-modal:0 24px 64px rgba(43,42,39,.16),0 8px 24px rgba(43,42,39,.08);
+}
+[data-theme="dark"]{
+  --desk-outer:#0f1115; --desk:#1a1d23; --desk-deep:#21252c;
+  --paper:#121419;      --card:#181b21;  --overlay:#232833;
+  --line-1:#1f232a;     --line-2:#2a2e37;  --line-3:#383d48;
+  --ink-1:#e9eaee; --ink-2:#b4b7be; --ink-3:#868a93; --ink-4:#6e727a;
+  --accent:#35b899; --accent-soft:rgba(53,184,153,.14);
+  --ok:#5cb176; --warn:#c8a94e; --err:#e0708f;
+  --shadow-card:0 1px 2px rgba(0,0,0,.32);
+  --shadow-modal:0 28px 72px rgba(0,0,0,.62),0 10px 26px rgba(0,0,0,.44);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#55524c;font-family:"Inter","Segoe UI","PingFang SC","Microsoft YaHei UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:40px 0 80px}
+.cap{width:1440px;margin:0 auto 12px;color:#d5d0c5;font:600 13px/1.4 "Inter",sans-serif;letter-spacing:.04em}
+.cap em{font-style:normal;color:#a09a8d;font-weight:400}
+.frame{width:1440px;height:900px;margin:0 auto 56px;background:var(--paper);overflow:hidden;position:relative;
+  box-shadow:0 30px 80px rgba(0,0,0,.45);border-radius:6px;color:var(--ink-1);font-size:14px}
+
+/* ── 上下文栏 ── */
+.ctxbar{height:48px;display:flex;align-items:center;gap:14px;padding:0 14px;background:var(--desk);
+  border-bottom:1px solid var(--line-1)}
+.brand{display:flex;align-items:center;gap:8px;padding-right:14px;border-right:1px solid var(--line-2)}
+.brand .mark{width:14px;height:14px;border-radius:4px;background:var(--accent)}
+.brand b{font-size:13px;font-weight:600}
+.ctx-title{font-size:13px;font-weight:500;display:flex;align-items:center;gap:6px;flex:1}
+.ctx-meta{display:flex;align-items:center;gap:13px;margin-right:8px}
+.ctx-meta span{font-size:11px;color:var(--ink-3);font-family:ui-monospace,Consolas,monospace}
+.wbtn{width:26px;height:26px;border-radius:6px;display:grid;place-items:center;color:var(--ink-3);font-size:13px}
+.wbtn.on{background:var(--accent-soft);color:var(--accent)}
+.shell{display:flex;height:calc(100% - 48px)}
+
+/* ── 侧栏：保留原有「对话 / 项目」分组 ── */
+.sb{width:252px;flex:0 0 252px;background:var(--desk);border-right:1px solid var(--line-1);
+  display:flex;flex-direction:column;overflow:hidden}
+.sb-top{padding:10px 10px 8px;display:flex;flex-direction:column;gap:8px}
+.sb-search{height:30px;border-radius:7px;background:var(--desk-deep);display:flex;align-items:center;gap:7px;
+  padding:0 9px;font-size:12px;color:var(--ink-4)}
+.sb-new{height:32px;border-radius:8px;background:var(--card);border:1px solid var(--line-2);
+  display:flex;align-items:center;gap:8px;padding:0 10px;font-size:13px;color:var(--ink-1);
+  justify-content:center;box-shadow:var(--shadow-card)}
+.sb-new .plus{color:var(--accent);font-size:14px}
+.sb-sections{flex:1;overflow:hidden;padding:4px 0}
+.sb-sec-h{display:flex;align-items:center;gap:6px;height:28px;padding:0 10px 0 8px;font-size:12px;
+  font-weight:600;color:var(--ink-2);letter-spacing:.02em}
+.sb-sec-h .cv{color:var(--ink-4);font-size:10px}
+.sb-sec-h .ct{margin-left:auto;font-size:11px;color:var(--ink-4);font-family:ui-monospace,monospace}
+.sb-row{height:30px;display:flex;align-items:center;gap:8px;padding:0 10px 0 22px;font-size:13px;
+  color:var(--ink-2);border-left:2px solid transparent}
+.sb-row .ic{width:14px;color:var(--ink-4);font-size:12px}
+.sb-row .lbl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-row .rt{font-size:10px;color:var(--ink-4);font-family:ui-monospace,monospace}
+.sb-row.sel{background:var(--desk-deep);color:var(--ink-1);border-left-color:var(--accent)}
+.sb-row.nest{padding-left:36px;font-size:12.5px;color:var(--ink-3)}
+.sb-row .pulse{width:6px;height:6px;border-radius:50%;background:var(--accent);flex:0 0 6px}
+.sb-foot{border-top:1px solid var(--line-1);padding:6px 0}
+.sb-nav{display:flex;flex-wrap:wrap;gap:2px;padding:6px 8px 0}
+.sb-nav i{width:30px;height:28px;border-radius:6px;display:grid;place-items:center;font-style:normal;
+  font-size:13px;color:var(--ink-3)}
+.sb-nav i.on{background:var(--desk-deep);color:var(--ink-1)}
+
+/* ── 主轴 ── */
+.axis{flex:1;min-width:0;background:var(--paper);display:flex;flex-direction:column}
+.scroller{flex:1;overflow:hidden;padding:22px 0 12px}
+.measure{margin:0 auto;padding:0 32px;max-width:640px}
+.measure-wide{margin:0 auto;padding:0 32px;max-width:920px}
+
+/* 思考：跑完即自动收起 */
+.think{display:flex;align-items:center;gap:8px;height:26px;padding:0 8px;margin-left:-8px;border-radius:6px;
+  font-size:12px;color:var(--ink-3)}
+.think:hover{background:var(--desk)}
+.think .dur{color:var(--ink-4);font-family:ui-monospace,monospace;font-size:11px}
+.think .caret{color:var(--ink-4);font-size:10px}
+.think .tag{margin-left:auto;font-size:10.5px;color:var(--ok);background:rgba(46,122,84,.10);
+  padding:1px 6px;border-radius:20px}
+.think-body{margin:2px 0 0;padding:6px 0 6px 14px;border-left:1.5px solid var(--line-2);
+  font-size:12.5px;line-height:1.7;color:var(--ink-2)}
+.think-body p{margin:0 0 .4em}
+
+/* 工具时间轴 */
+.rail{position:relative;padding-left:20px;margin:10px 0}
+.rail::before{content:"";position:absolute;left:3px;top:9px;bottom:2px;width:1px;background:var(--line-2)}
+.tline{position:relative;display:flex;align-items:center;gap:8px;height:24px;font-size:12px;color:var(--ink-2)}
+.tline .dot{position:absolute;left:-20px;top:8px;width:7px;height:7px;border-radius:50%;
+  border:1.5px solid var(--ink-4);background:var(--paper)}
+.tline.ok .dot{border-color:var(--ok)}
+.tline.run .dot{border-color:var(--accent);background:var(--accent)}
+.tline .nm{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--ink-1)}
+.tline .arg{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--ink-4);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px}
+.tline .res{margin-left:auto;font-size:11px;color:var(--ink-4);font-family:ui-monospace,monospace}
+.out{margin:2px 0 0;padding:7px 10px;background:var(--desk);border:1px solid var(--line-1);border-radius:7px;
+  font:11.5px/1.6 ui-monospace,Consolas,monospace;color:var(--ink-3)}
+.turnsum{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;margin:0 0 12px;
+  margin-left:-8px;border-radius:7px;font-size:12.5px;color:var(--ink-2);cursor:pointer}
+.turnsum:hover{background:var(--desk)}
+.turnsum .ic{color:var(--ink-4);font-size:11px}
+.turnsum .ct{color:var(--ink-4);font-size:11.5px;font-family:ui-monospace,monospace}
+.turnsum .caret{margin-left:auto;color:var(--ink-4);font-size:10px}
+.turnsum.ghosted{opacity:.55;margin-top:2px}
+.divider{height:1px;margin:14px 0 16px;border:0;
+  background:linear-gradient(90deg,transparent,var(--line-3) 18%,var(--line-3) 82%,transparent)}
+
+/* 正文 */
+.prose{font-size:14px;line-height:1.75;color:var(--ink-1)}
+.prose p{margin:0 0 .75em}
+.prose h3{font-size:14px;font-weight:600;margin:1.3em 0 .45em}
+.prose ul{margin:0 0 .75em;padding-left:1.3em}
+.prose li{margin:.16em 0}
+.prose li::marker{color:var(--ink-4)}
+.prose code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
+.user{display:flex;justify-content:flex-end;margin:14px 0 16px}
+.user .bubble{background:var(--card);border:1px solid var(--line-1);border-radius:12px 12px 4px 12px;
+  padding:9px 13px;line-height:1.68;max-width:78%;box-shadow:var(--shadow-card)}
+
+/* 待你决定 */
+.blocked{margin:14px 0 4px;background:var(--card);border:1px solid var(--line-1);border-left:2px solid var(--accent);
+  border-radius:8px;padding:11px 13px;box-shadow:var(--shadow-card)}
+.blocked .bt{font-size:13px;font-weight:600;display:flex;align-items:center;gap:7px}
+.blocked .bt::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.blocked .bd{font-size:12.5px;color:var(--ink-2);margin:5px 0 10px;line-height:1.6}
+.blocked .bd code{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.bactions{display:flex;gap:8px;justify-content:flex-end}
+.btn{height:29px;padding:0 13px;border-radius:7px;font-size:12.5px;font-weight:500;display:inline-flex;
+  align-items:center;border:1px solid transparent}
+.btn.ghost{color:var(--ink-2);border-color:var(--line-2)}
+.btn.pri{background:var(--accent);color:#fff}
+
+/* ── 输入栏：完全保持现状 ── */
+.composer{padding:0 32px 18px}
+.cbox{max-width:640px;margin:0 auto;background:var(--card);border:1px solid var(--line-2);
+  border-radius:12px;box-shadow:var(--shadow-card);overflow:hidden}
+.cbox .ta{padding:11px 13px 6px;font-size:14px;line-height:1.6;color:var(--ink-4)}
+.ctool{display:flex;align-items:center;gap:2px;padding:2px 8px 8px}
+.chip{display:flex;align-items:center;gap:5px;height:26px;padding:0 8px;border-radius:6px;font-size:12.5px;
+  color:var(--ink-2)}
+.chip:hover{background:var(--desk)}
+.chip .ci{color:var(--ink-4);font-size:11px}
+.chip.sel{color:var(--chip-fg,var(--ink-1));background:var(--chip-bg,var(--desk-deep))}
+.ctool .right{margin-left:auto;display:flex;align-items:center;gap:4px}
+.send{width:30px;height:30px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center}
+
+/* ── 产物：右侧停靠可折叠 ── */
+.rail-panel{width:320px;flex:0 0 320px;background:var(--desk);border-left:1px solid var(--line-1);
+  display:flex;flex-direction:column;overflow:hidden}
+.rail-panel .rh{height:40px;display:flex;align-items:center;gap:6px;padding:0 8px 0 12px;
+  border-bottom:1px solid var(--line-1);font-size:12.5px;font-weight:600}
+.rail-panel .rh .tcount{color:var(--ink-4);font-weight:400;font-family:ui-monospace,monospace;font-size:11px}
+.rail-panel .rh .x{margin-left:auto;color:var(--ink-3);font-size:12px;padding:2px 6px;border-radius:5px}
+.rail-panel .rh .x:hover{background:var(--desk-deep)}
+.rtab{display:flex;gap:2px;padding:6px 8px;border-bottom:1px solid var(--line-1)}
+.rtab i{font-style:normal;padding:4px 9px;border-radius:6px;font-size:12px;color:var(--ink-3)}
+.rtab i.on{background:var(--card);color:var(--ink-1);font-weight:500}
+.ritem{padding:9px 12px;border-bottom:1px solid var(--line-1);font-size:12.5px;color:var(--ink-2);
+  display:flex;align-items:flex-start;gap:8px}
+.ritem .fi{width:16px;text-align:center;font-size:12px;color:var(--ink-4);margin-top:1px}
+.ritem .m{display:block;font-size:10.5px;color:var(--ink-4);font-family:ui-monospace,monospace;margin-top:1px}
+.ritem.on{background:var(--card);color:var(--ink-1)}
+
+/* ── 在场球 ── */
+.orb{position:absolute;right:24px;bottom:24px;width:48px;height:48px;border-radius:50%;background:var(--card);
+  border:1px solid var(--line-2);box-shadow:var(--shadow-modal);display:grid;place-items:center}
+.orb .glyph{width:20px;height:20px;border-radius:6px;background:var(--accent)}
+.orb .ring{position:absolute;inset:-5px;border-radius:50%;border:1.5px solid var(--warn)}
+
+
+/* -- 字体标本屏 -- */
+.tscale{display:grid;grid-template-columns:1fr 1fr;height:100%}
+.tcol{padding:22px 30px;overflow:hidden}
+.tcol+.tcol{border-left:1px solid var(--line-1)}
+.tsec-t{font-size:12px;font-weight:600;color:var(--ink-3);letter-spacing:.06em;margin-bottom:12px}
+.tsrow{display:flex;align-items:baseline;gap:10px;padding:7px 0;border-bottom:1px dashed var(--line-1)}
+.tsrow .tk{font:11px ui-monospace,Consolas,monospace;color:var(--accent);flex:0 0 128px}
+.tsrow .tv{font:11px ui-monospace,Consolas,monospace;color:var(--ink-4);flex:0 0 40px}
+.tsrow .tu{font-size:11px;color:var(--ink-4);flex:0 0 84px}
+.tsrow .ts{flex:1;color:var(--ink-1);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.trole{display:grid;grid-template-columns:92px 40px 32px 1fr;gap:8px;align-items:baseline;
+  padding:6px 0;border-bottom:1px dashed var(--line-1);font-size:11.5px;color:var(--ink-3)}
+.trole.h{color:var(--ink-4);font-weight:600;font-size:11px;letter-spacing:.04em;border-bottom:1px solid var(--line-2)}
+.trole .tn{color:var(--ink-4);font:10.5px ui-monospace,Consolas,monospace}
+.trole .samp{color:var(--ink-1);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:4px}
+.cmpbox{border:1px solid var(--line-1);border-radius:10px;padding:12px 14px;background:var(--paper)}
+.cmpbox .lbl{font-size:11px;color:var(--ink-4);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.cmpbox .lbl .sw{width:8px;height:8px;border-radius:2px;flex:0 0 8px}
+/* ── 对比屏 ── */
+.split{display:flex;height:100%}
+.pane{flex:1;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--line-1)}
+.pane:last-child{border-right:0}
+.pane-h{padding:12px 20px 10px;border-bottom:1px solid var(--line-1);background:var(--desk)}
+.pane-h .t{font-size:13px;font-weight:600}
+.pane-h .d{font-size:11.5px;color:var(--ink-3);margin-top:3px}
+.badge-no{color:var(--err);font-family:ui-monospace,monospace;font-size:11px}
+.badge-yes{color:var(--ok);font-family:ui-monospace,monospace;font-size:11px}
+.ruler{position:relative;height:1px;background:var(--line-2);margin:8px 0 0}
+.ruler span{position:absolute;top:-9px;font-size:10px;color:var(--ink-4);font-family:ui-monospace,monospace;
+  background:var(--paper);padding:0 5px}
+.ruler .mid{left:50%;transform:translateX(-50%)}
+.ruler .l{left:0}.ruler .r{right:0}
+.seq{display:flex;flex-direction:column;gap:16px;padding:24px 44px;overflow:hidden}
+.seq-step{display:flex;gap:16px;align-items:flex-start}
+.seq-n{width:22px;height:22px;border-radius:50%;background:var(--desk-deep);color:var(--ink-3);flex:0 0 22px;
+  display:grid;place-items:center;font-size:11px;font-family:ui-monospace,monospace;margin-top:2px}
+.seq-c{flex:1;min-width:0}
+.seq-c .h{font-size:12.5px;font-weight:600;margin-bottom:3px}
+.seq-c .d{font-size:11.5px;color:var(--ink-3);line-height:1.6;margin-bottom:9px;max-width:760px}
+.mockbox{background:var(--paper);border:1px solid var(--line-1);border-radius:10px;padding:10px 14px;max-width:760px}
+.note{font-size:11px;color:var(--ink-4);background:var(--desk);border:1px solid var(--line-1);border-radius:6px;
+  padding:6px 9px;display:inline-block;margin-top:7px}
+</style>
+</head>
+<body>
+
+<!-- ══ 屏 1 ══ -->
+<div class="cap">① 对话页 · 宣纸 —— <em>侧栏分组、输入栏、产物停靠栏保持现状；accent=青碧 #1d8a72；只改正文行宽、轮次摘要、审批收敛</em></div>
+<div class="frame" data-theme="light">
+  <div class="ctxbar">
+    <div class="brand"><span class="mark"></span><b>Hermes</b></div>
+    <div class="ctx-title">把认证模块拆出来 <span style="color:var(--ink-4);font-size:10px">▼</span></div>
+    <div class="ctx-meta"><span>gpt-5</span><span>~/work/api</span><span>默认权限</span></div>
+    <div class="wbtn on">◨</div><div class="wbtn">⋯</div>
+  </div>
+  <div class="shell">
+    <aside class="sb">
+      <div class="sb-top">
+        <div class="sb-search">⌕ <span>搜索对话与项目</span></div>
+        <div class="sb-new"><span class="plus">＋</span> 新建对话</div>
+      </div>
+      <div class="sb-sections">
+        <div class="sb-sec-h"><span class="cv">▾</span>对话 <span class="ct">6</span></div>
+        <div class="sb-row sel"><span class="pulse"></span><span class="lbl">把认证模块拆出来</span></div>
+        <div class="sb-row"><span class="lbl">修复构建失败</span></div>
+        <div class="sb-row"><span class="lbl">给表单加校验</span><span class="rt">置顶</span></div>
+        <div class="sb-sec-h" style="margin-top:8px"><span class="cv">▾</span>项目 <span class="ct">2</span></div>
+        <div class="sb-row"><span class="ic">▣</span><span class="lbl">shop</span><span class="rt">4</span></div>
+        <div class="sb-row nest"><span class="lbl">订单看板改版</span></div>
+        <div class="sb-row nest"><span class="lbl">支付回调重试</span></div>
+        <div class="sb-row"><span class="ic">▣</span><span class="lbl">api</span><span class="rt">2</span></div>
+        <div class="sb-row nest"><span class="lbl">鉴权拆分</span></div>
+      </div>
+      <div class="sb-foot"><div class="sb-nav"><i>⌂</i><i class="on">◍</i><i>◈</i><i>◧</i><i>⚙</i></div></div>
+    </aside>
+
+    <main class="axis">
+      <div class="scroller"><div class="measure">
+        <div class="turnsum"><span class="ic">⏱</span><span>已工作 3 分 40 秒</span>
+          <span class="ct">5 个工具 · 12 行</span><span class="caret">⌄</span></div>
+        <div class="user"><div class="bubble">把 session 和 jwt 校验拆成两个模块，jwt 那边补单测。</div></div>
+        <div class="turnsum ghosted"><span class="ic">⏱</span><span>已工作 5 分 12 秒</span>
+          <span class="ct">3 个工具 · 8 行</span><span class="caret">›</span></div>
+        <div class="prose">
+          <p>已经拆完了。<code>session.rs</code> 只留会话生命周期，签名与校验全部搬到 <code>jwt.rs</code>，两边互不依赖。</p>
+          <h3>改了什么</h3>
+          <ul>
+            <li>抽出 <code>JwtClaims</code> 与 <code>verify()</code>，错误类型收敛为 <code>AuthError</code></li>
+            <li>session 中间件不再关心 token 细节，只拿 <code>sub</code> 和 <code>exp</code></li>
+          </ul>
+          <p>跑通了 <code>cargo test -p auth</code>，24 passed。</p>
+        </div>
+        <div class="blocked">
+          <div class="bt">需要你的决定</div>
+          <div class="bd">写入 <code>src/auth/mod.rs</code> 与 <code>src/auth/jwt.rs</code>，覆盖当前内容。</div>
+          <div class="bactions"><span class="btn ghost">取消</span><span class="btn pri">允许</span></div>
+        </div>
+      </div></div>
+      <div class="composer"><div class="cbox">
+        <div class="ta">接着说…</div>
+        <div class="ctool">
+          <span class="chip"><span class="ci">✦</span>专家</span>
+          <span class="chip"><span class="ci">▣</span>目录</span>
+          <span class="chip sel" style="--chip-fg:var(--warn);--chip-bg:rgba(150,117,15,.12)">
+            <span class="ci">⚠</span>完全访问</span>
+          <span class="right"><span class="chip"><span class="ci">🖼</span></span><span class="send">↑</span></span>
+        </div>
+      </div></div>
+    </main>
+
+    <aside class="rail-panel">
+      <div class="rh">产物 <span class="tcount">3</span><span class="x">⟩</span></div>
+      <div class="rtab"><i class="on">产物</i><i>电脑</i></div>
+      <div class="ritem on"><span class="fi">◧</span><span><span>src/auth/mod.rs</span>
+        <span class="m">改写 · 18 KB</span></span></div>
+      <div class="ritem"><span class="fi">◨</span><span><span>src/auth/jwt.rs</span>
+        <span class="m">新建 · 4 KB</span></span></div>
+      <div class="ritem"><span class="fi">◨</span><span><span>src/auth/jwt.test.ts</span>
+        <span class="m">新建 · 6 KB</span></span></div>
+    </aside>
+  </div>
+</div>
+
+<!-- ══ 屏 2 ══ -->
+<div class="cap">② 对话页 · 夜墨 —— <em>同一套深度语法；底 #121419 非纯黑，青碧提亮 #35b899，error 走玫瑰色与青碧分开</em></div>
+<div class="frame" data-theme="dark">
+  <div class="ctxbar">
+    <div class="brand"><span class="mark"></span><b>Hermes</b></div>
+    <div class="ctx-title">把认证模块拆出来 <span style="color:var(--ink-4);font-size:10px">▼</span></div>
+    <div class="ctx-meta"><span>gpt-5</span><span>~/work/api</span><span>默认权限</span></div>
+    <div class="wbtn on">◨</div><div class="wbtn">⋯</div>
+  </div>
+  <div class="shell">
+    <aside class="sb">
+      <div class="sb-top">
+        <div class="sb-search">⌕ <span>搜索对话与项目</span></div>
+        <div class="sb-new"><span class="plus">＋</span> 新建对话</div>
+      </div>
+      <div class="sb-sections">
+        <div class="sb-sec-h"><span class="cv">▾</span>对话 <span class="ct">6</span></div>
+        <div class="sb-row sel"><span class="pulse"></span><span class="lbl">把认证模块拆出来</span></div>
+        <div class="sb-row"><span class="lbl">修复构建失败</span></div>
+        <div class="sb-row"><span class="lbl">给表单加校验</span><span class="rt">置顶</span></div>
+        <div class="sb-sec-h" style="margin-top:8px"><span class="cv">▾</span>项目 <span class="ct">2</span></div>
+        <div class="sb-row"><span class="ic">▣</span><span class="lbl">shop</span><span class="rt">4</span></div>
+        <div class="sb-row nest"><span class="lbl">订单看板改版</span></div>
+        <div class="sb-row nest"><span class="lbl">支付回调重试</span></div>
+        <div class="sb-row"><span class="ic">▣</span><span class="lbl">api</span><span class="rt">2</span></div>
+        <div class="sb-row nest"><span class="lbl">鉴权拆分</span></div>
+      </div>
+      <div class="sb-foot"><div class="sb-nav"><i>⌂</i><i class="on">◍</i><i>◈</i><i>◧</i><i>⚙</i></div></div>
+    </aside>
+    <main class="axis">
+      <div class="scroller"><div class="measure">
+        <div class="turnsum"><span class="ic">⏱</span><span>已工作 3 分 40 秒</span>
+          <span class="ct">5 个工具 · 12 行</span><span class="caret">⌄</span></div>
+        <div class="user"><div class="bubble">把 session 和 jwt 校验拆成两个模块，jwt 那边补单测。</div></div>
+        <div class="turnsum ghosted"><span class="ic">⏱</span><span>已工作 5 分 12 秒</span>
+          <span class="ct">3 个工具 · 8 行</span><span class="caret">›</span></div>
+        <div class="prose">
+          <p>已经拆完了。<code>session.rs</code> 只留会话生命周期，签名与校验全部搬到 <code>jwt.rs</code>，两边互不依赖。</p>
+          <h3>改了什么</h3>
+          <ul>
+            <li>抽出 <code>JwtClaims</code> 与 <code>verify()</code>，错误类型收敛为 <code>AuthError</code></li>
+            <li>session 中间件不再关心 token 细节，只拿 <code>sub</code> 和 <code>exp</code></li>
+          </ul>
+          <p>跑通了 <code>cargo test -p auth</code>，24 passed。</p>
+        </div>
+        <div class="blocked">
+          <div class="bt">需要你的决定</div>
+          <div class="bd">写入 <code>src/auth/mod.rs</code> 与 <code>src/auth/jwt.rs</code>，覆盖当前内容。</div>
+          <div class="bactions"><span class="btn ghost">取消</span><span class="btn pri">允许</span></div>
+        </div>
+      </div></div>
+      <div class="composer"><div class="cbox">
+        <div class="ta">接着说…</div>
+        <div class="ctool">
+          <span class="chip"><span class="ci">✦</span>专家</span>
+          <span class="chip"><span class="ci">▣</span>目录</span>
+          <span class="chip sel" style="--chip-fg:var(--warn);--chip-bg:rgba(200,169,78,.14)">
+            <span class="ci">⚠</span>完全访问</span>
+          <span class="right"><span class="chip"><span class="ci">🖼</span></span><span class="send">↑</span></span>
+        </div>
+      </div></div>
+    </main>
+    <aside class="rail-panel">
+      <div class="rh">产物 <span class="tcount">3</span><span class="x">⟩</span></div>
+      <div class="rtab"><i class="on">产物</i><i>电脑</i></div>
+      <div class="ritem on"><span class="fi">◧</span><span><span>src/auth/mod.rs</span><span class="m">改写 · 18 KB</span></span></div>
+      <div class="ritem"><span class="fi">◨</span><span><span>src/auth/jwt.rs</span><span class="m">新建 · 4 KB</span></span></div>
+      <div class="ritem"><span class="fi">◨</span><span><span>src/auth/jwt.test.ts</span><span class="m">新建 · 6 KB</span></span></div>
+    </aside>
+  </div>
+</div>
+
+<!-- ══ 屏 3：行宽 ══ -->
+<div class="cap">③ 正文行宽 —— <em>现状 max-width:920px ≈ 65 字/行；提案 640px ≈ 38 字/行。同样的文字，差 280px</em></div>
+<div class="frame" data-theme="light">
+  <div class="ctxbar"><div class="brand"><span class="mark"></span><b>Hermes</b></div>
+    <div class="ctx-title">行宽对比 <span style="color:var(--ink-4);font-size:10px">▼</span></div>
+    <div class="ctx-meta"><span>现状 920px</span><span style="color:var(--accent)">提案 640px</span></div></div>
+  <div class="scroller" style="height:852px">
+    <div class="measure-wide" style="position:relative">
+      <div class="ruler"><span class="l">左</span><span class="mid">现状 920px · 约 65 字 / 行</span><span class="r">右</span></div>
+      <div class="prose" style="margin-top:30px;position:relative">
+        <p>认证模块拆分完成，session 与 jwt 的职责边界已经清晰，中间的依赖方向也检查过一遍，没有出现反向引用的情况。</p>
+        <p>中间件那一层原本直接读 token 里的全部字段，现在收敛成只取 sub 和 exp 两个，其余解析细节全部下沉到 jwt 模块内部完成。</p>
+        <h3>需要你确认的一点</h3>
+        <p>旧的 <code>verify_token</code> 我暂时保留了 deprecated 别名，因为不确定有没有别的模块还在引用它。你确认没有的话我下一轮就删掉，顺便把 imports 也清一遍。</p>
+        <!-- 收窄标尺：提案的 640px 止于这里 -->
+        <div style="position:absolute;left:-24px;top:-14px;bottom:-20px;width:640px;
+          border-left:1.5px dashed var(--accent);pointer-events:none"></div>
+        <div style="position:absolute;left:-24px;top:-34px;width:640px;text-align:right;
+          font-size:10.5px;color:var(--accent);font-family:ui-monospace,monospace">↑ 提案：正文收到 640px（虚线为界）</div>
+        <div style="position:absolute;right:0;top:-14px;bottom:-20px;width:256px;background:var(--accent-soft);
+          border-radius:6px;pointer-events:none"></div>
+        <div style="position:absolute;right:8px;bottom:-26px;font-size:10.5px;color:var(--accent)">多出的 280px · 每行多 27 个字</div>
+      </div>
+      <div class="note" style="margin-top:26px;max-width:920px">
+        只收窄「正文」这一层：代码块、表格、长命令行保持原有宽度并允许横向滚动，不跟着一起压窄。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 屏 4：轮次折叠（已实现，仅需微调） ══ -->
+<div class="cap">④ 轮次折叠 —— <em>你们已经实现了（ProcessTimeline）。这一屏只说明现状判定，标出唯一想微调的一处</em></div>
+<div class="frame" data-theme="light">
+  <div class="ctxbar"><div class="brand"><span class="mark"></span><b>Hermes</b></div>
+    <div class="ctx-title">轮次折叠 <span style="color:var(--ink-4);font-size:10px">▼</span></div>
+    <div class="ctx-meta"><span style="color:var(--ok)">已实现</span><span>仅微调摘要行样式</span></div></div>
+  <div class="seq" style="height:852px">
+    <div class="seq-step"><div class="seq-n">✓</div><div class="seq-c">
+      <div class="h">现状判定（ToolCallBubble.tsx:162 ProcessTimeline）—— 不动</div>
+      <div class="d">流式中展开 · 等审批(keepOpen)展开 · 工具在跑(hasRunningTool)展开 · <b style="color:var(--ink-1)">真正结束才默认折叠</b>；
+        用户的手动展开保留到下一轮开始。摘要行的耗时由 Done 事件的 durationMs 提供。</div>
+      <div class="mockbox" style="max-width:640px">
+        <div class="turnsum" style="margin:0"><span class="ic">⏱</span><span>已工作 5 分 40 秒</span>
+          <span class="ct">5 个工具 · 12 行</span><span class="caret" style="margin-left:auto">⌄</span></div>
+        <div class="think-body" style="margin-top:8px">
+          <p>展开后是原来的完整过程：思考块 + 工具时间轴 + 命令输出，一行不少。</p></div>
+      </div>
+    </div></div>
+
+    <div class="seq-step"><div class="seq-n">!</div><div class="seq-c">
+      <div class="h">唯一想微调：摘要行跟着新配色走，并补两个计数</div>
+      <div class="d">现在是「已工作 X 分 Y 秒」一行。建议在右侧补「N 个工具 · M 行输出」，
+        让折叠状态下也能判断这一轮的分量，而不必点开。样式改用新令牌，位置和点击区域不变。</div>
+      <div class="mockbox" style="max-width:640px">
+        <div class="turnsum" style="margin:0"><span class="ic">⏱</span><span>已工作 5 分 40 秒</span>
+          <span class="ct">5 个工具 · 12 行</span><span class="caret" style="margin-left:auto">⌄</span></div>
+      </div>
+      <div class="note">折叠判定逻辑一行不改 —— 它现在的三条保护（有审批不折、工具在跑不折、手动展开保留）是对的</div>
+    </div></div>
+  </div>
+</div>
+
+<!-- ══ 屏 5：产物栏折叠 ══ -->
+<div class="cap">⑤ 产物栏 —— <em>保持右侧停靠，不做浮层；只增加一个 44px 折叠态，收起后是一条带计数的竖条</em></div>
+<div class="frame" data-theme="light">
+  <div class="ctxbar"><div class="brand"><span class="mark"></span><b>Hermes</b></div>
+    <div class="ctx-title">产物栏折叠 <span style="color:var(--ink-4);font-size:10px">▼</span></div></div>
+  <div class="split" style="height:852px">
+    <div class="pane">
+      <div class="pane-h"><div class="t">展开态 <span class="badge-yes">停靠 320–520px</span></div>
+        <div class="d">和现状一致：顶部 tab（产物 / 电脑）、列表项、右侧可拖拽调宽</div></div>
+      <div style="flex:1;display:flex;min-height:0">
+        <div class="rail-panel" style="width:300px;flex:0 0 300px">
+          <div class="rh">产物 <span class="tcount">3</span><span class="x">⟩</span></div>
+          <div class="rtab"><i class="on">产物</i><i>电脑</i></div>
+          <div class="ritem on"><span class="fi">◧</span><span><span>src/auth/mod.rs</span><span class="m">改写 · 18 KB</span></span></div>
+          <div class="ritem"><span class="fi">◨</span><span><span>src/auth/jwt.rs</span><span class="m">新建 · 4 KB</span></span></div>
+          <div class="ritem"><span class="fi">◨</span><span><span>src/auth/jwt.test.ts</span><span class="m">新建 · 6 KB</span></span></div>
+        </div>
+        <div style="flex:1;background:var(--paper);padding:26px 32px;min-width:0">
+          <div class="prose" style="max-width:520px"><p>主区内容照常滚动，产物栏不遮挡、不打断，也没有浮层带来的那层阴影和边框。</p></div>
+        </div>
+      </div>
+    </div>
+    <div class="pane">
+      <div class="pane-h"><div class="t">折叠态 <span class="badge-yes">44px 竖条</span></div>
+        <div class="d">收起后仍留在原位，带产物数量角标；点一下原路展开，宽度记忆</div></div>
+      <div style="flex:1;display:flex;min-height:0">
+        <div style="width:64px;flex:0 0 64px;background:var(--desk);border-left:1px solid var(--line-1);
+          display:flex;flex-direction:column;align-items:center;padding-top:12px;gap:10px">
+          <div style="position:relative;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;
+            font-size:14px;color:var(--ink-1);background:var(--card)">◧
+            <span style="position:absolute;top:-4px;right:-5px;min-width:15px;height:15px;border-radius:8px;
+              background:var(--accent);color:#fff;font-size:9.5px;display:grid;place-items:center;padding:0 3px;
+              font-weight:600">3</span>
+          </div>
+          <div style="writing-mode:vertical-rl;font-size:11px;color:var(--ink-4);letter-spacing:.16em">产 物</div>
+        </div>
+        <div style="flex:1;background:var(--paper);padding:26px 32px;min-width:0">
+          <div class="prose" style="max-width:520px">
+            <p>折叠后主区宽度全部还给正文，没有遮挡层，也没有浮层带来的视觉噪音。</p>
+            <p>竖条常驻可见，所以「有 3 个产物没看」这件事不会忘——浮层方案会把这个状态藏进一次性的提示里，然后消失。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 屏 6：工作台 ══ -->
+<div class="cap">⑥ 工作台 + 在场球 —— <em>画布拿回全部宽度（右侧 460px 固定栏去掉）；球跨页常驻，环上直接读出 agent 状态</em></div>
+<div class="frame" data-theme="dark">
+  <div class="ctxbar">
+    <div class="brand"><span class="mark"></span><b>Hermes</b></div>
+    <div class="ctx-title">工作台 · 订单看板 <span style="color:var(--ink-4);font-size:10px">▼</span></div>
+    <div class="ctx-meta"><span>gpt-5</span><span>~/work/shop</span><span>完全访问</span></div>
+    <div class="wbtn on">◨</div><div class="wbtn">⋯</div>
+  </div>
+  <div style="position:absolute;left:0;right:0;top:48px;bottom:0;background:var(--desk-outer);
+    display:flex;flex-direction:column">
+    <div style="height:38px;display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--desk);
+      border-bottom:1px solid var(--line-1);font-size:12px;color:var(--ink-3)">
+      <span style="font-family:ui-monospace,monospace;color:var(--ink-2)">Board.tsx</span><span>·</span>
+      <span>src/orders/</span>
+      <span style="margin-left:auto;color:var(--warn)">● 3 个文件待确认</span></div>
+    <div style="flex:1;margin:14px;position:relative;border-radius:10px;background:var(--card);
+      border:1px solid var(--line-1);display:grid;place-items:center;color:var(--ink-4);font-size:12px;
+      box-shadow:var(--shadow-card)">画布 · 拿回全部宽度（原来的右侧 460px 固定栏没有了）</div>
+  </div>
+  <div class="orb"><div class="ring"></div><div class="glyph"></div></div>
+  <div style="position:absolute;right:24px;bottom:84px;background:var(--overlay);border:1px solid var(--line-2);
+    border-radius:10px;box-shadow:var(--shadow-modal);padding:9px 12px;display:flex;align-items:center;gap:10px;
+    font-size:12.5px">◍ <span>agent 在等你批准写入 3 个文件</span>
+    <span style="color:var(--accent)">展开</span></div>
+</div>
+
+<!-- == 屏 7：字体规范 == -->
+<div class="cap">⑦ 字体规范 —— <em>7 档字号 / 3 档字重 / 4 档行高；思考比正文小一档、浅两档</em></div>
+<div class="frame" data-theme="light">
+  <div class="ctxbar"><div class="brand"><span class="mark"></span><b>Hermes</b></div>
+    <div class="ctx-title">字体规范 <span style="color:var(--ink-4);font-size:10px">▼</span></div>
+    <div class="ctx-meta"><span style="color:var(--err)">现状 11 个正文字号 / 407 处任意值</span>
+      <span style="color:var(--ok)">提案 7 档语义</span></div></div>
+  <div class="tscale" style="height:852px">
+    <div class="tcol">
+      <div class="tsec-t">字号阶梯 · 一屏内档位 ≤ 3</div>
+      <div class="tsrow"><span class="tk">--text-display</span><span class="tv">20px</span>
+        <span class="tu">页面标题</span><span class="ts" style="font-size:20px;font-weight:600">订单看板</span></div>
+      <div class="tsrow"><span class="tk">--text-title</span><span class="tv">16px</span>
+        <span class="tu">小标题</span><span class="ts" style="font-size:16px;font-weight:600">产物</span></div>
+      <div class="tsrow"><span class="tk">--text-body</span><span class="tv">14px</span>
+        <span class="tu">对话正文</span><span class="ts" style="font-size:14px;line-height:1.75">已经拆完了，两边互不依赖。</span></div>
+      <div class="tsrow"><span class="tk">--text-ui</span><span class="tv">13px</span>
+        <span class="tu">界面 / 思考</span><span class="ts" style="font-size:13px;color:var(--ink-3)">先确认中间件从哪读字段</span></div>
+      <div class="tsrow"><span class="tk">--text-meta</span><span class="tv">12px</span>
+        <span class="tu">工具 / chip</span><span class="ts" style="font-size:12px;font-family:ui-monospace,monospace">read_file</span></div>
+      <div class="tsrow"><span class="tk">--text-tiny</span><span class="tv">11px</span>
+        <span class="tu">元信息</span><span class="ts" style="font-size:11px;color:var(--ink-3);font-family:ui-monospace,monospace">12:04 · 1.2k 行</span></div>
+      <div class="tsrow"><span class="tk">--text-micro</span><span class="tv">10px</span>
+        <span class="tu">角标</span><span class="ts" style="font-size:10px;color:var(--ink-4)">3 个文件待确认</span></div>
+
+      <div class="tsec-t" style="margin-top:22px">字重 · 最高 600（中文小字 700 会糊成块）</div>
+      <div class="tsrow"><span class="tk">--font-weight-semibold</span><span class="tv">600</span>
+        <span class="tu">标题</span><span class="ts" style="font-weight:600">改了什么</span></div>
+      <div class="tsrow"><span class="tk">--font-weight-medium</span><span class="tv">500</span>
+        <span class="tu">界面强调</span><span class="ts" style="font-weight:500">允许</span></div>
+      <div class="tsrow"><span class="tk">--font-weight-regular</span><span class="tv">400</span>
+        <span class="tu">正文</span><span class="ts">默认</span></div>
+
+      <div class="tsec-t" style="margin-top:22px">行高 · 按用途分，不按字号分</div>
+      <div class="tsrow"><span class="tk">--leading-reading</span><span class="tv">1.75</span>
+        <span class="tu">长文</span><span class="ts" style="line-height:1.75">对话正文 / 思考正文</span></div>
+      <div class="tsrow"><span class="tk">--leading-ui</span><span class="tv">1.5</span>
+        <span class="tu">界面</span><span class="ts" style="line-height:1.5">按钮 / chip / 列表</span></div>
+      <div class="tsrow"><span class="tk">--leading-compact</span><span class="tv">1.4</span>
+        <span class="tu">紧凑</span><span class="ts" style="line-height:1.4">工具行 / 元信息</span></div>
+    </div>
+
+    <div class="tcol">
+      <div class="tsec-t">角色对照表 · 组件只能从这里取</div>
+      <div class="trole h"><span>内容</span><span>字号</span><span>字重</span><span>样例（实际渲染）</span></div>
+      <div class="trole"><span>对话正文</span><span class="tn">body</span><span class="tn">400</span>
+        <span class="samp" style="font-size:14px;line-height:1.75">已经拆完了。</span></div>
+      <div class="trole"><span>用户气泡</span><span class="tn">body</span><span class="tn">400</span>
+        <span class="samp" style="font-size:14px">拆成两个模块</span></div>
+      <div class="trole"><span>思考正文</span><span class="tn">ui</span><span class="tn">400</span>
+        <span class="samp" style="font-size:13px;line-height:1.75;color:var(--ink-3)">先看 session.rs 有没有反向依赖</span></div>
+      <div class="trole"><span>轮次摘要行</span><span class="tn">meta</span><span class="tn">500</span>
+        <span class="samp" style="font-size:12px;font-weight:500;color:var(--ink-2)">已工作 5 分 40 秒</span></div>
+      <div class="trole"><span>工具名</span><span class="tn">meta</span><span class="tn">500</span>
+        <span class="samp" style="font-size:12px;font-weight:500;font-family:ui-monospace,monospace">read_file</span></div>
+      <div class="trole"><span>参数 / 路径</span><span class="tn">tiny</span><span class="tn">400</span>
+        <span class="samp" style="font-size:11px;font-family:ui-monospace,monospace;color:var(--ink-3)">src/auth/session.rs</span></div>
+      <div class="trole"><span>命令输出</span><span class="tn">meta</span><span class="tn">400</span>
+        <span class="samp" style="font-size:12px;font-family:ui-monospace,monospace;color:var(--ink-2)">test result: ok. 24 passed</span></div>
+      <div class="trole"><span>时间 / 计数</span><span class="tn">tiny</span><span class="tn">400</span>
+        <span class="samp" style="font-size:11px;color:var(--ink-3)">12:04 · 5 个工具</span></div>
+      <div class="trole"><span>区块标题</span><span class="tn">meta</span><span class="tn">600</span>
+        <span class="samp" style="font-size:12px;font-weight:600;color:var(--ink-3);letter-spacing:.04em">对话</span></div>
+      <div class="trole"><span>chip 文本</span><span class="tn">meta</span><span class="tn">500</span>
+        <span class="samp" style="font-size:12px;font-weight:500">完全访问</span></div>
+      <div class="trole"><span>按钮</span><span class="tn">ui</span><span class="tn">500</span>
+        <span class="samp" style="font-size:13px;font-weight:500">新建对话</span></div>
+      <div class="trole"><span>占位 / 禁用</span><span class="tn">tiny</span><span class="tn">400</span>
+        <span class="samp" style="font-size:11px;color:var(--ink-4)">搜索对话与项目</span></div>
+
+      <div class="tsec-t" style="margin-top:22px">思考 vs 正文 · 你指出的那条</div>
+      <div class="cmp">
+        <div class="cmpbox">
+          <div class="lbl"><span class="sw" style="background:var(--err)"></span>现状：与正文完全相同</div>
+          <div style="font-size:14px;line-height:1.72;color:var(--ink-1)">先确认中间件从哪读 token 字段，再决定 verify 的签名形态。</div>
+          <div style="font-size:14px;line-height:1.72;color:var(--ink-1);margin-top:8px;padding-top:8px;border-top:1px solid var(--line-1)">已经拆完了，两边互不依赖。</div>
+        </div>
+        <div class="cmpbox" style="border-color:var(--accent)">
+          <div class="lbl"><span class="sw" style="background:var(--accent)"></span>提案：小一档 + 浅两档</div>
+          <div style="font-size:13px;line-height:1.75;color:var(--ink-3)">先确认中间件从哪读 token 字段，再决定 verify 的签名形态。</div>
+          <div style="font-size:14px;line-height:1.75;color:var(--ink-1);margin-top:8px;padding-top:8px;border-top:1px solid var(--line-1)">已经拆完了，两边互不依赖。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

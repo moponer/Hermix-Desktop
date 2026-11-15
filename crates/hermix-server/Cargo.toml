@@ -1,0 +1,106 @@
+[package]
+name = "hermix-server"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "HTTP/WebSocket API server for Hermix Agent"
+
+[features]
+default = []
+otlp = ["hermix-telemetry/otlp"]
+# Internal: exposes `pub mod test_state` for integration tests and the
+# in-process dashboard test harness. Off by default; enable with
+# `cargo test -p hermix-server --features test-helpers`.
+test-helpers = []
+
+[[bin]]
+name = "hermix"
+path = "src/main.rs"
+
+[dependencies]
+hermix-core = { workspace = true }
+hermix-store = { workspace = true }
+hermix-transport = { workspace = true }
+hermix-protocol = { workspace = true }
+hermix-agent = { workspace = true }
+hermix-focus = { workspace = true }
+hermix-tools = { workspace = true }
+hermix-context = { workspace = true }
+hermix-plugin = { workspace = true }
+hermix-config = { workspace = true }
+hermix-skills = { workspace = true }
+hermix-environments = { workspace = true }
+hermix-telemetry = { workspace = true }
+hermix-runtime = { workspace = true }
+hermix-voice = { workspace = true }
+hermix-mcp = { workspace = true }
+hermix-task = { workspace = true }
+hermix-automation = { workspace = true }
+hermix-intelligence = { workspace = true }
+hermix-vault = { path = "../hermix-vault" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+tracing = { workspace = true }
+futures = { workspace = true }
+async-stream = "0.3"
+chrono = { workspace = true }
+cron = { workspace = true }
+uuid = { workspace = true }
+axum = { version = "0.8", features = ["ws", "macros"] }
+axum-server = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+rcgen = { workspace = true }
+time = { workspace = true }
+sha2 = { workspace = true }
+rand = "0.8"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "limit", "fs"] }
+libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls", "multipart"] }
+# IM 通道（QQ 官方 bot 网关）需要一条出站 wss 长连接；服务端不再暴露入站 WS。
+# rustls-tls-native-roots 用编译进二进制的根证书，不拉 OpenSSL，MSVC 下无 CMake 负担
+# （与 tls.rs 强制 ring provider 避开 aws-lc 是同一个理由）。
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+base64 = { workspace = true }
+# IM 通道：QQ 开放平台扫码绑定返回的 bot secret 是 AES-256-GCM 密文。
+aes-gcm = { workspace = true }
+# relay 帧 E2EE —— 与 App 侧 apps/hm/src/core/crypto.ts 逐字节对齐。
+p256 = { workspace = true }
+hkdf = { workspace = true }
+# ShellExecuteExW 提权拉起 filesearch helper：Win32_UI_Shell（SHELLEXECUTEINFOW）
+# + Win32_System_Registry（ShellExecuteExW 本体被它门控，见 windows-0.58 mod.rs:4588）
+windows = { workspace = true, features = [
+    "Win32_UI_Shell",
+    "Win32_System_Registry",
+    # 网络变化感知（net_watch.rs）：NotifyAddrChange 拿地址/路由变更通知，
+    # 把「切 Wi-Fi 后最坏 150s 恢复」压到秒级。OVERLAPPED 自带在 Win32_System_IO。
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_System_IO",
+    # 休眠/唤醒通知（RegisterSuspendResumeNotification，回调式，不需要窗口）。
+    "Win32_System_Power",
+] }
+regex = { workspace = true }
+# `test_state.rs` lives in the lib tree (gated by `#![cfg(any(test,
+# feature = "test-helpers"))]`) and uses `tempfile::tempdir` — so it
+# must be a regular `[dependencies]` entry, not dev-only, otherwise
+# `cargo test --features test-helpers` fails to build the lib.
+tempfile = "3"
+
+[dev-dependencies]
+http-body-util = "0.1"
+tracing-subscriber = { workspace = true }
+proptest = { workspace = true }
+walkdir = "2"
+hermix-context = { workspace = true }
+# `#[tokio::test(start_paused = true)]` 需要它：把时间虚拟化，让心跳这类
+# 依赖时序的用例不再靠真 sleep 赌调度。只在测试构建里生效。
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

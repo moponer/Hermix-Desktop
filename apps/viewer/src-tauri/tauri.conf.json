@@ -1,0 +1,36 @@
+{
+  "productName": "Hermix 文件查看器",
+  "version": "0.1.0",
+  "identifier": "com.hermix.viewer",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hermix 文件查看器",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 640,
+        "minHeight": 420,
+        "resizable": true,
+        "center": true,
+        "visible": false,
+        "decorations": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=0"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: blob: http://asset.localhost; media-src 'self' asset: http://asset.localhost blob: data:; object-src 'self' data:; worker-src 'self' blob:;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": []
+  }
+}

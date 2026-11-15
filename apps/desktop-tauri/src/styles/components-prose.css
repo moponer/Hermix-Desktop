@@ -1,0 +1,1229 @@
+/* ════════════════════════════════════════════════════════════════════
+   § 18.  PROSE & MESSAGE FLOW
+   ════════════════════════════════════════════════════════════════════ */
+/* impeccable-disable side-tab: 引用块是 2px **中性**轨（非 3px 实色条、非语义色）+ 淡底 + 缩进；层次由底色承担，正文里的引用仍需要一处「这是引用」的形状提示。 */
+
+.prose {
+  color: var(--color-text-primary);
+  font-size: var(--text-body);
+  line-height: var(--leading-reading);
+  font-weight: var(--font-weight-regular);
+  /* 0.01em 是**中文正文例外**：中文方块字在 14px 下笔画贴得偏紧，加一丝
+     字距更透气（latin 段落同值无害）。中文不加负字距。
+     待提为令牌 --tracking-body（tokens.css 不在本批次归属，见移交项）。 */
+  letter-spacing: 0.01em;
+  /* 中文专属：避免行尾出现单字成行（孤字），并按中文断行规则处理标点。 */
+  text-wrap: pretty;
+  line-break: strict;
+}
+/* 段间距从 0.95em 提到 1.05em：LLM 输出的特点是段落多、标题多，
+   段与段之间只差 0.95em 时，长回复会糊成一整块灰（用户描述「像日志」）。
+   1.05em + 标题上方的 1.7em 形成「段内紧、段间松、节间更松」三级节奏。 */
+.prose p { margin: 0 0 1.05em; }
+.prose p:last-child { margin-bottom: 0; }
+/* 段落首行不缩进（中文网页排版惯例），靠段间距分界。 */
+.prose p + p { margin-top: -0.15em; }
+/* 2026-09-30：540 是为可变字体设的中间档，Microsoft YaHei UI / Segoe UI
+   非可变时会跳档，渲染成忽粗忽细。归到 500/600 两档 + 中文不加负字距。 */
+.prose strong { color: var(--color-text-primary); font-weight: 600; letter-spacing: 0; }
+.prose em { font-style: italic; color: var(--color-text-secondary); }
+.prose a {
+  color: var(--color-link);
+  text-decoration: none;
+  border-bottom: 1px solid var(--color-link);
+  padding-bottom: 0.5px;
+  /* 不放 opacity：opacity 恒为 1（.prose a 没有半透明态），transition 里
+     带它是死声明。 */
+  transition: color var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+.prose a:hover {
+  text-decoration: underline;
+  border-bottom-color: transparent;
+}
+/* 标题：三档尺度 + 三级间距，让长回复能被「扫」而不是被「读」。
+   之前 h1–h4 共用一套 margin，标题与标题之间、标题与段落之间距离相同，
+   层级只能靠字号 —— 而字号只有 16/14 两档（差 2px），等于没有层级。
+
+   现在的梯度（字号只取七档里的三档，不开新档位）：
+     h1 20px（--text-display）· 600 · 满墨 · 上 1.9em
+     h2 16px（--text-title）  · 600 · 满墨 · 上 1.6em
+     h3 14px（--text-body）   · 600 · 满墨 · 上 1.35em
+     h4 14px                 · 500 · 次级墨 · 上 1.15em
+   h3 与正文同号，靠 600 字重区分；h4 再降一档字重与墨色。三层标题在
+   字号上只差两档，但**字重 + 墨色 + 间距**三条通道同时拉开，层次足够。
+
+   为什么不开 17px / 15px 这样的中间档：全站字号只有七档，正文之外的
+   任意值会让「一屏内字号 ≤3 档」这条纪律失效，且 check-theme-tokens
+   的 css-type-debt 会持续报警。 */
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  line-height: var(--leading-heading);
+  letter-spacing: 0;
+  /* 标题不被段间距「吃掉」：下边距恒小于上边距，标题必须属于它下面那段。 */
+  margin: 1.6em 0 0.55em;
+}
+.prose h1 { font-size: var(--text-display); font-weight: 600; color: var(--color-text-primary); margin-top: 1.9em; }
+.prose h2 { font-size: var(--text-title); font-weight: 600; color: var(--color-text-primary); margin-top: 1.6em; }
+.prose h3,
+.prose h5 { font-size: var(--text-body); font-weight: 600; color: var(--color-text-primary); margin-top: 1.35em; }
+.prose h4,
+.prose h6 { font-size: var(--text-body); font-weight: 500; color: var(--color-text-secondary); margin-top: 1.15em; }
+/* 标题紧跟标题（LLM 爱写「## 标题 \n ### 子标题」）时收紧，不要堆成楼梯。 */
+.prose h1 + h2,
+.prose h2 + h3,
+.prose h3 + h4 { margin-top: 0.5em; }
+.prose > :first-child { margin-top: 0; }
+
+/* Mermaid 图表块 */
+.md-mermaid {
+  margin: 0.9em 0;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-bg-secondary);
+}
+.md-mermaid-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  font-size: var(--text-meta);
+  color: var(--color-text-muted);
+}
+.md-mermaid-btn {
+  font-size: var(--text-tiny);
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.md-mermaid-btn:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.md-mermaid-svg {
+  padding: 12px;
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+  background: var(--color-bg-primary);
+}
+.md-mermaid-svg svg { max-width: 100%; height: auto; }
+.md-mermaid-source,
+.md-mermaid-error {
+  margin: 0;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  overflow: auto;
+  background: var(--color-bg-code);
+}
+.md-mermaid-error { color: var(--color-error); }
+.md-mermaid-loading {
+  padding: 24px;
+  text-align: center;
+  font-size: var(--text-meta);
+  color: var(--color-text-muted);
+}
+
+/* 数学公式（KaTeX） */
+.prose .md-math { font-size: 1.02em; }
+.prose .md-math--block {
+  display: block;
+  margin: 0.8em 0;
+  padding: 0.2em 0;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.prose .md-math .katex { font-size: 1.05em; }
+
+/* diff 代码块：整行底色表达增删，不依赖 prism 词法（diff 没有 token）。 */
+.prose .md-diff-line { display: block; }
+.prose .md-diff-line--add {
+  background: color-mix(in srgb, var(--color-success) 18%, var(--color-bg-code));
+  color: var(--color-success);
+}
+.prose .md-diff-line--del {
+  background: color-mix(in srgb, var(--color-error) 18%, var(--color-bg-code));
+  color: var(--color-error);
+}
+.prose .md-diff-line--hunk { color: var(--color-text-secondary); }
+.prose .md-diff-line--meta { color: var(--color-text-faint); }
+
+/* 代码块外壳（components/MarkdownBody.tsx 的 CodeBlock）—— 三层底色承担
+   全部层次，无描边：
+     纸面 --color-bg-primary（最亮）
+       └ 头部 --color-bg-code-header（中）
+       └ 代码体 --color-bg-code（最暗，代码区压在底部）
+   头/体之间也不用分隔线，靠这一档底色差就能看出「上面是语言名、下面是代码」。 */
+.md-codeblock {
+  background: var(--color-bg-code);
+}
+.md-codeblock__head {
+  background: var(--color-bg-code-header);
+  color: var(--color-text-muted);
+}
+
+/* 小节包装（复制本节 / 折叠）：按钮只在 hover 或键盘聚焦时出现，
+   不常驻、不抢标题的层级。 */
+.prose .md-section,
+.prose .md-section-head { position: relative; }
+.prose .md-section:first-child .md-section-head > h1,
+.prose .md-section:first-child .md-section-head > h2 { margin-top: 0; }
+.prose .md-section-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+.prose .md-section-head:hover .md-section-actions,
+.prose .md-section-actions:focus-within { opacity: 1; }
+.prose .md-section-btn {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.prose .md-section-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.prose .md-section-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+/* 标题字号走 --text-* 七档（此前是 1.55em/1.33em/1.14em/1em 的影子刻度：
+   21.7/18.6/16/14px 全是半档，越过了 tokens.css:32「禁半档」纪律）。
+   层级改由字重 600 + 颜色承担，不再靠偷偷放大的字号。 */
+.prose h1 { font-size: var(--text-display); }
+.prose h2 { font-size: var(--text-title); }
+.prose h3 { font-size: var(--text-title); }
+.prose h4 { font-size: var(--text-body); color: var(--color-text-secondary); }
+.prose ul,
+.prose ol { 
+  padding-left: 1.4em; 
+  margin: 0.8em 0; 
+  list-style-position: outside;
+}
+.prose ul { list-style-type: disc; }
+.prose ol { list-style-type: decimal; }
+.prose li { margin: 0.35em 0; }
+.prose li::marker { color: var(--color-text-secondary); }
+
+/* GFM 任务列表：勾选框以前被渲染器整个丢掉（return null），
+   列表退化成普通圆点。这里用只读方块表达状态。 */
+.prose li.md-task {
+  list-style: none;
+  margin-left: -1.15em;
+}
+.prose .md-task-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  border-radius: 4px;
+  color: transparent;
+  /* 未勾选的方块此前**完全没有可见外形**（只有 checked 态还了 accent 底），
+     渲染出来是一段 6px 的空隙 —— 任务清单退化成缩进段落。用 inset 环补外形：
+     不写 border，避免撞 G11「CSS 层结构描边」门禁。 */
+  box-shadow: inset 0 0 0 1px var(--color-border-secondary);
+}
+.prose .md-task-box[data-checked="true"] {
+  background: var(--color-accent);
+  box-shadow: none;
+  color: var(--color-on-accent);
+}
+
+/* 引用：中文斜体是浏览器合成倾斜（歪且脏），改为中性色 + 实底。
+   2026-10-21：原来的 `border-left: 3px solid` 命中仓库自己的头号反模式
+   （impeccable-design.md:36「side-tab：卡片单侧 3px 实色彩条」），先降到
+   2px 中性轨。
+   2026-10-23：扁平化收口 —— **轨也去掉**。引用与正文的区别交给三件事：
+   ① 底色（淡一档的案面）② 左内缩进（比 padding 多 4px，形成起排差）
+   ③ 墨色降一档。三者叠加在无描边界面上足够可读，且不再出现任何竖线。 */
+.prose blockquote {
+  padding: 0.6em 0.9em 0.6em 1.15em;
+  margin: 0.9em 0;
+  color: var(--color-text-secondary);
+  font-style: normal;
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+  border-left: 0;
+}
+.prose blockquote p:last-child { margin-bottom: 0; }
+
+/* 提示块（> [!NOTE] / [!TIP] / [!WARNING] / [!CAUTION]）
+   2026-10-21：去掉整圈描边，改淡底 + 圆角（用户偏好：UI 一律不用描边，
+   层次靠底色差 + 阴影 + 间距）。语义由标题与图标色承担。 */
+.prose .md-callout {
+  display: flex;
+  gap: 10px;
+  margin: 0.9em 0;
+  padding: 0.7em 0.9em;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+  font-style: normal;
+  color: var(--color-text-secondary);
+}
+.prose .md-callout > .md-callout-icon { flex-shrink: 0; margin-top: 2px; color: var(--color-text-muted); }
+.prose .md-callout > .md-callout-body { min-width: 0; flex: 1; }
+.prose .md-callout > .md-callout-body > :first-child { margin-top: 0; }
+.prose .md-callout > .md-callout-body > :last-child { margin-bottom: 0; }
+.prose .md-callout-title {
+  display: block;
+  margin-bottom: 2px;
+  font-size: var(--text-meta);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.prose .md-callout--warning > .md-callout-icon { color: var(--color-warning); }
+.prose .md-callout--danger > .md-callout-icon { color: var(--color-error); }
+.prose .md-callout--success > .md-callout-icon { color: var(--color-success); }
+
+.prose hr { border: 0; border-top: 1px solid var(--color-bg-tertiary); margin: 1.1em 0; }
+
+/* 表格：去网格。全边框 + 表头底色是 Excel 观感，正文表格只需要行分隔。 */
+.prose .md-table-wrap {
+  margin: 0.8em 0;
+  overflow-x: auto;
+}
+/* 宽表按内容撑开、外层横向滚动；窄表仍然铺满可用宽度。 */
+.prose .md-table-wrap table { min-width: max-content; }
+.prose table {
+  border-collapse: collapse;
+  margin: 0;
+  font-size: var(--text-ui);
+  width: 100%;
+}
+.prose th,
+.prose td {
+  padding: 0.5em 0.7em;
+  border: 0;
+  vertical-align: top;
+}
+.prose th {
+  background: transparent;
+  /* 表头与表体同档（--text-ui）：此前 th 是 --text-meta(12px) 而 td 是
+     0.95em(13.3px) —— 表头比表体小，层级倒置。 */
+  font-size: var(--text-ui);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-align: left;
+  border-bottom-color: var(--color-border-secondary);
+}
+.prose tbody tr:hover { background: var(--color-bg-hover); }
+.prose td[data-align="right"], .prose th[data-align="right"] { text-align: right; }
+.prose td[data-align="center"], .prose th[data-align="center"] { text-align: center; }
+/* 行内代码芯片（2026-10-01）。
+   此前是「透明底 + 一条下划线」—— 下划线在长段落里既不像代码也不像
+   链接，眼睛抓不到标识符。改成浅色圆角块：正文里一眼定位
+   `patch_file_multi`、`file.rs` 这类词，是**提高**信息密度而不是降噪。
+
+   16% 混合（`color-mix(text-primary 16%)`）是上一版实测选的档位，
+   但用户实机反馈**太深、抢焦点**：一屏里五六块芯片时，16% 的底
+   连同 1px 边框形成的深色团块比正文还重，把「这是代码」读成
+   「这里有更重要的东西」。
+
+   2026-10-01 定稿：直接用既有的 `--color-bg-tertiary`（令牌注释原文
+   就是「最轻的着色 / chip」），不再手搓混合百分比。取参考界面的实际
+   像素值校准：参考截图里芯片底 = `#F5F5F5`、页面底 = `#FFFFFF`，
+   本令牌浅色主题 = `#F0F0F0`（差 5/255，肉眼不可分），深色主题 =
+   `#24262a`（对 `#161719` 抬升 14 级，与浅色同量级）。
+   边框同时删掉：`--color-border-subtle` 在深色底约 1.1:1，量不出来
+   却给每个芯片画了一圈硬边 —— 一屏六块芯片就是六个方框。
+
+   刻意只对标识符/路径/行号生效：普通中文词不会被 markdown 成 code，
+   所以不存在「一段中文被切成 5 个芯片」的情况。 */
+.prose code {
+  /* 2026-10-12 用户修正:芯片一多(表格里尤甚)实色底糊成一片脏感。
+     降到 45% 半透明 —— 单枚仍可扫读,成片时不再抢焦点。
+     2026-10-21:45% 是手调魔数,应提为 --color-code-inline-bg 令牌
+     (tokens.css 不在本批次归属,见移交项);此处值不变,只做标注。 */
+  background: color-mix(in srgb, var(--color-bg-tertiary) 45%, transparent);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: var(--text-ui);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  /* 不加粗：2026-10-01 用户修正。芯片已经有底色，再叠一层粗体
+     就是两个重音互相抢 —— 底色负责「这是代码」，字重没有余量可加。
+     之前是 500（medium），在深色底上视觉上接近 bold。 */
+  font-weight: 400;
+  border: 0;
+  text-decoration: none;
+  text-underline-offset: 2px;
+  white-space: break-spaces;
+  vertical-align: baseline;
+}
+/* 代码块内部的 code 不再套芯片 —— 外面已经是整块代码区了，
+   再加一层底色会变成「块中块」，层次反而乱。 */
+.prose pre code {
+  background: transparent;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  font-size: inherit;
+  white-space: pre;
+}
+.prose pre {
+  /* CodeBlock 组件: outer wrapper 用 --color-bg-code 给代码区清晰独立
+     背景 (vs chat 气泡 / 卡片), 增强主题色下的对比层次.
+     内层 <pre> 保持 transparent, 让 wrapper 的背景透出. */
+  background: transparent;
+  color: var(--color-text-on-code);
+  border-radius: 0;
+  padding: 0;
+  overflow: hidden;
+  margin: 0.5em 0;
+  box-shadow: none;
+  border: none;
+}
+/* 让 outer code-block wrapper 显式用专属代码背景 (跟主题色一起变化).
+   之前依赖 --color-bg-code-header 给 toolbar, 但代码区本身没设,
+   在浅色主题下跟卡片白底几乎看不出差别. */
+.code-block-wrapper,
+/* Inside the CodeBlock component, the outer wrapper owns the
+   rounded corners and the spacing. Reset the `.prose pre` rules
+   so the toolbar and the code area are flush (no margin, no
+   padding), AND keep the code area background transparent so
+   it inherits the wrapper's #fafafa — the highlighter would
+   otherwise inject its own background and create a visible
+   second-tone band that reads as a nested card. */
+.prose pre.code-block-body,
+.prose pre.code-block-body > code,
+.prose pre[class*="language-"],
+.prose pre[class*="language-"] > code {
+  margin: 0;
+  padding: 0;
+  background: transparent !important;
+  border-radius: 0;
+  box-shadow: none !important;
+}
+.prose pre code {
+  background: transparent;
+  padding: 10px 12px;
+  color: inherit;
+  font-size: var(--text-ui);
+  border: 0;
+  border-radius: 0;
+  font-weight: 400;
+  line-height: 1.6;
+  display: block;
+  overflow-x: auto;
+  text-decoration: none;
+  font-family: var(--font-mono);
+}
+
+/* ── Message flow ── */
+.msg-card {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+}
+.msg-card + .msg-card { margin-top: 20px; }
+
+.msg-stream-list > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 150px;
+}
+.msg-bubble-user {
+  /* 用户气泡靠「收拢 + 着色」辨识，不靠边框或灰块。accent 微染底让气泡
+     与主题强调色呼应：浅色是极淡的松墨绿灰，深色自动适配，不再突兀。 */
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-card));
+  border: 0;
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-sm) var(--radius-2xl);
+  padding: 10px 14px;
+  /* --font-size-body 是已废弃别名（tokens.css:54 明禁新代码使用），
+     正文统一走 --text-body；行高与 .prose 对齐到 --leading-reading。 */
+  font-size: var(--text-body);
+  line-height: var(--leading-reading);
+  color: var(--color-text-primary);
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+.msg-bubble-user:hover {
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-card));
+}
+.msg-user-column {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-left: auto;
+}
+/* 有效宽度约束（此前上面那条 `max-width: 80%` 被本规则覆盖，是死声明，已删）。 */
+.msg-bubble-user {
+  max-width: 100%;
+}
+
+/* ── Assistant streaming bubble ──
+   Outer flex: avatar on the left, body column on the right.
+   Used by StreamingBubble to keep the avatar and the markdown body
+   in the same column rhythm as the regular MessageBubble
+   (showHeader=true), so streaming text doesn't "jump" when the
+   stream completes and switches to the final bubble layout. */
+
+/* ── Vertical rhythm ── */
+.msg-stack { display: flex; flex-direction: column; }
+.msg-channel { margin-top: 10px; }
+.msg-channel:first-child { margin-top: 0; }
+
+/* ── Agent activity indicator (post-stream gap) ──
+   旋转图标 + 进度文字——无边框，仅靠底色区分状态。
+     data-state="thinking" — between turns, analyzing results
+     data-state="tools"    — tool calls currently executing */
+.agent-activity {
+  display: flex;
+  align-items: center;
+  margin-left: 38px;
+  margin-top: 10px;
+}
+.agent-activity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  font-size: var(--text-tiny);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-secondary);
+  border: 0;  /* 无边框 */
+  line-height: 1.4;
+}
+.agent-activity[data-state="tools"] .agent-activity-pill {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  /* 无边框，仅靠底色 */
+}
+.agent-activity-bounce-dot--delay1 { animation-delay: 0.15s; }
+.agent-activity-bounce-dot--delay2 { animation-delay: 0.30s; }
+@keyframes agent-activity-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30%           { transform: translateY(-3px); opacity: 1; }
+}
+
+/* ── Wait-for-input indicator ──
+   Final completion state — shown when no stream, no tools pending,
+   no post-stream activity window. Tells the user "Hermix finished,
+   waiting for your next message". */
+/* ── Wait-for-input indicator (pure animation, no chrome) ── */
+/* 等待输入指示器 — 与消息气泡同节奏、缩进对齐 */
+.wait-for-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* 与 Avatar(22) + gap-2.5(10) 对齐: 22 + 10 = 32 */
+  margin-left: 32px;
+  margin-top: 4px;
+  margin-bottom: 2px;
+  /* Intentional: no border, no background, no colored text. The
+     three dots are the only visual signal. */
+}
+.wait-for-input-label {
+  /* 2026-10-01 用户反馈：与操作条一起从 tiny(11px) 提到 meta(12px)——
+     同一条提示行上的元素要一个视觉档位。italic 保留（轻量提示语义）。 */
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  user-select: none;
+  /* 加 italic 表达"轻量、非强制提示"语义 */
+  font-style: italic;
+}
+.wait-for-input-dot--delay1 { animation-delay: 0.18s; }
+.wait-for-input-dot--delay2 { animation-delay: 0.36s; }
+@keyframes wait-for-input-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.25;
+  }
+  30% {
+    transform: translateY(-2.5px);
+    opacity: 0.65;
+  }
+}
+
+/* ── Channel label (soft chip) ──
+   章节用"小灰胶囊"——纯背景色 + 文字，无边框。
+   边框在 12.5px 的字号下显得过粗，去掉后更贴近"分组标记"而不是"控件"。 */
+
+/* ── Artifact card ──
+   简洁列表项 — 仅一行: 文件图标 + 文件名 + 扩展 chip.
+   不用浅灰底 + 4 宫格摘要 (在 480px 右列里占太多垂直空间, 像 panel
+   而不是 list). 纯透明背景 + hover 浅灰底, 与对话流风格一致. */
+.artifact-card {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+.artifact-card:hover {
+  background: var(--color-bg-hover);
+}
+.artifact-card.is-active {
+  background: var(--color-bg-selected);
+}
+
+/* 文件类型 chip — 替代 4 宫格摘要, 文件信息收敛成一行 */
+
+/* 文件信息不另起摘要块: 类型收敛到 .artifact-ext chip, 完整路径用
+   title tooltip 表达, 不在卡片内铺开。 */
+
+/* ── File change block ───────────────────────────────────────────
+   Flat, no background, no borders, no per-file icons. Title row
+   shows "文件变更 (N个)" in the same body-text colour and size as
+   the rest of the assistant reply. Each filename is rendered as
+   a link-styled span (blue, hover underline) so the user can
+   click it to open the file in the preview popover. ───────────── */
+/* ── Footer block width ────────────────────────────────────────
+   Shared width / centering for the assistant-message-trailing
+   blocks that share the same horizontal lane below the
+   conversation: file changes, sub-agent panel, approval card.
+   `wait-for-input` deliberately stays avatar-aligned (margin-left
+   32px) and does NOT use this class.
+
+   不再与头像对齐、也不在整行居中，而是缩进到正文起始位置（头像
+   22px + gap 10px = 32px），宽度同步减去 32px，使左、右两边都落
+   在文本列内，视觉上与气泡正文同列。 */
+.footer-block {
+  /* 宽度跟随父容器（.msg-stream-list.max-w-reading = min(780px, 100%)）。
+     2026-10-21：删掉两条 @media (min-width: 1024px / 1280px) 的
+     max-width 688 → 768 → 888 —— 祖先已把可用宽度卡在 780px，子元素
+     再写一条够不着的上限只会让下一个人以为它在生效。 */
+  width: calc(100% - 32px);
+  margin-left: 32px;
+  margin-right: 0;
+  box-sizing: border-box;
+}
+/* `.file-change-block.footer-block` 那条覆盖规则已随 2026-10-02 的
+   FileChangeSummary 一起删掉 —— 汇总条不再挂 `.footer-block`，它渲染在
+   `.tl-text-inner--meta` 里，宽度由那一层给，avatar 偏移已经到位，
+   再叠一次 32px 会双重缩进。 */
+/* ════════════════════════════════════════════════════════════════════
+   本轮文件变更汇总条（.fcx，2026-10-02）
+   ════════════════════════════════════════════════════════════════════
+   取代原来的 `.file-change-*` 那套（「文件变更（N个）」+ 文件名列表）。
+   视觉取向见 `FileChangeSummary.tsx` 的文件头：这里不复述，只记三条**为什么**：
+
+   1. 无描边。`border: 1px solid …` + `background: bg-secondary` 的卡片外壳
+      本身就在说「这是一个独立的内容块」，而文件变更清单是这一轮的**过程
+      摘要**，和正文同层。改用 `--color-bg-tertiary`（最轻的一档着色）
+      铺底 + 2px 左侧轨，轨默认透明、hover / 展开时才显形。
+   2. 计数用等宽 chip，颜色沿用过程行那对 success / error。整个界面的
+      「+N −M」是同一套符号（`.process-line-stat--add/del` 同源）。
+   3. 左侧轨用 accent 色：它标的是「这一轮动过东西」这个事实，不是错误。
+      错误色留给过程行里真正失败的那些。
+
+   ⚠ 2026-10-04 推翻第 1 条（见 .fcx 上方的重做说明）：无描边 + 灰 slab 实际
+      渲染出来是一坨灰块，与正文呼吸感脱节。改为描边 + 纸面底。第 2、3 条
+      （等宽 +N −M 计数、类型语义）保留。 */
+
+.fcx {
+  position: relative;
+  border-radius: var(--radius-md);
+  /* 描边 + 纸面底：文件变更清单是这一轮的**独立结论**（区别于过程正文），
+     值得一圈 1px 细边。这与 .modal / 预览卡是同一套语言。原先「描边就在
+     宣告这是内容」的反对理由在这里不成立 —— 它就是内容。 */
+  background: var(--color-bg-primary);
+  overflow: hidden;
+}
+.fcx[data-open="true"] { border-color: var(--color-border-secondary); }
+
+.fcx-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  border-radius: 0;
+  min-width: 0;
+  transition: background var(--duration-fast) ease;
+}
+.fcx-head:hover { background: var(--color-bg-tertiary); }
+.fcx-head:focus-visible {
+  outline: 2px solid var(--color-border);
+  outline-offset: -2px;
+}
+.fcx-head-text {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 「N 个文件已更改」—— 主语先行。用户扫这一行要的第一件事是有几个文件被动过，
+   不是新增/修改/删除各几个；类型分布降级到展开后每行的图标上。 */
+.fcx-title { font-size: var(--text-ui); font-weight: 600; }
+/* disclosure 交给左端 chevron 承担，右端只留统计数。原先右端是「查看文件 ›」
+   文字 + 箭头：既要读文字又要看出能点，信息重复。 */
+.fcx-chev { color: var(--color-text-muted); flex: none; transition: transform var(--duration-fast) ease; }
+.fcx[data-open="true"] .fcx-chev { transform: rotate(90deg); }
+
+/* ── 增删行数 chip ── */
+.fcx-stats {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  flex: none;
+}
+.fcx-stat {
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  font-variant-numeric: tabular-nums;
+}
+.fcx-stat--add { color: var(--color-success); }
+.fcx-stat--del { color: var(--color-text-faint); }
+
+/* ── 展开后的文件清单 ── */
+.fcx-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* 清单与标题行之间一条发丝线：让「标题 / 明细」两层结构在视觉上分开，
+     取代原先靠 1px 间隙硬凑的排布。容器顶边，按分割线规则保留。 */
+}
+/* 分割线规则（2026-10-11）：清单内逐行线取消——行距 + 文件名等宽字体
+   已承担扫描分隔。 */
+.fcx-list li { margin: 0; padding: 0; }
+.fcx-list li + li { margin-top: 4px; }
+.fcx-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 0;
+  min-width: 0;
+  transition: background var(--duration-fast) ease;
+}
+.fcx-row:hover { background: var(--color-bg-tertiary); }
+.fcx-row:focus-visible {
+  outline: 2px solid var(--color-border);
+  outline-offset: -2px;
+}
+.fcx-kind {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.fcx-kind[data-kind="created"] { color: var(--color-success); }
+.fcx-kind[data-kind="deleted"] { color: var(--color-error); }
+/* 行内：文件名（主）+ 目录（次）+ 统计。文件名用正文字体而非等宽 —— 它是这行
+   的主语，等宽会把它读成「一段路径」；目录才用等宽小字，两者拉开层次。 */
+.fcx-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: var(--text-ui);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fcx-dir {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 目录过长由 JS 按段数截断（见 FileChangeSummary.splitPath），这里的 ellipsis
+     只是最后一道兜底。刻意不用 direction:rtl 截断 —— 路径里混 `\` `:` 数字
+     时那招的渲染结果不稳定。 */
+}
+
+
+/* ── Inline path link (assistant prose) ──────────────────────
+   Flat link style — no chip background, no border. Renders
+   as plain prose text that becomes a link on hover (underline),
+   with a small file-type icon in front so the reader can tell
+   a .ts from a .png without reading the extension.
+   Mirrors the colour of the rest of the assistant reply's
+   hyperlinks (the "查看全部制品 →" link blue) so paths read as
+   part of the prose, not as a UI widget. */
+.md-path-link {
+  display: inline-flex;
+  /* 必须用 baseline，不能改成几何居中（center）——这不是审美问题，是会
+     真的错位，而且被反证过两次。
+
+     按钮是 inline-flex，它的基线取自第一个 flex 项（图标）的 border box
+     下沿。只有 align-items:baseline 能让这个下沿与文字基线重合，整枚 chip
+     才坐在正文基线上。改 center 后按钮整体下沉约 1.75px：图标看着"居中"了，
+     整块链接却脱离了正文基线。用零高 inline-block 探针量过（探针在按钮
+     **外面**的正文里）：center 下图标底在基线下 1.75px，baseline 下是 0。
+
+     另有一条流传过的错误推理，这里钉死：span 即便带 truncate
+     (overflow:hidden)，作为 flex item 被 blockify 后内部仍是普通行盒，
+     基线取自真文本基线；overflow 只裁剪溢出，不改变基线来源。
+     曾经据此改成 center，两次都错。 */
+  align-items: baseline;
+  gap: 3px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  color: var(--color-link);
+  cursor: pointer;
+  /* 蓝色即链接语义：靠颜色区分，不再常驻下划线（2026-10-28）。此前
+     常驻下划线让一句里多个文件路径都挂上线、显得很重，也和本类的注释
+     「becomes a link on hover (underline)」自相矛盾。下划线只在悬停 /
+     聚焦时出现，与正文其他超链接口径一致。 */
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  vertical-align: middle;
+  transition: color var(--duration-fast) ease;
+}
+.md-path-link:hover,
+.md-path-link:focus-visible {
+  color: var(--color-link-hover);
+  text-decoration: underline;
+}
+/* 裸文件名（`App.tsx`）：中性引用，不带路径语义。用正文色而不是链接蓝
+   —— 它出现在"改 App.tsx 的登录逻辑"这种句子里，是话题而不是跳转，
+   染成链接色会让整句话都在喊"点我"。图标仍然带类型色。 */
+.md-path-link--bare {
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-ui);
+}
+.md-path-link--bare:hover {
+  color: var(--color-text-primary);
+  text-decoration-color: var(--color-accent);
+}
+/* 2026-10-24：正文路径链接的文件类型图标改用 `FileTypeIcon` 的 **soft
+   形态**（同色相淡染底 + 文字色字形）。原来是品牌实色方块 + 白色粗体
+   字母（PDF / TS / W）—— 一段话五个文件就是五块彩色积木，用户实机反馈
+   "一部分重点加粗带背景色的特殊词汇……界面有点乱"。淡染后色相还在（扫
+   一眼知道是什么类型），重量没了。
+
+   translateY(2px)：align-items 是 baseline，图标的 border box 下沿压在正文
+   基线上，方块整体在基线以上；正文 14px（--text-body）汉字字面约 12.3px 高、
+   略探到基线下，下移 2px 让图标光学居中于汉字行而不是浮在字顶。
+
+   align-items 必须留在 baseline：按钮是 inline-flex，它的基线取自第一个
+   flex 项（图标）的 border box 下沿；改成 center 会把整个链接往下推约
+   1.75px，整块链接脱离正文基线。位移补偿放在图标自身而不是改 align-items。
+
+   图标不是默认件：只有最终答复正文开（MarkdownBody 的 pathIcons）。 */
+.md-path-link__icon {
+  flex-shrink: 0;
+  border-radius: 2px;
+  transform: translateY(2px);
+}
+/* Relative paths keep the warning amber so the user can tell at a
+   glance "this won't resolve unless I'm in the right workspace". */
+.md-path-link--rel {
+  color: var(--color-warning);
+}
+.md-path-link--rel:hover {
+  color: var(--color-warning);
+  filter: brightness(1.15);
+}
+
+/* ── Markdown task list marker (LLM output `- [ ]` / `- [x]`)
+   不渲染任何 marker：普通无序列表已有 disc 圆点，任务标记符号与圆点
+   重复。MarkdownBody.tsx 的 input handler 直接返回 null，此处无 marker 可样式化。 */
+
+/* ── Preview pane ──
+   Scoped strictly inside .preview-pane so SyntaxHighlighter's injected
+   global <style> rules and markdown-rendered elements (<h1>, <strong>, …)
+   never bleed into the chat area. */
+/* ── Monospace font scoping ──
+   只对代码视图相关元素应用等宽字体，不能扩展到整个 .preview-pane：
+   Markdown 预览正文 (.preview-md-body) 必须走 --font-family-primary，
+   否则标题/段落/列表会变成等宽，破坏阅读体验。详见 code-view.css。 */
+.preview-pane .code-viewport,
+.preview-pane .code-viewport *,
+.preview-pane .code-viewport *::before,
+.preview-pane .code-viewport *::after,
+.preview-pane .code-status,
+.preview-pane .code-status *,
+.preview-pane .code-empty,
+.preview-pane .preview-path,
+.preview-pane .preview-stats {
+  font-family: var(--font-mono) !important;
+}
+
+/* 下面这些选择器只针对历史残留的 markdown 注入做兜底
+   （不针对 code-table，新版结构已无 .code-table） */
+/* Markdown body inside preview pane: reset the old blanket `margin: 0`
+   override that collapsed heading spacing. Now `.preview-md-body`
+   owns its own typography (see code-view.css). We only keep the
+   max-width safety guard so wide images/tables don't overflow. */
+.preview-pane .preview-md-body h1,
+.preview-pane .preview-md-body h2,
+.preview-pane .preview-md-body h3,
+.preview-pane .preview-md-body h4,
+.preview-pane .preview-md-body h5,
+.preview-pane .preview-md-body h6,
+.preview-pane .preview-md-body p,
+.preview-pane .preview-md-body ul,
+.preview-pane .preview-md-body ol,
+.preview-pane .preview-md-body li,
+.preview-pane .preview-md-body strong,
+.preview-pane .preview-md-body em,
+.preview-pane .preview-md-body blockquote,
+.preview-pane .preview-md-body a,
+.preview-pane .preview-md-body img,
+.preview-pane .preview-md-body hr {
+  max-width: 100% !important;
+}
+
+/* Path / filename rows in the preview header — read as plain text.
+   11px / 500, matches lucide-docs density. */
+/* ── Memory update block ── */
+/* Surfaces what the agent remembered this turn. Palette is strictly
+   gray/zinc + amber/green/red action tints — no blue/indigo/violet. */
+.memory-update-block {
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+.memory-update-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-meta);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+.memory-update-count {
+  color: var(--color-text-faint);
+  font-size: var(--text-tiny);
+  font-weight: 400;
+}
+.memory-update-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.memory-update-item {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: var(--text-meta);
+  color: var(--color-text-secondary);
+}
+.memory-update-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: var(--text-tiny);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.memory-update-text {
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-update-num {
+  color: var(--color-text-faint);
+}
+
+/* ── Memory recall block ── */
+/* Single-line "💭 想到 N 条" chip per recall. Visually subtler
+ * than memory-update (it's a read, not a write). */
+.memory-recall-block {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-meta);
+}
+.memory-recall-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  /* 软底走 color-mix（跟随主题），替代写死的暗底白高光（EXCEPTIONS 纪律 2）。 */
+  background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+  color: var(--color-text-secondary);
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.memory-recall-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+.memory-recall-trigger {
+  font-size: var(--text-tiny);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  color: var(--color-warning);
+}
+.memory-recall-keys {
+  font-family: var(--font-mono);
+  color: var(--color-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+.memory-recall-chars {
+  color: var(--color-text-faint);
+  font-size: var(--text-tiny);
+}
+
+/* ── Stream error banner ─────────────────────────────────────────
+   静默横幅：极淡 warning 染底 + 1px 混色细边框承担语义，无阴影无
+   光晕无动画。装饰性元素必须有信息或功能理由，否则删掉。 */
+.stream-error-card {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg, 10px);
+  background: color-mix(in srgb, var(--color-warning) 4%, var(--color-bg-card));
+  border: 1px solid color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
+.stream-error-card--amber-strong {
+  --sec-tint:        color-mix(in srgb, var(--color-warning) 9%, transparent);
+  --sec-tint-strong: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  --sec-halo:        color-mix(in srgb, var(--color-warning) 18%, transparent);
+  --sec-glow:        color-mix(in srgb, var(--color-warning) 26%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 7%, var(--color-bg-card));
+  border-color: color-mix(in srgb, var(--color-warning) 20%, transparent);
+}
+.stream-error-card--amber-soft {
+  --sec-tint:        color-mix(in srgb, var(--color-warning) 4%, transparent);
+  --sec-tint-strong: color-mix(in srgb, var(--color-warning) 7%, transparent);
+  --sec-halo:        color-mix(in srgb, var(--color-warning) 8%, transparent);
+  --sec-glow:        color-mix(in srgb, var(--color-warning) 10%, transparent);
+}
+.stream-error-card__main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+}
+.stream-error-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.stream-error-card__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-warning);
+}
+.stream-error-card__title {
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: var(--text-ui);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stream-error-card__dismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.stream-error-card__dismiss:hover,
+.stream-error-card__dismiss:focus-visible {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  outline: none;
+}
+.stream-error-card__message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+  font-size: var(--text-meta);
+  line-height: 1.55;
+  letter-spacing: 0.01em;
+}
+.stream-error-card__tip {
+  min-width: 0;
+  color: var(--color-text-faint);
+  font-size: var(--text-tiny);
+  line-height: 1.55;
+  letter-spacing: 0.015em;
+  margin-top: 1px;
+}
+.stream-error-card__detail {
+  margin: 4px 0 0;
+  padding-top: 6px;
+  position: relative;
+}
+.stream-error-card__detail::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-warning) 18%, transparent) 30%, color-mix(in srgb, var(--color-warning) 18%, transparent) 70%, transparent);
+}
+.stream-error-card__detail > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--color-text-muted);
+  font-size: var(--text-tiny);
+  line-height: 1.4;
+  user-select: none;
+  outline: none;
+  padding: 1px 2px;
+  border-radius: var(--radius-sm, 4px);
+  transition: color var(--duration-fast) ease;
+}
+.stream-error-card__detail > summary:hover { color: var(--color-text-primary); }
+.stream-error-card__detail > summary::-webkit-details-marker {
+  display: none;
+}
+.stream-error-card__chev {
+  transition: transform var(--duration-fast) ease;
+}
+.stream-error-card__chev.is-open {
+  transform: rotate(180deg);
+}
+.stream-error-card__detail > pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 160px;
+  overflow: auto;
+  border-radius: var(--radius-md, 6px);
+  background: color-mix(in srgb, var(--color-bg-primary) 70%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: var(--color-text-secondary);
+  font-size: var(--text-tiny);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+}
+.stream-error-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  margin-top: 2px;
+}
+.stream-error-card__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius-sm, 4px);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: var(--color-text-primary);
+  font-size: var(--text-tiny);
+  font-weight: 500;
+  line-height: 1.3;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+.stream-error-card__btn:hover {
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+}
+.stream-error-card__btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-warning) 32%, transparent);
+}
+.stream-error-card__btn--ghost {
+  color: var(--color-text-muted);
+  background: transparent;
+  padding: 4px 8px;
+}
+.stream-error-card__btn--ghost:hover {
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: var(--color-text-primary);
+}
+
+.task-row.done { color: var(--color-text-secondary); }
+.task-row.done .task-text {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+/* ── 流式长文的「正在生长的最后一块」 ──
+   正文超过 6000 字符时，MarkdownBody 只解析已闭合的前缀，最后一块按纯文本
+   上屏（见 splitStreamTail）：satteri 解析 + hast→JSX 是随正文线性增长的
+   长任务，而每 120ms 全量重跑一次在长报告上就是主线程抖动。
+   视觉上与正文同档：只按字面保留换行，不加任何装饰。 */
+.md-stream-tail {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  margin-top: 0.6em;
+}

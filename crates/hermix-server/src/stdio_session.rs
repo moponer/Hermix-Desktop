@@ -1,0 +1,383 @@
+//! stdio 多路复用服务：单进程 stdin/stdout 承载多个虚拟连接。
+//!
+//! 协议（JSON Lines，一帧一行）：
+//! - 入站 `{"channel": "stream:<session_id>", "payload": "<JSON 文本>"}`
+//! - 出站同形；payload 按字符串嵌入，对端需两层 parse
+//!
+//! channel 命名对齐原 WS 路由语义（`stream:` / 其余为主通道），
+//! 首次出现的 channel 会 spawn 对应 handler；handler 退出后该通道自动摘除，
+//! 同名 channel 再次出现视为重连并新建虚拟连接。
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::{body::Body, http::Method};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::mpsc;
+
+use crate::state::HttpServerState;
+use crate::transport::{ChannelSink, ChannelSource, Transport};
+
+const OUTBOUND_BUFFER: usize = 256;
+/// oneshot 响应体收集上限（与 HTTP 层 body limit 同量级，覆盖大文件/大结果导出场景）。
+const HTTP_RESPONSE_LIMIT: usize = 64 * 1024 * 1024;
+
+/// 入站帧：信封拆包失败或 channel 缺失时忽略并告警（对端 bug，不应崩溃服务）。
+#[derive(Debug)]
+struct InboundFrame {
+    channel: String,
+    payload: String,
+    /// 信封级 request_id。桥以它为键配对 REST 应答（`pending_http`）；
+    /// 不回填则应答永远带空 id，桥找不到 waiter，每个请求都会挂到
+    /// 120s 超时才失败——前端表现为"发送失败 / 后端未启动"。
+    request_id: Option<String>,
+}
+
+fn parse_inbound(line: &str) -> Option<InboundFrame> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let channel = v.get("channel")?.as_str()?.to_string();
+    let payload = match v.get("payload")? {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let request_id = v
+        .get("request_id")
+        .and_then(|r| r.as_str())
+        .filter(|r| !r.is_empty())
+        .map(String::from);
+    Some(InboundFrame { channel, payload, request_id })
+}
+
+/// stdio 主循环：读 stdin → 路由到虚拟连接；各虚拟连接的出站统一写 stdout。
+pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core::AgentError> {
+    // 汇聚 writer：所有 ChannelSink 都把信封塞进这条队列，单一 task 顺序写
+    // stdout，避免多 handler 并发写导致行交错。
+    let (writer_tx, mut writer_rx) = mpsc::channel::<String>(OUTBOUND_BUFFER);
+    tokio::spawn(async move {
+        let mut stdout = tokio::io::stdout();
+        while let Some(line) = writer_rx.recv().await {
+            if stdout.write_all(line.as_bytes()).await.is_err()
+                || stdout.write_all(b"\n").await.is_err()
+                || stdout.flush().await.is_err()
+            {
+                // stdout 断了（父进程退出）——静默退出 writer；stdin 读循环
+                // 也会随之结束。
+                break;
+            }
+        }
+    });
+
+    // HTTP /shutdown handler 用 Extension(watch::Sender<bool>) 驱动 graceful
+    // shutdown，主循环通过同一个 watch channel 监听关闭信号。两者共用一个
+    // sender/receiver pair：HTTP 请求触发发送 true，主循环收到后退出 while。
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let app = crate::router(state.clone()).layer(axum::Extension(shutdown_tx));
+
+    // IM 通道（QQ / 企业微信）。HTTP 模式在 run_server 里起，stdio（桌面端
+    // IPC）此前漏了——重启应用后通道不自动拉起，状态接口永远返回
+    // connected=false 且无故障原文。凭据成对齐全才启（ImRuntime::start 自己判断）。
+    let im_runtime = crate::channels::ImRuntime::start(state.clone());
+    crate::channels::install_runtime(im_runtime.clone());
+
+    // 虚拟连接注册表：channel → 该连接的入站队列发送端。
+    let connections: Arc<
+        tokio::sync::Mutex<HashMap<String, mpsc::Sender<String>>>,
+    > = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
+    let mut stdin = BufReader::new(tokio::io::stdin()).lines();
+    // 退出原因：三条 break 路径此前共用一句 "stdin closed, exiting"，排查时
+    // 分不清是父进程关了管道、读错误，还是外壳主动发了 shutdown 帧。
+    let exit_reason = loop {
+        // 用 futures::select 同时监听 stdin 与 shutdown watch；任何一方就绪
+        // 都继续下一次迭代：shutdown 信号 → break；stdin 帧 → 正常路由。
+        tokio::select! {
+            biased;
+            line = stdin.next_line() => {
+                let line = match line {
+                    Ok(Some(line)) => line,
+                    Ok(None) => break "stdin eof (parent closed pipe)",
+                    Err(e) => {
+                        tracing::warn!("stdio: stdin read error, exiting: {e}");
+                        break "stdin read error";
+                    }
+                };
+                let Some(frame) = parse_inbound(&line) else {
+                    tracing::warn!(len = line.len(), "stdio: unparseable inbound frame, ignored");
+                    continue;
+                };
+
+                // shutdown 帧：客户端主动请求优雅退出，立即终止循环。
+                if frame.channel == "shutdown" {
+                    tracing::info!("stdio: shutdown frame received, exiting gracefully");
+                    break "shutdown frame from parent";
+                }
+
+                // REST 通道：request-response 语义，不走虚拟连接，直接 oneshot。
+                if frame.channel == "http" {
+                    let app = app.clone();
+                    let writer = writer_tx.clone();
+                    // 信封级 request_id 透传进 handler，由它回填到应答信封，
+                    // 桥才能按 id 配对（否则应答 request_id 为空，请求悬挂）。
+                    let request_id = frame.request_id.clone();
+                    tokio::spawn(async move {
+                        let reply = handle_http_frame(app, &frame.payload, request_id.as_deref()).await;
+                        let _ = writer.send(reply).await;
+                    });
+                    continue;
+                }
+
+                let mut conns = connections.lock().await;
+                if !conns.contains_key(&frame.channel) {
+                    let (inbound_tx, inbound_rx) = mpsc::channel::<String>(OUTBOUND_BUFFER);
+                    conns.insert(frame.channel.clone(), inbound_tx);
+
+                    let sink = ChannelSink::new(frame.channel.clone(), writer_tx.clone());
+                    let source = ChannelSource::new(inbound_rx);
+                    spawn_connection_handler(state.clone(), frame.channel.clone(), sink, source, connections.clone());
+                }
+                // 虚拟连接尚未消费完队列时丢弃策略：mpsc 满则 send 失败，
+                // 此处静默丢弃并告警（对端应限速，与 WS 背压语义一致）。
+                if let Some(tx) = conns.get(&frame.channel) {
+                    if tx.send(frame.payload).await.is_err() {
+                        tracing::warn!(channel = %frame.channel, "stdio: inbound queue closed, frame dropped");
+                    }
+                }
+            }
+            _ = shutdown_rx.changed() => {
+                tracing::info!("stdio: shutdown signal via watch channel, exiting");
+                break "shutdown via watcher";
+            }
+        }
+    };
+
+    tracing::info!(reason = exit_reason, "stdio: 主循环结束，开始收尾");
+    // 与 HTTP 模式（lib.rs 的 graceful shutdown）对齐：先中断在途 agent 回合，
+    // 给它们 2s 把部分输出落库。此前这条路径只停 IM 通道，桌面端点「重启后端」
+    // 或退出应用时，正在生成的回复随任务被 drop —— 前端只能收到 bridge-dead
+    // 并提示「连接中断，请重新发送」，中间那段输出既不在 UI 也不保证在库里。
+    state.agent_service().interrupt_all();
+    let agent_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let remaining = state
+            .active_handles
+            .lock()
+            .map(|g| g.len())
+            .unwrap_or(0);
+        if remaining == 0 || std::time::Instant::now() >= agent_deadline {
+            if remaining > 0 {
+                tracing::warn!(
+                    active_tasks = remaining,
+                    "stdio: {} agent task(s) did not finish within 2s — partial output may be lost",
+                    remaining
+                );
+            }
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if let Some(rt) = im_runtime.as_ref() {
+        // 有界等待：QQ / 企业微信的关连接要走网络，无限等会把整个退出流程拖过
+        // 桌面外壳的强杀阈值（旧行为：外壳 3s 等不到就 TerminateProcess，
+        // 于是「优雅退出」从来没发生过）。
+        match tokio::time::timeout(Duration::from_secs(2), rt.stop()).await {
+            Ok(()) => {}
+            Err(_) => tracing::warn!("stdio: IM 通道停止超时（2s），继续退出"),
+        }
+    }
+    tracing::info!("stdio: 收尾完成");
+    Ok(())
+}
+
+/// 处理一帧 REST 请求：payload 形如
+/// `{"method":"GET","path":"/api/...","body":"...","request_id":"n"}`。
+/// 响应信封 payload 为 `{"status":S,"body":"...","enc":"utf8"|"base64"}`。
+async fn handle_http_frame(
+    app: axum::Router,
+    payload: &str,
+    envelope_request_id: Option<&str>,
+) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or(serde_json::Value::Null);
+    // 优先用信封级 id：桥以信封 id 为配对键，payload 内的同名字段是历史
+    // 遗留（HTTP 时代客户端自带），两者不一致时必须以信封为准。
+    let request_id = envelope_request_id
+        .map(String::from)
+        .or_else(|| {
+            parsed
+                .get("request_id")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .unwrap_or_default();
+    let method = parsed
+        .get("method")
+        .and_then(|v| v.as_str())
+        .and_then(|m| Method::from_bytes(m.as_bytes()).ok())
+        .unwrap_or(Method::GET);
+    let path = parsed.get("path").and_then(|v| v.as_str()).unwrap_or("/");
+    let body: Option<String> = parsed
+        .get("body")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let respond = |status: u16, body: String, enc: &str, request_id: &str| -> String {
+        serde_json::json!({
+            "channel": "http",
+            "request_id": request_id,
+            "payload": serde_json::json!({"status": status, "body": body, "enc": enc}).to_string(),
+        })
+        .to_string()
+    };
+
+    let mut builder = axum::http::Request::builder().method(method).uri(path);
+    if body.is_some() {
+        // axum 的 Json extractor 校验 content-type；统一按 JSON 请求体处理。
+        builder = builder.header("content-type", "application/json");
+    }
+    let mut request = match builder.body(Body::from(body.unwrap_or_default())) {
+        Ok(r) => r,
+        Err(e) => return respond(400, e.to_string(), "utf8", &request_id),
+    };
+    // stdio 桥是桌面端进程自身的管道（sidecar 的 stdin 只可能被本机
+    // Tauri 壳写入），没有 TCP 对端可取 ConnectInfo。注入 loopback 合成
+    // ConnectInfo：client_ip() 返回 127.0.0.1 → derive_origin 判 Local
+    // （桌面 = 本机，T1 关口语义下最可信来源，与 stdio 迁移前的 TCP
+    // loopback 行为一致）。缺这一步时 request_guard 的 T1 关口会把
+    // 桌面端自己的全部 REST 请求判 Unpaired 而 403。
+    if let Ok(peer) = "127.0.0.1:0".parse::<std::net::SocketAddr>() {
+        request.extensions_mut().insert(axum::extract::ConnectInfo(peer));
+    }
+
+    match tower::ServiceExt::oneshot(app, request).await {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            match axum::body::to_bytes(resp.into_body(), HTTP_RESPONSE_LIMIT).await {
+                Ok(bytes) => match std::str::from_utf8(&bytes) {
+                    Ok(s) => respond(status, s.to_string(), "utf8", &request_id),
+                    Err(_) => {
+                        use base64::Engine as _;
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        respond(status, b64, "base64", &request_id)
+                    }
+                },
+                Err(e) => respond(502, format!("collect body: {e}"), "utf8", &request_id),
+            }
+        }
+        Err(e) => respond(500, e.to_string(), "utf8", &request_id),
+    }
+}
+
+/// 按 channel 前缀选择 handler 并 spawn。通道摘除由 connections 锁在
+/// handler 结束后完成（简化：handler 结束时移除注册表条目）。
+fn spawn_connection_handler(
+    state: HttpServerState,
+    channel: String,
+    sink: ChannelSink,
+    source: ChannelSource,
+    connections: Arc<tokio::sync::Mutex<HashMap<String, mpsc::Sender<String>>>>,
+) {
+    // 把 (sink, source) 拆进 handler 的泛型接口：handler 接收 impl Transport，
+    // 这里用一个小适配 struct 承载 ChannelSink/ChannelSource 的组合。
+    let transport = ChannelTransport { sink, source };
+
+    let registry = connections;
+    tokio::spawn(async move {
+        let channel_for_log = channel.clone();
+        match channel.split_once(':') {
+            Some(("stream", session_id)) => {
+                crate::ws::handle_ws_stream(transport, state, session_id.to_string()).await;
+            }
+            _ => {
+                // 主通道：简单 request-reply 语义，session_id 用 channel 原名。
+                crate::ws::handle_ws(
+                    transport,
+                    state,
+                    channel.clone(),
+                    // Local stdio pipe: the operator driving this channel
+                    // already has host shell access, so a Dangerous tool
+                    // is not a privilege escalation. Network transports
+                    // pass Deny instead.
+                    hermix_core::approval::ApprovalFallback::Allow,
+                )
+                .await;
+            }
+        }
+        registry.lock().await.remove(&channel_for_log);
+    });
+}
+
+/// (ChannelSink, ChannelSource) 的组合，满足 `Transport` 以复用现有 handler 签名。
+struct ChannelTransport {
+    sink: ChannelSink,
+    source: ChannelSource,
+}
+
+impl Transport for ChannelTransport {
+    fn split(self) -> (Box<dyn crate::transport::TransportSink>, Box<dyn crate::transport::TransportSource>) {
+        (Box::new(self.sink), Box::new(self.source))
+    }
+}
+
+#[cfg(test)]
+mod envelope_tests {
+    use super::*;
+
+    /// 信封级 request_id 必须被解析出来。桥以它为键配对 REST 应答；
+    /// 丢了这个字段，应答会带空 id，桥永远找不到 waiter，每个请求都
+    /// 要等满 120s 超时才失败（前端表现为"后端不可达"）。
+    #[test]
+    fn parse_inbound_keeps_envelope_request_id() {
+        let line = r#"{"channel":"http","request_id":"42","payload":"{\"method\":\"GET\"}"}"#;
+        let f = parse_inbound(line).expect("frame parses");
+        assert_eq!(f.request_id.as_deref(), Some("42"));
+        assert_eq!(f.channel, "http");
+    }
+
+    /// 非 http 通道（stream）没有 request_id 是正常的，
+    /// 不应因此丢掉整帧。
+    #[test]
+    fn parse_inbound_tolerates_missing_request_id() {
+        let line = r#"{"channel":"stream:s1","payload":"{}"}"#;
+        let f = parse_inbound(line).expect("frame parses");
+        assert!(f.request_id.is_none());
+    }
+
+    /// 空字符串等同于缺失：桥不会用空串做配对键，
+    /// 回一个空 id 与不回没有区别。
+    #[test]
+    fn parse_inbound_treats_empty_request_id_as_absent() {
+        let line = r#"{"channel":"http","request_id":"","payload":"{}"}"#;
+        let f = parse_inbound(line).expect("frame parses");
+        assert!(f.request_id.is_none());
+    }
+
+    /// T1 回归保护：`handle_http_frame` 派发的请求必须注入合成 loopback
+    /// `ConnectInfo`。缺它时 `request_guard::client_ip` 返回 None →
+    /// `derive_origin` 判 `Unpaired` → T1 关口把桌面端自己的全部 REST
+    /// 请求 403（真机故障：桌面端除 /health 与配对端点外全被拦）。
+    /// 驱动方式：最小 router 的 handler 用 `ConnectInfo` 提取器读对端，
+    /// 注入缺失时 axum 返回 500（extension 不存在），断言必红。
+    #[tokio::test]
+    async fn http_frame_injects_loopback_connect_info() {
+        use axum::extract::ConnectInfo;
+        use std::net::SocketAddr;
+
+        let app = axum::Router::new().route(
+            "/echo-peer",
+            axum::routing::get(|ConnectInfo(peer): ConnectInfo<SocketAddr>| async move {
+                peer.to_string()
+            }),
+        );
+        let resp = handle_http_frame(
+            app,
+            r#"{"method":"GET","path":"/echo-peer"}"#,
+            Some("1"),
+        )
+        .await;
+        let envelope: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(envelope["payload"].as_str().unwrap()).unwrap();
+        assert_eq!(payload["status"], 200, "ConnectInfo 已注入 → 200");
+        assert_eq!(payload["body"], "127.0.0.1:0", "对端是注入的合成 loopback");
+    }
+}

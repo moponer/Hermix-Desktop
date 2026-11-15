@@ -1,0 +1,992 @@
+/* ════════════════════════════════════════════════════════════════════
+   文档预览排版层 — Markdown / Word / 表格 / 网页
+   ────────────────────────────────────────────────────────────────────
+   为什么单独一个文件：这四类视图的共同诉求是"**还原源文件的版面**"，
+   与代码视图（等宽、按行截断、按行号对齐）是两套完全不同的排版规则，
+   混在 code-view.css 里只会互相覆。放在一起也方便一眼看出：所有
+   尺寸都来自令牌或源文件，没有一处即兴像素值。
+
+   两条贯穿全文件的纪律：
+   1. 界面外壳（工具条、面板、目录）一律**不描边**，层次靠底色差 + 阴影
+      + 间距 —— 这是本项目的硬约定。文档内容里的线（表格框线、Word 页
+      边界）来自源文件，属于"还原"而非"界面描边"，照画不误。
+   2. 正文行长按**字符数**约束，不按像素。窄侧栏与全屏共用同一条规则，
+      两种场景都落在可读区间（旧实现写死 780px，窄栏用不上、全屏太宽）。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Markdown 正文 ──────────────────────────────────────────────── */
+
+/* 行长：68 个西文字符约等于一行 34 个汉字，是中文长文的舒适上限。
+   max-width 用 ch 而不是 px —— 换字号时行长跟着换，不需要再调数字。 */
+.preview-pane .preview-md-body {
+  max-width: 68ch;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-6) var(--space-8);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--leading-reading);
+  color: var(--color-text-primary);
+  overflow-wrap: break-word;
+}
+/* 侧栏很窄时收掉横向留白，把宽度让给正文 */
+@media (max-width: 520px) {
+  .preview-pane .preview-md-body {
+    padding: var(--space-4) var(--space-4) var(--space-8);
+  }
+}
+
+/* 标题层级：一二两级带一条底部细分隔（GitHub README 惯例，三级以下不加，
+   否则满屏横线）。分隔线用 border 而不是伪元素侧条 —— 侧条是
+   impeccable 明令的反模式。 */
+.preview-pane .preview-md-body h1,
+.preview-pane .preview-md-body h2,
+.preview-pane .preview-md-body h3,
+.preview-pane .preview-md-body h4,
+.preview-pane .preview-md-body h5,
+.preview-pane .preview-md-body h6 {
+  margin: var(--space-6) 0 var(--space-3);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--leading-heading);
+  color: var(--color-text-primary);
+}
+.preview-pane .preview-md-body h1 {
+  font-size: 24px;
+  margin-top: 0;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.preview-pane .preview-md-body h2 {
+  font-size: 19px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.preview-pane .preview-md-body h3 { font-size: 16px; }
+.preview-pane .preview-md-body h4 { font-size: var(--text-body); }
+.preview-pane .preview-md-body h5,
+.preview-pane .preview-md-body h6 {
+  font-size: var(--text-ui);
+  color: var(--color-text-secondary);
+}
+
+/* 段落与列表 */
+.preview-pane .preview-md-body p { margin: 0 0 var(--space-3); }
+.preview-pane .preview-md-body ul,
+.preview-pane .preview-md-body ol {
+  margin: 0 0 var(--space-3);
+  padding-left: 1.6em;
+}
+.preview-pane .preview-md-body ul { list-style-type: disc; }
+.preview-pane .preview-md-body ol { list-style-type: decimal; }
+/* Tailwind 4 的 preflight 把 list-style 清成 none，这里显式补回来，
+   并让标记落在行外（与聊天侧 .prose 保持同一约定）。 */
+.preview-pane .preview-md-body li {
+  list-style-position: outside;
+  margin: 4px 0;
+}
+.preview-pane .preview-md-body li > p { margin-bottom: 6px; }
+.preview-pane .preview-md-body li::marker { color: var(--color-text-secondary); }
+.preview-pane .preview-md-body li > ul,
+.preview-pane .preview-md-body li > ol { margin: 4px 0; }
+
+/* 任务列表：复选框与文字基线对齐，且整体不可点（内容来自文件） */
+.preview-pane .preview-md-body input[type="checkbox"] {
+  margin-right: 6px;
+  accent-color: var(--color-accent);
+  cursor: default;
+}
+
+/* 行内代码与代码块 */
+.preview-pane .preview-md-body code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
+  color: var(--color-text-primary);
+}
+.preview-pane .preview-md-body pre {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-4);
+  background: var(--color-bg-primary);
+  border-radius: var(--radius-lg);
+  overflow-x: auto;
+  font-size: var(--text-ui);
+  line-height: var(--leading-compact);
+}
+.preview-pane .preview-md-body pre code {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  font-size: inherit;
+}
+
+/* 引用：整块淡染 + 圆角，不画侧条（side-tab 是 AI 味最重的反模式） */
+.preview-pane .preview-md-body blockquote {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-accent-soft);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-md);
+}
+.preview-pane .preview-md-body blockquote > :first-child { margin-top: 0; }
+.preview-pane .preview-md-body blockquote > :last-child { margin-bottom: 0; }
+
+/* GFM 表格：外层可横向滚动，单元格表头有底色差、无竖线 */
+.preview-pane .preview-md-body table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 0 var(--space-4);
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: var(--text-ui);
+}
+.preview-pane .preview-md-body th,
+.preview-pane .preview-md-body td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  text-align: left;
+}
+.preview-pane .preview-md-body th {
+  background: var(--color-bg-tertiary);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+/* 脚注：脚注区与正文之间靠一条分隔线分段 */
+.preview-pane .preview-md-body .footnotes {
+  margin-top: var(--space-6);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--text-ui);
+  color: var(--color-text-secondary);
+}
+
+/* 链接 / 分隔线 / 图片 */
+.preview-pane .preview-md-body a {
+  color: var(--color-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.preview-pane .preview-md-body a:hover { color: var(--color-link-hover); }
+.preview-pane .preview-md-body hr {
+  height: 1px;
+  margin: var(--space-6) 0;
+  background: var(--color-border-subtle);
+}
+.preview-pane .preview-md-body img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: var(--space-3) 0;
+  border-radius: var(--radius-md);
+}
+
+/* ── 目录（TOC） ────────────────────────────────────────────────── */
+
+/* 布局契约：整块是"固定目录列 + 独立滚动正文列"的 flex 行。
+   这条规则以前只存在于 MarkdownView 的注释里，CSS 侧从未落地 ——
+   于是 .preview-md-layout 退化成普通块，目录与开关被排进滚动流的
+   最上方（表现为"章节跑到最上面"），而 .preview-md-toc 的
+   flex:0 0 200px 与正文列的 flex:1 1 auto 全部失效，目录不再固定、
+   正文也不再独占滚动。
+
+   目录在滚动流之外 → 滚的只有正文列；因此这一层要占满面板高度，
+   高度由宿主给的确定高度解析（面板侧 .preview-pane-inner、全屏侧
+   .preview-fullscreen-scroll 都是 flex 定高容器）。 */
+.preview-pane .preview-md-layout,
+.preview-pane .preview-md-host {
+  display: flex;
+  flex-direction: row;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.preview-pane .preview-md-toc {
+  /* 目录列按容器比例取宽：宽栏 200px，窄栏（右侧预览栏常只有 400~550px）
+     收窄到 140px 起，否则目录会吃掉三分之一宽度，正文只剩十几字一行。 */
+  flex: 0 0 clamp(140px, 30%, 200px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--space-4) var(--space-2);
+  /* 目录列与正文列同底色时分不清哪列是哪列：用底色差拉开一档
+     （深色主题自动变亮，浅色主题自动变深），不画描边。 */
+  background: color-mix(in srgb, var(--color-text-primary) 5%, var(--color-bg-code));
+  overflow: hidden auto;
+}
+.preview-pane .preview-md-toc-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 var(--space-2) var(--space-2);
+  font-size: var(--text-meta);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-muted);
+}
+.preview-pane .preview-md-toc-list { display: flex; flex-direction: column; gap: 1px; }
+.preview-pane .preview-md-toc-item {
+  display: block;
+  width: 100%;
+  padding: 5px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: var(--text-meta);
+  line-height: var(--leading-ui);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-pane .preview-md-toc-item:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+/* 当前章节靠底色承担，不加描边 */
+.preview-pane .preview-md-toc-item.is-active {
+  background: var(--color-accent-soft-strong);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+.preview-pane .preview-md-toc-toggle {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  border: 0;
+  background: var(--color-bg-code);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.preview-pane .preview-md-toc-toggle:hover { color: var(--color-text-primary); }
+
+/* 正文滚动列：目录不在滚动流里，滚的只有这一列 */
+.preview-pane .preview-md-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.preview-pane .preview-md-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--color-bg-code);
+}
+/* 缩放容器：宽度跟着正文列走，不跟着内容走。
+   之前是 `width: max-content` —— 正文恒为 68ch（≈550px），在窄栏里
+   撑破容器，正文被裁到右边界外、只能横向滚动才能看全。`max-width:68ch`
+   是"行长上限"，不是"行长定值"：列宽小于 68ch 时应当回落到列宽并折行。
+   缩放语义随之变成浏览器式的（Ctrl +/-：字号变大、行内字数变少）。 */
+.preview-pane .preview-md-zoom { width: 100%; min-width: 100%; }
+
+/* ── Word（docx-preview 输出） ───────────────────────────────────── */
+/*
+   docx-preview 自带的 .docx-wrapper 样式写死了灰底 + 30px padding，在暗色
+   主题下是一块突兀的灰。这里把外壳换成令牌底色，纸张仍然是白底黑字 ——
+   那是文档本身的样子，不该被主题染色。
+*/
+.preview-pane .docx-root,
+.preview-fullscreen .docx-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.preview-pane .docx-scroll,
+.preview-fullscreen .docx-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-6) var(--space-4) var(--space-8);
+  background: var(--color-bg-code);
+}
+.preview-pane .docx-shell { width: max-content; margin: 0 auto; }
+/* 外壳：去掉库自带的灰底与固定 padding，交给上层的滚动区 */
+.preview-pane .docx-shell .docx-wrapper {
+  background: transparent !important;
+  padding: 0 !important;
+  display: block !important;
+  gap: var(--space-5) !important;
+}
+/* 纸张：库自带的白底 + 阴影就是对的，保留；只补一条让它在窄栏里不发灰 */
+.preview-pane .docx-shell section.docx,
+.preview-fullscreen .docx-shell section.docx {
+  background: #ffffff;
+  color: #000000;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
+  margin: 0 auto var(--space-5);
+}
+/* 页码等页眉页脚内容：库给的是小字，补一点可读性 */
+.preview-pane .docx-shell section.docx header,
+.preview-pane .docx-shell section.docx footer {
+  font-size: 10px;
+  color: #555555;
+}
+.preview-pane .preview-md-meta {
+  flex: 0 0 auto;
+  padding: 4px var(--space-4);
+  font-size: var(--text-meta);
+  color: var(--color-text-muted);
+}
+
+/* ── 表格 ───────────────────────────────────────────────────────── */
+
+.preview-pane .sheet-root,
+.preview-fullscreen .sheet-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.preview-pane .sheet-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-primary);
+  box-shadow: 0 1px 0 var(--color-border-subtle);
+}
+.preview-pane .sheet-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+}
+.preview-pane .sheet-name {
+  min-width: 72px;
+  max-width: 140px;
+  padding: 0 var(--space-1);
+  font-size: var(--text-meta);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-pane .sheet-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  max-width: 280px;
+  padding: 4px var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+}
+.preview-pane .sheet-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: var(--text-meta);
+  outline: none;
+}
+.preview-pane .sheet-search input::placeholder { color: var(--color-text-faint); }
+.preview-pane .sheet-search-icon { flex: 0 0 auto; color: var(--color-text-muted); }
+.preview-pane .sheet-hits {
+  flex: 0 0 auto;
+  font-size: var(--text-tiny);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.preview-pane .sheet-bar-spacer { flex: 1 1 auto; }
+.preview-pane .sheet-badge {
+  flex: 0 0 auto;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-muted);
+  font-size: var(--text-tiny);
+  cursor: help;
+}
+.preview-pane .sheet-action,
+.preview-pane .sheet-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: inherit;
+  font-size: var(--text-meta);
+  cursor: pointer;
+}
+.preview-pane .sheet-action:hover,
+.preview-pane .sheet-step:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.preview-pane .sheet-step:disabled { opacity: 0.4; cursor: default; }
+
+.preview-pane .sheet-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--color-bg-primary);
+}
+/* 表格是"一张白纸"，有自己的颜色世界：白底 + 黑字。
+   界面主题（尤其深色）不该渗进表格里 —— 深色界面把字色换成浅色后，
+   白纸上就是浅字：内容直接看不见，背景与文字糊成一片白。
+   单元格自己带底色时，墨色由底色亮度决定（见 workbook.ts 的 contrastInk）。
+
+   纸面这套令牌（--sheet-*）由**两端应用**定义（viewer 的 styles.css、
+   desktop 的 tokens.css）—— 共享 CSS 只用不定义，避免同一事实三处各写
+   一份（见 scripts/check-preview-layer.mjs 的 token 规则）。 */
+.preview-pane .sheet-table {
+  /* collapse：相邻格子的边框合成一条（Excel 的网格线就是一条），
+     separate 模式下每格各画各的 → 线变双倍、还会错位。 */
+  border-collapse: collapse;
+  border-spacing: 0;
+  table-layout: fixed;
+  font-family: var(--font-sans);
+  font-size: var(--text-ui);
+  line-height: 1.15;
+  background: var(--sheet-bg);
+  color: var(--sheet-ink);
+}
+.preview-pane .sheet-table td,
+.preview-pane .sheet-table th {
+  box-sizing: border-box;
+}
+.preview-pane .sheet-cell {
+  padding: 1px 5px;
+  /* 网格线用**真边框**画，不用 box-shadow 假线：假线在有色底上几乎看不见，
+     而且搜索高亮一加就把整片线抹掉（"表格线有的丢失"）。源文件自带的边框
+     是内联样式，会盖掉这里的网格线 —— 与 Excel 一致（源文件优先）。 */
+  border-right: 1px solid var(--sheet-grid);
+  border-bottom: 1px solid var(--sheet-grid);
+  white-space: nowrap;
+}
+/* 表格外沿不画线：Excel 只在数据区里画网格线。 */
+.preview-pane .sheet-table td:last-child { border-right: 0; }
+.preview-pane .sheet-link {
+  color: #0563c1;
+  text-decoration: underline;
+}
+.preview-pane .sheet-cell.is-hit {
+  /* 命中只加内描边，不动底色 —— 底色是源文件的，一改就看不出命中的是哪块 */
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+}
+/* 表头（列标 A/B/C 与行号）：与数据区有底色差，不描边。
+   高度/宽度必须与 SpreadsheetView.tsx 里的 HEADER_H / ROW_HEADER_W 一致 ——
+   冻结窗格用 JS 算 sticky 偏移（left = 行号列宽 + 前 N 列宽之和，
+   top = 表头高 + 前 N 行高之和），对不上就会错位一两行。 */
+.preview-pane .sheet-col-head,
+.preview-pane .sheet-row-head,
+.preview-pane .sheet-corner {
+  position: sticky;
+  z-index: 3;
+  height: 26px;
+  padding: 0 5px;
+  background: var(--sheet-head-bg);
+  color: var(--sheet-head-fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-tiny);
+  font-weight: var(--font-weight-medium);
+  line-height: 26px;
+  text-align: center;
+  white-space: nowrap;
+  border-right: 1px solid var(--sheet-grid);
+  border-bottom: 1px solid var(--sheet-grid);
+}
+.preview-pane .sheet-row-head { left: 0; width: 46px; }
+.preview-pane .sheet-col-head { top: 0; }
+.preview-pane .sheet-row-head { left: 0; }
+.preview-pane .sheet-corner {
+  top: 0;
+  left: 0;
+  z-index: 4;
+}
+/* 三角标记 = Excel 的全选角，指向右下方 */
+.preview-pane .sheet-corner-mark {
+  display: block;
+  width: 0;
+  height: 0;
+  margin: 0 auto;
+  border-style: solid;
+  border-width: 0 0 9px 9px;
+  border-color: transparent transparent var(--sheet-head-fg) transparent;
+}
+.preview-pane .sheet-pad { padding: 0; border: 0; }
+.preview-pane .sheet-empty-cell {
+  padding: var(--space-6);
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
+  text-align: center;
+}
+.preview-pane .sheet-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
+}
+
+/* ── 网页预览 ───────────────────────────────────────────────────── */
+
+.preview-pane .html-root,
+.preview-fullscreen .html-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.preview-pane .html-viewports {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.preview-pane .html-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: var(--space-4);
+  background: var(--color-bg-code);
+}
+/* 固定视口宽度时给页面本体一点存在感（阴影），不画描边 */
+.preview-pane .html-frame {
+  /* 固定视口（桌面/平板/手机）必须真的宽出来，交给 .html-stage 横向滚动：
+     此前这里有 max-width:100%，配合 flex 默认 shrink，1280/834 被压回面板宽，
+     用户点「桌面」看不到任何变化，像是按钮坏了。 */
+  max-width: none;
+  flex: 0 0 auto;
+  height: 100%;
+  min-height: 320px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  box-shadow: 0 2px 12px rgb(0 0 0 / 14%);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   渲染器外壳 — 宿主布局契约 / 图片 / PDF / PPTX / 状态 / 纯文本
+   ────────────────────────────────────────────────────────────────────
+   这批规则以前留在桌面端 apps/desktop-tauri/src/styles/code-view.css，
+   于是共享渲染层在 viewer 里等于"没有样式"：图片按原始尺寸贴在左上角
+   而不是居中、PDF/PPTX 画布不居中、纯文本顶到最上面、缩放按钮没有
+   形状。共享包被 desktop / viewer 两个应用消费，渲染层的样式就必须
+   住在共享包里；桌面端 code-view.css 只保留代码视图（.code-*）与桌面
+   专属外壳（.preview-head 等）。
+
+   两端宿主结构一致：
+     .preview-pane          外壳（flex 列，撑满父容器）
+       .preview-pane-inner  内容区（flex:1 + overflow:auto）
+   desktop 侧靠 Tailwind 原子类实现，viewer 刻意不装 Tailwind，
+   所以"内容区占满剩余高度并独立滚动"这条契约必须写在这里，
+   两端才都成立。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 宿主布局契约 ────────────────────────────────────────────────
+   用后代选择器（0,2,0）压过 Tailwind 的单类原子（0,1,0），两端结果
+   一致，不依赖 @import 顺序。 */
+.preview-pane .preview-pane-inner {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ── 竖向容器：工具条固定，画布区吃掉剩余高度 ────────────────── */
+.preview-pane .preview-pdf,
+.preview-pane .preview-docx,
+.preview-pane .preview-image,
+.preview-fullscreen .preview-pdf,
+.preview-fullscreen .preview-docx,
+.preview-fullscreen .preview-image {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* ── 分页工具条（PDF / PPTX / 图片共用） ───────────────────── */
+.preview-pdf-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border-secondary);
+}
+.preview-pdf-page {
+  font-size: var(--text-meta);
+  color: var(--color-text-secondary);
+  min-width: 72px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.preview-pdf-zoom {
+  font-size: var(--text-meta);
+  color: var(--color-text-secondary);
+  min-width: 46px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.preview-pdf-spacer {
+  flex: 1 1 auto;
+}
+
+/* ── 画布舞台（PDF / PPTX 共用） ────────────────────────────── */
+.preview-pane .preview-pdf-stage,
+.preview-fullscreen .preview-pdf-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 16px;
+  background: var(--color-bg-code);
+}
+.preview-pdf-stage canvas {
+  display: block;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.12);
+}
+/* 渲染中给一点视觉反馈，避免大文件看起来像卡住 */
+.preview-pdf-stage[data-busy] {
+  opacity: 0.6;
+}
+
+/* ── 连续滚动文档：缩略图侧栏 + 纵向页列（2026-10-28） ──────────
+   一页一页翻的旧形态换成连续滚动：所有页铺成一列，正文区自己滚，
+   左侧缩略图是可选侧栏。PDF / PPTX / Word 共用这一套类名。 */
+.docpager-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.docpager-thumbs {
+  flex: none;
+  width: 136px;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--color-bg-code);
+  border-right: 1px solid var(--color-border-secondary);
+}
+.docpager-thumb {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.docpager-thumb:hover { background: var(--color-bg-hover); }
+.docpager-thumb.is-active {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+/* 缩略图"槽"：尺寸先占好，内容滚到才画（见 NearSlot）。 */
+.docpager-thumb-slot {
+  display: block;
+  overflow: hidden;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.docpager-thumb-slot canvas { display: block; }
+/* Word 的缩略图是缩放克隆，纸张底色由节自己带，别叠第二层白。 */
+.docpager-docx-thumb { width: 100%; height: 100%; background: #fff; }
+.docpager-thumb-no { line-height: 1; }
+.docpager-pages {
+  position: relative;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 16px;
+}
+/* 纸面外壳承担投影，canvas 只负责画内容。 */
+.docpager-sheet {
+  flex: none;
+  position: relative;
+  overflow: hidden;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.docpager-sheet canvas { border-radius: 0; box-shadow: none; }
+/* 页列居中交给 margin:auto：放大到超宽时 flex 居中会把左半截裁掉，
+   auto 边距会退化为 0，横向滚动才看得见左边。 */
+.docpager-body .preview-pdf-stage { justify-content: flex-start; }
+/* Word 的舞台是 .docx-scroll：在侧栏旁边要能收缩，不然窄栏里被挤成一条。 */
+.docpager-body .docx-scroll { min-width: 0; }
+
+/* ── 图片：居中 + 棋盘格背景显示透明通道 ──────────────────────
+   舞台是 flex 居中容器，图片才有"在整栏正中"的位置；没有这条时
+   图片按原始尺寸贴在左上角（viewer 之前正是这样）。 */
+.preview-pane .preview-image-stage,
+.preview-fullscreen .preview-image-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 24px;
+  /* 棋盘格：把 PNG/WebP 的透明通道露出来（截图 / 图标常见），
+     16px 方格在"看得见 alpha"与"不花"之间取平衡。 */
+  background-color: var(--color-bg-code);
+  background-image:
+    linear-gradient(45deg,
+      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 25%,
+      transparent 25%),
+    linear-gradient(-45deg,
+      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 25%,
+      transparent 25%),
+    linear-gradient(45deg,
+      transparent 75%,
+      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 75%),
+    linear-gradient(-45deg,
+      transparent 75%,
+      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+.preview-image-rotor {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.preview-pane .preview-image-img,
+.preview-fullscreen .preview-image-img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  display: block;
+  border-radius: 4px;
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.12);
+  user-select: none;
+  -webkit-user-drag: none;
+  /* 可拖（滚轮缩放 / 平移）。没有这个提示，用户放大后不知道能拖着看
+     边缘——"放大只能在区域内"的实际根源。 */
+  cursor: grab;
+}
+.preview-image-stage:active .preview-image-img { cursor: grabbing; }
+
+/* ── 状态：载入 / 错误 / 纯文本 ────────────────────────────── */
+.preview-state-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  font-size: var(--text-meta);
+  color: var(--color-text-muted);
+}
+.preview-state-error {
+  padding: 16px;
+  font-size: var(--text-meta);
+  color: var(--color-error);
+}
+.preview-state-error-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
+  font-size: var(--text-meta);
+  color: var(--color-error);
+}
+.preview-plain-text {
+  margin: 0;
+  padding: 16px;
+  font-family: var(--font-sans);
+  font-size: var(--text-ui);
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── 头部动作按钮 ────────────────────────────────────────────
+   共享组件（图片/PDF/PPTX/HTML/文档画布）都在自己的工具条里放
+   这些按钮，样式必须跟着组件走，不能留在桌面端。 */
+.preview-pane .head-action,
+.preview-fullscreen .head-action {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+  font-family: inherit;
+}
+.preview-pane .head-action:hover,
+.preview-fullscreen .head-action:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.preview-pane .head-action:active,
+.preview-fullscreen .head-action:active {
+  background: var(--color-bg-active);
+}
+.preview-pane .head-action:disabled,
+.preview-fullscreen .head-action:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: transparent;
+}
+.preview-pane .head-action:focus-visible,
+.preview-fullscreen .head-action:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+.preview-pane .head-action.is-active,
+.preview-fullscreen .head-action.is-active {
+  background: color-mix(in srgb, var(--color-info) 18%, transparent);
+  color: var(--color-info);
+}
+.preview-pane .head-action.is-danger:hover,
+.preview-fullscreen .head-action.is-danger:hover {
+  background: color-mix(in srgb, var(--color-error) 18%, transparent);
+  color: var(--color-error);
+}
+/* 按下时的一层轻微高光（桌面端原有效果，搬过来时保留） */
+.preview-pane .head-action::after,
+.preview-fullscreen .head-action::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 160ms ease;
+  pointer-events: none;
+}
+.preview-pane .head-action:active::after,
+.preview-fullscreen .head-action:active::after {
+  opacity: 0.08;
+}
+
+/* ── 引擎载入指示 ────────────────────────────────────────────
+   共享包不装 Tailwind，animate-spin 不存在；自带动关键帧，两端一致。 */
+.preview-spin {
+  animation: preview-spin 900ms linear infinite;
+}
+@keyframes preview-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── 共享代码块（CodeBlock） ──────────────────────────────────────
+   共享包不装 Tailwind，所以版式不写原子类，改成语义类：
+     .preview-code             外壳（圆角 + 裁切 + 上下留白）
+     .preview-code-head        头部条（语言标签 + 复制按钮）
+     .preview-code-head-main   头部左侧一组
+     .preview-code-lang        语言标签（等宽 + 大写 + 字距）
+     .preview-code-count       行数提示
+     .preview-code-copy        复制按钮
+     .preview-code-copy-label  复制按钮文字
+   底色 / 字色由组件内联样式给（跟随 --color-bg-code 系列 token），
+   这里只负责版式。 */
+.preview-code {
+  margin: 10px 0;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+.preview-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  font-size: var(--text-meta);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.preview-code-head-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.preview-code-lang {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.preview-code-count {
+  font-size: var(--text-meta);
+  opacity: 0.5;
+}
+.preview-code-copy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.preview-code-copy:hover { background: var(--color-bg-hover); }
+.preview-code-copy-label { font-weight: var(--font-weight-medium); }
+
+/* 文档画布（DocCanvasView）工具条上的文件信息 */
+.preview-doc-meta {
+  font-size: var(--text-body);
+  color: var(--color-text-secondary);
+}
+
+/* ── 面板工具条里的共享缩放控件 ─────────────────────────────────── */
+
+.preview-pane .preview-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+}
+.preview-pane .preview-zoom-val {
+  min-width: 42px;
+  font-size: var(--text-meta);
+  color: var(--color-text-secondary);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}

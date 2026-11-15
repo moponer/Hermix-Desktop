@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>凭据保险库 · 打磨预览</title>
+<style>
+  /* 令牌取值全部来自 tokens.css（宣纸·青碧 · LIGHT 基线），逐字节一致 */
+  :root{
+    --bg-primary:#ffffff; --bg-card:#f6f6f6; --bg-secondary:#ededed;
+    --bg-card-hover:#e4e4e4; --bg-elevated:#ffffff;
+    --border-primary:#ebebeb; --border-secondary:#d6d6d6; --border-strong:#8c8c8c;
+    --text-primary:#242424; --text-secondary:#575757; --text-faint:#8c8c8c;
+    --accent:#1e4a3c; --on-accent:#ffffff; --accent-hover:#1a4135;
+    --error:#c74436; --error-soft:#faece8;
+    --radius-sm:6px; --radius-md:10px; --radius-xl:17px; --radius-3xl:24px;
+    --shadow-modal:0 24px 64px rgba(28,28,30,.16),0 8px 24px rgba(28,28,30,.08);
+    --shadow-pop:0 6px 20px rgba(28,28,30,.1),0 2px 6px rgba(28,28,30,.06);
+    --font:"Segoe UI Variable","Segoe UI",-apple-system,BlinkMacSystemFont,
+      "PingFang SC","Microsoft YaHei UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--font);background:#f7f7f7;color:var(--text-primary);
+    -webkit-font-smoothing:antialiased;padding:28px;display:flex;justify-content:center}
+  .frame{width:560px;max-width:100%;background:var(--bg-primary);
+    border:1px solid var(--border-primary);border-radius:var(--radius-xl);
+    box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden}
+  .panel{display:flex;flex-direction:column;gap:16px;padding:24px}
+
+  h2{font-size:16px;font-weight:600;color:var(--text-primary)}
+  .sub{font-size:12px;color:var(--text-secondary);margin-top:2px}
+  .head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+  .btna{display:inline-flex;align-items:center;border:none;cursor:pointer;
+    border-radius:var(--radius-md);background:var(--accent);color:var(--on-accent);
+    padding:6px 12px;font-size:13px;font-family:var(--font);transition:transform .12s,background .16s}
+  .btna:hover{background:var(--accent-hover)}
+  .btna:active{transform:scale(.98)}
+  .btna:disabled{opacity:.5;cursor:default}
+
+  .search{width:100%;border:1px solid var(--border-secondary);background:var(--bg-secondary);
+    border-radius:var(--radius-md);padding:8px 12px;font-size:13px;color:var(--text-primary);
+    outline:none;font-family:var(--font)}
+  .search:focus{border-color:var(--accent)}
+  .search::placeholder{color:var(--text-secondary)}
+
+  .err{background:var(--error-soft);color:var(--error);border-radius:var(--radius-md);
+    padding:8px 12px;font-size:13px}
+
+  .list{display:flex;flex-direction:column;gap:8px}
+  .row{display:flex;align-items:center;gap:8px;border:1px solid var(--border-primary);
+    background:var(--bg-card);border-radius:var(--radius-xl);padding:12px 16px;transition:background .16s}
+  .row:hover{background:var(--bg-card-hover)}
+  .row .main{min-width:0;flex:1}
+  .namerow{display:flex;align-items:center;gap:8px;min-width:0}
+  .favwrap{display:inline-flex;flex-shrink:0}
+  .favfallback{display:inline-flex;color:var(--text-faint)}
+  .row .name{font-size:13px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+  .row .meta{font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .secret{margin-top:4px;font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;
+    font-size:12px;color:var(--text-secondary);word-break:break-all}
+  .noterow{margin-top:4px;font-size:12px;color:var(--text-faint);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .acts{display:flex;align-items:center;gap:4px;flex-shrink:0}
+
+  .ibtn{display:inline-flex;align-items:center;gap:4px;border:none;cursor:pointer;background:transparent;
+    color:var(--text-secondary);border-radius:var(--radius-md);padding:6px;font-size:13px;
+    font-family:var(--font);transition:background .16s}
+  .ibtn:hover{background:var(--bg-secondary)}
+  .ibtn.text{padding:4px 8px}
+  .ibtn.danger{color:var(--error)}
+  .ibtn.danger:hover{background:var(--error-soft)}
+  .ibtn.confirm{color:var(--error);font-weight:500}
+  .ibtn.confirm:hover{background:var(--error-soft)}
+
+  /* 图标按钮 hover 说明浮层（原生 title 约 1s 才弹出且样式不可控，故自绘） */
+  .ibtn.tipwrap{position:relative}
+  .tip{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);margin-bottom:4px;
+    white-space:nowrap;background:var(--bg-elevated);border:1px solid var(--border-primary);
+    color:var(--text-primary);font-size:12px;line-height:1;padding:5px 8px;border-radius:var(--radius-sm);
+    box-shadow:var(--shadow-pop);opacity:0;transition:opacity .15s;pointer-events:none;z-index:20}
+  .ibtn.tipwrap:hover .tip,.ibtn.tipwrap:focus-visible .tip{opacity:1}
+  @media (prefers-reduced-motion:reduce){.tip{transition:none}}
+  svg{display:block}
+
+  /* 弹窗 */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;
+    justify-content:center;opacity:0;transition:opacity .15s;pointer-events:none}
+  .scrim.show{opacity:1;pointer-events:auto}
+  .modal{width:100%;max-width:448px;background:var(--bg-elevated);border:1px solid var(--border-primary);
+    border-radius:var(--radius-3xl);padding:20px;box-shadow:var(--shadow-modal);
+    transform:scale(.95);opacity:0;transition:opacity .2s,transform .2s}
+  .scrim.show .modal{transform:scale(1);opacity:1}
+  @media (prefers-reduced-motion:reduce){.scrim,.modal{transition:none}}
+  .modal h3{font-size:16px;font-weight:600;color:var(--text-primary);margin-bottom:16px}
+  .field{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+  .field label{font-size:12px;color:var(--text-secondary)}
+  .field input,.field textarea{width:100%;border:1px solid var(--border-secondary);
+    background:var(--bg-secondary);border-radius:var(--radius-md);padding:8px 12px;font-size:13px;
+    color:var(--text-primary);outline:none;font-family:var(--font)}
+  .field input:focus,.field textarea:focus{border-color:var(--accent)}
+  .field textarea{resize:none}
+  .pw{position:relative}
+  .pw input{padding-right:40px}
+  .pwbtn{position:absolute;right:8px;top:50%;transform:translateY(-50%);border:none;background:transparent;
+    color:var(--text-secondary);cursor:pointer;padding:6px;border-radius:8px}
+  .pwbtn:hover{background:var(--bg-card-hover)}
+  .modal .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
+  .cancel{display:inline-flex;align-items:center;border:none;cursor:pointer;background:transparent;
+    color:var(--text-secondary);border-radius:var(--radius-md);padding:6px 12px;font-size:13px;
+    font-family:var(--font);transition:transform .12s,background .16s}
+  .cancel:hover{background:var(--bg-secondary)}
+  .cancel:active{transform:scale(.98)}
+  .note{font-size:11px;color:var(--text-secondary);text-align:center;margin-top:8px}
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="panel">
+      <div class="head">
+        <div>
+          <h2>凭据保险库</h2>
+          <div class="sub">AES-256-GCM 本地加密 · 主密钥在 Windows 凭据管理器 · 列表不含密码</div>
+        </div>
+        <button class="btna" onclick="openAdd()">+ 新增凭据</button>
+      </div>
+
+      <input class="search" placeholder="搜索名称 / 网址 / 用户名…" />
+
+      <div class="err" id="errbox" style="display:none"></div>
+
+      <div class="list" id="list"></div>
+
+      <div class="note">这是用 tokens.css 真实色值还原的静态预览（非运行截图），用于确认打磨效果。</div>
+    </div>
+  </div>
+
+  <!-- 弹窗 -->
+  <div class="scrim" id="scrim" onclick="if(event.target===this)closeModal()">
+    <div class="modal" id="modal">
+      <h3 id="modalTitle">新增凭据</h3>
+      <div class="field"><label>名称 *</label><input id="f-name" placeholder="例如 GitHub" /></div>
+      <div class="field"><label>网址</label>
+        <div style="position:relative">
+          <span id="modalFav" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);display:inline-flex;color:var(--text-faint)"></span>
+          <input id="f-url" placeholder="https://…" style="padding-left:32px" oninput="updateModalFav()" />
+        </div>
+      </div>
+      <div class="field"><label>用户名</label><input id="f-username" placeholder="you@example.com" /></div>
+      <div class="field"><label id="f-secret-label">密码</label>
+        <div class="pw">
+          <input id="f-secret" type="password" placeholder="••••••••" />
+          <button class="pwbtn" id="pwToggle" aria-label="显示密码" aria-pressed="false" onclick="togglePw()">
+            <span id="pwIcon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></span>
+            <span class="tip" id="pwTip">显示密码</span>
+          </button>
+        </div>
+      </div>
+      <div class="field"><label>备注</label><textarea id="f-notes" rows="2"></textarea></div>
+      <div class="foot">
+        <button class="cancel" onclick="closeModal()">取消</button>
+        <button class="btna" id="saveBtn" onclick="save()">保存</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+const EYE='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYEOFF='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.7 5.1A11 11 0 0 1 12 5c6.4 0 10 7 10 7a18 18 0 0 1-3 4.1"/><path d="M6.6 6.6A18 18 0 0 0 2 12s3.6 7 10 7a10.7 10.7 0 0 0 5.3-1.4"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="M2 2l20 20"/></svg>';
+const USER='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+const KEY='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>';
+const CHECK='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+const GLOBE='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z"/></svg>';
+
+let data=[
+  {id:'1',name:'GitHub',url:'https://github.com',username:'moponer',secret:'ghp_8xK2mN9qR4tV7wX',notes:'主账号，2FA 走手机验证码'},
+  {id:'2',name:'抖音',url:'https://www.douyin.com',username:'shengyi_official',secret:'Dy@2026$sKy',notes:''},
+  {id:'3',name:'公司内部 Wiki',url:'https://wiki.shengyi.cn',username:'wang.ye',secret:'Wiki#88pass',notes:'工作日 9:00-18:00 可登录，初次登录需改密'},
+];
+const revealed={}; const copied={}; const confirming={};
+let showPw=false, editingId=null, copyTimer=null;
+
+/* 网站图标：按域名从 favicon.im 现取；无域名或加载失败回落地球。 */
+function favIcon(url,size){
+  let domain='';
+  try{domain=new URL(url).hostname;}catch(e){}
+  if(!domain)return `<span class="favfallback">${GLOBE}</span>`;
+  return `<img class="fav" data-domain="${domain}" width="${size}" height="${size}" alt="" style="border-radius:3px;border:1px solid var(--border-primary)">`;
+}
+function bindFav(im,domain){
+  im.onerror=()=>{im.outerHTML=`<span class="favfallback">${GLOBE}</span>`;};
+  im.src='https://favicon.im/'+domain;
+}
+function bindListFavs(){
+  document.querySelectorAll('#list .fav').forEach(im=>bindFav(im,im.dataset.domain));
+}
+
+function render(){
+  const list=document.getElementById('list');
+  list.innerHTML=data.map(e=>{
+    const shown=revealed[e.id];
+    const isC=confirming[e.id];
+    return `<div class="row">
+      <div class="main">
+        <div class="namerow"><span class="favwrap">${favIcon(e.url,16)}</span><div class="name">${e.name}</div></div>
+        <div class="meta">${[e.url,e.username].filter(Boolean).join(' · ')||'—'}</div>
+        ${shown?`<div class="secret">${e.secret}</div>`:''}
+        ${e.notes&&e.notes.trim()?`<div class="noterow">${e.notes}</div>`:''}
+      </div>
+      <div class="acts">
+        <button class="ibtn text" aria-label="${shown?'掩回密码':'显示密码'}" aria-pressed="${!!shown}" onclick="toggleReveal('${e.id}')">${shown?EYEOFF:EYE}${shown?'掩回':'显示'}</button>
+        <button class="ibtn tipwrap" aria-label="复制用户名" onclick="copy('${e.id}','user','${e.username}')">${copied[e.id+':user']?CHECK:USER}<span class="tip">复制用户名</span></button>
+        ${shown?`<button class="ibtn tipwrap" aria-label="复制密码" onclick="copy('${e.id}','secret','${e.secret}')">${copied[e.id+':secret']?CHECK:KEY}<span class="tip">复制密码</span></button>`:''}
+        <button class="ibtn text" onclick="edit('${e.id}')">编辑</button>
+        ${isC?`<button class="ibtn confirm" onclick="del('${e.id}')">确认删除</button><button class="ibtn text" onclick="cancelDel('${e.id}')">取消</button>`
+              :`<button class="ibtn danger text" onclick="askDel('${e.id}')">删除</button>`}
+      </div>
+    </div>`;
+  }).join('');
+  bindListFavs();
+}
+function toggleReveal(id){ if(revealed[id])delete revealed[id]; else revealed[id]=true; render(); }
+function copy(id,kind,text){
+  navigator.clipboard?.writeText(text).then(()=>{
+    copied[id+':'+kind]=true; render();
+    clearTimeout(copyTimer);
+    copyTimer=setTimeout(()=>{delete copied[id+':'+kind];render();},1500);
+  }).catch(()=>showErr('复制失败（剪贴板不可用）'));
+}
+function showErr(m){const b=document.getElementById('errbox');b.textContent=m;b.style.display='block';setTimeout(()=>b.style.display='none',3000);}
+function askDel(id){confirming[id]=true;render();}
+function cancelDel(id){delete confirming[id];render();}
+function del(id){data=data.filter(e=>e.id!==id);delete confirming[id];render();}
+function edit(id){const e=data.find(x=>x.id===id);editingId=id;showPw=false;
+  document.getElementById('modalTitle').textContent='编辑凭据';
+  document.getElementById('f-secret-label').textContent='密码（留空 = 不修改）';
+  document.getElementById('f-name').value=e.name;
+  document.getElementById('f-url').value=e.url;
+  document.getElementById('f-username').value=e.username;
+  document.getElementById('f-secret').value=e.secret;
+  document.getElementById('f-notes').value='';
+  updateModalFav();openModal();}
+function openAdd(){editingId=null;showPw=false;
+  document.getElementById('modalTitle').textContent='新增凭据';
+  document.getElementById('f-secret-label').textContent='密码';
+  ['f-name','f-url','f-username','f-secret','f-notes'].forEach(i=>document.getElementById(i).value='');
+  updateModalFav();openModal();}
+function openModal(){document.getElementById('scrim').classList.add('show');setTimeout(()=>{document.getElementById('f-name').focus();},50);}
+function closeModal(){document.getElementById('scrim').classList.remove('show');}
+function updateModalFav(){
+  const host=document.getElementById('modalFav');
+  let domain='';try{domain=new URL(document.getElementById('f-url').value).hostname;}catch(e){}
+  if(!domain){host.innerHTML=`<span class="favfallback">${GLOBE}</span>`;return;}
+  host.innerHTML=`<img class="fav" data-domain="${domain}" width="14" height="14" alt="" style="border-radius:3px;border:1px solid var(--border-primary)">`;
+  bindFav(host.querySelector('.fav'),domain);
+}
+function togglePw(){showPw=!showPw;const i=document.getElementById('f-secret');i.type=showPw?'text':'password';
+  const b=document.getElementById('pwToggle');document.getElementById('pwIcon').innerHTML=showPw?EYEOFF:EYE;
+  b.setAttribute('aria-pressed',showPw);
+  const t=document.getElementById('pwTip');t.textContent=showPw?'隐藏密码':'显示密码';b.setAttribute('aria-label',t.textContent);}
+function save(){const name=document.getElementById('f-name').value.trim();
+  if(!name){showErr('名称必填');return;}
+  const obj={name,url:document.getElementById('f-url').value,username:document.getElementById('f-username').value,
+    secret:document.getElementById('f-secret').value,notes:document.getElementById('f-notes').value};
+  if(editingId){const e=data.find(x=>x.id===editingId);Object.assign(e,obj);}
+  else{obj.id=String(Date.now());data.push(obj);}
+  closeModal();render();}
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,173 @@
+/* ════════════════════════════════════════════════════════════════════
+   过程行（L2）— 2026-10-01 对话输出排版重构
+   ════════════════════════════════════════════════════════════════════
+   目标：把「过程」从内容降级为旁注。上一版每个工具调用是一张卡
+   （`.tw-msg-row` + 图标块 + 边框背景），在视觉上与正文抢层级 ——
+   卡片外壳本身就在宣告「这是内容」。
+
+   这一版的形态：**单行文字 + 12px 图标**，无边框 / 无背景 / 无圆角，
+   与正文同左对齐，仅靠字号（13px vs 15px）和颜色
+   （secondary 6.68:1 vs primary 15.32:1）降级。
+
+   状态由**图标形状**承载（✓ / ! / ⟳ / ⊘），不再用「已完成 / 失败 /
+   运行中」文字标签：文字标签占掉的横向空间比 12px 图标多得多，且
+   色觉障碍用户在颜色不可辨时仍能从形状读出状态（无障碍基础项）。
+   每个状态都带 `title` + `.sr-only` 文本，屏幕阅读器拿得到完整语义。
+
+   运行态（ToolGroupCard）与恢复态（ToolMessageCard）都渲染这一个
+   组件，所以这一节的规则对两条路径同时生效 —— 不存在「一处改了
+   另一处没改」的可能。 */
+
+/* ── 行容器 ── */
+.process-line {
+  display: flex;
+  flex-direction: column;
+  /* 无 background / border / border-radius —— 卡片外壳是「内容」的
+     声明，过程不是内容。 */
+}
+
+.process-line-row {
+  display: flex;
+  /* 垂直居中而非 baseline：右侧状态图标容器（inline-flex 内含 block svg）
+     没有文字基线，浏览器按底边充当基线，与左侧按基线手调的图标对不齐；
+     各状态字形（✓ / ⟳ / !）内边距不同还会放大偏差。整行居中对齐后
+     左右图标都落在同一中轴上。 */
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  min-width: 0;
+  border-radius: 4px;
+  transition: color var(--duration-fast) ease;
+}
+.process-line-row:hover,
+.process-line-row:focus-visible {
+  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+}
+.process-line-row:focus-visible {
+  outline: 2px solid var(--color-border);
+  outline-offset: 1px;
+}
+.process-line-row:disabled,
+.process-line-row:not([onclick]) { cursor: default; }
+
+.process-line-icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  position: relative;
+  top: 0;                      /* 行已垂直居中，图标无需再按基线手调 */
+  color: var(--color-text-tertiary);
+}
+
+.process-line-verb {
+  flex: none;
+  font-size: var(--text-ui);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-primary);
+  white-space: nowrap;
+}
+
+.process-line-primary {
+  flex: none;
+  max-width: 46%;
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.process-line-primary--link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-secondary);
+  text-underline-offset: 2px;
+}
+.process-line-primary--link:hover {
+  text-decoration-color: var(--color-accent);
+}
+
+.process-line-peek {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-line-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding-left: 10px;
+}
+
+.process-line-stats {
+  display: flex;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+}
+.process-line-stat--add { color: var(--color-success); }
+.process-line-stat--del { color: var(--color-text-faint); }
+
+/* 状态图标：形状即语义，颜色只是强化 */
+.process-line-state {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-faint);
+}
+.process-line-state-icon {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+.process-line[data-state="done"]    .process-line-state { color: var(--color-text-faint); }
+.process-line[data-state="running"] .process-line-state,
+.process-line[data-state="awaiting"].process-line-state { color: var(--color-accent); }
+.process-line[data-state="error"]   .process-line-state { color: var(--color-error); }
+.process-line[data-state="skipped"] .process-line-state { color: var(--color-text-faint); }
+
+/* 失败 / 跳过：**只染失败原因那部分**（peek 槽），动词和对象保持正常色。
+   2026-10-01 用户修正：原先整行染红，包括「执行命令」这个类型词 ——
+   但「执行命令」本身没有出错，出错的是它跑的东西。整行红会让一屏里
+   每一条失败的工具都变成红块，反而看不出哪几条是真问题。
+   「跳过」用中性灰：没发生不是错误。
+   2026-10-02 用户实机反馈后调整：primary 槽改回**始终显示 acted-on 的
+   对象**（路径 / 命令），原因挪到 peek 槽 —— 一行里两件事各占一格，
+   用户既知道读的是哪个目录，也知道失败的是哪一步。染红跟着原因走：
+   对象没出错，不该替它背红。 */
+.process-line[data-state="error"] .process-line-peek--error { color: var(--color-error); }
+.process-line[data-state="skipped"] .process-line-peek { color: var(--color-text-tertiary); }
+
+/* 展开箭头只在 hover / focus 时显形 —— 静态时右侧只留状态图标 */
+.process-line-chev {
+  display: inline-flex;
+  color: var(--color-text-faint);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+.process-line-chev svg { width: 12px; height: 12px; display: block; }
+.process-line-row:hover .process-line-chev,
+.process-line-row:focus-visible .process-line-chev,
+.process-line[data-open="true"] .process-line-chev { opacity: 1; }
+
+/* 失败 / 跳过的原因**就在上面那一行的 primary 槽里**，不另开一行。
+   （2026-10-01 删除：原因在下面重复一遍是纯噪音，而完整内容点 chevron
+   展开即可。） */
+
+.process-line-body {
+  padding: 4px 0 4px 21px;
+}
+

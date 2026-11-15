@@ -1,0 +1,91 @@
+# Phase 0.1 — Deterministic validation gate.
+#
+# Every PR must pass:
+#   1. cargo check  (compilation, no type errors)
+#   2. cargo test   (unit + lib tests)
+#   3. tsc --noEmit (frontend type check)
+#
+# The workspace uses an out-of-tree target dir (release/target/) via
+# .cargo/config.toml so we cache that path.
+
+name: validate
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Cache Cargo target
+        uses: actions/cache@v4
+        with:
+          path: release/target
+          key: cargo-target-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-
+
+      - name: Cargo check
+        run: cargo check --workspace --all-targets 2>&1
+
+      # clippy 的 correctness 类 lint 默认 deny：能挂在这一步的都是真 bug
+      # （死代码路径、错误的比较、永远为真的条件）。风格类保持 warning ——
+      # 仓库有上百条存量，直接 `-D warnings` 会立刻红，且把 PR 卡在缩进上。
+      - name: Cargo clippy (correctness gate)
+        run: cargo clippy --workspace --all-targets 2>&1
+
+      - name: Cargo test (lib only — deterministic, no LLM calls)
+        run: cargo test --workspace --lib 2>&1
+
+  frontend-check:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/desktop-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/desktop-tauri/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 必须直接调二进制：`pnpm tsc --noEmit` 只跑 pnpm 自己的 install 流程
+      # 就返回 0（~0.8s、输出 "Already up to date"），是一个看起来全绿的假信号。
+      # 见 AGENTS.md「Build & verify」。
+      - name: TypeScript type check
+        run: ./node_modules/.bin/tsc --noEmit

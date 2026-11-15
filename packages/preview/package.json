@@ -1,0 +1,44 @@
+{
+  "name": "@hermix/preview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "共享文件预览渲染层（Markdown/Excel/Word/PPT/HTML/Code/Image/PDF）",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles/*": "./src/styles/*",
+    "./FileTypeIcon": "./src/FileTypeIcon.tsx",
+    "./ProviderIcon": "./src/ProviderIcon.tsx",
+    "./resolveKind": "./src/resolveKind.ts",
+    "./lib/textDecode": "./src/lib/textDecode.ts",
+    "./lib/previewUtils": "./src/lib/previewUtils.ts"
+  },
+  "peerDependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "dependencies": {
+    "@bruits/satteri-wasm32-wasi": "0.10.5",
+    "@panzoom/panzoom": "^4.6.2",
+    "docx": "^9.10.0",
+    "docx-preview": "^0.4.1",
+    "exceljs": "^4.4.0",
+    "hast-util-to-jsx-runtime": "^2.3.6",
+    "lucide-react": "^0.511.0",
+    "papaparse": "^5.5.4",
+    "pdfjs-dist": "^6.3.289",
+    "pptx-browser": "^4.1.5",
+    "refractor": "^3.6.0",
+    "satteri": "^0.10.5",
+    "xlsx": "^0.18.5",
+    "@lobehub/icons": "^5.10.0"
+  },
+  "devDependencies": {
+    "@types/papaparse": "^5.3.16",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/refractor": "^3.4.0"
+  }
+}

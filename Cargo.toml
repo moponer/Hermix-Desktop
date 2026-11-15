@@ -1,0 +1,292 @@
+[workspace]
+resolver = "2"
+# 产物目录唯一真相源：docs/notes/implemented/architecture/2026-10-09-single-workspace-target-dir.md
+# 简述：全仓单 workspace、产物一律落仓库根 target/，无 target-dir 配置。
+# Note: `workspace.name` is intentionally omitted. The product is
+# **Hermix**; the legacy "hermes-" crate names were a port from the
+# Python reference implementation and have been renamed in lockstep
+# (Phase 1 of the hermix migration). Crate-level `package.name` is set
+# explicitly per member.
+exclude = []
+members = [
+    "apps/desktop-tauri/src-tauri",
+    "apps/viewer/src-tauri",
+    "crates/hermix-store",
+    "crates/hermix-session",
+    "crates/hermix-context",
+    "crates/hermix-transport",
+    "crates/hermix-protocol",
+    "crates/hermix-core",
+    "crates/hermix-agent",
+    "crates/hermix-tools",
+    "crates/hermix-cron",
+    "crates/hermix-skills",
+    "crates/hermix-mcp",
+    "crates/hermix-environments",
+    "crates/hermix-config",
+    "crates/hermix-intelligence",
+    "crates/hermix-focus",
+    "crates/hermix-vault",
+    "crates/hermix-server",
+    "crates/hermix-telemetry",
+    "crates/hermix-runtime",
+    "crates/hermix-voice",
+    "crates/hermix-task",
+    "crates/hermix-automation",
+    "crates/hermix-plugin",
+    "crates/hermix-filesearch",
+]
+
+# html5ever v0.39.0: rsproxy.cn registry mirror 缓存不完整（缺 tree_builder/tag_sets.rs），
+# 导致 svg_html_integration_point / mathml_text_integration_point 链接失败。
+# 修复：从 crates.io 原装 tarball 重新填充源码（已含完整 tag_sets.rs + types.rs）。
+[patch.crates-io]
+html5ever = { path = "patches/html5ever-0.39.0-patched" }
+
+[workspace.package]
+version = "0.1.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/nousresearch/hermes-engine"
+
+[workspace.lints.rust]
+# Workspace-wide lint policy (2026-07-30: promoted unused_* to `warn`).
+# The codebase was initially `allow` during the Python→Rust port to reduce
+# noise, but the port is complete and the accumulated dead imports/variables
+# are now a maintenance burden. `dead_code` stays `allow` for now — it needs
+# a per-file audit before promotion.
+unused_variables = "warn"
+unused_imports = "warn"
+dead_code = "allow"
+
+[workspace.lints.clippy]
+# (P0-6 / STABILITY-PLAN §2.1): std::sync / parking_lot lock guards
+# held across `.await` are guaranteed deadlocks (the owning thread is
+# parked and can't release). tokio::sync locks are async-aware and NOT
+# caught by this lint — those require code review (see P0-4 cdp.rs /
+# P0-5 session.rs for the patterns to avoid: nested locks, lock-held-
+# during-long-read).
+await_holding_lock = "deny"
+# (P1-4 / STABILITY-PLAN §2.3): warn-level for unwrap/expect in
+# production code. The plan calls for deny, but the existing codebase
+# has 500+ unwrap calls (server/lib.rs 130, session_persistence.rs
+# 176, etc.). Deny would immediately break compilation. Strategy:
+# 1. warn now — makes new unwrap/expect visible in CI output
+# 2. Clean up existing unwrap in top-5 files
+# 3. Promote to deny once density is manageable
+# Test code is exempt via #[cfg_attr(test, allow(...))] in individual
+# crates if needed.
+unwrap_used = "warn"
+expect_used = "warn"
+
+[workspace.dependencies]
+# Internal crates
+hermix-store = { path = "crates/hermix-store" }
+hermix-session = { path = "crates/hermix-session" }
+hermix-context = { path = "crates/hermix-context" }
+hermix-core = { path = "crates/hermix-core" }
+hermix-transport = { path = "crates/hermix-transport" }
+hermix-protocol = { path = "crates/hermix-protocol" }
+hermix-agent = { path = "crates/hermix-agent" }
+hermix-tools = { path = "crates/hermix-tools" }
+hermix-cron = { path = "crates/hermix-cron" }
+hermix-skills = { path = "crates/hermix-skills" }
+hermix-mcp = { path = "crates/hermix-mcp" }
+hermix-environments = { path = "crates/hermix-environments" }
+hermix-config = { path = "crates/hermix-config" }
+hermix-intelligence = { path = "crates/hermix-intelligence" }
+hermix-focus = { path = "crates/hermix-focus" }
+hermix-server = { path = "crates/hermix-server" }
+hermix-telemetry = { path = "crates/hermix-telemetry" }
+hermix-runtime = { path = "crates/hermix-runtime" }
+hermix-voice = { path = "crates/hermix-voice" }
+hermix-task = { path = "crates/hermix-task" }
+hermix-automation = { path = "crates/hermix-automation" }
+hermix-plugin = { path = "crates/hermix-plugin" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# HTTP / networking
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls"] }
+tokio-tungstenite = "0.24"
+eventsource-stream = "0.2"
+# (§5.5 第 2 层) TLS listener + 自签证书生成；指纹固定是设备配对 TOFU 的根基。
+# (§5.5 第 2 层) 0.7.2+ 内置 rustls TLS；CryptoProvider 由本仓显式
+# 指定 ring（tls.rs::build_server_config），避免 provider 图谱歧义。
+axum-server = { version = "0.7.2", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+rcgen = "0.13"
+time = { version = "0.3", features = ["std"] }
+
+# Error handling & logging
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# (P0-7 / STABILITY-PLAN §3.1) rolling file logs in packaged Tauri app —
+# #![windows_subsystem="windows"] eats stderr, so traces must persist to disk
+# to be diagnosable from a release build.
+tracing-appender = "0.2"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled", "modern_sqlite"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+cron = "0.15"
+
+# Utils
+regex = "1"
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+base64 = "0.22"
+# IM 通道：QQ 开放平台扫码绑定返回的 bot secret 是 AES-256-GCM 密文，
+# 解不开就只能让用户手动去控制台抄 secret。
+aes-gcm = "0.10"
+bytes = "1"
+sha2 = "0.10"
+# relay 帧 E2EE：P-256 ECDH 派生 content key + HKDF-SHA256 展开。
+# 选 P-256 而非 X25519 是因为 App 侧只有 WebCrypto（无 Curve25519），
+# P-256 是 subtle.deriveBits 的原生曲线，两端不必自研或引 JS 密码学库。
+# 与上面的 sha2 / aes-gcm 同属 RustCrypto 同代。
+p256 = { version = "0.13", features = ["ecdh"] }
+hkdf = "0.12"
+# relay E2EE 的静态私钥用 DPAPI 保护（crypt32.dll，零第三方密码学库）。
+windows = { version = "0.58", features = [
+  "Win32_Security_Cryptography",
+  "Win32_Foundation",
+  # Native OS automation (2026-10-13 note, docs/notes/implemented/feature/
+  # 2026-10-13-native-os-automation.md). Feature unification means these
+  # cost every dependent one extra `windows` build unit, so the list is
+  # kept to exactly what the two lines touch:
+  #   Win32_UI_Accessibility        — UIA client (desktop line)
+  #   Win32_System_Com              — CoInitializeEx / CoCreateInstance
+  #   Win32_System_JobObjects       — KILL_ON_JOB_CLOSE (browser orphan guard)
+  #   Win32_UI_Input_KeyboardAndMouse — SendInput fallback
+  #   Win32_UI_WindowsAndMessaging  — GetForegroundWindow / SetFocus / rect
+  #   Win32_Graphics_Gdi            — window / screen rect helpers
+  #   Win32_System_Threading        — thread handles, process handles
+  "Win32_UI_Accessibility",
+  "Win32_System_Com",
+  "Win32_System_JobObjects",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Threading",
+] }
+
+# CDP client for the browser-automation line. **Pinned to 0.8, not 0.9**:
+# 0.9 raises its reqwest floor to ^0.13, which would drag a second full
+# hyper/rustls stack into the binary beside the workspace's 0.12
+# (the OS-automation line never makes an outbound HTTP call — it only
+# speaks CDP over a loopback WebSocket). 0.8 depends on reqwest ^0.12
+# with default-features=false, which is already in the tree, so the
+# whole incremental cost is async-tungstenite + the cdp/types crates.
+# Bump to 0.9 only if the reqwest floor is ever unified across the workspace.
+chromiumoxide = "0.8"
+url = "2"
+directories = "6"
+minijinja = "2"
+jsonwebtoken = "9"
+indexmap = { version = "2", features = ["serde"] }
+once_cell = "1"
+md5 = "0.7"
+tiktoken-rs = "0.6"
+sysinfo = "0.33"
+proptest = "1"
+
+# Plugin/extension registration via link-time collection
+# (used by hermix-tools to auto-register built-in tools without
+# a 1,400-line manual `register_builtins.rs`).
+inventory = "0.3"
+
+# Native plugin loading (runtime .dll on Windows, .so on Linux)
+libloading = "0.8"
+
+# Cache
+moka = { version = "0.12", features = ["future"] }
+
+# Local embedding (L1)
+# fastembed-rs 5.x wraps ONNX Runtime via `ort`, ships 46 pre-bundled
+# models (BGE-small-en-v1.5 default, 384 dim; BGE-zh, mxbai,
+# multilingual-e5, jina, snowflake-arctic, embeddinggemma ...).
+# First run downloads model files to %LOCALAPPDATA%\fastembed\ on
+# Windows. Sync API; we wrap with `tokio::task::spawn_blocking` in
+# our `EmbeddingProvider` async trait so it never blocks the runtime.
+#
+# Marked optional because:
+# 1. The underlying `ort` 2.0.0-rc.12 downloads ONNX runtime from
+#    `cdn.pyke.io`, which is geo-blocked in some regions (HTTP 403).
+# 2. Build-time requirement for `ort-sys` to fetch the prebuilt
+#    ONNX runtime binary. We don't want that to gate every CI run.
+# Enable in production with `cargo build -p hermix-intelligence --features fastembed`.
+fastembed = "5.16"
+
+# Cross-platform advisory file locks (Phase 18+)
+# We use `fs4` here too so the workspace has a single
+# well-maintained locking primitive. Already pinned in
+# hermix-tools; declaring it as a workspace dep makes the
+# intent explicit.
+fs4 = { version = "0.13", default-features = false }
+
+# File system watching (Phase 18+)
+# Used by hermix-skills to watch for SKILL.md changes
+notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
+
+# `image` is used by hermix-tools for the PNG/JPEG codec APIs
+# (read_image thumbnailing, file_converter output writers).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# ----------------------------------------------------------------------
+# Build profiles — 2026-06-24
+# ----------------------------------------------------------------------
+# 铁律: dev/test 走 line-tables-only 省内存, release 保持默认 (不优化
+# debug info, 真正发布包要 DWARF 全量方便 production debug). 定策原话
+# "能不用的情况下不要用" —— lld + line tables 是 dev 妥协, 不是常态.
+#
+# 触发回退:
+#   1. cargo build --release 想看完整内联展开 → 把 debug 改 "1" 或 "2"
+#   2. dev 编译某个 .rs 报 "missing source location" → 临时改回默认
+#   3. 测试 fail 但 line tables 的栈追踪看不懂 → 临时改回 "1"
+#
+# 2026-10-15: incremental 必须 = false. sccache 对带 -C incremental 的编译
+# 一律判 non-cacheable, 不关则缓存命中率 0%、等于没开 sccache (实测 hermix-config
+# 全量 non-cacheable). 关掉增量后, 改动 crate 整编但依赖树走 sccache 命中,
+# 跨构建 / 跨 worktree / 跨 profile 复用同一套依赖产物, 重建接近秒回.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.test]
+debug = "line-tables-only"
+incremental = false
+
+# Release profile — 2026-06-25 audit round 3.
+# opt-level=3 is the default; stated explicitly so it doesn't get silently
+# downgraded. lto=thin + codegen-units=1 gives ~5-10% size win on the
+# binary with a small build-time cost. strip=symbols removes debuginfo
+# (we ship no stack traces).
+#
+# (P1-1 / STABILITY-PLAN §2.3): panic=unwind is REQUIRED for task-level
+# panic isolation. With panic=abort, ANY panic in a tool handler or agent
+# loop kills the entire server process — all user sessions lost. With
+# panic=unwind, tokio's task model naturally isolates panics to the
+# spawning task, and catch_unwind can convert them to structured errors.
+# The ~50 KB size increase is negligible for a desktop app that already
+# ships WebView2 + React. Cold-start impact is marginal (unwinding tables
+# are lazily loaded).
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "unwind"
+incremental = false

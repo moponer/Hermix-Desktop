@@ -1,0 +1,90 @@
+{
+  "productName": "Hermix Desktop",
+  "version": "0.1.20",
+  "identifier": "com.hermix.desktop",
+  "build": {
+    "frontendDist": "../../../release/frontend",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeDevCommand": "npm run dev:vite",
+    "beforeBuildCommand": "node <repo>/apps/desktop-tauri/scripts/prepare-build.mjs"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hermix Desktop",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 980,
+        "minHeight": 680,
+        "decorations": false,
+        "center": true,
+        "incognito": true,
+        "dragDropEnabled": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "dangerousDisableAssetCspModification": ["style-src", "script-src"],
+      "csp": "default-src 'self'; connect-src 'self' ipc: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; img-src 'self' data: https: blob: asset: http://asset.localhost; frame-src 'self' asset: file: http://asset.localhost; worker-src 'self' blob:;",
+      "devCsp": "default-src 'self'; connect-src 'self' ipc: https: ws: wss: http://127.0.0.1:1420; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; img-src 'self' data: https: blob: asset: http://asset.localhost; frame-src 'self' asset: file: http://asset.localhost; worker-src 'self' blob:;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/.hermix/**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "windows": {
+      "nsis": {
+        "languages": [
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false,
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "installerHooks": "installer/hooks.nsh"
+      }
+    },
+    "createUpdaterArtifacts": false,
+    "externalBin": [
+      "binaries/hermix",
+      "binaries/markitdown",
+      "binaries/hermix-viewer",
+      "binaries/hermix-filesearch"
+    ],
+    "publisher": "Hermix",
+    "copyright": "© 2026 Hermix hermix.cssso.com",
+    "shortDescription": "Hermix Desktop portable AI agent (Windows)",
+    "longDescription": "A fully portable AI agent desktop app. All user data lives next to the executable, no system-wide writes, no C drive bloat. Zip, copy, run.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/skills/modelscope-dev/frontend-dev/SKILL.md",
+      "resources/skills/modelscope-dev/fullstack-dev/SKILL.md",
+      "resources/skills/modelscope-dev/android-native-dev/SKILL.md",
+      "resources/skills/modelscope-dev/ios-application-dev/SKILL.md",
+      "resources/loader/hx-shell.exe",
+      "resources/loader/WebView2Loader.dll",
+      "resources/loader/esbuild.exe",
+      "resources/loader/react/react.production.min.js",
+      "resources/loader/react/react-dom.production.min.js"
+    ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

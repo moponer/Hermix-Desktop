@@ -1,0 +1,318 @@
+/* 文件搜索小窗（#/file-search）——独立窗口小图，不与主应用共用样式。
+ *
+ * 独立窗口不加载 globals.css / tokens.css，`var(--text-*)` 在这里本来是
+ * 未定义（整条 font-size 声明被丢弃、回退到继承的 16px）。所以这份小图
+ * 自带一档字号令牌，取值与主应用七档完全一致 —— 改主应用档位时同步这里。
+ * （颜色仍为窗口自有深色系，不参与主题。） */
+:root {
+  --text-micro: 10px;
+  --text-tiny: 12px;
+  --text-meta: 12px;
+  --text-ui: 13px;
+  --text-body: 13px;
+  --text-title: 16px;
+  --text-display: 20px;
+}
+
+.fsw-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #141416;
+  color: #e8e8e6;
+  font-size: var(--text-ui);
+  overflow: hidden;
+  border: 1px solid #2a2a2e;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+/* ── 标题栏 ── */
+.fsw-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 8px 0 14px;
+  background: #1f1f23;
+  flex-shrink: 0;
+}
+.fsw-title {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.fsw-hotkey-chip {
+  font-size: var(--text-tiny);
+  color: #b5d4f4;
+  background: rgba(133, 183, 235, 0.12);
+  border: 1px solid rgba(133, 183, 235, 0.25);
+  border-radius: 4px;
+  padding: 1px 7px;
+}
+.fsw-titlebar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+.fsw-icon-btn {
+  width: 32px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: #a0a09a;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: var(--text-body);
+}
+.fsw-icon-btn:hover {
+  background: #2a2a2e;
+  color: #e8e8e6;
+}
+.fsw-icon-btn.fsw-close:hover {
+  background: #5c2b2b;
+  color: #f0b8b8;
+}
+
+/* ── 搜索行 ── */
+.fsw-search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 6px;
+  flex-shrink: 0;
+}
+.fsw-input {
+  flex: 1;
+  height: 34px;
+  background: #232327;
+  border: 1px solid #2a2a2e;
+  border-radius: 7px;
+  color: #e8e8e6;
+  padding: 0 12px;
+  font-size: var(--text-body);
+  outline: none;
+}
+.fsw-input:focus {
+  border-color: #85b7eb;
+}
+.fsw-input::placeholder {
+  color: #6f6f6a;
+}
+.fsw-count {
+  color: #8a8a84;
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+/* ── 筛选行 ── */
+.fsw-filter-row {
+  display: flex;
+  gap: 6px;
+  padding: 2px 14px 8px;
+  flex-shrink: 0;
+}
+.fsw-chip {
+  border: 1px solid #2a2a2e;
+  background: #1f1f23;
+  color: #a0a09a;
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: var(--text-meta);
+  cursor: pointer;
+}
+.fsw-chip:hover {
+  color: #e8e8e6;
+}
+.fsw-chip.active {
+  background: rgba(133, 183, 235, 0.15);
+  border-color: rgba(133, 183, 235, 0.4);
+  color: #b5d4f4;
+}
+
+/* ── 设置面板 ── */
+.fsw-settings {
+  margin: 0 14px 8px;
+  padding: 12px 14px;
+  background: #1f1f23;
+  border: 1px solid #2a2a2e;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.fsw-setting-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: #a0a09a;
+  font-size: var(--text-meta);
+}
+.fsw-setting-row > span:first-child {
+  width: 210px;
+  flex-shrink: 0;
+  text-align: right;
+}
+.fsw-setting-input {
+  flex: 1;
+  height: 26px;
+  background: #232327;
+  border: 1px solid #2a2a2e;
+  border-radius: 5px;
+  color: #e8e8e6;
+  padding: 0 8px;
+  font-size: var(--text-meta);
+  outline: none;
+}
+.fsw-setting-input:focus {
+  border-color: #85b7eb;
+}
+.fsw-setting-check {
+  gap: 6px;
+}
+.fsw-setting-note {
+  color: #6f6f6a;
+  font-size: var(--text-tiny);
+  margin: 4px 0 8px;
+}
+.fsw-save-btn {
+  height: 28px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 6px;
+  background: #85b7eb;
+  color: #14141c;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fsw-save-btn:hover {
+  background: #b5d4f4;
+}
+
+/* ── 列骨架（表头与结果行共用一份 grid-template；R3-7 前是两份
+      各写各的，改列宽必须同步两处）── */
+.fsw-header-row,
+.fsw-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.1fr) 2fr 72px 128px;
+  gap: 10px;
+}
+
+/* ── 表头 ── */
+.fsw-header-row {
+  padding: 4px 14px;
+  color: #8a8a84;
+  font-size: var(--text-tiny);
+  border-bottom: 1px solid #232327;
+  flex-shrink: 0;
+}
+
+/* ── 结果列表（虚拟滚动） ── */
+.fsw-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.fsw-hint {
+  padding: 18px 14px;
+  color: #8a8a84;
+  font-size: var(--text-meta);
+  line-height: 1.7;
+}
+.fsw-hint-error {
+  color: #ef9f27;
+}
+.fsw-row {
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  cursor: default;
+}
+.fsw-row:hover {
+  background: #232327;
+}
+.fsw-col-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.fsw-icon {
+  flex-shrink: 0;
+  font-size: var(--text-meta);
+}
+.fsw-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fsw-col-path {
+  color: #8a8a84;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl; /* 长路径保尾段可见 */
+  text-align: left;
+}
+.fsw-col-size,
+.fsw-col-time {
+  color: #a0a09a;
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+/* ── 状态栏 ── */
+.fsw-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 14px;
+  background: #1f1f23;
+  border-top: 1px solid #232327;
+  font-size: var(--text-tiny);
+  color: #a0a09a;
+  flex-shrink: 0;
+}
+.fsw-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.fsw-dot.ok {
+  background: #5dcaa5;
+  box-shadow: 0 0 5px rgba(93, 202, 165, 0.6);
+}
+.fsw-dot.busy {
+  background: #85b7eb;
+  animation: fsw-pulse 1.2s infinite;
+}
+.fsw-dot.warn {
+  background: #ef9f27;
+}
+.fsw-dot.idle {
+  background: #6f6f6a;
+}
+@keyframes fsw-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.fsw-status-skipped {
+  color: #ef9f27;
+  cursor: help;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 滚动条 */
+.fsw-list::-webkit-scrollbar {
+  width: 10px;
+}
+.fsw-list::-webkit-scrollbar-thumb {
+  background: #2a2a2e;
+  border-radius: 5px;
+}
+.fsw-list::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3f;
+}

@@ -1,0 +1,866 @@
+<!doctype html>
+<!-- impeccable-disable cramped-padding: 30-44px 紧凑行（rail/命令行/日志行）是工作台密度设计 -->
+<!-- impeccable-disable nested-cards: 深色画布中的终端/代码块是内容图形，不是卡片容器 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermix 案台 · 开发/办公统一工作空间 · 2026-10-15</title>
+<style>
+/* ══════════════════════════════════════════════════════════
+   案台架构 v2 — 统一工作空间（开发 + 办公）
+    docs/notes/proposed/feature/2026-10-15-cockpit-workspace-architecture.md
+   ══════════════════════════════════════════════════════════ */
+:root {
+  --ink-bg: #202823; --ink-2: #2a332d; --ink-3: #354039;
+  --on-ink: #e8efea; --on-ink2: #a9b8ae; --on-ink3: #8fa29a;
+  --accent: #1e4a3c; --accent-h: #163a2f; --accent-lite: #6fae94;
+  --accent-tint: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 9%, white);
+  --paper: #fafbf9; --card: #f1f4f1; --line: #e4e9e5; --line2: #ccd5cf;
+  --ink: #212925; --ink2: #565f5a; --ink3: #5d6861;
+  /* 任务笺 8 色（表"物"，与品牌绿"表态"分开两个语义） */
+  --t1: #4f7fa3; --t2: #a8751f; --t3: #b23c30; --t4: #8a5fa0;
+  --t5: #2f7d8c; --t6: #c2703f; --t7: #6b7d3a; --t8: #9a5b7c;
+  --term: #14171a;
+  --ok: #3e8153; --err: #b23c30; --warn: #7a5e0c;
+  --sh-pop: 0 8px 28px rgba(16,22,18,.15), 0 2px 8px rgba(16,22,18,.08);
+  --sh-card: 0 1px 3px rgba(16,22,18,.06), 0 1px 2px rgba(16,22,18,.04);
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { height: 100%; }
+body { font-family: "Segoe UI Variable","Segoe UI","PingFang SC","Microsoft YaHei UI",sans-serif;
+  background: #141915; color: var(--ink); font-size: 14px; padding: 44px 20px 20px; min-height: 100vh; }
+button { font-family: inherit; cursor: pointer; border: 0; background: none; color: inherit; font-size: 13px; }
+input { font-family: inherit; font-size: 14px; }
+
+.demo-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 300;
+  display: flex; align-items: center; gap: 6px; padding: 7px 14px;
+  background: #0e120f; color: #cfe0d6; font-size: 12px; }
+.demo-bar b { color: #fff; font-size: 12px; margin-right: 6px; }
+.demo-btn { padding: 3px 11px; border-radius: 999px; font-size: 12px; color: #9db1a6; }
+.demo-btn:hover { background: rgba(255,255,255,.1); color: #fff; }
+.demo-btn.on { background: #e8efea; color: #1e4a3c; font-weight: 600; }
+.demo-btn kbd { font-family: var(--mono); font-size: 11px; opacity: .8; }
+
+.window { width: var(--win-w, 1440px); max-width: 100%; height: calc(100vh - 76px);
+  min-height: 660px; margin: 0 auto; display: flex; flex-direction: column;
+  border-radius: 14px; overflow: visible; background: var(--paper); }
+
+/* ═══ deck 指挥条 ═══ */
+.deck { height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 14px;
+  padding: 0 14px; background: var(--ink-bg); color: var(--on-ink); border-radius: 14px 14px 0 0; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 14px; }
+.brand .mark { width: 24px; height: 24px; border-radius: 7px; background: var(--accent-lite);
+  display: grid; place-items: center; color: #14201b; font-size: 13px; }
+.crumb { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; color: var(--on-ink2); }
+.crumb .task { color: var(--on-ink); font-weight: 600; max-width: 260px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.statechip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px;
+  border-radius: 999px; background: rgba(111,174,148,.16); color: #9ed4bb; font-size: 11px; font-weight: 600; }
+.statechip i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-lite); }
+.spacer { flex: 1; }
+.ksearch { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px 0 12px;
+  border-radius: 8px; background: var(--ink-2); color: var(--on-ink3); font-size: 13px; min-width: 230px; }
+.ksearch kbd { margin-left: auto; font-family: var(--mono); font-size: 11px;
+  border: 1px solid var(--ink-3); border-radius: 4px; padding: 1px 5px; }
+.dbtn { position: relative; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+  color: var(--on-ink3); }
+.dbtn:hover { background: var(--ink-2); color: var(--on-ink); }
+.dbtn .badge { position: absolute; top: 2px; right: 2px; min-width: 15px; height: 15px;
+  border-radius: 999px; background: var(--t3); color: #fff; font-size: 10px; font-weight: 700;
+  display: grid; place-items: center; padding: 0 3px; }
+.pop { position: absolute; top: 38px; right: 0; width: 320px; background: var(--ink-2);
+  border-radius: 12px; padding: 8px; box-shadow: var(--sh-pop); z-index: 120; }
+.pop .ph { font-size: 11px; font-weight: 600; color: var(--on-ink3); padding: 4px 8px 6px; letter-spacing: .05em; }
+.nrow { display: flex; gap: 9px; padding: 9px 10px; border-radius: 8px; text-align: left; width: 100%; }
+.nrow:hover { background: var(--ink-3); }
+.nrow i { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+.nrow b { display: block; font-size: 13px; color: var(--on-ink); font-weight: 600; }
+.nrow span { font-size: 12px; color: var(--on-ink2); }
+
+.body3 { flex: 1; min-height: 0; display: flex; }
+
+/* ═══ Rail ═══ */
+.rail { width: 60px; flex-shrink: 0; background: var(--ink-bg); display: flex; flex-direction: column;
+  align-items: center; gap: 4px; padding: 10px 0; }
+.ritem { position: relative; width: 42px; height: 42px; border-radius: 11px; display: grid; place-items: center;
+  color: var(--on-ink3); }
+.ritem:hover { background: var(--ink-2); color: var(--on-ink); }
+.ritem.on { background: rgba(111,174,148,.18); color: #9ed4bb; }
+.rb { position: absolute; top: 5px; right: 5px; min-width: 15px; height: 15px; border-radius: 999px;
+  background: var(--accent-lite); color: #14201b; font-size: 10px; font-weight: 700;
+  display: grid; place-items: center; padding: 0 3px; }
+.rgap { flex: 1; }
+.fly { position: absolute; left: 54px; top: 50%; transform: translateY(-50%); width: 268px;
+  background: var(--ink-2); border-radius: 12px; padding: 8px; box-shadow: var(--sh-pop); display: none; z-index: 60; }
+.ritem:hover .fly { display: block; }
+.fly .fh { font-size: 11px; font-weight: 600; color: var(--on-ink3); padding: 4px 8px 6px; letter-spacing: .05em; }
+.frow { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: 8px;
+  font-size: 13px; color: var(--on-ink2); }
+.frow:hover { background: var(--ink-3); color: var(--on-ink); }
+.frow.on { background: rgba(111,174,148,.18); color: #cfe6d8; font-weight: 500; }
+.frow .t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.frow .d { font-size: 11px; color: var(--on-ink3); font-family: var(--mono); }
+
+/* ═══ Stage ═══ */
+.stage { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--paper); }
+.belt { height: 44px; flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 0 16px;
+  border-bottom: 1px solid var(--line); overflow-x: auto; }
+.seg { display: flex; gap: 2px; background: var(--card); border-radius: 9px; padding: 2px; flex-shrink: 0; }
+.seg button { height: 24px; padding: 0 12px; border-radius: 7px; font-size: 12px; color: var(--ink3); white-space: nowrap; }
+.seg button.on { background: #fff; color: var(--ink); font-weight: 600; box-shadow: var(--sh-card); }
+.bdiv { width: 1px; height: 20px; background: var(--line); flex-shrink: 0; margin: 0 4px; }
+.bbtn { display: inline-flex; align-items: center; gap: 5px; height: 27px; padding: 0 10px; border-radius: 8px;
+  font-size: 12.5px; color: var(--ink2); white-space: nowrap; flex-shrink: 0; }
+.bbtn:hover { background: var(--card); color: var(--ink); }
+.bbtn.primary { background: var(--accent); color: #fff; font-weight: 500; }
+.bbtn.primary:hover { background: var(--accent-h); }
+.bbtn .kbd2 { font-family: var(--mono); font-size: 11px; color: var(--ink3); }
+
+.content { flex: 1; min-height: 0; overflow-y: auto; }
+.wrap { max-width: 940px; margin: 0 auto; padding: 22px 24px 26px; display: flex; flex-direction: column; gap: 14px; }
+.resume { display: flex; gap: 14px; padding: 14px 16px; border-radius: 12px;
+  background: var(--accent-soft); border: 1px solid var(--accent-tint); }
+.resume .rt { flex: 1; }
+.resume .rt b { font-size: 13px; color: var(--ink); }
+.resume .rt p { font-size: 12.5px; color: var(--ink2); line-height: 1.7; margin-top: 3px; }
+.resume .rb2 { display: flex; gap: 6px; align-self: center; }
+.resume button { height: 28px; padding: 0 11px; border-radius: 8px; font-size: 12.5px;
+  border: 1px solid var(--line2); color: var(--ink2); }
+.resume button.pri { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 500; }
+
+/* 叙事时间线（沿用案台 v1） */
+.tl { position: relative; padding-left: 34px; max-width: 760px; }
+.tl::before { content: ""; position: absolute; left: 9px; top: 8px; bottom: 8px; width: 2px; background: var(--line); border-radius: 2px; }
+.n { position: relative; padding-bottom: 24px; }
+.ndot { position: absolute; left: -34px; top: 3px; width: 20px; height: 20px; display: grid; place-items: center; }
+.ndot i { width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 2.5px solid var(--line2); }
+.n-user .ndot i { background: var(--tc, var(--accent)); border-color: var(--tc, var(--accent)); }
+.n .meta { position: absolute; left: calc(100% + 30px); top: 3px; width: 128px;
+  font-family: var(--mono); font-size: 11px; line-height: 1.9; color: var(--ink3); }
+.n .meta b { display: block; color: var(--ink2); font-weight: 600; }
+.who { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--ink3); margin-bottom: 6px; }
+.n-user .txt { font-size: 17px; font-weight: 600; line-height: 1.55; color: var(--ink); }
+.n-ag .txt { font-size: 14.5px; line-height: 1.8; color: var(--ink); }
+.tool { display: flex; align-items: center; gap: 8px; padding: 7px 0; font-family: var(--mono); font-size: 12.5px;
+  color: var(--ink2); border-bottom: 1px dashed var(--line); }
+.tool .fn { color: var(--ink); font-weight: 600; }
+.tool .ar { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool .st { font-size: 11px; color: var(--ok); font-weight: 600; }
+.qcard { border-left: 2px solid color-mix(in srgb, var(--tc, var(--accent)) 55%, transparent);
+  background: var(--accent-soft); border-radius: 0 9px 9px 0; padding: 12px 16px; margin: 12px 0;
+  font-size: 13.5px; line-height: 1.7; color: var(--ink); }
+.qcard b { color: var(--accent); }
+
+/* 办公域：文档卡 */
+.doccard { border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
+.doccard .dh { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px;
+  background: var(--card); border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--ink2); }
+.doccard .db { padding: 16px 18px; font-size: 14px; line-height: 1.85; color: var(--ink); }
+.doccard .db h4 { font-size: 14px; font-weight: 600; margin: 4px 0 6px; }
+.doccard .db p { color: var(--ink2); }
+.comment { display: flex; gap: 8px; padding: 8px 14px; background: var(--accent-soft);
+  border-top: 1px solid var(--accent-tint); font-size: 12.5px; color: var(--ink2); }
+.comment .av { width: 20px; height: 20px; border-radius: 50%; background: var(--t1); color: #fff;
+  display: grid; place-items: center; font-size: 10px; font-weight: 700; flex-shrink: 0; }
+
+/* ═══ 任务归属区（命令行上方） ═══ */
+.attrib { flex-shrink: 0; }
+.queue-bar { display: flex; align-items: center; gap: 6px; padding: 8px 14px 0; background: var(--ink-bg); }
+.qp { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: 999px;
+  background: var(--ink-2); color: var(--on-ink3); font-size: 12px; max-width: 190px; }
+.qp:hover { background: var(--ink-3); color: var(--on-ink); }
+.qp.on { background: rgba(232,239,234,.14); color: #e8efea; font-weight: 600; }
+.qp i { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.qp .qt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp .qs { font-family: var(--mono); font-size: 11px; color: var(--on-ink3); flex-shrink: 0; }
+.queue-bar .hint { margin-left: auto; font-size: 11px; color: var(--on-ink3); font-family: var(--mono); }
+.approve-bar { display: flex; align-items: center; gap: 10px; margin: 6px 14px 0; padding: 9px 12px;
+  border-radius: 10px; background: #33291a; color: #e9d9a8; font-size: 12.5px; }
+.approve-bar b { color: #f0e2b6; font-weight: 600; }
+.approve-bar .acts { margin-left: auto; display: flex; gap: 6px; }
+.approve-bar button { height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px;
+  background: var(--ink-3); color: var(--on-ink); }
+.approve-bar button.go { background: #d8b25e; color: #2a2010; font-weight: 600; }
+
+/* ═══ 命令行（归属核心） ═══ */
+.cmdline { height: 62px; flex-shrink: 0; display: flex; align-items: center; gap: 10px;
+  padding: 0 14px 0 14px; background: var(--ink-bg); color: var(--on-ink); border-radius: 0 0 14px 14px;
+  position: relative; }
+.prompt { font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--tc, var(--accent-lite)); }
+/* 目标环：归属的第一要素 */
+.target { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 38px;
+  padding: 0 10px; border-radius: 10px; background: var(--ink-2); flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--tc, var(--accent-lite)) 40%, transparent); }
+.target:hover { background: var(--ink-3); }
+.target i { width: 8px; height: 8px; border-radius: 50%; background: var(--tc); flex-shrink: 0; }
+.target .tn { font-size: 13px; font-weight: 600; color: var(--on-ink); max-width: 150px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.target .car { color: var(--on-ink3); font-size: 11px; }
+.tmenu { position: absolute; bottom: 46px; left: 0; width: 288px; background: var(--ink-2);
+  border-radius: 12px; padding: 8px; box-shadow: var(--sh-pop); display: none; z-index: 130; }
+.target.open .tmenu { display: block; }
+.tmenu .mh { font-size: 11px; font-weight: 600; color: var(--on-ink3); padding: 4px 8px 6px; letter-spacing: .05em; }
+.tmi { display: flex; align-items: center; gap: 9px; width: 100%; height: 32px; padding: 0 8px;
+  border-radius: 8px; font-size: 13px; color: var(--on-ink2); }
+.tmi:hover { background: var(--ink-3); color: var(--on-ink); }
+.tmi.on { background: rgba(232,239,234,.14); color: #e8efea; font-weight: 600; }
+.tmi i { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.tmi .tt { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tmi .ts { font-size: 11px; color: var(--on-ink3); font-family: var(--mono); }
+/* @ 任务补全 */
+.mention { position: absolute; bottom: 52px; left: 60px; width: 300px; background: var(--ink-2);
+  border-radius: 12px; padding: 8px; box-shadow: var(--sh-pop); display: none; z-index: 130; }
+.mention.open { display: block; }
+.mention .mh { font-size: 11px; color: var(--on-ink3); padding: 4px 8px 6px; letter-spacing: .05em; }
+.cmd-input { flex: 1; display: flex; align-items: center; gap: 8px; height: 38px; background: var(--ink-2);
+  border-radius: 10px; padding: 0 12px; border: 1px solid transparent;
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--tc, var(--accent-lite)) 55%, transparent); }
+.cmd-input:focus-within { border-color: color-mix(in srgb, var(--tc, var(--accent-lite)) 45%, transparent); }
+.cmd-input input { flex: 1; background: none; border: 0; outline: none; color: var(--on-ink); font-size: 14px; }
+.cmd-input input::placeholder { color: var(--on-ink3); }
+.cch { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 7px;
+  background: var(--ink-3); color: var(--on-ink2); font-size: 12px; flex-shrink: 0; }
+.cch.hl { background: rgba(111,174,148,.18); color: #9ed4bb; }
+.send { width: 38px; height: 38px; border-radius: 10px; background: var(--tc, var(--accent-lite));
+  color: #14201b; display: grid; place-items: center; flex-shrink: 0; }
+.send:hover { filter: brightness(1.08); }
+/* 投送回执 */
+.toast { position: fixed; right: 28px; bottom: 96px; z-index: 200; display: flex; align-items: center; gap: 9px;
+  padding: 10px 14px; border-radius: 10px; background: var(--ink-2); color: var(--on-ink);
+  box-shadow: var(--sh-pop); font-size: 13px;
+  opacity: 0; transform: translateY(8px); transition: opacity .18s, transform .18s; pointer-events: none; }
+.toast.on { opacity: 1; transform: none; }
+/* 任务身份由圆点 + 名称承担，不用左侧色条（side-tab 反模式） */
+.toast i { width: 9px; height: 9px; border-radius: 50%; background: var(--tc2, var(--accent-lite));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tc2, var(--accent-lite)) 22%, transparent); }
+
+/* ═══ ⌘K 命令面板 ═══ */
+.palette { position: absolute; inset: 0; z-index: 150; display: none; align-items: flex-start;
+  justify-content: center; padding-top: 90px; background: rgba(12,18,14,.5); border-radius: 14px; }
+.palette.on { display: flex; }
+.pal { width: 620px; max-width: 90%; background: var(--ink-2); border-radius: 14px;
+  box-shadow: var(--sh-pop); overflow: hidden; }
+.pal-in { display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 16px;
+  border-bottom: 1px solid var(--ink-3); color: var(--on-ink); font-size: 14px; }
+.pal-in input { flex: 1; background: none; border: 0; outline: none; color: var(--on-ink); font-size: 15px; }
+.psec { font-size: 11px; font-weight: 700; letter-spacing: .06em; color: var(--on-ink3); padding: 10px 16px 6px; }
+.pitem { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 16px; font-size: 13px;
+  color: var(--on-ink2); }
+.pitem:hover, .pitem.on { background: var(--ink-3); color: var(--on-ink); }
+.pitem .pn { width: 16px; text-align: center; color: var(--on-ink3); }
+.pitem .ptxt { flex: 1; }
+.pitem .pcat { font-size: 11px; color: var(--on-ink3); font-family: var(--mono); }
+
+/* ═══ 副屏（右侧）：内容 = f(任务形态) ═══ */
+.dossier { width: 330px; flex-shrink: 0; background: var(--paper); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; }
+.doh { height: 44px; flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 8px;
+  border-bottom: 1px solid var(--line); }
+.doh .stab { height: 28px; padding: 0 10px; border-radius: 8px; font-size: 12px; color: var(--ink3);
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.doh .stab:hover { background: var(--card); color: var(--ink); }
+.doh .stab.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.doh .expand { margin-left: auto; width: 28px; height: 28px; border-radius: 8px; display: grid;
+  place-items: center; color: var(--ink3); }
+.doh .expand:hover { background: var(--card); color: var(--ink); }
+.dos { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+/* 副屏 · 差异 */
+.sp-diff { font-family: var(--mono); font-size: 12px; line-height: 1.85; border-radius: 10px;
+  overflow: hidden; border: 1px solid var(--line); }
+.sp-diff .sp-f { padding: 5px 10px; background: var(--card); color: var(--ink2); font-size: 11.5px; }
+.sp-diff div:nth-child(n+2) { padding: 0 10px; white-space: pre; }
+.sp-diff .ad { background: color-mix(in srgb, var(--ok) 14%, transparent); color: #2c5c3c; }
+.sp-diff .de { background: color-mix(in srgb, var(--err) 12%, transparent); color: #8f2e24; text-decoration: line-through; }
+.sp-diff .hk { color: var(--ink3); }
+/* 副屏 · 终端 */
+.sp-term { background: var(--term); border-radius: 10px; padding: 10px 12px; font-family: var(--mono);
+  font-size: 12px; line-height: 1.8; color: #c4d2c9; }
+.sp-term .p { color: #6fae94; } .sp-term .dim { color: #6c7a72; }
+/* 副屏 · 文档大纲 */
+.sp-ol { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.sp-ol .oh { padding: 8px 12px; background: var(--card); font-size: 12px; font-weight: 600; color: var(--ink); }
+.sp-ol .oi { display: flex; gap: 8px; padding: 6px 12px; font-size: 12.5px; color: var(--ink2); }
+.sp-ol .oi.lv2 { padding-left: 26px; color: var(--ink3); }
+.sp-ol .oi.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.sp-ol .oi .pg { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--ink3); }
+/* 副屏 · 表格 */
+.sp-tb { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; font-size: 12px; }
+.sp-tb table { width: 100%; border-collapse: collapse; }
+.sp-tb th { background: var(--card); text-align: left; padding: 7px 10px; font-weight: 600; color: var(--ink2); }
+.sp-tb td { padding: 6px 10px; border-top: 1px solid var(--line); color: var(--ink2); }
+.sp-tb td.num { text-align: right; font-family: var(--mono); }
+.sp-tb tr.sel td { background: var(--accent-soft); color: var(--ink); }
+/* 副屏 · 批队 */
+.sp-sum { display: flex; gap: 8px; }
+.sp-sum .k { flex: 1; background: var(--card); border-radius: 9px; padding: 9px 10px; text-align: center; }
+.sp-sum .k b { display: block; font-size: 15px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.sp-sum .k span { font-size: 11px; color: var(--ink3); }
+.qrow { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; font-size: 12.5px;
+  color: var(--ink2); }
+.qrow:hover { background: var(--card); }
+.qrow i { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.qrow .qn { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 11.5px; }
+.qrow button { height: 22px; padding: 0 8px; border-radius: 6px; font-size: 11.5px;
+  border: 1px solid var(--line2); color: var(--ink2); flex-shrink: 0; }
+.qrow button:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* 副屏 · 画廊 */
+.sp-gal { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.sp-gal .g { aspect-ratio: 1; border-radius: 9px; background: var(--card); border: 2px solid transparent;
+  display: grid; place-items: center; font-size: 11px; color: var(--ink3); }
+.sp-gal .g.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.sp-param { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 12px; color: var(--ink2); }
+.sp-param b { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+.dt { font-size: 11px; font-weight: 700; letter-spacing: .07em; color: var(--ink3); margin-bottom: 8px; }
+.dcard { background: var(--card); border-radius: 11px; padding: 13px 14px; }
+.dcard .big { font-size: 14px; font-weight: 600; color: var(--ink); }
+.dcard .sub { font-size: 12px; color: var(--ink3); margin-top: 3px; }
+.kv { display: flex; justify-content: space-between; font-size: 12.5px; padding: 5px 0; color: var(--ink2); }
+.kv b { font-weight: 500; color: var(--ink); font-family: var(--mono); font-size: 12px; }
+.frow { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: 8px;
+  font-size: 12.5px; color: var(--ink2); font-family: var(--mono); }
+.frow:hover { background: var(--card); color: var(--ink); }
+.frow .fn { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.frow .dl { font-size: 11px; } .dl.up { color: var(--ok); } .dl.dn { color: var(--err); }
+.srow { display: flex; align-items: center; gap: 9px; padding: 7px 8px; font-size: 12.5px; color: var(--ink2); }
+.srow i { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.meter { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 10px; }
+.meter i { display: block; height: 100%; border-radius: 3px; background: var(--tc, var(--accent)); }
+
+.window.narrow { --win-w: 1120px; }
+.window.narrow .dossier { display: none; }
+.window.narrow .n .meta { display: none; }
+.window.narrow .tl { max-width: none; }
+body.notes [data-note] { outline: 1.5px dashed rgba(30,74,60,.55); outline-offset: 2px; position: relative; }
+body.notes [data-note]::after { content: attr(data-note); position: absolute; top: -7px; left: 10px;
+  transform: translateY(-100%); background: var(--accent); color: #fff; font-size: 11px; line-height: 1;
+  padding: 4px 7px; border-radius: 5px; white-space: nowrap; z-index: 90; pointer-events: none; }
+body.notes .deck[data-note]::after, body.notes .cmdline[data-note]::after { left: auto; right: 10px; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="demo-bar">
+  <b>案台 v2 · 统一工作空间</b>
+  <button class="demo-btn on" id="m-dev">开发任务</button>
+  <button class="demo-btn" id="m-ofc">办公任务</button>
+  <span style="width:10px"></span>
+  <button class="demo-btn" id="b-pal">⌘K 命令面板</button>
+  <button class="demo-btn" id="b-narrow">窄屏档</button>
+  <button class="demo-btn" id="b-notes">设计标注</button>
+  <span style="flex:1"></span>
+  <span style="color:#9db1a6">试试：点命令行左侧目标环换任务 · 输入 @ 触发任务补全 · 切换任务看草稿保留</span>
+</div>
+
+<div class="window" id="win" style="--tc:var(--t1)">
+
+  <div class="deck" data-note="指挥条：任务状态 + ⌘K 检索 + 通知">
+    <div class="brand"><span class="mark">H</span>Hermix</div>
+    <div class="crumb">
+      <span>任务</span>
+      <span style="color:var(--on-ink3)">▸</span>
+      <span class="task" id="crumb-task">Hermix 桌面 · 布局重构</span>
+      <span class="statechip"><i id="crumb-dot"></i><span id="crumb-state">执行中 · 14 分钟</span></span>
+    </div>
+    <div class="spacer"></div>
+    <div class="ksearch">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      搜索会话、任务、命令、设置…
+      <kbd>⌘K</kbd>
+    </div>
+    <div style="position:relative">
+      <button class="dbtn" id="bell" title="通知">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 1 0-12 0c0 6-2 7-2 7h16s-2-1-2-7M13.7 20a2 2 0 0 1-3.4 0"/></svg>
+        <span class="badge">2</span>
+      </button>
+      <div class="pop" id="notif" style="display:none">
+        <div class="ph">通知 · 点击即聚焦到该任务</div>
+        <button class="nrow" data-goto="t2"><i style="background:var(--t2)"></i><span><b>第三方登录排期表 v3 已定稿</b><span>任务已完成 · 输出 2 份材料</span></span></button>
+        <button class="nrow" data-goto="t3"><i style="background:var(--t3)"></i><span><b>夜航巡检需要确认 1 步</b><span>待审批 · ⌘A 可通过</span></span></button>
+        <button class="nrow" data-goto="t4"><i style="background:var(--t4)"></i><span><b>子代理异常：素材抓取超时</b><span>已重试 2 次</span></span></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="body3">
+
+    <!-- Rail：一级入口（能力域） -->
+    <nav class="rail" data-note="一级入口：Rail 6 项封顶">
+      <button class="ritem on" title="工作台">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="10" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/></svg>
+        <div class="fly"><div class="fh">最近任务</div>
+          <div class="frow on" data-goto="t1"><span class="t">Hermix 桌面 · 布局重构</span><span class="d">now</span></div>
+          <div class="frow" data-goto="t2"><span class="t">排期表 v3 定稿</span><span class="d">10:02</span></div>
+          <div class="frow" data-goto="t3"><span class="t">夜航巡检</span><span class="d">09:41</span></div>
+          <div class="frow" data-goto="t4"><span class="t">素材抓取</span><span class="d">09:12</span></div>
+        </div>
+      </button>
+      <button class="ritem" title="任务">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <span class="rb">3</span>
+      </button>
+      <button class="ritem" title="专家">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+      </button>
+      <button class="ritem" title="自动化">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
+      </button>
+      <button class="ritem" title="知识库">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V4H6.5A2.5 2.5 0 0 0 4 6.5v13zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>
+      </button>
+      <button class="ritem" title="洞察">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M8 16v-5m5 5V8m5 8v-3"/></svg>
+      </button>
+      <div class="rgap"></div>
+      <button class="ritem" title="设置">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2"/></svg>
+      </button>
+    </nav>
+
+    <!-- Stage -->
+    <section class="stage">
+      <!-- 二级入口：上下文工具带 -->
+      <div class="belt" data-note="二级入口：随领域（开发/办公）切换的工具带，≤7 项">
+        <div class="seg">
+          <button class="on" id="seg-dev">开发任务</button>
+          <button id="seg-ofc">办公任务</button>
+        </div>
+        <span class="bdiv"></span>
+        <span id="belt-dev" style="display:contents">
+          <button class="bbtn primary"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>运行测试</button>
+          <button class="bbtn">差异审查</button>
+          <button class="bbtn">终端</button>
+          <button class="bbtn">索引代码库</button>
+          <button class="bbtn">构建产物</button>
+          <button class="bbtn">依赖清单</button>
+          <button class="bbtn">调试会话</button>
+        </span>
+        <span id="belt-ofc" style="display:none">
+          <button class="bbtn primary"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>生成大纲</button>
+          <button class="bbtn">语言审校</button>
+          <button class="bbtn">版式套用</button>
+          <button class="bbtn">表格提取</button>
+          <button class="bbtn">引用核校</button>
+          <button class="bbtn">导出汇报</button>
+          <button class="bbtn">素材库</button>
+        </span>
+        <span class="bdiv"></span>
+        <button class="bbtn" id="b-pal2">⌘K 全量命令</button>
+      </div>
+
+      <div class="content">
+        <div class="wrap">
+
+          <!-- 任务上下文记忆 -->
+          <div class="resume" data-note="上下文记忆：闲置 30 分钟回来先给「上次做了什么」">
+            <div class="rt">
+              <b>上次做到这里 · 09:41</b>
+              <p id="resume-txt">已改完 tokens.css 亮色基线，check:tokens 全绿；detect 还剩 5 项，卡在 PDF 导出卡片的对比度上。</p>
+            </div>
+            <div class="rb2">
+              <button class="pri">继续</button>
+              <button>重做这步</button>
+            </div>
+          </div>
+
+          <!-- 叙事流 -->
+          <div class="tl" id="story"></div>
+
+        </div>
+      </div>
+
+      <!-- ═══ 任务归属区 ═══ -->
+      <div class="attrib">
+        <div class="queue-bar" data-note="并行任务条：点击即切换投送目标">
+          <button class="qp on" data-goto="t1"><i style="background:var(--t1)"></i><span class="qt">布局重构</span><span class="qs">执行</span></button>
+          <button class="qp" data-goto="t2"><i style="background:var(--t2)"></i><span class="qt">排期表 v3</span><span class="qs">完成</span></button>
+          <button class="qp" data-goto="t3"><i style="background:var(--t3)"></i><span class="qt">夜航巡检</span><span class="qs">待批</span></button>
+          <button class="qp" data-goto="t4"><i style="background:var(--t4)"></i><span class="qt">素材抓取</span><span class="qs">异常</span></button>
+          <button class="qp" data-goto="t5"><i style="background:var(--t5)"></i><span class="qt">季度报表</span><span class="qs">执行</span></button>
+          <button class="qp" data-goto="t6"><i style="background:var(--t6)"></i><span class="qt">PDF 转换</span><span class="qs">27/32</span></button>
+          <button class="qp" data-goto="t7"><i style="background:var(--t7)"></i><span class="qt">封面图</span><span class="qs">空闲</span></button>
+          <span class="hint">⌘1…7 切任务 · ⇧⌘K 归档</span>
+        </div>
+        <div class="approve-bar" id="approve-bar" style="display:none">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#e9d9a8" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+          <span>目标 <b>夜航巡检</b> 需要确认 1 步：删除 3 个缓存产物</span>
+          <span class="acts">
+            <button class="go">⌘A 通过</button>
+            <button>查看</button>
+          </span>
+        </div>
+      </div>
+
+      <!-- 命令行 -->
+      <div class="cmdline" data-note="命令行：目标环 + 逐任务草稿 + 投送回执">
+        <span class="prompt">❯</span>
+        <div class="target" id="target">
+          <i></i><span class="tn" id="target-name">布局重构</span><span class="car">▾</span>
+          <div class="tmenu" id="tmenu">
+            <div class="mh">投送目标</div>
+            <button class="tmi on" data-goto="t1"><i style="background:var(--t1)"></i><span class="tt">布局重构</span><span class="ts">执行</span></button>
+            <button class="tmi" data-goto="t2"><i style="background:var(--t2)"></i><span class="tt">排期表 v3</span><span class="ts">空闲</span></button>
+            <button class="tmi" data-goto="t3"><i style="background:var(--t3)"></i><span class="tt">夜航巡检</span><span class="ts">待批</span></button>
+            <button class="tmi" data-goto="t4"><i style="background:var(--t4)"></i><span class="tt">素材抓取</span><span class="ts">异常</span></button>
+            <button class="tmi" data-goto="t5"><i style="background:var(--t5)"></i><span class="tt">季度报表</span><span class="ts">执行</span></button>
+            <button class="tmi" data-goto="t6"><i style="background:var(--t6)"></i><span class="tt">PDF 批量转换</span><span class="ts">27/32</span></button>
+            <button class="tmi" data-goto="t7"><i style="background:var(--t7)"></i><span class="tt">封面图</span><span class="ts">空闲</span></button>
+            <button class="tmi" data-goto="new"><i style="background:#fff"></i><span class="tt">＋ 新建任务</span></button>
+          </div>
+        </div>
+        <div class="mention" id="mention">
+          <div class="mh">以 @ 切换投送目标</div>
+          <button class="tmi" data-goto="t2"><i style="background:var(--t2)"></i><span class="tt">排期表 v3</span><span class="ts">空闲</span></button>
+          <button class="tmi" data-goto="t3"><i style="background:var(--t3)"></i><span class="tt">夜航巡检</span><span class="ts">待批</span></button>
+          <button class="tmi" data-goto="t4"><i style="background:var(--t4)"></i><span class="tt">素材抓取</span><span class="ts">异常</span></button>
+        </div>
+        <div class="cmd-input">
+          <input id="cmd" placeholder="下指令…（@ 切任务 · ⌘↩ 投送 · ↑ 历史）">
+          <span class="cch hl">Hermix</span>
+          <span class="cch">GLM-5.3</span>
+          <span class="cch" id="draft-hint">草稿已保留</span>
+        </div>
+        <button class="send" id="send" title="投送（⌘↩）">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <!-- 副屏：内容随任务形态变，对话流恒定在中间主列 -->
+    <aside class="dossier" data-note="副屏 = f(任务形态)：差异/文档/表格/批队/画廊">
+      <div class="doh">
+        <button class="stab on" data-tab="art"><span id="art-name">差异</span></button>
+        <button class="stab" data-tab="ctx">上下文</button>
+        <button class="stab" data-tab="sub">子代理 <span class="rb" style="position:static;background:var(--accent-lite)">2</span></button>
+        <button class="expand" title="最大化副屏">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m11-5v3a2 2 0 0 1-2 2h-3"/></svg>
+        </button>
+      </div>
+      <div class="dos" id="dos"></div>
+    </aside>
+
+  </div>
+
+  <!-- ⌘K -->
+  <div class="palette" id="palette">
+    <div class="pal">
+      <div class="pal-in">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--on-ink3)" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input placeholder="命令 / 会话 / 任务 / 文件 / 设置…">
+        <span style="font-family:var(--mono);font-size:11px;color:var(--on-ink3)">ESC 关闭</span>
+      </div>
+      <div style="max-height:360px;overflow-y:auto">
+        <div class="psec">常用（按当前领域排序）</div>
+        <div class="pitem"><span class="pn">▸</span><span class="ptxt">运行测试</span><span class="pcat">开发 · 任务型</span></div>
+        <div class="pitem"><span class="pn">▸</span><span class="ptxt">差异审查</span><span class="pcat">开发 · 任务型</span></div>
+        <div class="psec">任务</div>
+        <div class="pitem"><span class="pn">▸</span><span class="ptxt">切到：布局重构</span><span class="pcat">⌘1</span></div>
+        <div class="pitem"><span class="pn">▸</span><span class="ptxt">归档当前任务</span><span class="pcat">⇧⌘K</span></div>
+        <div class="psec">导航</div>
+        <div class="pitem"><span class="pn">▸</span><span class="ptxt">打开任务看板</span><span class="pcat">导航型</span></div>
+        <div class="pitem"><span class="pn">▸</span><span class="ptxt">打开知识库</span><span class="pcat">导航型</span></div>
+        <div class="psec">破坏性 / 配置（强制降级到这里）</div>
+        <div class="pitem"><span class="pn">▸</span><span class="ptxt">清空会话历史</span><span class="pcat">需二次确认</span></div>
+        <div class="pitem"><span class="pn">▸</span><span class="ptxt">修改权限策略</span><span class="pcat">需二次确认</span></div>
+        <div class="pitem"><span class="pn">▸</span><span class="ptxt">模型设置</span><span class="pcat">配置型</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"><i></i><span id="toast-txt"></span></div>
+
+<script>
+/* ── 任务数据：归属机制的状态源 ── */
+const TASKS = {
+  t1: { name: "布局重构", color: "var(--t1)", state: "执行中", stateShort: "执行", domain: "dev",
+        resume: "已改完 tokens.css 亮色基线，check:tokens 全绿；detect 还剩 5 项，卡在 PDF 导出卡片的对比度上。",
+        draft: "把 detect 那 5 项一并修掉，其中 PDF 导出卡片的对比度不够，顺便看看有没有同类问题",
+        files: [["src/styles/tokens.css","+84"],["src/styles/dark.css","+2"],["design-previews/cockpit.html","+612"],["docs/notes/proposed/…","+148"]],
+        agents: [], cost: [["输入","96.1k"],["输出","31.9k"],["缓存命中","71%"],["折合","¥0.42"]] },
+  t2: { name: "排期表 v3", color: "var(--t2)", state: "已完成", stateShort: "完成", domain: "ofc",
+        resume: "三方登录排期表已定稿并导出，等待产品确认最终版本号。",
+        draft: "把这份排期表按研发/测试/灰度三阶段重排一遍，输出成一页纸",
+        files: [["排期表 v3.docx","+1"],["三方登录纪要.md","+12"],["素材/流程图.png","—"]],
+        agents: [], cost: [["输入","42.0k"],["输出","11.4k"],["缓存命中","64%"],["折合","¥0.18"]] },
+  t3: { name: "夜航巡检", color: "var(--t3)", state: "待审批", stateShort: "待批", domain: "dev",
+        resume: "巡检到 10 台节点，3 个缓存产物待删除，等待人工确认。",
+        draft: "",
+        files: [["ops/report-1015.json","+1"],["ops/nodes.csv","—"]],
+        agents: [], cost: [["输入","18.2k"],["输出","4.1k"],["缓存命中","52%"],["折合","¥0.07"]] },
+  t4: { name: "素材抓取", color: "var(--t4)", state: "异常", stateShort: "异常", domain: "ofc",
+        resume: "子代理在抓取第 4 个素材站时超时，已重试 2 次。",
+        draft: "跳过超时的站点，其余素材继续抓，最后给我一份缺失清单",
+        files: [["素材/raw/","+37"],["抓取日志.txt","+402"]],
+        agents: [], cost: [["输入","64.8k"],["输出","9.7k"],["缓存命中","39%"],["折合","¥0.24"]] },
+  t5: { name: "季度报表", color: "var(--t5)", state: "执行中", stateShort: "执行", domain: "ofc",
+        resume: "已合并 4 个部门表，正在核校公式与合计数。",
+        draft: "把 G 列的合计公式改成跨表引用，别再手填了",
+        files: [["Q3-合并.xlsx","+1"],["部门/华东.xlsx","—"],["部门/华南.xlsx","—"]],
+        agents: [], cost: [["输入","51.3k"],["输出","14.2k"],["缓存命中","68%"],["折合","¥0.21"]] },
+  t6: { name: "PDF 批量转换", color: "var(--t6)", state: "执行中", stateShort: "执行", domain: "ofc",
+        resume: "32 个文件已处理 27 个，2 个失败（扫描件 OCR 超时），正在重试。",
+        draft: "剩下 5 个继续，失败的那 2 个改用 OCR 高精度模式重跑",
+        files: [["in/","32 项"],["out/","27 项"],["失败清单.csv","+2"]],
+        agents: [], cost: [["输入","28.4k"],["输出","6.9k"],["缓存命中","44%"],["折合","¥0.11"]] },
+  t7: { name: "封面图", color: "var(--t7)", state: "空闲", stateShort: "空闲", domain: "ofc",
+        resume: "已生成 6 版，当前选中 v4（横版 · 墨绿主色）。",
+        draft: "v4 再出两版：一个把标题字号调大，一个换成深底",
+        files: [["封面 v4.png","+1"],["封面 v3.png","—"],["封面 v2.png","—"]],
+        agents: [], cost: [["输入","33.6k"],["输出","8.1k"],["缓存命中","57%"],["折合","¥0.15"]] },
+};
+/* 形态 → 副屏类型（对话流恒定在中间主列，不受形态影响） */
+const FORMS = { t1: "diff", t2: "word", t3: "diff", t4: "gallery", t5: "table", t6: "batch", t7: "gallery" };
+/* 逐任务草稿：切换不丢 */
+const drafts = Object.fromEntries(Object.entries(TASKS).map(([k,v]) => [k, v.draft]));
+let cur = "t1", domain = "dev", newBuf = "";
+
+const win = document.getElementById("win");
+const $ = id => document.getElementById(id);
+const cmd = $("cmd");
+
+/* 叙事内容（开发 / 办公两套） */
+const STORY = {
+  dev: `
+    <div class="n n-user"><span class="ndot"><i></i></span>
+      <span class="meta"><b>09:41:07</b>输入 86 字<br>2 个附件</span>
+      <div class="who">你</div>
+      <div class="txt">锁屏/夜间切换时浅色主题的配色会闪，查一下。</div></div>
+    <div class="n n-ag"><span class="ndot"><i></i></span>
+      <span class="meta"><b>09:41:09</b>GLM-5.3<br>流式 4.2s</span>
+      <div class="who">Hermix · GLM-5.3</div>
+      <div class="txt"><div class="tool"><span class="fn">search_content</span><span class="ar">--color-bg-app · styles/</span><span class="st">✓ 0.3s</span></div>
+      <p>找到了：<code>tokens.css</code> 里 <code>bg-app</code> 与 <code>bg-primary</code> 同为 <code>#fff</code>，暗色 fallback 缺失导致切换重绘。</p></div></div>`,
+  ofc: `
+    <div class="n n-user"><span class="ndot"><i></i></span>
+      <span class="meta"><b>10:02:14</b>输入 42 字<br>1 个附件</span>
+      <div class="who">你</div>
+      <div class="txt">把三方登录的排期整理成一页纸，明天给产品过。</div></div>
+    <div class="n n-ag"><span class="ndot"><i></i></span>
+      <span class="meta"><b>10:02:16</b>GLM-5.3<br>流式 3.1s</span>
+      <div class="who">Hermix · GLM-5.3</div>
+      <div class="txt"><div class="qcard"><b>结论：</b>排期按研发 / 联调 / 灰度三阶段重排，关键路径是<b>供应商 OAuth 回调改造</b>，阻塞 2 天。</div>
+      <p>已生成一页纸，并留了一条批注：供应商文档里的回调字段名与实现不一致，需要产品确认。</p>
+      <div class="doccard" style="margin-top:10px">
+        <div class="dh">📄 排期表 v3 · 一页纸</div>
+        <div class="db"><h4>一、关键路径</h4><p>回调改造（3d）→ 联调（2d）→ 灰度（1d），共 6 个工作日。</p><h4>二、风险</h4><p>供应商字段名不一致，阻塞确认。</p></div>
+        <div class="comment"><span class="av">你</span><span>这里字段名再确认一次，文档里有两版。</span></div>
+      </div></div></div>`
+};
+/* 形态 → 这轮对话的样子（都是对话驱动，只是过程不同） */
+Object.assign(STORY, {
+  word: STORY.ofc,
+  table: `
+    <div class="n n-user"><span class="ndot"><i></i></span>
+      <span class="meta"><b>11:20:03</b>输入 38 字<br>4 个附件</span>
+      <div class="who">你</div>
+      <div class="txt">四个部门的季度表合并一下，合计别手填。</div></div>
+    <div class="n n-ag"><span class="ndot"><i></i></span>
+      <span class="meta"><b>11:20:06</b>GLM-5.3<br>流式 6.8s</span>
+      <div class="who">Hermix · GLM-5.3</div>
+      <div class="txt"><div class="tool"><span class="fn">read_file</span><span class="ar">部门/{华东,华南,华北}.xlsx</span><span class="st">✓ 2.1s</span></div>
+      <p>已合并成 Q3-合并.xlsx，右侧副屏可直接看表。合计列我改成了跨表引用公式，不再手填。</p>
+      <div class="qcard"><b>要你定：</b>华北环比 -3.8%，要不要在表里加一列"原因备注"？</div></div></div>`,
+  batch: `
+    <div class="n n-user"><span class="ndot"><i></i></span>
+      <span class="meta"><b>13:05:11</b>输入 24 字<br>32 个附件</span>
+      <div class="who">你</div>
+      <div class="txt">这 32 个 PDF 全转成 Word，转完告诉我哪些没成功。</div></div>
+    <div class="n n-ag"><span class="ndot"><i></i></span>
+      <span class="meta"><b>13:05:14</b>GLM-5.3<br>批量 · 27/32</span>
+      <div class="who">Hermix · GLM-5.3</div>
+      <div class="txt"><p>开始批量处理，进度在右侧副屏（已完成 27，进行中 3）。</p>
+      <div class="tool"><span class="fn">convert</span><span class="ar">scan-014.pdf → 失败：OCR 超时</span><span class="st" style="color:var(--err)">✗ 32s</span></div>
+      <div class="tool"><span class="fn">convert</span><span class="ar">scan-027.pdf → 失败：OCR 超时</span><span class="st" style="color:var(--err)">✗ 30s</span></div>
+      <div class="qcard"><b>需要你定：</b>这 2 个是扫描件，要不要切高精度 OCR 重跑（慢 3 倍，但能出字）？</div></div></div>`,
+  gallery: `
+    <div class="n n-user"><span class="ndot"><i></i></span>
+      <span class="meta"><b>15:41:29</b>输入 31 字</span>
+      <div class="who">你</div>
+      <div class="txt">给这次汇报做个封面，墨绿主色，留白多一点。</div></div>
+    <div class="n n-ag"><span class="ndot"><i></i></span>
+      <span class="meta"><b>15:41:33</b>GLM-5.3<br>已出 6 版</span>
+      <div class="who">Hermix · GLM-5.3</div>
+      <div class="txt"><div class="tool"><span class="fn">image_gen</span><span class="ar">1920×1080 · 文房留白 · seed 184203</span><span class="st">✓ 4.6s</span></div>
+      <p>出了 6 版，副屏画廊里点着看。当前选的是 v4——标题字号偏小但留白最舒服。</p>
+      <div class="qcard"><b>要你定：</b>v4 保持这个构图，我再把标题调大两号出一版？</div></div></div>`,
+});
+
+function setDomain(d, skipStory) {
+  domain = d;
+  $("belt-dev").style.display = d === "dev" ? "contents" : "none";
+  $("belt-ofc").style.display = d === "ofc" ? "contents" : "none";
+  $("seg-dev").classList.toggle("on", d === "dev");
+  $("seg-ofc").classList.toggle("on", d === "ofc");
+  $("m-dev").classList.toggle("on", d === "dev");
+  $("m-ofc").classList.toggle("on", d === "ofc");
+  if (!skipStory) $("story").innerHTML = STORY[d];
+}
+
+function focusTask(id) {
+  const t = TASKS[id];
+  if (!t) { return; }
+  if (cur) drafts[cur] = cmd.value;          /* 切走前保存草稿 */
+  cur = id; newBuf = "";
+  win.style.setProperty("--tc", t.color);
+  $("target-name").textContent = t.name;
+  $("crumb-task").textContent = t.name;
+  $("crumb-state").textContent = t.state + (id === "t1" ? " · 14 分钟" : "");
+  $("crumb-dot").style.background = t.color;
+  $("do-name").textContent = t.name;
+  $("resume-txt").textContent = t.resume;
+  cmd.value = drafts[id] || "";               /* 切回来还原草稿 */
+  $("draft-hint").style.display = drafts[id] ? "" : "none";
+  cmd.placeholder = t.stateShort === "执行" ? "该任务执行中，指令将排队第 2 位…" : "下指令…（@ 切任务 · ⌘↩ 投送 · ↑ 历史）";
+  $("approve-bar").style.display = t.stateShort === "待批" ? "flex" : "none";
+  document.querySelectorAll(".qp").forEach(b => b.classList.toggle("on", b.dataset.goto === id));
+  document.querySelectorAll(".tmi").forEach(b => b.classList.toggle("on", b.dataset.goto === id));
+  document.querySelectorAll(".frow").forEach(b => b.classList.toggle("on", b.dataset.goto === id));
+  /* 领域随任务切换，叙事流同步重绘（此前传了 skipStory，导致切到办公任务后
+     工具带变了、对话流还是开发任务的旧内容） */
+  if (t.domain !== domain) setDomain(t.domain);
+  /* 对话流：形态决定这一轮对话长什么样（写表格 / 批量 / 出图 过程各不相同），
+     但三种形态都是对话驱动的——这就是为什么副屏不能替代对话流 */
+  $("story").innerHTML = STORY[FORMS[id]] || STORY[t.domain];
+  renderSide(FORMS[id] || "diff", id);   /* 副屏随形态重绘 */
+}
+
+/* ═══ 副屏：形态决定内容 ═══ 对话流恒定在中间主列，不受影响 ═══ */
+let sideTab = "art";
+const ART_TITLE = { diff: "差异", word: "文档", table: "表格", batch: "队列", gallery: "画廊" };
+const ART = {
+  /* 开发 → 差异 + 终端 */
+  diff: `<div class="dt">改动 · tokens.css</div>
+    <div class="sp-diff"><div class="sp-f">src/styles/tokens.css</div>
+      <div class="hk">@@ -212,7 +212,8 @@</div>
+      <div class="de">-  --color-bg-app: #ffffff;</div>
+      <div class="ad">+  --color-bg-app: #eef1ee;</div>
+      <div>   --color-bg-primary: #ffffff;</div>
+      <div class="ad">+  --color-bg-card: #f5f7f5;</div></div>
+    <div class="dt">终端</div>
+    <div class="sp-term"><span class="p">❯</span> npm run check:tokens<br><span class="dim">[contract] dark: 102/102 ✓</span><br><span class="dim">[palette-debt] 无未登记色阶类 ✓</span><br>Finished in 3.4s</div>`,
+  /* 写文档 → 大纲 + 批注 */
+  word: `<div class="dt">文档大纲 · 排期表 v3</div>
+    <div class="sp-ol"><div class="oh">三方登录排期（一页纸）</div>
+      <div class="oi on">一、关键路径<span class="pg">p1</span></div>
+      <div class="oi lv2">回调改造 · 3d<span class="pg">p1</span></div>
+      <div class="oi lv2">联调 · 2d<span class="pg">p2</span></div>
+      <div class="oi">二、风险<span class="pg">p2</span></div>
+      <div class="oi lv2">供应商字段名不一致<span class="pg">p2</span></div></div>
+    <div class="dt">批注 · 1</div>
+    <div class="comment"><span class="av">你</span><span>字段名再确认一次，文档里有两版。</span></div>`,
+  /* 表格 → 预览（可最大化，此时工具带交表格工具） */
+  table: `<div class="dt">表格 · Q3-合并.xlsx</div>
+    <div class="sp-tb"><table>
+      <tr><th>部门</th><th>Q2</th><th class="num">Q3</th><th class="num">环比</th></tr>
+      <tr class="sel"><td>华东</td><td>1,204</td><td class="num">1,588</td><td class="num">+31.9%</td></tr>
+      <tr><td>华南</td><td>980</td><td class="num">1,102</td><td class="num">+12.4%</td></tr>
+      <tr><td>华北</td><td>1,431</td><td class="num">1,377</td><td class="num">-3.8%</td></tr>
+      <tr><td>合计</td><td>3,615</td><td class="num">4,067</td><td class="num">+12.5%</td></tr>
+    </table></div>
+    <div class="dt">提示</div>
+    <div class="card" style="background:var(--card);border-radius:10px;padding:10px 12px;font-size:12.5px;color:var(--ink2)">G 列合计目前是手填值，已标记 3 处，可一键改为跨表引用。</div>`,
+  /* 批量转换 → 队列进度（对话照常推进，进度在副屏） */
+  batch: `<div class="dt">批量转换 · 32 项</div>
+    <div class="sp-sum"><div class="k"><b>27</b><span>已完成</span></div>
+      <div class="k"><b>3</b><span>进行中</span></div>
+      <div class="k"><b>2</b><span>失败</span></div></div>
+    <div class="qrow"><i style="background:var(--err)"></i><span class="qn">scan-014.pdf</span><button>重试</button></div>
+    <div class="qrow"><i style="background:var(--err)"></i><span class="qn">scan-027.pdf</span><button>重试</button></div>
+    <div class="qrow"><i style="background:var(--t1)"></i><span class="qn">contract-08.pdf</span><span style="font-size:11px;color:var(--ink3)">转换中</span></div>
+    <div class="qrow"><i style="background:var(--ok)"></i><span class="qn">report-01.pdf</span><span style="font-size:11px;color:var(--ink3)">✓ 1.2s</span></div>
+    <div class="qrow"><i style="background:var(--ok)"></i><span class="qn">report-02.pdf</span><span style="font-size:11px;color:var(--ink3)">✓ 0.9s</span></div>`,
+  /* 图片 → 画廊 + 参数 */
+  gallery: `<div class="dt">版本 · 6</div>
+    <div class="sp-gal">
+      <div class="g">v1</div><div class="g">v2</div><div class="g">v3</div>
+      <div class="g on">v4</div><div class="g">v5</div><div class="g">v6</div></div>
+    <div class="dt">参数</div>
+    <div class="sp-param"><span>尺寸</span><b>1920×1080</b>
+      <span>主色</span><b>#1e4a3c</b>
+      <span>风格</span><b>文房 · 留白</b>
+      <span>种子</span><b>184203</b></div>`,
+};
+function renderSide(form, id) {
+  const t = TASKS[id];
+  if (sideTab === "ctx") { $("dos").innerHTML = ctxHtml(t); return; }
+  if (sideTab === "sub") {
+    $("dos").innerHTML = `<div class="dt">子代理 · 2 运行中</div>
+      <div class="srow"><i style="background:${t.color}"></i><span style="flex:1">素材抓取 · 第 4 站</span><span style="font-family:var(--mono);font-size:11px;color:var(--ink3)">超时重试</span></div>
+      <div class="srow"><i style="background:${t.color}"></i><span style="flex:1">反模式扫描</span><span style="font-family:var(--mono);font-size:11px;color:var(--ink3)">4/9 轮</span></div>`;
+    return;
+  }
+  $("art-name").textContent = ART_TITLE[form] || "产物";
+  $("dos").innerHTML = ART[form] || "";
+}
+function ctxHtml(t) {
+  let h = `<div class="dt">任务状态</div><div class="dcard"><div class="big">${t.name} · ${t.state}</div>
+    <div class="sub">${t.domain === "dev" ? "开发域" : "办公域"} · 专家 Hermix</div>
+    <div class="meter"><i style="width:78%"></i></div>
+    <div class="kv" style="margin-top:8px"><span>上下文占用</span><b>92% · 128k</b></div></div>`;
+  h += `<div class="dt">上下文文件 · ${t.files.length}</div>`;
+  for (const [f, d] of t.files) h += `<div class="frow"><span class="fn">${f}</span><span class="dl ${d.startsWith("+") ? "up" : ""}">${d}</span></div>`;
+  h += `<div class="dt">成本 · 本任务</div>`;
+  for (const [k, v] of t.cost) h += `<div class="kv"><span>${k}</span><b>${v}</b></div>`;
+  return h;
+}
+document.querySelectorAll(".stab").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".stab").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); sideTab = b.dataset.tab; renderSide(FORMS[cur] || "diff", cur);
+});
+
+/* 归属切换：目标环 / 队列条 / @ 补全 / 通知 */
+document.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => {
+  const id = b.dataset.goto;
+  if (id === "new") { focusTask("t1"); newBuf = cmd.value = ""; $("target-name").textContent = "新任务"; return; }
+  focusTask(id);
+  $("target").classList.remove("open"); $("mention").classList.remove("open");
+  $("notif").style.display = "none";
+  cmd.focus();
+});
+$("target").onclick = e => { e.stopPropagation(); $("target").classList.toggle("open"); };
+document.onclick = () => { $("target").classList.remove("open"); $("mention").classList.remove("open"); $("notif").style.display = "none"; };
+$("bell").onclick = e => { e.stopPropagation(); $("notif").style.display = $("notif").style.display === "none" ? "block" : "none"; };
+$("notif").onclick = e => e.stopPropagation();
+
+/* @ 补全 */
+cmd.oninput = () => { $("mention").classList.toggle("open", cmd.value.startsWith("@")); };
+
+/* 投送回执 */
+$("send").onclick = () => {
+  const t = TASKS[cur];
+  const queued = t.stateShort === "执行" ? "（该任务执行中，已排队第 2 位）" : "";
+  const to = $("target-name").textContent;
+  const toast = $("toast");
+  toast.className = "toast on";
+  toast.style.setProperty("--tc2", t.color);
+  $("toast-txt").textContent = `已投送 → ${to} ${queued}`;
+  drafts[cur] = "";
+  cmd.value = ""; $("draft-hint").style.display = "none";
+  clearTimeout(window._tt); window._tt = setTimeout(() => toast.classList.remove("on"), 2600);
+};
+cmd.onkeydown = e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("send").click(); };
+
+/* 演示控制 */
+$("seg-dev").onclick = () => setDomain("dev");
+$("seg-ofc").onclick = () => setDomain("ofc");
+$("m-dev").onclick = () => setDomain("dev");
+$("m-ofc").onclick = () => setDomain("ofc");
+function togglePal() { $("palette").classList.toggle("on"); }
+$("b-pal").onclick = togglePal; $("b-pal2").onclick = togglePal;
+$("palette").onclick = e => { if (e.target === $("palette")) togglePal(); };
+document.onkeydown = e => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); togglePal(); } };
+$("b-narrow").onclick = e => { win.classList.toggle("narrow"); e.target.classList.toggle("on"); };
+$("b-notes").onclick = e => { document.body.classList.toggle("notes"); e.target.classList.toggle("on"); };
+
+/* 初始化必须渲染叙事流：此前这里传了 skipStory=true，首屏对话区是空白的 */
+setDomain("dev");
+focusTask("t1");
+</script>
+</body>
+</html>

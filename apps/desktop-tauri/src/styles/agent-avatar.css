@@ -1,0 +1,64 @@
+/* ════════════════════════════════════════════════════════════════════
+   agent-avatar.css — 专家头像（首汉字 / 首字母色块）
+   ──────────────────────────────────────────────────────────────────
+   2026-10-23 建立，取代 18 个 emoji 的头像选择器。
+
+   尺寸 / 底色来自共享的 .cat-icon 类族（--color-tone-*），
+   这里只补三件 cat-icon 不负责的事：
+     1. 圆形（cat-icon 是圆角方块，用于类目图标）；
+     2. 字号 —— 一个字形要占满 36px 的块，视觉上才不显空；
+     3. 字重 600 + 1 的行高，让单字在块里居中而不是偏上。
+
+   ## 为什么头像**不**改成实心色块（2026-10-23）
+
+   列表行图标已经全面改成「实心身份色底 + 反白字形」（.cat-tile），
+   头像仍然是「中性底 + 彩色字」，因为**字母是文字，不是图形**：
+   WCAG 1.4.3 对文字要求 ≥4.5:1，而 8 档身份色里没有任何单一前景色
+   能同时达标 —— 白字在 amber/orange 上只有 3.49/3.17:1，深墨在
+   slate/violet/cyan 上只有 3.8/3.8/3.8:1。实心底 + 任意单色前景，
+   必然有一半色相不达标。
+
+   改用「把色相往墨的方向压」：色相不变，亮度向主题墨色移动
+   （浅色主题压暗、深色主题提亮 —— 也就是永远远离背景），
+   8 档全部 ≥4.5:1（实测 4.84~6.23:1），比原来的彩字（2.71~4.12:1）
+   明显更实。
+   ════════════════════════════════════════════════════════════════════ */
+
+.agent-avatar {
+  border-radius: var(--radius-full);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  /* 单字在 flex 居中下仍会因字体上沿留白显得偏上，用 1px 视觉修正 */
+  padding-top: 1px;
+  user-select: none;
+}
+
+/* 字形前景：色相 70% + 主题墨 30% 现算 —— 保持色相、只压亮度，
+   永远远离所在底色（浅色主题变深、深色主题变浅）。
+   走 color-mix 而不是新增 8 档"文字安全色"令牌：新增令牌要每套主题各
+   维护 8 条（tokens.css 明确反对"每套主题多维护 8 条"），而这里要的是
+   一个**跟随主题方向**的压暗/提亮，color-mix 一次算完。 */
+.agent-avatar.cat-icon {
+  color: color-mix(in srgb, var(--cat-tone) 70%, var(--color-text-primary));
+}
+
+/* tone 注入：AgentAvatar 的 className 是 `cat-icon cat-icon--<size> cat-icon--<tone>`
+   两段同前缀 —— size 档管字号，这 8 条只负责把 tone 令牌交给 --cat-tone。
+   此前 --cat-tone 从未被定义，color-mix 整条失效、字形前景回退继承色。 */
+.agent-avatar.cat-icon--slate  { --cat-tone: var(--color-tone-slate); }
+.agent-avatar.cat-icon--blue   { --cat-tone: var(--color-tone-blue); }
+.agent-avatar.cat-icon--cyan   { --cat-tone: var(--color-tone-cyan); }
+.agent-avatar.cat-icon--green  { --cat-tone: var(--color-tone-green); }
+.agent-avatar.cat-icon--amber  { --cat-tone: var(--color-tone-amber); }
+.agent-avatar.cat-icon--orange { --cat-tone: var(--color-tone-orange); }
+.agent-avatar.cat-icon--rose   { --cat-tone: var(--color-tone-rose); }
+.agent-avatar.cat-icon--violet { --cat-tone: var(--color-tone-violet); }
+
+/* 字号按块尺寸分档，比例都在 42~46%（单字最稳的占比）：
+     28px 块 → 13px · 36px 块 → 16px · 48px 块 → 20px
+   全部走 --text-* 七档令牌，不开新档位（否则 check-theme-tokens 的
+   css-type-debt 会持续报警，且"一屏内字号 ≤3 档"的纪律会失效）。 */
+.agent-avatar.cat-icon--sm { font-size: var(--text-ui); }
+.agent-avatar.cat-icon--md { font-size: var(--text-title); }
+.agent-avatar.cat-icon--lg { font-size: var(--text-display); }

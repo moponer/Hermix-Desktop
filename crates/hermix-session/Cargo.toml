@@ -1,0 +1,20 @@
+[package]
+name = "hermix-session"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Session change line and commit protocol: committed state is the only observable state."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+hermix-store = { workspace = true }
+rusqlite = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

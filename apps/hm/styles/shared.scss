@@ -1,0 +1,65 @@
+/* 跨页复用的小原件 —— 只在这里定义一次。
+ *
+ * 为什么不放 uni.scss：uni.scss 经 additionalData 注入**每个组件**的 scoped
+ * 样式，规则放那里会被逐组件复制（体积 × 组件数）。这里只在 App.vue 引入一次。
+ *
+ * 只收「形态一致、语义单一」的原件；页面专属的边距 / 宽度 / 排列留在各自
+ * <style>。配色一律靠修饰类，不做嵌套选择器，避免和 scoped 样式打架。
+ */
+
+/* 提示条：默认中性，warn / err 覆色。 */
+.hm-notice {
+  border-radius: 8rpx;
+  font-size: $fs-mini;
+  line-height: 1.5;
+  color: $fg2;
+  background: $card;
+  box-sizing: border-box;
+}
+.hm-notice.warn {
+  background: $warn-bg;
+  color: $warn;
+}
+.hm-notice.err {
+  background: $err-bg;
+  color: $err;
+}
+
+/* 胶囊按钮：形态统一，配色靠修饰类。 */
+.hm-pill {
+  height: $tap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: $r-pill;
+  font-size: $fs-sub;
+}
+.hm-pill:active {
+  opacity: 0.8;
+}
+.hm-pill.solid {
+  background: $raised;
+  color: $fg;
+}
+.hm-pill.soft {
+  background: $raised;
+  color: $fg2;
+}
+.hm-pill.ghost {
+  background: $card;
+  color: $fg2;
+}
+.hm-pill.pri {
+  background: $accent;
+  color: $on-accent;
+}
+.hm-pill.danger {
+  background: $err-bg;
+  color: $err;
+}
+
+/* 卡片壳：底色 + 圆角，内边距由页面决定。 */
+.hm-card {
+  background: $card;
+  border-radius: $r-card;
+}

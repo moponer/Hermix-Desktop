@@ -1,0 +1,97 @@
+/* ════════════════════════════════════════════════════════════════════
+   globals.css — Entry point. Imports modular stylesheets.
+   ──────────────────────────────────────────────────────────────────
+   To re-skin the entire app, edit tokens.css.
+   To add a new component, add a class to the appropriate components-*.css file.
+   To add a utility, add it to utilities.css.
+   ════════════════════════════════════════════════════════════════════ */
+
+@import "tailwindcss";
+@import "./tokens.css";
+@import "./base.css";
+@import "./components-layout.css";
+@import "./components-controls.css";
+@import "./components-prose.css";
+@import "./components-tool-card.css";
+@import "./process-line.css";
+@import "./components-helpers.css";
+@import "./components-twin.css";
+@import "./components-mission.css";
+@import "./inline-thinking-dot.css";
+@import "./code-view.css";
+@import "@hermix/preview/styles/preview-doc.css";
+/* 分类彩色图标住在共享包：查看器是独立进程且没有 Tailwind，
+   两个 app 共用一份才不会分叉。 */
+@import "@hermix/preview/styles/icon-tone.css";
+@import "./flat-ui.css";
+@import "./agent-avatar.css";
+@import "./motion.css";
+@import "./utilities.css";
+/* 主题级排版层：只在 data-theme 命中时生效（当前只有 notion）。 */
+@import "./notion-prose.css";
+@import "./notion-app.css";
+/* 欢迎页「夜航」面板（A · 夜航方向）：局部暗底，颜色自成一套 --night-* 变量。 */
+@import "./welcome-night.css";
+/* Composer 的夜航态：工具行移到输入面外面 + 局部重定义主题令牌。 */
+
+/* Tailwind dark: 变体已废除 —— .dark 类不再挂载（useTheme 只设 data-theme），
+   语义色一律走 token，token 值随 data-theme 自动切换。残留 dark: 前缀类均为死类。 */
+
+/* Tailwind v4 不把 `--duration-*` 当作 duration 工具的命名空间（只认
+   `--default-transition-duration` 单一值），因此三档时长令牌无法自动生成
+   `duration-fast/base/slow` 工具类 —— 这正是它们长期 0 引用的原因。
+   这里用 @utility 显式注册，使动效档位真正可消费。 */
+@utility duration-fast { transition-duration: var(--duration-fast); }
+@utility duration-base { transition-duration: var(--duration-base); }
+@utility duration-slow { transition-duration: var(--duration-slow); }
+
+/* 压缩进度条不确定态：横扫循环动画（CompactionStatusBanner 用）。
+   LLM 摘要生成拿不到真实百分比，用不定进度条 + 已等待计时表达进行中。 */
+@keyframes compaction-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+/* 图标 3 档 —— 等宽 + 等高，与 Lucide size={N} 同语义。
+   icon-sm=12 / icon-md=14 / icon-lg=16；旧 size={11/12/13/14/15/16/18}
+   一律收敛到这 3 档（覆盖 ~87%）。特殊尺寸（22/24/28/32/36/48/72）保留
+   字面值 —— 品牌/Logo 等一次性资产不进档位。 */
+@utility icon-xs {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+}
+@utility icon-sm {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+@utility icon-md {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+}
+@utility icon-lg {
+  width: var(--icon-size-lg);
+  height: var(--icon-size-lg);
+}
+
+/* 宽度 4 档 —— 语义化"窄/默认/宽/全"。w-full 由 Tailwind 自带，本节只
+   注册其它 3 档。narrow=240（表单/侧栏列），base=420（卡片/弹窗主体），
+   wide=720（大面板/详情）。Tailwind 原生 w-1..96 数值档与本套语义档并行
+   共存 —— 字面值适用于临时/独特宽度，语义档适用于反复出现的 UI 形态。 */
+@utility w-narrow { width: var(--width-narrow); }
+@utility w-base { width: var(--width-base); }
+@utility w-wide { width: var(--width-wide); }
+
+/* max-w 语义档 —— 与 w- 三档同语义，覆盖 `max-w-[XXXpx]` 字面值场景
+   （弹窗主体宽度、表单列宽、聊天流列宽等）。w-full 由 Tailwind 自带，
+   对应 max-w-full 也已存在，无需重复声明。 */
+@utility max-w-narrow { max-width: var(--width-narrow); }
+@utility max-w-base { max-width: var(--width-base); }
+@utility max-w-wide { max-width: var(--width-wide); }
+/* 页面内容宽度两档（R1-4）：常规 672 / 宽页 896 */
+@utility max-w-page { max-width: var(--width-page); }
+@utility max-w-wide-page { max-width: var(--width-wide-page); }
+/* 起排线（R1-1）：助手消息续条缩进 */
+@utility pl-thread { padding-left: var(--indent-thread); }
+/* max-w-reading = 对话正文行长档（780px / 14px 正文约 52 汉字）。
+   改行宽只改 tokens.css 的 --width-reading，不再在组件里写字面值。 */
+@utility max-w-reading { max-width: var(--width-reading); }

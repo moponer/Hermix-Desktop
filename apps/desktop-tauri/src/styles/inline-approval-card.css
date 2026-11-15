@@ -1,0 +1,765 @@
+/* ════════════════════════════════════════════════════════════════════
+   inline-approval-card.css — InlineApprovalCard + InlineClarifyCard
+   ──────────────────────────────────────────────────────────────────
+   本文件补全 InlineApprovalCard.tsx 引用但未在任何项目 CSS 中定义的
+   类名 (.approval-avatar / .approval-pills / .approval-line2 /
+   .approval-tool-pill / .approval-pill-pending|dangerous|caution|safe 等):
+   这些类名一旦缺失, 组件裸奔, 浏览器默认样式接管, 按钮退化成 12px 灰色纯文字;
+   即便命中, 旧 .approval-btn 的 `padding: 3px 12px; font-size: var(--text-tiny);
+   background: transparent` 也无视觉重量。
+
+   做法:
+     · 补全所有缺失的类
+     · 按钮高度从 ~22px 拉到 32px、字号 12.5px、加粗
+     · 主按钮(允许/发送)用 accent 实色,反按钮(拒绝)用 error-soft
+       浅红底 + 红字,两者对比 + 体积都拉满,请求按钮一眼可见
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── §1.5. 整张卡折叠动画（resolve 后立刻收回，避免"1 秒空白"） ──
+   父层不主动 unmount 卡片（show 队列按 outcome 决定），而服务端
+   下一条消息从 WS 回来前有几 ms~几 s 的延迟。如果卡片一直以"已允许 +
+   操作已继续执行"的最小残留态挂着，用户感受是 resolve 之后 LLM 在
+   装死。h-leaving 让卡片在 240ms 内整体 max-height → 0、opacity → 0，
+   下条消息到达时直接占位，看起来像无缝衔接。prefers-reduced-motion
+   走 media query 兜底立即消失。 */
+.h-leaving {
+  animation: approval-card-leave 240ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  overflow: hidden;
+  pointer-events: none;
+}
+@keyframes approval-card-leave {
+  from { opacity: 1; max-height: 200px; }
+  to   { opacity: 0; max-height: 0; margin: 0; padding: 0; border: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .h-leaving { animation: none; opacity: 0; max-height: 0; }
+}
+
+/* ── §2. Pill row (line 1: tool pill + risk badge + status pill) ── */
+.approval-pills {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-height: 18px;
+}
+
+/* Tool name pill — monospace, neutral gray */
+.approval-tool-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px 2px 6px;
+  border-radius: 6px;
+  font-size: var(--text-tiny);
+  font-weight: 500;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  max-width: 100%;
+  overflow: hidden;
+  line-height: 1.3;
+}
+.approval-tool-pill .font-mono {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: var(--text-micro);
+}
+
+/* Generic pill (status indicator at right) */
+.approval-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: var(--text-tiny);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.approval-pill svg { flex-shrink: 0; }
+
+.approval-pill-approved {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+.approval-pill-denied {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+}
+.approval-pill-expired {
+  color: var(--color-text-muted);
+  background: var(--color-bg-tertiary);
+}
+
+/* Risk-level badge (高危/中危/低危) */
+.approval-pill-dangerous {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+}
+.approval-pill-caution {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+}
+.approval-pill-safe {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+
+/* ── §3. Line 2 — args text + action buttons ─────────────────────── */
+.approval-line2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.approval-args-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-primary);
+  padding: 3px 7px;
+  border-radius: var(--radius-md, 6px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  line-height: 1.4;
+}
+
+.approval-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+  max-height: 60px;
+  opacity: 1;
+  overflow: hidden;
+  transition:
+    max-height 280ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 200ms ease,
+    margin 280ms ease;
+}
+.approval-actions.is-hidden {
+  max-height: 0;
+  opacity: 0;
+  pointer-events: none;
+  margin-left: 0;
+}
+
+.approval-resolved-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-tiny);
+  line-height: 1.4;
+  color: var(--color-text-muted);
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+  padding-top: 0;
+  overflow: hidden;
+  transition:
+    max-height 280ms cubic-bezier(0.4, 0, 0.2, 1) 60ms,
+    opacity 180ms ease 60ms,
+    margin-top 280ms ease 60ms,
+    padding-top 280ms ease 60ms;
+}
+/* 分割线规则（2026-10-11）：虚线"缝线"取消，transition 也不再动
+   border-top-width——那正是 impeccable layout-transition 反模式。 */
+.approval-resolved-footer:not(.is-hidden) {
+  margin-top: 6px;
+  padding-top: 6px;
+  max-height: 120px;
+  opacity: 1;
+}
+
+/* Status pill (已允许 / 已拒绝 / 已超时) fade-in
+   when the card flips to resolved — gives a tiny "settled" beat
+   so the user can register the state change without a flash. */
+@keyframes approval-pill-enter {
+  from { opacity: 0; transform: scale(0.85) translateY(-2px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.approval-pill-approved,
+.approval-pill-denied,
+.approval-pill-expired {
+  animation: approval-pill-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .approval-actions,
+  .approval-resolved-footer,
+  .approval-pill-approved,
+  .approval-pill-denied,
+  .approval-pill-expired {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Status icon chip inside the resolved footer — colored square that
+   matches the decision so the user can scan the footer state without
+   reading the text. */
+.approval-resolved-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.approval-resolved-icon.icon-ok {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+.approval-resolved-icon.icon-deny {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+}
+.approval-resolved-icon.icon-expired {
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-text-muted) 10%, transparent);
+}
+
+/* ── §3b. Resolved-card refinements ─────────
+   当卡片已被决定 (approved/denied/expired), 它不再是待办项 —
+   视觉权重应"沉下去",把焦点还给当前正在进行的对话。设计意图:
+
+     · 整卡 opacity 0.93 — 让已完成的卡片在消息流里退后一步
+     · 命令文本 wrap 显示 (pre-wrap + break-word) — 完整可读,
+       审计/回顾价值优先于紧凑预览
+     · 字号略增 0.5px,颜色加深到 text-secondary — 既然已经决定,
+       不再是"瞥一眼"的预览,而是"以后回来查"的记录
+
+   Pending 卡片保留紧凑截断预览 — 决策阶段只需快速判断该不该允许,
+   完整命令细节等到批准后再展开。 */
+.msg-card.approval-card.is-resolved {
+  opacity: 0.93;
+}
+
+.approval-args-text.is-resolved {
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-size: var(--text-tiny);
+  line-height: 1.55;
+  padding: 6px 10px;
+  color: var(--color-text-secondary);
+}
+
+/* ── §3a. Action buttons — BIG & high-contrast ─────────────────────
+   按钮绝不能做成透明 / 11.5px 灰字的幽灵样式 (否则鼠标不在上面时
+   完全看不见)。权限确认是带边界感的二元操作——允许或拒绝,必须给到
+   两个同样大、同样亮的按钮,让红色按钮本身作为视觉警示,而非靠 hover
+   才看到。
+
+   设计:
+   · 高度 32px,字号 12.5px-13px,字重 600
+   · 主按钮(.approval-btn-approve): accent 实色背景,前景用
+     --color-accent-on-text(浅色),对深色按钮 = 白字,清晰
+   · 拒绝按钮(.approval-btn-danger): 浅红底(error-soft)+ 红字,
+     hover 加深,但默认已够醒目
+   · 二级按钮(.approval-btn-secondary): 用于 Clarify 卡片选项,
+     灰底 + 边,hover 才填深
+   · 全部带 :active scale 反馈,让按下时手感到位 */
+.approval-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  min-width: 66px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: var(--text-meta);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.005em;
+  font-family: inherit;
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background var(--duration-fast, 120ms) ease,
+    border-color var(--duration-fast, 120ms) ease,
+    color var(--duration-fast, 120ms) ease,
+    transform var(--duration-fast, 120ms) ease,
+    box-shadow var(--duration-fast, 120ms) ease;
+}
+.approval-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.approval-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.approval-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Primary action — solid accent fill, on-accent text */
+.approval-btn-approve {
+  background: var(--color-btn-primary-bg);
+  border-color: var(--color-btn-primary-bg);
+  color: var(--color-btn-primary-text);
+  box-shadow: var(--shadow-card),
+              0 0 0 0 color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+.approval-btn-approve:hover:not(:disabled) {
+  background: var(--color-btn-primary-hover);
+  border-color: var(--color-btn-primary-hover);
+  box-shadow: var(--shadow-card),
+              0 0 0 4px color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+/* Danger action — soft red wash but always present, even pre-hover */
+.approval-btn-danger {
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-error) 26%, transparent);
+  color: var(--color-error);
+}
+.approval-btn-danger:hover:not(:disabled) {
+  background: var(--color-error);
+  border-color: var(--color-error);
+  color: var(--color-on-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 16%, transparent);
+}
+
+/* Secondary — outlined, used by Clarify choice buttons */
+.approval-btn-secondary {
+  background: var(--color-bg-primary);
+  border-color: var(--color-border-primary);
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+.approval-btn-secondary:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-secondary);
+}
+
+.msg-card.approval-card {
+  /* 内嵌审批卡同样收窄到 520px，与 MessageBubble 版审批卡对齐。 */
+  max-width: min(460px, 100%);
+}
+
+/* ── §7. Denial banner (A+C product fix) ───────────────────────────
+   top-center banner shown when a tool call is *denied*
+   (user拒绝 / 超时 / 连接中断). Mirrors the agent's injected
+   "tell the user" system note with a visible cue. Uses the
+   warning/error tokens only — no blue/indigo/violet per the
+   project's colour rule. */
+.denial-banner {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-error) 45%, transparent);
+  background: color-mix(in srgb, var(--color-error) 10%, var(--color-bg-elevated));
+  color: var(--color-text-primary);
+  font-size: var(--text-ui);
+  line-height: 1.45;
+  box-shadow: var(--shadow-pop);
+  animation: denial-banner-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.denial-banner__icon {
+  flex: 0 0 auto;
+  font-size: var(--text-body);
+  color: var(--color-error);
+}
+.denial-banner__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.denial-banner__title {
+  font-weight: 600;
+}
+.denial-banner__title code {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  padding: 0 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+.denial-banner__sub {
+  margin-top: 2px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-meta);
+}
+.denial-banner__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-faint);
+  cursor: pointer;
+  transition: background var(--duration-fast, 120ms) ease, color var(--duration-fast, 120ms) ease;
+}
+.denial-banner__close:hover {
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+  color: var(--color-error);
+}
+@keyframes denial-banner-enter {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .denial-banner { animation: none; }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   Approval Drawer — 输入框上方的"待决定"抽屉
+   ──────────────────────────────────────────────────────────────────
+   审批从消息流里搬到这里：它是「现在需要你做的决定」，不是历史记录。
+   已决定的历史卡片仍走上面的 .approval-card 内联渲染。
+   定位：宿主容器（Composer 的外层）加 position:relative，抽屉
+   absolute bottom:100% 贴着输入框上缘弹出。宽度跟随 composer 容器
+   （max-w-reading 档），不随消息列宽变化。
+   ══════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════════
+   审批抽屉（2026-09-30 ZCode 式重做）
+   从输入框顶部弹出（bottom: 100% 锚定 + slide-up 入场）。
+   信息层级：「需要权限」标题 + 风险 chip + 工具身份 → 等待确认状态行 →
+   命令原样等宽框（信任核心）→ 5 选项（各带作用域说明）→ 反馈输入 →
+   键盘提示行。
+   视觉：纸面 + 细边 + pop 阴影 + radius-xl。
+   ════════════════════════════════════════════════════════════════════ */
+.approval-drawer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 30;
+  background: var(--color-bg-primary);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-pop);
+  padding: 12px 14px;
+  animation: approval-drawer-in 220ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+}
+@keyframes approval-drawer-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .approval-drawer { animation: none; }
+}
+
+/* ── 头：标题 + 风险 chip + 工具 + 队列计数 ── */
+.approval-drawer__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.approval-drawer__title {
+  font-size: var(--text-ui);
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--color-text-primary);
+  flex: 0 0 auto;
+}
+.approval-drawer__risk {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: var(--text-tiny);
+  font-weight: var(--font-weight-medium, 500);
+  flex: 0 0 auto;
+}
+.approval-drawer__tool {
+  font-size: var(--text-ui);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.approval-drawer__count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: var(--text-tiny);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-faint);
+}
+
+/* ── 状态行：⏳ 等待确认 + 后端 reason（有才显示） ── */
+.approval-drawer__statusline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 6px;
+}
+.approval-drawer__status {
+  flex: 0 0 auto;
+  font-size: var(--text-tiny);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text-tertiary);
+}
+.approval-drawer__desc {
+  font-size: var(--text-ui);
+  line-height: var(--leading-ui, 1.5);
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-drawer__body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+/* ── 命令原样框：即将执行的内容逐字展示（信任核心） ── */
+.approval-drawer__cmd {
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-inset);
+  overflow: hidden;
+}
+.approval-drawer__cmd-label {
+  display: block;
+  padding: 5px 9px 0;
+  font-size: var(--text-micro);
+  font-weight: var(--font-weight-medium, 500);
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
+}
+.approval-drawer__cmd-text {
+  padding: 4px 9px 8px;
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  line-height: 1.55;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+  overflow: auto;
+}
+
+/* 参数详情：原生 details 折叠。命令原样框已给"人话层"，
+   JSON 全文只进这个折叠块（一张卡里只出现一次）。 */
+.approval-drawer__args {
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-secondary);
+  overflow: hidden;
+}
+.approval-drawer__args-summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 9px;
+  font-size: var(--text-tiny);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  user-select: none;
+}
+.approval-drawer__args-summary::-webkit-details-marker { display: none; }
+.approval-drawer__args-summary::before {
+  content: "▸";
+  font-size: 9px;
+  transition: transform var(--duration-fast) ease;
+}
+.approval-drawer__args[open] .approval-drawer__args-summary::before {
+  transform: rotate(90deg);
+}
+.approval-drawer__args-summary:hover { color: var(--color-text-secondary); }
+.approval-drawer__args-pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.approval-drawer__diff-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-tiny);
+  cursor: pointer;
+}
+.approval-drawer__diff-toggle:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.approval-drawer__diff-pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  max-height: 200px;
+  overflow: auto;
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+  white-space: pre;
+}
+
+/* 批量审批：最老的前 3 项清单 */
+.approval-drawer__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.approval-drawer__items li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--text-ui);
+  color: var(--color-text-primary);
+}
+.approval-drawer__item-tool {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  font-weight: var(--font-weight-medium, 500);
+}
+.approval-drawer__item-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+.approval-drawer__more { color: var(--color-text-tertiary); }
+
+/* ── 选项列表：数字键 + 标签 + 作用域说明 ── */
+.approval-drawer__options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.approval-drawer__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--radius-md, 6px);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  transition: background var(--duration-fast) ease;
+}
+button.approval-drawer__option:hover,
+.approval-drawer__option--feedback:hover { background: var(--color-bg-hover); }
+button.approval-drawer__option:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+.approval-drawer__option-key {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  line-height: 1.4;
+  min-width: 18px;
+  text-align: center;
+  padding: 1px 3px;
+  border-radius: 4px;
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-secondary);
+}
+.approval-drawer__option-label {
+  flex: 0 0 auto;
+  font-size: var(--text-ui);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text-primary);
+}
+.approval-drawer__option-desc {
+  min-width: 0;
+  font-size: var(--text-tiny);
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.approval-drawer__option--primary .approval-drawer__option-label {
+  color: var(--color-accent);
+}
+.approval-drawer__option--danger .approval-drawer__option-label {
+  color: var(--color-error, var(--color-text-secondary));
+}
+
+/* 第 5 项：反馈输入行（"告诉模型接下来怎么做"） */
+.approval-drawer__option--feedback {
+  cursor: text;
+}
+.approval-drawer__feedback-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: var(--text-ui);
+  font-family: inherit;
+}
+.approval-drawer__feedback-input::placeholder { color: var(--color-text-faint); }
+.approval-drawer__feedback-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+.approval-drawer__feedback-send {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-accent);
+  color: var(--color-accent-on-text);
+  cursor: pointer;
+}
+.approval-drawer__feedback-send:disabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-faint);
+  cursor: default;
+}
+
+/* ── 脚：键盘导航提示 ── */
+.approval-drawer__hint {
+  margin-top: 8px;
+  padding-top: 7px;
+  font-size: var(--text-micro);
+  color: var(--color-text-faint);
+}

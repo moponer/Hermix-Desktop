@@ -1,0 +1,19 @@
+{
+  "name": "hermix-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hermix M 的自建中转。只路由不执行：按 token 哈希把帧转到对应的电脑，不解析内层帧，不校验 hermix 侧授权。",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.5.0",
+    "express": "^4.21.0",
+    "ws": "^8.18.0"
+  }
+}

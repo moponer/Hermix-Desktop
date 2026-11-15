@@ -1,0 +1,647 @@
+<!doctype html>
+<!-- impeccable-disable cramped-padding: 30-44px 紧凑行（标题栏/侧栏行/tab条/日志行）是桌面应用密度 -->
+<!-- impeccable-disable nested-cards: 代码块与终端是内容图形；示例卡在展示栅格里平铺，不是嵌套容器 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermix 组件与主题设计稿 · 2026-10-16（原布局 / 新组件语言 / 浅色+墨绿）</title>
+<style>
+/* ══════════════════════════════════════════════════════════
+   沿用现有三列骨架，重做组件语言与配色
+   两套主题取值 = tokens.css 亮色基线 v3 / themes/ink-green.css v2
+   桌面端呈现纪律：
+     ① 相邻明度级差 ≥4%（125%/150% 缩放不吃掉层次）
+     ② 面间亮度比 ≥1.06，不靠 1px 发丝线单独分隔
+     ③ 全实色，不用 alpha 叠层（避免缩放带状条纹）
+     ④ 四级墨全部 ≥4.5:1；不用纯黑纯白
+   ══════════════════════════════════════════════════════════ */
+:root {
+  --font-sans: "Segoe UI Variable","Segoe UI","PingFang SC","Microsoft YaHei UI",system-ui,sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --r-sm: 6px; --r-md: 10px; --r-lg: 13px; --r-xl: 17px; --r-2xl: 20px;
+  --ease: cubic-bezier(.16,1,.3,1);
+  --dur: 160ms;
+}
+/* ── 浅色「宣纸·松墨」v3 ── */
+:root, [data-theme="light"] {
+  --bg-app: #e3e8e4; --paper: #ffffff; --card: #f4f6f3; --chrome: #eaeeea;
+  --hover: #dde3de; --active: #d2dad4; --elevated: #ffffff;
+  --line: #e0e5e2; --line-sub: #eef1ee; --line-2: #c8d1cb; --line-strong: #7c8a83;
+  --ink: #1f2622; --ink2: #4f5952; --ink3: #59635c; --faint: #5b6560;
+  --accent: #1e4a3c; --accent-h: #163a2f;
+  --accent-tint: #e6ede9;          /* accent 淡染（选中/淡底）—— 实色，非 alpha */
+  --accent-soft: #eef3f0;
+  --code-bg: #f6f8f6; --code-hd: #f1f4f1; --code-line: #e4e9e5; --code-ink: #333b36;
+  --term: #17181b;
+  --ok: #3e8153; --err: #b23c30; --warn: #7a5e0c;
+  --sh-card: 0 1px 2px rgba(24,36,30,.05);
+  --sh-pop: 0 6px 20px rgba(24,36,30,.10), 0 2px 6px rgba(24,36,30,.06);
+  --sh-paper: 0 1px 3px rgba(24,36,30,.06), 0 1px 2px rgba(24,36,30,.04);
+  --sh-btn: 0 1px 2px rgba(24,36,30,.22), 0 3px 10px rgba(24,36,30,.16);
+}
+/* ── 墨绿 v2（中性轴改与墨绿同族，去掉偏蓝灰） ── */
+[data-theme="ink-green"] {
+  --bg-app: #e2e9e5; --paper: #fdfefd; --card: #f3f7f4; --chrome: #e8eeea;
+  --hover: #dbe3de; --active: #ced8d2; --elevated: #ffffff;
+  --line: #e0e9e4; --line-sub: #edf2ef; --line-2: #c6d2cb; --line-strong: #7b8b83;
+  --ink: #1b221e; --ink2: #54635b; --ink3: #5c6a62; --faint: #59675f;
+  --accent: #2f6b4f; --accent-h: #255641;
+  --accent-tint: #e4ece7;
+  --accent-soft: #eef4f0;
+  --code-bg: #f5f8f6; --code-hd: #f0f5f2; --code-line: #e2eae5; --code-ink: #323c36;
+  --term: #17181b;
+  --ok: #2ba24a; --err: #b23c30; --warn: #9c6206;
+  --sh-card: 0 1px 2px rgba(24,36,30,.05);
+  --sh-pop: 0 6px 20px rgba(24,36,30,.10), 0 2px 6px rgba(24,36,30,.06);
+  --sh-paper: 0 1px 3px rgba(24,36,30,.06), 0 1px 2px rgba(24,36,30,.04);
+  --sh-btn: 0 1px 2px rgba(24,36,30,.22), 0 3px 10px rgba(24,36,30,.16);
+}
+* { box-sizing: border-box; margin: 0; }
+body { font-family: var(--font-sans); background: #cfd6d1; color: var(--ink);
+  font-size: 14px; padding: 46px 18px 24px; min-height: 100vh; }
+button { font-family: inherit; cursor: pointer; border: 0; background: none; color: inherit; font-size: 13px; }
+input { font-family: inherit; font-size: 13px; }
+
+/* ── 演示条 ── */
+.bar { position: fixed; top: 0; left: 0; right: 0; z-index: 300; display: flex; align-items: center;
+  gap: 6px; padding: 7px 14px; background: #1b221e; color: #cfe0d6; flex-wrap: wrap; }
+.bar b { color: #fff; font-size: 12px; margin-right: 4px; }
+.bb { padding: 3px 11px; border-radius: 999px; font-size: 12px; color: #9db1a6; }
+.bb:hover { background: rgba(255,255,255,.1); color: #fff; }
+.bb.on { background: #e8efea; color: #1e4a3c; font-weight: 600; }
+
+.window { width: var(--win-w, 1440px); max-width: 100%; height: calc(100vh - 78px); min-height: 700px;
+  margin: 0 auto; display: flex; flex-direction: column; border-radius: 14px; background: var(--bg-app);
+  overflow: visible; outline: 1px solid rgba(24,36,30,.12); }
+
+/* ═══ 标题栏 ═══ */
+.tb { height: 40px; flex-shrink: 0; display: grid; align-items: center;
+  grid-template-columns: var(--tb-l, 280px) 1fr var(--tb-r, 480px);
+  background: var(--chrome); border-radius: 14px 14px 0 0; padding-right: 10px; }
+.tb-l { display: flex; align-items: center; gap: 8px; padding-left: 12px; }
+.logo { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.tb-brand { font-size: 14px; font-weight: 600; color: var(--ink2); }
+.tb-c { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; }
+.tb-doc { font-size: 13px; font-weight: 600; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb-r { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.tbb { width: 40px; height: 32px; display: grid; place-items: center; color: var(--ink3); border-radius: 0; }
+.tbb:hover { background: var(--hover); color: var(--ink); }
+
+/* ═══ 三列 ═══ */
+.body3 { flex: 1; min-height: 0; display: grid; gap: 8px; padding: 0 8px 8px;
+  grid-template-columns: var(--col-l, 280px) minmax(0,1fr) var(--col-r, 480px); position: relative; }
+.pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+
+/* ── 侧栏（完整） ── */
+.sb { background: var(--chrome); border-radius: var(--r-xl); display: flex; flex-direction: column; overflow: hidden; }
+.sb-head { height: 40px; flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 10px; }
+.sb-search { flex: 1; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px;
+  border-radius: var(--r-md); background: var(--paper); border: 1px solid var(--line); color: var(--faint); font-size: 12px; }
+.sb-ib { width: 28px; height: 28px; border-radius: var(--r-md); display: grid; place-items: center; color: var(--ink3); }
+.sb-ib:hover { background: var(--hover); color: var(--ink); }
+.sb-nav { padding: 4px 8px 8px; }
+.sb-nav .row { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px;
+  border-radius: var(--r-md); font-size: 13px; font-weight: 500; color: var(--ink2); }
+.sb-nav .row:hover { background: var(--hover); color: var(--ink); }
+.sb-tabs { display: flex; gap: 2px; padding: 0 8px 8px; }
+.sb-tabs .t { flex: 1; height: 26px; border-radius: var(--r-sm); font-size: 12px; color: var(--ink3); }
+.sb-tabs .t.on { background: var(--paper); color: var(--ink); font-weight: 600; box-shadow: var(--sh-card); }
+.sb-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
+.sec-h { display: flex; align-items: center; height: 26px; padding: 0 8px; font-size: 12px;
+  font-weight: 700; letter-spacing: .04em; color: var(--faint); }
+.sec-h .n { font-weight: 500; } .sec-h .add { margin-left: auto; opacity: 0; }
+.sec-h:hover .add { opacity: 1; }
+.row2 { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px;
+  border-radius: var(--r-md); font-size: 13px; color: var(--ink2); }
+.row2:hover { background: var(--hover); }
+.row2.on { background: var(--accent-tint); color: var(--ink); font-weight: 500; }
+.row2 .tt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row2 .mt { font-size: 12px; color: var(--faint); }
+.row2 .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.user { height: 44px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+  border-top: 1px solid var(--line); }
+.av { width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+  display: grid; place-items: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.user .nm { flex: 1; font-size: 12px; font-weight: 500; color: var(--ink2); }
+
+/* ── 侧栏收起 = rail 56px + 焦点弹出卡片 ── */
+.rail { width: 56px; background: var(--chrome); border-radius: var(--r-xl); display: none;
+  flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; }
+.rb { position: relative; width: 40px; height: 40px; border-radius: var(--r-md);
+  display: grid; place-items: center; color: var(--ink3); }
+.rb:hover, .rb:focus-visible { background: var(--hover); color: var(--ink); }
+.rb.on { background: var(--accent-tint); color: var(--accent); }
+.rb:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rb .gap { flex: 1; }
+/* 弹出卡片：hover / 键盘 focus 都触发，带指向箭头与 120ms 延迟出现 */
+.pop { position: absolute; left: 50px; top: 50%; transform: translateY(-50%) translateX(-4px);
+  width: 272px; background: var(--elevated); border-radius: var(--r-xl); padding: 8px;
+  box-shadow: var(--sh-pop); z-index: 60; opacity: 0; pointer-events: none;
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.pop::before { content: ""; position: absolute; left: -5px; top: 50%; margin-top: -5px;
+  width: 10px; height: 10px; background: var(--elevated); transform: rotate(45deg); border-radius: 2px; }
+.rb:hover .pop, .rb:focus-visible .pop { opacity: 1; transform: translateY(-50%) translateX(0);
+  pointer-events: auto; transition-delay: 120ms; }
+.rb .pop { transition-delay: 200ms; }   /* 移出留 200ms 宽限，别一抖就没 */
+.pop .ph { font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--faint);
+  padding: 4px 8px 6px; }
+.pop .pr { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px;
+  border-radius: var(--r-md); font-size: 13px; color: var(--ink2); width: 100%; text-align: left; }
+.pop .pr:hover { background: var(--hover); color: var(--ink); }
+.pop .pr.on { background: var(--accent-tint); color: var(--ink); font-weight: 500; }
+.pop .pr .tt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pop .pr .mt { font-size: 12px; color: var(--faint); font-family: var(--mono); }
+.pop .pf { margin-top: 4px; padding: 6px 8px 2px; border-top: 1px solid var(--line-sub);
+  font-size: 12px; color: var(--ink3); display: flex; align-items: center; gap: 6px; width: 100%; }
+.pop .pf:hover { color: var(--accent); }
+
+/* ═══ 主列 ═══ */
+.main { background: var(--paper); border-radius: var(--r-xl); position: relative;
+  display: flex; flex-direction: column; }
+.flow { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 20px; }
+.msgcol { max-width: 660px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+/* 消息卡 · 用户：大字意图，不是气泡 */
+.m-you { display: flex; flex-direction: column; gap: 6px; }
+.m-you .lb { font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--faint); }
+.m-you .tx { font-size: 17px; font-weight: 600; line-height: 1.55; color: var(--ink);
+  letter-spacing: -.005em; }
+.m-you .mt2 { font-size: 12px; color: var(--faint); font-family: var(--mono); }
+/* 消息卡 · 助手 */
+.m-ag { display: flex; gap: 10px; align-items: flex-start; }
+.m-ag .av { width: 22px; height: 22px; font-size: 11px; margin-top: 3px; }
+.m-ag .bd { flex: 1; min-width: 0; }
+.m-ag .nm { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700;
+  letter-spacing: .04em; color: var(--accent); margin-bottom: 6px; }
+.m-ag .nm .md { font-family: var(--mono); font-weight: 500; letter-spacing: 0; color: var(--faint); }
+.m-ag .tx { font-size: 14.5px; line-height: 1.8; color: var(--ink); }
+.m-ag .tx p + p { margin-top: 10px; }
+/* 工具事件 = 日志行 */
+.tl-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; font-family: var(--mono);
+  font-size: 12.5px; color: var(--ink2); border-bottom: 1px dashed var(--line); }
+.tl-row .fn { color: var(--ink); font-weight: 600; }
+.tl-row .ar { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-row .st { font-size: 12px; font-weight: 700; color: var(--ok); }
+.tl-row .st.no { color: var(--err); }
+/* 结论块：染底 + 圆角（不用左侧色条，避免 side-tab 反模式） */
+.concl { background: var(--accent-tint); border-radius: var(--r-lg); padding: 12px 16px;
+  margin: 12px 0; font-size: 13.5px; line-height: 1.75; color: var(--ink); }
+.concl b { color: var(--accent); font-weight: 600; }
+/* 系统行 */
+.m-sys { text-align: center; font-size: 12px; font-style: italic; color: var(--faint); }
+
+/* ── 底部：审批卡 + 输入区 ── */
+.bottom { flex-shrink: 0; padding: 0 20px 14px; }
+.bi { max-width: 660px; margin: 0 auto; position: relative; }
+.appr { position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; background: var(--elevated);
+  border-radius: var(--r-lg); box-shadow: var(--sh-pop); padding: 12px 14px; }
+.appr .ah { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.appr .ac { font-family: var(--mono); font-size: 12px; color: var(--ink2); padding: 8px 0; }
+.appr .ab { display: flex; gap: 8px; justify-content: flex-end; }
+.comp { border-radius: var(--r-2xl); background: var(--paper); border: 1px solid var(--line);
+  box-shadow: var(--sh-paper); transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.comp:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: var(--sh-paper), 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.comp textarea { width: 100%; border: 0; outline: none; resize: none; background: transparent;
+  padding: 12px 16px 4px; font-size: 14px; line-height: 1.6; color: var(--ink); height: 46px;
+  font-family: inherit; }
+.comp textarea::placeholder { color: var(--faint); }
+.cbar { display: flex; align-items: center; gap: 4px; padding: 0 8px 5px 12px; flex-wrap: wrap; }
+.usage { margin-right: auto; font-family: var(--mono); font-size: 12px; color: var(--faint);
+  display: inline-flex; align-items: center; gap: 5px; padding: 0 4px; }
+.usage i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px;
+  border-radius: var(--r-sm); font-size: 12px; color: var(--ink2); background: var(--card);
+  border: 1px solid var(--line); max-width: 160px; }
+.chip .cv { color: var(--ink); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.send { width: 30px; height: 30px; border-radius: 999px; background: var(--accent); color: #fff;
+  display: grid; place-items: center; box-shadow: var(--sh-btn); }
+.send:hover { background: var(--accent-h); }
+
+/* ── 右栏 ── */
+.rp { background: var(--paper); border-radius: var(--r-xl); overflow: hidden; display: flex; flex-direction: column; }
+.rp-strip { height: 40px; flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 0 8px;
+  background: var(--chrome); }
+.rp-tab { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: var(--r-md);
+  font-size: 12px; color: var(--ink3); max-width: 180px; }
+.rp-tab span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rp-tab.on { background: var(--paper); color: var(--ink); font-weight: 500; box-shadow: var(--sh-card); }
+.rp-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rp-url { display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
+.rp-url .u2 { flex: 1; height: 26px; border-radius: 999px; background: var(--card);
+  display: flex; align-items: center; padding: 0 12px; font-size: 12px; color: var(--ink3);
+  font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rp-frame { flex: 1; background: var(--card); display: grid; place-items: center; padding: 24px;
+  color: var(--faint); font-size: 12px; text-align: center; }
+/* 差异内容（右栏） */
+.diff { font-family: var(--mono); font-size: 12px; line-height: 1.85; padding: 12px 14px; overflow: auto; }
+.diff .hk { color: var(--faint); }
+.diff .ad { background: color-mix(in srgb, var(--ok) 14%, transparent); color: #2c5c3c; padding: 0 8px; display: block; }
+.diff .de { background: color-mix(in srgb, var(--err) 12%, transparent); color: #8f2e24; padding: 0 8px; display: block; text-decoration: line-through; }
+.diff .ln { padding: 0 8px; display: block; color: var(--ink2); }
+
+/* ═══ 组件库屏 ═══ */
+.lib { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 24px 28px; }
+.libw { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
+.lib-sec .lh { font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--faint); margin-bottom: 10px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px,1fr)); gap: 14px; }
+/* 通用卡片 */
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-xl); padding: 16px;
+  transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.card:hover { transform: translateY(-1px); box-shadow: var(--sh-pop); }
+.card .ct { display: flex; align-items: center; gap: 10px; }
+.card .ci { width: 34px; height: 34px; border-radius: 10px; background: var(--accent-soft); color: var(--accent);
+  display: grid; place-items: center; font-weight: 700; font-size: 13px; flex-shrink: 0; }
+.card .cn { font-size: 14px; font-weight: 600; color: var(--ink); }
+.card .cd { font-size: 12.5px; color: var(--ink2); line-height: 1.65; margin-top: 8px; }
+.card .cf { display: flex; gap: 6px; margin-top: 12px; }
+/* 按钮 */
+.btnp { height: 32px; padding: 0 14px; border-radius: var(--r-md); background: var(--accent); color: #fff;
+  font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; box-shadow: var(--sh-btn); }
+.btnp:hover { background: var(--accent-h); }
+.btns { height: 32px; padding: 0 12px; border-radius: var(--r-md); border: 1px solid var(--line-2);
+  color: var(--ink2); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+.btns:hover { background: var(--hover); color: var(--ink); }
+.btng { height: 32px; padding: 0 10px; border-radius: var(--r-md); color: var(--ink2); font-size: 13px;
+  display: inline-flex; align-items: center; gap: 6px; }
+.btng:hover { background: var(--hover); color: var(--ink); }
+/* 表单 */
+.fld { display: flex; flex-direction: column; gap: 5px; }
+.fld label { font-size: 12px; font-weight: 500; color: var(--ink2); }
+.inp { height: 32px; border-radius: var(--r-md); border: 1px solid var(--line-2); background: var(--paper);
+  padding: 0 10px; color: var(--ink); outline: none; }
+.inp:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.sw { width: 34px; height: 20px; border-radius: 999px; background: var(--line-2); position: relative; flex-shrink: 0; }
+.sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; transition: transform var(--dur) var(--ease); }
+.sw.on { background: var(--accent); } .sw.on::after { transform: translateX(14px); }
+.tagx { font-size: 12px; font-family: var(--mono); padding: 2px 8px; border-radius: var(--r-sm);
+  background: var(--hover); color: var(--ink2); }
+/* 代码块 */
+.code { background: var(--code-bg); border: 1px solid var(--code-line); border-radius: var(--r-lg); overflow: hidden; }
+.code .ch { height: 30px; display: flex; align-items: center; padding: 0 12px; background: var(--code-hd);
+  font-family: var(--mono); font-size: 12px; color: var(--faint); border-bottom: 1px solid var(--code-line); }
+.code pre { padding: 10px 12px; font-family: var(--mono); font-size: 12px; line-height: 1.8; color: var(--code-ink); }
+.term { background: var(--term); border-radius: var(--r-lg); padding: 12px 14px; font-family: var(--mono);
+  font-size: 12px; line-height: 1.8; color: #c4d2c9; }
+.term .p { color: #6fae94; } .term .dim { color: #6c7a72; }
+/* 设置行 */
+.srow { display: flex; align-items: center; gap: 16px; min-height: 52px; padding: 12px 16px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.srow + .srow { margin-top: 8px; }
+.srow .st2 { flex: 1; }
+.srow .st2 b { display: block; font-size: 13px; font-weight: 500; color: var(--ink); }
+.srow .st2 span { font-size: 12px; color: var(--ink2); }
+.swatch { display: flex; gap: 6px; }
+.swatch i { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; }
+.swatch i.on { border-color: var(--accent); }
+/* 焦点弹出卡演示区 */
+.flydemo { display: flex; gap: 18px; align-items: flex-start; }
+.flydemo .pop-static { width: 272px; flex-shrink: 0; background: var(--elevated);
+  border-radius: var(--r-xl); padding: 8px; box-shadow: var(--sh-pop); position: relative; }
+.flydemo .pop-static .pr { display: flex; align-items: center; gap: 8px; height: 30px;
+  padding: 0 8px; border-radius: var(--r-md); font-size: 13px; color: var(--ink2); }
+.flydemo .pop-static .pr.on { background: var(--accent-tint); color: var(--ink); font-weight: 500; }
+.flydemo .pop-static .pr .tt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.flydemo .pop-static .pr .mt { font-size: 12px; color: var(--faint); font-family: var(--mono); }
+.flydemo .pop-static .ph { font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  color: var(--faint); padding: 4px 8px 6px; }
+.flydemo .pop-static .pf { margin-top: 4px; padding: 6px 8px 2px; border-top: 1px solid var(--line-sub);
+  font-size: 12px; color: var(--ink3); }
+.flydemo .pop-static::before { content: ""; position: absolute; left: -5px; top: 22px;
+  width: 10px; height: 10px; background: var(--elevated); transform: rotate(45deg); border-radius: 2px; }
+.fly-rail { width: 56px; background: var(--chrome); border-radius: var(--r-xl); display: flex;
+  flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; flex-shrink: 0; }
+.flydemo .note { flex: 1; font-size: 12.5px; line-height: 1.8; color: var(--ink2); }
+.flydemo .note b { color: var(--ink); }
+.flydemo .note ul { margin: 6px 0 0 16px; }
+.flydemo .note li { margin: 3px 0; }
+
+/* 状态切换 */
+.window.collapsed .sb { display: none; }
+.window.collapsed .rail { display: flex; }
+.window.collapsed .body3 { grid-template-columns: 56px minmax(0,1fr) var(--col-r, 480px); }
+.window.collapsed .tb { grid-template-columns: 56px 1fr var(--tb-r, 480px); }
+.view { display: none; } .view.on { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+body.notes [data-note] { outline: 1.5px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px; position: relative; }
+body.notes [data-note]::after { content: attr(data-note); position: absolute; top: -7px; left: 10px;
+  transform: translateY(-100%); background: var(--accent); color: #fff; font-size: 11px; line-height: 1;
+  padding: 4px 7px; border-radius: 5px; white-space: nowrap; z-index: 90; pointer-events: none; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
+</style>
+</head>
+<body data-theme="light">
+
+<div class="bar">
+  <b>组件与主题设计稿 · 原三列布局</b>
+  <button class="bb on" id="t-light">浅色 宣纸</button>
+  <button class="bb" id="t-green">墨绿</button>
+  <span style="width:8px"></span>
+  <button class="bb on" data-view="chat">对话</button>
+  <button class="bb" data-view="lib">组件库</button>
+  <span style="width:8px"></span>
+  <button class="bb" id="b-col">侧栏收起（看焦点弹出卡）</button>
+  <button class="bb" id="b-note">设计标注</button>
+  <span style="flex:1"></span>
+  <span style="color:#9db1a6">桌面端纪律：级差≥4% · 面间亮度比≥1.06 · 全实色无 alpha 叠层 · 四级墨≥4.5:1</span>
+</div>
+
+<div class="window" id="win">
+
+  <div class="tb">
+    <div class="tb-l"><span class="logo">H</span><span class="tb-brand">Hermix</span></div>
+    <div class="tb-c">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2"><path d="M14 3v5h5M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z"/></svg>
+      <span class="tb-doc">Hermix 桌面 · 布局重构</span>
+    </div>
+    <div class="tb-r">
+      <button class="tbb"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
+      <button class="tbb"><svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg></button>
+      <button class="tbb"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></button>
+      <button class="tbb"><svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+  </div>
+
+  <div class="body3">
+
+    <!-- 侧栏 -->
+    <aside class="pane sb">
+      <div class="sb-head">
+        <div class="sb-search">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>搜索会话
+        </div>
+        <button class="sb-ib"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+      </div>
+      <div class="sb-nav">
+        <div class="row"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>新建对话</div>
+        <div class="row"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>定时任务</div>
+        <div class="row"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V4H6.5A2.5 2.5 0 0 0 4 6.5v13z"/></svg>技能</div>
+      </div>
+      <div class="sb-tabs"><button class="t on">对话</button><button class="t">项目</button><button class="t">聊天室</button></div>
+      <div class="sb-scroll">
+        <div class="sec-h" style="margin-top:6px">今天 <span class="n">3</span><span class="add">＋</span></div>
+        <div class="row2 on"><span class="dot"></span><span class="tt">Hermix 桌面 · 布局重构</span><span class="mt">92%</span></div>
+        <div class="row2"><span class="tt">侧栏宽度回归分析</span><span class="mt">14:20</span></div>
+        <div class="row2"><span class="tt">sidecar 打包链路排查</span><span class="mt">11:02</span></div>
+        <div class="sec-h" style="margin-top:8px">昨天 <span class="n">4</span><span class="add">＋</span></div>
+        <div class="row2"><span class="tt">convergence 阈值调参</span><span class="mt">18:40</span></div>
+        <div class="row2"><span class="tt">fastembed 特性裁剪</span><span class="mt">10:33</span></div>
+        <div class="row2"><span class="tt">主题契约校验器重构</span><span class="mt">09:05</span></div>
+      </div>
+      <div class="user"><span class="av">A</span><span class="nm">Administrator</span>
+        <button class="sb-ib"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2"/></svg></button>
+      </div>
+    </aside>
+
+    <!-- 收起态 rail + 焦点弹出卡 -->
+    <!-- 收起态 rail + 焦点弹出卡
+         ⚠ .rb 必须是 div[tabindex] 不能是 button：HTML 禁止 button 嵌套 button，
+         一旦内层 .pr 也是 button，解析器会提前闭合外层，整段 DOM 错位（实测：
+         main 会掉出 .body3 栅格，组件库跑到窗口外面）。 -->
+    <aside class="pane rail" data-note="收起后：hover 或键盘 focus 都弹出卡片">
+      <div class="rb" tabindex="0"><span class="logo" style="width:20px;height:20px;font-size:11px">H</span>
+        <div class="pop"><div class="ph">工作区</div>
+          <button class="pr on"><span class="tt">当前：hermix-desktop</span></button>
+          <button class="pr"><span class="tt">切换到 spiker-tools</span></button>
+          <button class="pf">打开工作区设置 →</button></div>
+      </div>
+      <div class="rb" tabindex="0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        <div class="pop"><div class="ph">新建</div>
+          <button class="pr"><span class="tt">新建对话</span><span class="mt">⌘N</span></button>
+          <button class="pr"><span class="tt">新建项目</span></button>
+          <button class="pr"><span class="tt">新建聊天室</span></button></div>
+      </div>
+      <div class="rb on" tabindex="0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <div class="pop"><div class="ph">最近会话</div>
+          <button class="pr on"><span class="tt">Hermix 桌面 · 布局重构</span><span class="mt">now</span></button>
+          <button class="pr"><span class="tt">侧栏宽度回归分析</span><span class="mt">14:20</span></button>
+          <button class="pr"><span class="tt">sidecar 打包链路排查</span><span class="mt">11:02</span></button>
+          <button class="pr"><span class="tt">convergence 阈值调参</span><span class="mt">昨</span></button>
+          <button class="pf">显示全部会话 →</button></div>
+      </div>
+      <div class="rb" tabindex="0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <div class="pop"><div class="ph">项目</div>
+          <button class="pr"><span class="tt">hermix-desktop</span><span class="mt">12</span></button>
+          <button class="pr"><span class="tt">spiker-tools</span><span class="mt">3</span></button></div>
+      </div>
+      <div class="gap" style="flex:1"></div>
+      <div class="rb" tabindex="0"><span class="av">A</span>
+        <div class="pop"><div class="ph">账户</div>
+          <button class="pr"><span class="tt">偏好设置</span><span class="mt">⌘,</span></button>
+          <button class="pr"><span class="tt">模型与额度</span></button>
+          <button class="pf">退出登录</button></div>
+      </div>
+    </aside>
+
+    <!-- 主列 -->
+    <main class="pane main view on" id="v-chat">
+      <div class="flow">
+        <div class="msgcol">
+          <div class="m-sys">已加载 3 个附件 · 2 个文件</div>
+
+          <div class="m-you" data-note="消息卡·用户：大字意图块，不是气泡">
+            <span class="lb">你</span>
+            <div class="tx">桌面端的配色要重新调——网页上这套灰在 Windows 里看着发闷，你连浅色和墨绿一起理一遍。</div>
+            <span class="mt2">09:41 · 输入 86 字 · 2 个附件</span>
+          </div>
+
+          <div class="m-ag" data-note="消息卡·助手：头像列 + 平铺正文">
+            <span class="av">H</span>
+            <div class="bd">
+              <div class="nm">Hermix <span class="md">GLM-5.3 · 09:41:09</span></div>
+              <div class="tx">
+                <div class="tl-row"><span class="fn">read_file</span><span class="ar">src/styles/tokens.css</span><span class="st">✓ 0.8s</span></div>
+                <div class="tl-row"><span class="fn">search_content</span><span class="ar">"--color-bg-" · styles/</span><span class="st">✓ 0.3s</span></div>
+                <div class="concl"><b>根因：</b>中性轴是纯灰（R=G=B），与品牌绿不同族；墨绿那套更糟——它的灰是<b>偏蓝</b>的，衬绿主色时尤其发闷。</div>
+                <p>两套主题都改成与各自主色同族的染色轴，并按桌面端重排明度阶梯。</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="m-ag">
+            <span class="av">H</span>
+            <div class="bd">
+              <div class="nm">Hermix <span class="md">GLM-5.3 · 09:42:02</span></div>
+              <div class="tx">
+                <div class="tl-row"><span class="fn">execute_command</span><span class="ar">npm run check:tokens</span><span class="st">✓ 3.4s</span></div>
+                <p>契约 102/102 全绿，detect 清零。右栏是改动预览，输入区聚焦时边界会亮起品牌绿。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bottom">
+        <div class="bi">
+          <div class="appr">
+            <div class="ah">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+              工具请求执行命令
+            </div>
+            <div class="ac">cargo check --workspace --all-targets</div>
+            <div class="ab"><button class="btng">本次拒绝</button><button class="btnp" style="height:28px">允许并继续</button></div>
+          </div>
+          <div class="comp" data-note="输入区：聚焦时描边与外晕亮起品牌绿">
+            <textarea placeholder="继续对话，Enter 发送 / Shift+Enter 换行"></textarea>
+            <div class="cbar">
+              <span class="usage"><i></i>92% · 128k</span>
+              <button class="chip">专家 <span class="cv">Hermix</span></button>
+              <button class="chip">目录 <span class="cv"><repo></span></button>
+              <button class="chip">权限 <span class="cv">标准</span></button>
+              <button class="chip">模型 <span class="cv">GLM-5.3</span></button>
+              <button class="send"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- 组件库 -->
+    <main class="pane main view" id="v-lib">
+      <div class="lib">
+        <div class="libw">
+
+          <div class="lib-sec">
+            <div class="lh">卡片 · 染底 + 1px 描边 + hover 抬 1px（不套卡片）</div>
+            <div class="grid2">
+              <div class="card">
+                <div class="ct"><span class="ci">H</span><span class="cn">Hermix 主理人</span></div>
+                <div class="cd">务实、较真、不废话。默认中文，代码为本行，什么都能聊。</div>
+                <div class="cf"><span class="tagx">coding</span><span class="tagx">zh-CN</span></div>
+              </div>
+              <div class="card">
+                <div class="ct"><span class="ci">R</span><span class="cn">Rust 审查员</span></div>
+                <div class="cd">对 borrow、生命周期与 unsafe 边界较真，输出带证据的审查意见。</div>
+                <div class="cf"><button class="btns" style="height:26px;font-size:12px">编辑</button></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="lib-sec">
+            <div class="lh">按钮 · 主/次/幽灵</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button class="btnp">运行测试</button>
+              <button class="btns">差异审查</button>
+              <button class="btng">导出</button>
+              <button class="btnp" disabled style="background:var(--hover);color:var(--faint);box-shadow:none">已禁用</button>
+            </div>
+          </div>
+
+          <div class="lib-sec">
+            <div class="lh">表单 · 聚焦态（品牌绿描边 + 3px 淡晕）</div>
+            <div class="grid2">
+              <div class="fld"><label>会话标题</label><input class="inp" value="Hermix 桌面 · 布局重构"></div>
+              <div class="fld"><label>工作区</label><input class="inp" placeholder="<repo>"></div>
+            </div>
+          </div>
+
+          <div class="lib-sec">
+            <div class="lh">设置行 · 左文右控件</div>
+            <div class="srow"><div class="st2"><b>思考过程折叠</b><span>&lt;think&gt; 进折叠块，不与结论抢通道</span></div>
+              <span class="sw on"></span></div>
+            <div class="srow"><div class="st2"><b>强调色</b><span>主行动、选中态与焦点环的共同色相</span></div>
+              <span class="swatch"><i class="on" style="background:#1e4a3c"></i><i style="background:#2f6b4f"></i><i style="background:#4f7fa3"></i><i style="background:#7a5e0c"></i></span></div>
+          </div>
+
+          <div class="lib-sec">
+            <div class="lh">代码与终端（内容图形，恒暗/浅底随主题）</div>
+            <div class="grid2">
+              <div class="code"><div class="ch">src/styles/tokens.css</div>
+                <pre>--color-bg-app: #e3e8e4;
+--color-bg-primary: #ffffff;
+--color-bg-card: #f4f6f3;</pre></div>
+              <div class="term"><span class="p">❯</span> npm run check:tokens
+<span class="dim">[contract] dark: 102/102 ✓</span>
+<span class="dim">[palette-debt] 无未登记色阶类 ✓</span>
+Finished in 3.4s</div>
+            </div>
+          </div>
+
+          <div class="lib-sec">
+            <div class="lh">侧栏收起后的焦点弹出卡片</div>
+            <div class="flydemo">
+              <div class="fly-rail">
+                <div class="rb on" tabindex="0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+                <div class="rb" tabindex="0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
+                <div class="rb" tabindex="0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+              </div>
+              <!-- 展开态用静态副本展示：真机上这张卡是 absolute 浮层，
+                   在说明文字旁边直接绝对定位会压住正文，这里平铺排版 -->
+              <div class="pop-static">
+                <div class="ph">最近会话</div>
+                <div class="pr on"><span class="tt">Hermix 桌面 · 布局重构</span><span class="mt">now</span></div>
+                <div class="pr"><span class="tt">侧栏宽度回归分析</span><span class="mt">14:20</span></div>
+                <div class="pr"><span class="tt">sidecar 打包链路排查</span><span class="mt">11:02</span></div>
+                <div class="pf">显示全部会话 →</div>
+              </div>
+              <div class="note">
+                <b>规则</b>
+                <ul>
+                  <li>hover 与<b>键盘 focus</b> 都触发（Tab 过去也弹），focus 时描 2px 品牌绿焦点环</li>
+                  <li>出现延迟 120ms、位移 4px、ease-out；移出留 200ms 宽限，鼠标一抖不消失</li>
+                  <li>卡片宽 272px，带指向箭头；底部固定一行"显示全部…"作为逃逸口</li>
+                  <li>同一时刻只展开一张：焦点在 rail 内才显示，进入卡片后内容可点</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </main>
+
+    <!-- 右栏 -->
+    <aside class="pane rp">
+      <div class="rp-strip">
+        <button class="rp-tab on"><span>tokens.css</span></button>
+        <button class="rp-tab"><span>审查</span></button>
+        <button class="rp-tab"><span>子代理</span></button>
+        <button class="sb-ib" style="margin-left:auto"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></button>
+      </div>
+      <div class="rp-body">
+        <div class="rp-url">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2"><path d="M14 3v5h5M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z"/></svg>
+          <span class="u2">src/styles/tokens.css</span>
+        </div>
+        <div class="diff">
+          <span class="hk">@@ -212,7 +212,8 @@</span>
+          <span class="de">-  --color-bg-app: #ffffff;</span>
+          <span class="ad">+  --color-bg-app: #e3e8e4;</span>
+          <span class="ln">   --color-bg-primary: #ffffff;</span>
+          <span class="ad">+  --color-bg-card: #f4f6f3;</span>
+          <span class="hk">@@ -245,6 +246,7 @@</span>
+          <span class="ln">   /* 四级墨全部满足 AA */</span>
+          <span class="ad">+  --color-text-faint: #5f6963;</span>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<script>
+const win = document.getElementById("win");
+document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => {
+  const v = b.dataset.view;
+  document.querySelectorAll("[data-view]").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".view").forEach(x => x.classList.toggle("on", x.id === "v-" + v));
+});
+document.getElementById("t-light").onclick = e => {
+  document.body.dataset.theme = "light";
+  document.querySelectorAll("#t-light,#t-green").forEach(x => x.classList.remove("on"));
+  e.target.classList.add("on");
+};
+document.getElementById("t-green").onclick = e => {
+  document.body.dataset.theme = "ink-green";
+  document.querySelectorAll("#t-light,#t-green").forEach(x => x.classList.remove("on"));
+  e.target.classList.add("on");
+};
+document.getElementById("b-col").onclick = e => { win.classList.toggle("collapsed"); e.target.classList.toggle("on"); };
+document.getElementById("b-note").onclick = e => { document.body.classList.toggle("notes"); e.target.classList.toggle("on"); };
+</script>
+</body>
+</html>

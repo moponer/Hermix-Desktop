@@ -1,0 +1,386 @@
+//! Deferred tool loader — coordinates the search → describe → call flow.
+//!
+//!
+//!
+//! The orchestration core uses this module to decide which tool schemas
+//! are included directly in the system prompt and which are deferred
+//! behind the `tool_search` / `tool_describe` / `tool_call` bridge.
+//!
+//! ## Flow
+//!
+//! 1. **Assembly** — `assemble_tool_schemas_with_meta()` takes all
+//!    registered tool schemas + a `ToolMetaRegistry` and produces an
+//!    `AssemblyResult`. If deferred tools exceed the threshold, the
+//!    result contains only resident tools + 3 bridge tool schemas.
+//!    Otherwise all tools pass through unchanged.
+//!
+//! 2. **Search** — the LLM calls `tool_search` with a keyword query.
+//!    The `ToolSearchHandler` (already in `tool_search.rs`) searches
+//!    the deferred tool set and returns matching names + descriptions.
+//!
+//! 3. **Describe** — the LLM calls `tool_describe` with a tool name.
+//!    The `ToolDescribeHandler` returns the full JSON schema.
+//!
+//! 4. **Call** — the LLM calls `tool_call` with the tool name + args.
+//!    The `ToolCallHandler` dispatches to the real tool handler.
+//!
+//! This module provides the assembly entry point (`assemble_with_meta`)
+//! and a `DeferredToolLoader` struct that can be injected into the
+//! orchestration core to centralize the metadata-aware assembly logic.
+
+use hermix_core::ToolSchema;
+
+use crate::tool_meta::ToolMetaRegistry;
+use crate::tools::tool_search::{bridge_tool_schemas, is_bridge, AssemblyResult};
+
+// ---------------------------------------------------------------------------
+// Metadata-aware assembly
+// ---------------------------------------------------------------------------
+
+/// Assemble tool schemas using a `ToolMetaRegistry` to classify tools
+/// as resident or deferred.
+/// This is the metadata-driven replacement for
+/// [`assemble_tool_schemas`]. When the metadata registry is non-empty,
+/// tools registered as `Deferred` are placed behind the bridge tools.
+/// When the registry is empty, the function falls back to the
+/// hard-coded `CORE_TOOLS` list (backwards compatibility).
+/// Returns an [`AssemblyResult`] with:
+/// - `tool_schemas` — the schemas to include in the system prompt
+/// - `activated` — whether the bridge was activated
+/// - `deferred_count` — number of deferred tools
+pub fn assemble_tool_schemas_with_meta(
+    all: Vec<ToolSchema>,
+    meta: &ToolMetaRegistry,
+) -> AssemblyResult {
+    // Split out pre-existing bridge tools rather than dropping them. Under
+    // the threshold they must be handed back untouched; above it they are
+    // replaced by the canonical trio (which carries the real count).
+    // Mirrors the same fix in `assemble_tool_schemas`.
+    let mut existing_bridges: Vec<ToolSchema> = Vec::new();
+    let mut incoming: Vec<ToolSchema> = Vec::new();
+    for s in all {
+        if is_bridge(&s.name) {
+            existing_bridges.push(s);
+        } else {
+            incoming.push(s);
+        }
+    }
+
+    // Classify using metadata registry
+    let (visible, deferred) = if meta.len() > 0 {
+        let mut vis = Vec::new();
+        let mut def = Vec::new();
+        for s in &incoming {
+            if meta.is_deferred(&s.name) {
+                def.push(s.clone());
+            } else {
+                vis.push(s.clone());
+            }
+        }
+        (vis, def)
+    } else {
+        // Fall back to hard-coded classification
+        let (vis_refs, def_refs) = crate::tools::tool_search::classify_tools(&incoming);
+        let vis: Vec<ToolSchema> = vis_refs.into_iter().cloned().collect();
+        let def: Vec<ToolSchema> = def_refs.into_iter().cloned().collect();
+        (vis, def)
+    };
+
+    if crate::tools::tool_search::schemas_char_size(deferred.iter())
+        <= crate::tools::tool_search::DEFERRED_SCHEMA_CHAR_BUDGET
+    {
+        let mut tool_schemas = incoming;
+        tool_schemas.extend(existing_bridges);
+        return AssemblyResult {
+            tool_schemas,
+            activated: false,
+            deferred_count: 0,
+        };
+    }
+
+    let count = deferred.len();
+    let mut result: Vec<ToolSchema> = visible;
+    result.extend(bridge_tool_schemas(count));
+    AssemblyResult {
+        tool_schemas: result,
+        activated: true,
+        deferred_count: count,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DeferredToolLoader
+// ---------------------------------------------------------------------------
+
+/// Coordinates the deferred tool loading flow.
+/// Holds a reference to the `ToolRegistry` (for dispatch) and the
+/// `ToolMetaRegistry` (for classification). The orchestration core
+/// calls `assemble()` at the start of each turn to get the tool
+/// schemas to include in the system prompt.
+/// The LLM then discovers deferred tools via `tool_search` and invokes
+/// them via `tool_call` — the handlers for those bridge tools are
+/// already registered in `tool_search.rs`.
+#[derive(Clone)]
+pub struct DeferredToolLoader {
+    meta_registry: ToolMetaRegistry,
+}
+
+impl DeferredToolLoader {
+    /// Create a new loader with an empty metadata registry.
+    /// Tools will be classified using the hard-coded `CORE_TOOLS` list.
+    pub fn new() -> Self {
+        Self {
+            meta_registry: ToolMetaRegistry::new(),
+        }
+    }
+
+    /// Create a new loader with the given metadata registry.
+    pub fn with_meta(meta_registry: ToolMetaRegistry) -> Self {
+        Self { meta_registry }
+    }
+
+    /// Get a reference to the metadata registry.
+    pub fn meta(&self) -> &ToolMetaRegistry {
+        &self.meta_registry
+    }
+
+    /// Assemble tool schemas for the system prompt.
+    /// This is the main entry point: call it with all registered tool
+    /// schemas and get back the subset to include in the LLM's tool list.
+    pub fn assemble(&self, all_schemas: Vec<ToolSchema>) -> AssemblyResult {
+        assemble_tool_schemas_with_meta(all_schemas, &self.meta_registry)
+    }
+
+    /// Mark a tool as deferred (hidden behind the bridge).
+    pub fn mark_deferred(&self, name: &str) {
+        self.meta_registry.mark_deferred(name);
+    }
+
+    /// Mark a tool as resident (always visible).
+    pub fn mark_resident(&self, name: &str) {
+        self.meta_registry.mark_resident(name);
+    }
+
+    /// Register metadata for a tool.
+    pub fn register_meta(&self, meta: crate::tool_meta::ToolMeta) {
+        self.meta_registry.register(meta);
+    }
+
+    /// Check if a tool is deferred.
+    pub fn is_deferred(&self, name: &str) -> bool {
+        self.meta_registry.is_deferred(name)
+    }
+
+    /// Check if a tool is resident.
+    pub fn is_resident(&self, name: &str) -> bool {
+        self.meta_registry.is_resident(name)
+    }
+}
+
+impl Default for DeferredToolLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hermix_core::JsonSchema;
+
+    fn dummy_schema(name: &str) -> ToolSchema {
+        ToolSchema::new(name, "test", JsonSchema::new("object"))
+    }
+
+    /// A description with realistic length — the registry's schemas
+    /// average ~290 characters, and the assembly trigger budgets
+    /// characters, so tests must not use one-word placeholders.
+    fn realistic_description(i: usize) -> String {
+        let base = "Search a connected service, read structured results, and return a compact \
+                    summary that another tool can act on. Prefer this over guessing at the \
+                    remote state; call it with explicit identifiers whenever the caller knows \
+                    them, and fall back to a listing query only when nothing else is known. \
+                    The result is plain data — no side effects happen until a follow-up call.";
+        format!("{base} (variant {i})")
+    }
+
+    /// Regression guard for the meta-path twin of the bridge-visibility bug
+    /// fixed in `assemble_tool_schemas`: pre-existing bridge tools were
+    /// filtered out and only restored on the activated branch, so a
+    /// below-threshold registry shipped no bridge at all while
+    /// `directions.rs` kept advertising it.
+    #[test]
+    fn test_assemble_with_meta_keeps_bridges_below_threshold() {
+        let meta = ToolMetaRegistry::new();
+        meta.register(crate::tool_meta::ToolMeta::resident("read_file", "R", "file"));
+        let mut schemas = vec![
+            dummy_schema("read_file"),
+            dummy_schema("tool_search"),
+            dummy_schema("tool_describe"),
+            dummy_schema("tool_call"),
+        ];
+        for i in 0..3 {
+            schemas.push(dummy_schema(&format!("plugin_{i}")));
+        }
+
+        let result = assemble_tool_schemas_with_meta(schemas, &meta);
+        assert!(!result.activated, "3 deferred is below the threshold");
+        let names: Vec<&str> = result.tool_schemas.iter().map(|s| s.name.as_str()).collect();
+        for want in ["tool_search", "tool_describe", "tool_call"] {
+            assert!(
+                names.contains(&want),
+                "bridge '{want}' vanished below threshold (meta path)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_assemble_with_meta_passthrough_when_few_deferred() {
+        let meta = ToolMetaRegistry::new();
+        meta.register(crate::tool_meta::ToolMeta::deferred("plugin_a", "A", "test"));
+        meta.register(crate::tool_meta::ToolMeta::deferred("plugin_b", "B", "test"));
+
+        let schemas = vec![
+            dummy_schema("read_file"),
+            dummy_schema("plugin_a"),
+            dummy_schema("plugin_b"),
+        ];
+
+        let result = assemble_tool_schemas_with_meta(schemas, &meta);
+        assert!(!result.activated);
+        assert_eq!(result.deferred_count, 0);
+        // All 3 tools pass through (below threshold)
+        assert_eq!(result.tool_schemas.len(), 3);
+    }
+
+    #[test]
+    fn test_assemble_with_meta_activates_when_threshold_exceeded() {
+        let meta = ToolMetaRegistry::new();
+        // The deferred set is grown until it crosses the character
+        // budget — the count is derived, not hardcoded, because the
+        // trigger measures schema size.
+        let mut schemas = vec![dummy_schema("read_file")];
+        let mut deferred_count = 0usize;
+        while crate::tools::tool_search::schemas_char_size(schemas.iter().skip(1))
+            <= crate::tools::tool_search::DEFERRED_SCHEMA_CHAR_BUDGET
+        {
+            deferred_count += 1;
+            let name = format!("plugin_{deferred_count}");
+            meta.register(crate::tool_meta::ToolMeta::deferred(
+                name.clone(),
+                format!("Plugin {deferred_count}"),
+                "test",
+            ));
+            schemas.push(ToolSchema::new(
+                name,
+                realistic_description(deferred_count),
+                JsonSchema::new("object"),
+            ));
+        }
+        assert!(deferred_count > 20, "expected a substantial deferred set");
+        meta.register(crate::tool_meta::ToolMeta::resident("read_file", "Read", "file"));
+
+        let result = assemble_tool_schemas_with_meta(schemas, &meta);
+        assert!(result.activated);
+        assert_eq!(result.deferred_count, deferred_count);
+        // 1 resident + 3 bridge = 4
+        assert_eq!(result.tool_schemas.len(), 4);
+
+        let names: Vec<&str> = result.tool_schemas.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"tool_search"));
+        assert!(names.contains(&"tool_describe"));
+        assert!(names.contains(&"tool_call"));
+    }
+
+    #[test]
+    fn test_assemble_with_meta_falls_back_when_empty() {
+        let meta = ToolMetaRegistry::new();
+        let schemas = vec![
+            dummy_schema("read_file"),
+            dummy_schema("some_plugin"),
+        ];
+
+        let result = assemble_tool_schemas_with_meta(schemas, &meta);
+        // Empty registry → falls back to CORE_TOOLS classification
+        assert!(!result.activated);
+        assert_eq!(result.tool_schemas.len(), 2);
+    }
+
+    #[test]
+    fn test_deferred_tool_loader_assemble() {
+        let loader = DeferredToolLoader::new();
+        loader.mark_deferred("heavy_tool_1");
+        loader.mark_deferred("heavy_tool_2");
+
+        let schemas = vec![
+            dummy_schema("read_file"),
+            dummy_schema("heavy_tool_1"),
+            dummy_schema("heavy_tool_2"),
+        ];
+
+        let result = loader.assemble(schemas);
+        // Below threshold, so passthrough
+        assert!(!result.activated);
+        assert_eq!(result.tool_schemas.len(), 3);
+    }
+
+    #[test]
+    fn test_deferred_tool_loader_with_meta_registry() {
+        let meta = ToolMetaRegistry::new();
+        let mut schemas = vec![dummy_schema("read_file")];
+        // Grown until the deferred set crosses the character budget —
+        // the count is derived, not hardcoded.
+        let mut deferred_count = 0usize;
+        while crate::tools::tool_search::schemas_char_size(schemas.iter().skip(1))
+            <= crate::tools::tool_search::DEFERRED_SCHEMA_CHAR_BUDGET
+        {
+            deferred_count += 1;
+            let name = format!("heavy_{deferred_count}");
+            meta.register(crate::tool_meta::ToolMeta::deferred(
+                name.clone(),
+                format!("Heavy {deferred_count}"),
+                "ai",
+            ));
+            schemas.push(ToolSchema::new(
+                name,
+                realistic_description(deferred_count),
+                JsonSchema::new("object"),
+            ));
+        }
+        meta.register(crate::tool_meta::ToolMeta::resident("read_file", "Read", "file"));
+
+        let loader = DeferredToolLoader::with_meta(meta);
+
+        let result = loader.assemble(schemas);
+        assert!(result.activated);
+        assert_eq!(result.deferred_count, deferred_count);
+        // 1 resident + 3 bridge = 4
+        assert_eq!(result.tool_schemas.len(), 4);
+    }
+
+    #[test]
+    fn test_deferred_tool_loader_mark_and_check() {
+        let loader = DeferredToolLoader::new();
+        loader.mark_deferred("image_gen");
+        loader.mark_resident("read_file");
+
+        assert!(loader.is_deferred("image_gen"));
+        assert!(loader.is_resident("read_file"));
+        assert!(!loader.is_deferred("read_file"));
+        assert!(!loader.is_resident("image_gen"));
+    }
+
+    #[test]
+    fn test_deferred_tool_loader_clone_shares_state() {
+        let loader = DeferredToolLoader::new();
+        let clone = loader.clone();
+        clone.mark_deferred("shared_tool");
+        // Both share the same metadata registry
+        assert!(loader.is_deferred("shared_tool"));
+    }
+}

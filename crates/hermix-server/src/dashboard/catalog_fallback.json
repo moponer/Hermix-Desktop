@@ -1,0 +1,387 @@
+{
+  "comment": "MCP 目录唯一数据源（2026-10-04 起取消远程拉取：官方 registry 与自建子注册中心两个源已删除，目录纯本地、由发版更新）。准入标准新增前两条硬约束：\n  1. 不得与内建工具重复 —— 内建已有 file/memory/web_extract/markitdown/read_pdf/terminal/browser+cua 等 34 个 toolset；重复项只会给 LLM 增加同义工具与 token 成本（旧版因此砍掉 filesystem/memory/fetch/markitdown/puppeteer/sequentialthinking/commands 共 11 条）。\n  2. 同一能力只留一个 —— 旧版有两个 notion、两个 postgres（且权限模型相反）、以及一个 reference test server，均已剔除。\n  3. 安装命令真实存在 + mcp_scan 全绿 + 中英文描述齐。\n注意：MCP 是外部服务的接入层，绝大多数条目需要用户提供自己的凭据，「内置」只能内置目录与二进制，内置不了开箱可用——因此不做 auto-seed。\n\n2026-10-05 追加「国内可用 + 零凭据」批次（bing-cn-mcp-enhanced / weather-china-mcp / i18n-mcp-server），起因是原 21 条几乎全是境外服务：GitHub / Slack / Notion / Brave / Exa / Firecrawl / AWS / Azure —— 在国内直连不可用或极慢，其中 13 条还要用户自备境外凭据，目录等于「看得见装不上」。\n  · 三条的版本号取自 npm registry 的 dist-tags.latest，已逐个核实包真实存在、license=MIT、README 明示无需 API key。**不写未经核实的包名**：目录会真的执行 `npx <pkg>@<version>`，编一个不存在的包名等于发一个装不上的按钮，比不发更糟。\n  · 检索位只留一条（约束 2）。同门的 `bing-cn-mcp`（1.0.2，作者 slcatwujian）能力与所选条目重复，按「同一能力只留一个」剔除；两者 MIT 且都免 key，要换回只需改这一条。\n  · 曾考虑 `baidu-search-mcp`（1.0.1，MIT）作为检索位，但 registry 无 readme 字段、npmjs.com 被 Cloudflare 拦截，**无法证实是否免 key**，故不入目录。证实后可替换。\n  · 曾考虑 `scmcp`（1.0.0，MIT，文档互转且完全离线），但与内建 markitdown / office-cli / file_converter 重复，按约束 1 剔除。\n  · id 用 `io.npm.<package>` 而非 `io.github.<org>/<pkg>`：这三条的来源就是 npm 仓库，凭空编一个 GitHub org 属于伪造出处。id 只作安装端点的查找键与中文名匹配的分词来源，不参与安装解析。\n\n2026-10-21 新增 hermix-viewer：本产品自带的**第一方**条目（不是第三方 registry 来源），走回环 http，因此标 official=true —— 它的安全性由本仓库保证，而不是靠 registry 背书。安装后在桌面端 agent 侧表现为 hermix-viewer__* 前缀的工具（web_open / webview_* / viewer_*），是「有头浏览器自动化」的主路径。",
+  "items": [
+    {
+      "id": "io.github.modelcontextprotocol/server-github",
+      "title": "GitHub",
+      "description": "Repository, issue, PR, and file APIs via the GitHub REST v3. Requires a personal access token.",
+      "version": "0.1.6",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/github",
+      "official": true,
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-github",
+        "version": "0.1.6"
+      },
+      "required_env": [
+        "GITHUB_PERSONAL_ACCESS_TOKEN"
+      ]
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-brave-search",
+      "title": "Brave Search",
+      "description": "Web and local search via the Brave Search API. Requires a free API key.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
+      "official": true,
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-brave-search",
+        "version": "0.6.2"
+      },
+      "required_env": [
+        "BRAVE_API_KEY"
+      ]
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-gitlab",
+      "title": "GitLab",
+      "description": "GitLab project, issue, MR, and branch APIs against gitlab.com or self-hosted instances.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/gitlab",
+      "official": true,
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-gitlab",
+        "version": "0.6.2"
+      },
+      "required_env": [
+        "GITLAB_PERSONAL_ACCESS_TOKEN"
+      ]
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-slack",
+      "title": "Slack",
+      "description": "Channel history, thread replies, and message posting for Slack workspaces.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/slack",
+      "official": true,
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-slack",
+        "version": "0.6.2"
+      },
+      "required_env": [
+        "SLACK_BOT_TOKEN",
+        "SLACK_TEAM_ID"
+      ]
+    },
+    {
+      "id": "io.github.domdomegg/airtable-mcp-server",
+      "title": "Airtable",
+      "description": "List, create, update, and delete Airtable records, bases, and tables.",
+      "version": "1.3.2",
+      "homepage": "https://github.com/domdomegg/airtable-mcp-server",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "airtable-mcp-server",
+        "version": null
+      },
+      "required_env": [
+        "AIRTABLE_API_KEY"
+      ]
+    },
+    {
+      "id": "io.github.domdomegg/notion-mcp-server",
+      "title": "Notion",
+      "description": "Search, read, create, and update Notion pages and databases via the official API.",
+      "version": "1.8.1",
+      "homepage": "https://github.com/makenotion/notion-mcp-server",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "@notionhq/notion-mcp-server",
+        "version": null
+      },
+      "required_env": [
+        "NOTION_TOKEN",
+        "NOTION_VERSION"
+      ]
+    },
+    {
+      "id": "io.github.postgres/mcp-server-postgres",
+      "title": "PostgreSQL",
+      "description": "Read-only SQL access to a PostgreSQL database: schema listing and query execution.",
+      "version": "0.3.0",
+      "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/postgres",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-postgres",
+        "version": null
+      },
+      "required_env": []
+    },
+    {
+      "id": "io.github.tavioy/mcp-server-youtube-transcript",
+      "title": "YouTube Transcript",
+      "description": "Fetch YouTube video transcripts and captions as plain text for summarization.",
+      "version": "1.0.2",
+      "homepage": "https://github.com/kimtaeyoon83/mcp-server-youtube-transcript",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "mcp-server-youtube-transcript",
+        "version": null
+      },
+      "required_env": []
+    },
+    {
+      "id": "io.github.exa-labs/exa-mcp-server",
+      "title": "Exa Search",
+      "description": "AI-optimized web search: semantic and keyword search with clean content extraction.",
+      "version": "2.2.1",
+      "homepage": "https://github.com/exa-labs/exa-mcp-server",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "exa-mcp-server",
+        "version": null
+      },
+      "required_env": [
+        "EXA_API_KEY"
+      ]
+    },
+    {
+      "id": "io.github.firecrawl/firecrawl-mcp-server",
+      "title": "Firecrawl",
+      "description": "Crawl websites into clean markdown: single page, deep crawl, and structured extraction. Requires Firecrawl API key.",
+      "version": "1.6.2",
+      "homepage": "https://github.com/mendableai/firecrawl-mcp-server",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "firecrawl-mcp",
+        "version": null
+      },
+      "required_env": [
+        "FIRECRAWL_API_KEY"
+      ]
+    },
+    {
+      "id": "io.github.supabase/supabase-mcp",
+      "title": "Supabase",
+      "description": "Manage Supabase projects: tables, schema, SQL, edge functions, and logs.",
+      "version": "0.2.3",
+      "homepage": "https://github.com/supabase-community/supabase-mcp",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "supabase-mcp",
+        "version": null
+      },
+      "required_env": [
+        "SUPABASE_ACCESS_TOKEN"
+      ]
+    },
+    {
+      "id": "io.github.qdrant/mcp-server-qdrant",
+      "title": "Qdrant Vector Search",
+      "description": "Semantic memory storage and retrieval backed by a Qdrant vector database.",
+      "version": "0.1.3",
+      "homepage": "https://github.com/qdrant/mcp-server-qdrant",
+      "official": false,
+      "install": {
+        "kind": "manual",
+        "package": "mcp-server-qdrant",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
+      "required_env": [
+        "QDRANT_URL"
+      ]
+    },
+    {
+      "id": "io.github.neondatabase/mcp-server-neon",
+      "title": "Neon Postgres",
+      "description": "Manage Neon serverless Postgres: projects, branches, migrations, and queries.",
+      "version": "0.1.2",
+      "homepage": "https://github.com/neondatabase/mcp-server-neon",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "@neondatabase/mcp-server-neon",
+        "version": null
+      },
+      "required_env": [
+        "NEON_API_KEY"
+      ]
+    },
+    {
+      "id": "io.github.upstash/mcp-server-upstash",
+      "title": "Upstash Redis & Vector",
+      "description": "Manage Upstash Redis databases and vector indexes: provision, query, and inspect.",
+      "version": "0.2.1",
+      "homepage": "https://github.com/upstash/mcp-server",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "@upstash/mcp-server",
+        "version": null
+      },
+      "required_env": [
+        "UPSTASH_EMAIL",
+        "UPSTASH_API_KEY"
+      ]
+    },
+    {
+      "id": "io.github.jaimeferj/mcp-server-redis",
+      "title": "Redis",
+      "description": "Operate Redis instances: get, set, list, and delete keys; inspect server info.",
+      "version": "0.1.0",
+      "homepage": "https://github.com/jaimeferj/mcp-server-redis",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "mcp-server-redis",
+        "version": null
+      },
+      "required_env": [
+        "REDIS_URI"
+      ]
+    },
+    {
+      "id": "io.github.smarakagho/mcp-kubernetes-server",
+      "title": "Kubernetes",
+      "description": "Query and manage Kubernetes clusters: pods, deployments, events, and logs via kubectl-compatible API.",
+      "version": "1.2.0",
+      "homepage": "https://github.com/Flux159/mcp-server-kubernetes",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "mcp-server-kubernetes",
+        "version": null
+      },
+      "required_env": []
+    },
+    {
+      "id": "io.github.aws/aws-docs-mcp",
+      "title": "AWS Documentation",
+      "description": "Search and read the official AWS documentation, with recommended-content ranking.",
+      "version": "1.0.0",
+      "homepage": "https://github.com/awslabs/mcp",
+      "official": false,
+      "install": {
+        "kind": "manual",
+        "package": "awslabs.aws-documentation-mcp-server",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
+      "required_env": []
+    },
+    {
+      "id": "io.github.azure/azure-docs-mcp",
+      "title": "Microsoft Learn Docs",
+      "description": "Search and read official Microsoft Learn documentation for Azure, M365, and .NET.",
+      "version": "0.1.0",
+      "homepage": "https://github.com/microsoftlearn/mcp",
+      "official": false,
+      "install": {
+        "kind": "manual",
+        "package": "microsoft-learn-docs-mcp",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
+      "required_env": []
+    },
+    {
+      "id": "io.github.mobilefish/sanctum-mcp-server",
+      "title": "Sanctum Terminal",
+      "description": "SSH into remote hosts and run commands with per-host allowlists and approval gates.",
+      "version": "0.3.0",
+      "homepage": "https://github.com/sanctumos/sanctum-mcp-server",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "@sanctumos/mcp-server",
+        "version": null
+      },
+      "required_env": []
+    },
+    {
+      "id": "io.github.yokingma/time-mcp",
+      "title": "Time",
+      "description": "Current time, timezone conversion, and relative time computation for scheduled tasks.",
+      "version": "1.1.0",
+      "homepage": "https://github.com/yokingma/time-mcp",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "time-mcp",
+        "version": null
+      },
+      "required_env": []
+    },
+    {
+      "id": "io.github.r-hurricane/mcp-server-sqlite",
+      "title": "SQLite",
+      "description": "Read-only SQLite exploration: schema, tables, and safe query execution.",
+      "version": "0.2.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/sqlite",
+      "official": false,
+      "install": {
+        "kind": "manual",
+        "package": "mcp-server-sqlite",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
+      "required_env": []
+    },
+    {
+      "id": "io.npm.bing-cn-mcp-enhanced",
+      "title": "Bing CN Search (中文必应搜索)",
+      "description": "Chinese web search by scraping Bing CN plus webpage content extraction. No API key, no overseas dependency — works on a plain domestic network.",
+      "version": "2.0.11",
+      "homepage": "https://www.npmjs.com/package/bing-cn-mcp-enhanced",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "bing-cn-mcp-enhanced",
+        "version": "2.0.11"
+      },
+      "required_env": []
+    },
+    {
+      "id": "io.npm.weather-china-mcp",
+      "title": "China Weather (中国天气网)",
+      "description": "Real-time weather and 5-day forecast from weather.com.cn, including humidity, AQI and PM2.5. No API key, free, accepts any Chinese city name.",
+      "version": "1.0.4",
+      "homepage": "https://www.npmjs.com/package/weather-china-mcp",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "weather-china-mcp",
+        "version": "1.0.4"
+      },
+      "required_env": []
+    },
+    {
+      "id": "io.npm.i18n-mcp-server",
+      "title": "i18n Workflow (国际化工作流)",
+      "description": "Extract hard-coded CJK strings, generate i18n keys, lint translation files for missing/dead keys, and rename keys in bulk. Runs fully local, no API key.",
+      "version": "0.0.2",
+      "homepage": "https://www.npmjs.com/package/i18n-mcp-server",
+      "official": false,
+      "install": {
+        "kind": "npm",
+        "package": "i18n-mcp-server",
+        "version": "0.0.2"
+      },
+      "required_env": []
+    },
+    {
+      "id": "hermix-viewer",
+      "title": "文件查看器（Hermix 自带）",
+      "description": "Hermix 文件查看器自带的 MCP 服务：在查看器的内嵌网页视图里打开网址、驱动页面、截图、按可见文字点击 —— 用户看得见、也能自己登录。需先在查看器 设置 → MCP 里开启本地服务（默认只监听回环）。",
+      "version": null,
+      "homepage": null,
+      "official": true,
+      "install": {
+        "kind": "remote",
+        "url": "http://127.0.0.1:3911/mcp"
+      },
+      "required_env": []
+    }
+  ]
+}

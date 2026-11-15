@@ -1,0 +1,633 @@
+/* ════════════════════════════════════════════════════════════════════
+   tokens.css — Design System 单一真理源
+   ──────────────────────────────────────────────────────────────────
+   分层结构（切换主题只换取值，不换令牌名 —— 这是硬性契约）：
+
+     本文件      = 亮色基线（@theme 默认值）+ 结构性令牌（字体/间距/圆角/
+                   动效/几何尺寸，这些跨主题恒定，任何主题不得重复声明）
+     themes/<id>.css = 每套主题一张【纯取值表】：只允许一个
+                   :root[data-theme="<id>"]:root { --token: value } 块，
+                   且必须覆盖下方 CONTRACT 色彩令牌清单的全集。
+     .dark 类    = 已废除。暗色系主题（json 里 "colorScheme":"dark"）
+                   由 themes/dark.css 自身的完整取值表负责，不再有
+                   第二份散落的暗色覆盖（历史漂移源，勿复活）。
+
+   新增主题三步：① 复制 themes/_template 注释头任一现有主题文件改名
+   ② 填满 CONTRACT 全部色彩令牌 ③ 配一份 <id>.json（label/colorScheme）。
+   registry 自动发现，无需改任何 TS。
+
+   校验器：node scripts/check-theme-tokens.mjs（含完整性/孤儿/裸色三项），
+   组件代码中禁止出现字面色值与 Tailwind 原生调色板类 —— 一律走变量。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ------------------------------------------------------------------
+ * 一、结构性令牌（跨主题恒定 · @theme 层 · 主题文件禁止覆盖）
+ * ------------------------------------------------------------------ */
+@theme {
+  /* ── 字号阶梯（7 档 · 唯一真相源）────────────────────────────
+     命名必须用 --text-* ：Tailwind v4 只在这个命名空间下生成
+     `text-*` 工具类。旧名 `--font-size-*` 是 v3 写法，v4 下**不生成任何
+     工具类**——这就是历史上 409 处 `text-[11px]` 任意值取代了整套档位的
+     根因（旧档位定义仍在文件尾部做别名，供 var() 引用）。
+     禁半档（11.5 / 12.5 / 13.5 …）：一屏内字号档位 ≤ 3。 */
+  --text-micro: 10px;    /* 角标、计数徽标（全局 ≤5% 出现） */
+  /* R1-6（2026-10-16）：tiny 11→12。功能文字下限统一为 12px（桌面端
+     125% 缩放下 11px 已是可读性下限）。tiny 与 meta 因此同为 12 ——
+     新代码请直接用 --text-meta，tiny 仅作过渡别名保留。 */
+  --text-tiny: 12px;     /* 元信息：时间、计数、路径、参数预览 */
+  --text-meta: 12px;     /* 工具名、chip、命令输出、区块标题 */
+  --text-ui: 13px;       /* 界面文本：按钮、列表项、表单标签、思考正文 */
+  --text-body: 13px;     /* 对话正文（全局唯一正文字号，与 --text-ui 同值） */
+  --text-title: 16px;    /* 小标题：区块标题、弹窗标题 */
+  --text-display: 20px;  /* 页面标题 / 空态（一次性使用） */
+  /* hero 28px（2026-10-18 裁决：40px 曾在两套规范间冲突——tokens 注释
+     允许 hero 用 700，docs/notes/archived/architecture/TYPOGRAPHY_SYSTEM.md 字重上限却是 600。裁决结果：
+     统一服从字重上限 600，字号从 40 收到 28（与 --text-title 16 / display
+     20 保持 4px 递进，不再单独开大档）。只给空态用，不进正文档位系统；
+     中文负字距是负优化，hero 保持 0 字距。 */
+  --text-hero: 28px;
+
+  /* ── Tailwind 原生刻度收编（2026-10-27）──────────────────────
+     组件里还有 100+ 处 `text-xs / text-sm / text-lg` 这类原生刻度类，
+     而它们的默认值与七档不是一套（xs=12、sm=14、base=16、lg=18）。
+     于是"用类名写"成了绕过档位的第二条路：设置左导航 14px（本该 13）、
+     面板标题 18px（本该 16）都从这条缝里长出来。
+     这里把原生刻度钉到七档值上 —— 无论写令牌还是写刻度，落点同一档。 */
+  --text-xs: 12px;      /* = meta */
+  --text-sm: 13px;      /* = ui（Tailwind 默认 14） */
+  --text-base: 13px;    /* = body（默认 16，统一为 13） */
+  --text-lg: 16px;      /* = title（默认 18） */
+  --text-xl: 20px;      /* = display */
+
+  /* ── 字重（4 档）────────────────────────────────────────────
+     中文在 13px 以下用 700 会糊成块，所以最高只到 600。
+     2026-10-02：这一档是**请求值**。雅黑只有 300/400/700 三档，所以 500
+     和 600 都会命中真 700（跳档，但不糊）；`body` 上有
+     `font-synthesis: none`（见 base.css）兜底，万一命中只有 Regular 的
+     字体，加粗会安静地留在 400 而不是被涂抹。读到这个值却看不到加粗，
+     先查命中的字体有几个字重，别急着加 700。 */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;   /* 界面强调：按钮、选中项、工具名 */
+  --font-weight-semibold: 600; /* 标题：区块 / 轮次 / 弹窗 */
+
+  /* ── 行高（4 档，按用途而非按字号）───────────────────────── */
+  --leading-reading: 1.75;  /* 长文阅读：对话正文、思考正文 */
+  --leading-ui: 1.5;        /* 界面文本：按钮、chip、列表 */
+  --leading-compact: 1.4;   /* 紧凑：工具行、元信息、表格 */
+  --leading-heading: 1.3;   /* 单行标题 */
+
+  /* Font families（Tailwind4 @theme 规范命名；旧名 --font-family-primary 走尾部别名）
+   *
+   * 2026-09-29：这里曾是**三套互不相同**的字体栈 —— `--font-sans` 一套、
+   * `base.css` 的 `body` 一套、`FileTypeIcon.tsx` 的 SVG 文字第三套。中文回退链
+   * 不同会导致不同机器上中文渲染粗细不一致。现在唯一真相源在此，`body` 与
+   * SVG 均引用它。
+   *
+   * 构成抄 cc-haha `desktop/src/theme/globals.css`：
+   *   --font-body:  -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif
+   *   --font-serif: 'Noto Serif SC', 'Songti SC', Georgia, serif
+   *   --font-mono:  'JetBrains Mono', ui-monospace, monospace
+   * 注意他们**没有**在正文里用 Inter / Manrope。观感的来源不是下载字体，
+   * 而是「一套系统栈走到底 + 圆角标度 + 明度分层」。
+   *
+   * 与 cc-haha 的唯一偏差：在 `Segoe UI` 前多留了 `Segoe UI Variable`。
+   * Win11 上它是可变字重版本，观感优于传统 Segoe UI；Win10 落回 `Segoe UI`，
+   * 行为与 cc-haha 一致。
+   */
+  /* 2026-09-30：中文回退链补 思源黑体 / HarmonyOS / Noto。
+     Windows 上默认落到 Microsoft YaHei UI —— 字面偏宽偏重，和 cc-haha 截图里
+     macOS 的 PingFang SC 差一截（PingFang 更匀、更透）。这几款只要装了就在
+     YaHei 之前命中，**不打包任何字体文件**，纯回退名，零体积成本。
+
+     2026-10-02 一次**失败**的尝试（已撤销，留档别再试）：本机装过
+     Alibaba PuHuiTi 2.0（`C:\Windows\Fonts\Alibaba.ttf`），400 档确实更轻
+     更透，于是把它插进这条链试了一轮。问题是它 `usWeightClass = 400`、
+     全机**只有 Regular 一个字重文件** —— `font-weight: 600` 拿不到真字重就
+     合成，横向涂抹把汉字笔画糊成块。18px 同字号墨量实测：
+
+         雅黑 Bold（真字重）  1877
+         普惠体 合成粗体       2463   ← 比真粗体还重 31%
+
+     用户实机验收不通过（标题和 **重点** 全部失去强调），已撤掉。
+
+     **教训**：往这条链里加字体之前，先查它有几个字重（读 OS/2 表的
+     `usWeightClass`，并看字体目录里有没有同名的 Bold/Medium 文件）。
+     只有 Regular 的字体会让全 app 的 500/600 变成假粗体，而中文正文里
+     500/600 到处都是 —— 正文看着更通透，代价是全文的层级标记全废。 */
+  --font-sans: "Segoe UI Variable", "Segoe UI", -apple-system,
+    BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC", "Source Han Sans SC",
+    "Noto Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  /* 编辑性衬线：给「内容」用（长文标题、引文），不给界面外壳。 */
+  --font-serif: "Noto Serif SC", "Songti SC", Georgia, SimSun, serif;
+  /* JetBrains Mono / Noto Serif SC 均为 SIL OFL 1.1，可自由使用与再分发。
+     本机未安装时落到 ui-monospace / Georgia，版面不会塌。 */
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code",
+    "Source Code Pro", Consolas, Menlo, monospace;
+  --font-headline: var(--font-sans);
+  --font-label: var(--font-sans);
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ── 控件高度档（2026-10-21）────────────────────────────────
+     宪法 §五定的控件高度是 24/30/32/40/44 五档，但实测同屏能出现 6 种
+     （.modal-input ≈36、AdvancedSettingsTab px-3 py-2 ≈37、ConnectorsTab
+     px-2.5 py-1.5 ≈30、ui/Input 28/32/40/44…）。收敛成**三档**：
+     sm=24（chip / 小钮）/ md=32（默认表单与按钮）/ lg=40（大输入区）。
+     结构性令牌，跨主题恒定，主题文件不得覆盖。 */
+  --control-h-sm: 24px;
+  --control-h-md: 32px;
+  --control-h-lg: 40px;
+
+  /* 弹窗最大高度 —— 此前 85/90/80/70/60/40vh 六种并存（ui/Modal 85vh、
+     AutomationView 90vh、TestDialog 80vh、.modal-form 70vh…）。统一成一档。 */
+  --dialog-max-h: 85vh;
+
+  /* 行内代码底色 —— 从 components-prose.css 里那个手调的 45% 魔数提上来。
+     45% 是「上一版实测选的档位」，既不是令牌也不是 spacing 档，换主题后
+     未再验证过。 */
+  --color-code-inline-bg: color-mix(in srgb, var(--color-bg-tertiary) 45%, transparent);
+
+  /* 正文字距 —— 中文正文例外（0.01em）。中文不需要负字距，0.01em 是拉丁
+     为主的设计里对中文也能接受的一点点间隔。 */
+  --tracking-body: 0.01em;
+
+  /* Radius scale */
+  /* 圆角标度，抄 cc-haha（其注释：6–7 角标 / 9–11 控件 / 12–14 内卡 /
+     16–18 卡片 / 20 输入框 / 24 弹窗 / 999 药丸）。
+     改之前是 4/6/8/10/12，且 CSS 里散落着 3px / 5px / 6px 的即兴值。 */
+  --radius-sm: 6px;     /* 角标 */
+  --radius-md: 10px;    /* 控件（按钮 / 输入） */
+  --radius-lg: 13px;    /* 内层卡片 */
+  --radius-xl: 17px;    /* 卡片 / 页面区块 */
+  --radius-2xl: 20px;   /* 大卡片 / 消息气泡外角 */
+  --radius-3xl: 24px;   /* 弹窗 */
+  /* 输入框专用圆角：比同主题的卡片档更圆（6px 的方正外框是"老式输入框"的
+     来源），又不至于变成胶囊。各主题按自己的尺度覆盖。 */
+  --radius-composer: 20px;
+  --radius-full: 9999px;
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* Tailwind v4 的 duration 默认时长（v4 不认 --duration-* 命名空间，fast/base/slow 三档靠 globals.css 的 @utility 注册） */
+  --default-transition-duration: 160ms;
+  --duration-fast: 120ms;
+  --duration-base: 160ms;
+  --duration-slow: 240ms;
+
+  /* ------------------------------------------------------------------
+   * 三、几何尺寸令牌（结构性）
+   *    跨主题恒定；唯一变更点是新加尺寸档位，旧代码统一收敛。
+   * ------------------------------------------------------------------ */
+
+  /* Icon 档位 —— Lucide 等图标库 size={N} 一律收敛到这里（单轨）。
+     xs=10 行内状态微图标（11px 文本行里的 spinner/状态点/行内删除钮，
+     2026-10-16 新增：40+ 处 9-10px 微图标强拔到 12 会撑爆紧凑行）；
+     sm=12 与 text-meta 同高（内联图标）；md=14 与 text-ui 同高
+     （按钮/侧栏默认）；lg=16 与 text-body 同高（强调/头部图标）。
+     特殊尺寸（22/24/28/32/36/48/72）允许保留——它们是品牌/Logo、
+     空态大图标、灯箱导航等一次性资产，不进档位系统。 */
+  --icon-size-xs: 10px;
+  --icon-size-sm: 12px;
+  --icon-size-md: 14px;
+  --icon-size-lg: 16px;
+
+  /* Width 四档 —— 语义化"窄/默认/宽/全"对应常见 UI 形态。
+     narrow=240px  表单/侧栏列；base=420px   卡片/弹窗主体；
+     wide=720px    大面板/详情；full=100%    全屏覆盖。
+     w-full 由 Tailwind 自带，本令牌仅文档化。 */
+  --width-narrow: 240px;
+  --width-base: 420px;
+  --width-wide: 720px;
+  /* 2026-10-16（R1-4）：页面内容宽度两档 —— 页头/网格收敛的配套令牌。
+     page=672 常规设置页；wide-page=896 数据/宽页。 */
+  --width-page: 672px;
+  --width-wide-page: 896px;
+  /* 宽面板（设置主面板这类「几乎全屏但仍是浮层」的容器）。
+     此前是 SettingsDialog 的裸数字 1080 —— 弹窗宽度不走令牌，
+     就等于宽度这件事永远不受约束（审计问题 42）。
+     窄屏由 ui/Modal 的 maxWidth: calc(100vw - 2rem) 兜住。 */
+  --width-panel: 1080px;
+  /* 2026-10-16（R1-1）：起排线 —— 助手消息续条与首条正文共用的缩进。
+     头像 22px + gap 10px = 32px，废止散落的 30px。 */
+  --indent-thread: 32px;
+  /* reading = 对话正文行长，随视口伸缩：窄屏守住 820px（约 50 汉字），
+     宽屏/全屏按 68vw 跟到 1240px 封顶 —— 全屏下两侧空白不再夸张。
+     代码块 / 表格 / 长命令行不跟随此档，各自按内容需要放宽。 */
+  /* 阅读测度：13px 正文下约 56 汉字 / 100 拉丁字符。此前 clamp(820,68vw,1240)
+     在 1440 窗口跑到 ~980px，一行 70 汉字，眼睛回行丢行——这是"输出像日志"
+     的第一原因。 */
+  --width-reading: min(780px, 100%);
+
+  /* ------------------------------------------------------------------
+   * 二、色彩令牌 · LIGHT 基线「宣纸 · 青碧」
+   * ------------------------------------------------------------------
+   *   与旧版「暖纸 + 陶土」的本质差别有三条：
+   *
+   *   1. **面只有四级，方向是"抬起"**：案 < 纸 < 面 < 浮。
+   *      旧版卡片比背景更暗或同色（--color-bg-card 与 --color-bg-primary
+   *      同为 #faf9f5），卡片根本没"抬"起来，层次只能靠到处画边框 ——
+   *      这就是满屏盒子感的根源。新版卡片恒比纸面亮，深浅方向统一。
+   *
+   *   2. **相邻两级明度差 ≥ 3%**（旧版 1-2%，人眼读不出层）。
+   *
+   *   3. **色相只属于墨**：中性轴近乎无彩，唯一饱和的青碧只给
+   *      「主行动 / 当前选中 / 需要你决定」；语义四色彼此拉开 ≥30°
+   *      色相，且全部避开青碧所在的青绿区（success 往黄绿挪 30°+，error 走绛红）。
+   *
+   *   文字对比也刻意降一档（正文约 11.5:1 而非 21:1）：墨水屏阅读
+   *   久看不累，正是因为没有高对比造成的光晕。
+   * ------------------------------------------------------------------ */
+
+  /* ── 面 ────────────────────────────────────────────────────────────
+   * 2026-09-29 重排，值抄 cc-haha `desktop/src/theme/globals.css` 的 white 主题。
+   *
+   * 方向性的关键差异（这才是"高级感"的来源，不是字体）：
+   *   cc-haha：页面 = 最亮（#FFFFFF），其余全部**向后退**。
+   *   改之前：页面灰（#f0f0f2）、卡片亮（#fefefe），是"卡片抬起"。
+   * 读长文时纸面应当是最亮的那一层，界面外壳退到背景里 —— 方向反了，
+   * 于是每个卡片都得靠边框撑出存在感，满屏盒子。
+   *
+   * 明度阶梯（相邻差 ≥ 3%，同色相下人眼要 ≥3% 才读得出高低）：
+   *   100% #FFFFFF  页面 / 对话区
+   *    96% #F6F6F6  卡片
+   *    93% #EDEDED  侧栏 / 顶栏 / 输入底
+   *    89% #E4E4E4  hover / chip
+   *    86% #DCDCDC  active / 分隔线
+   *
+   * 2026-10-10 重排：原阶梯是 100 / 98 / 97 / 94 / 93，**每级只差 1~3%**，
+   * 卡片（98%）压在纯白页面上几乎看不出是张卡片，插件 / 技能 / 工具集三个页面
+   * 整片糊成一块。现在每级差 8~9%，与暗色那套（#101113 < #161719 < #1d1f22
+   * < #24262a < #2e3136）的可感知步长对齐。
+   * 约束：**相邻两级差不得小于 6%**，否则层级又会消失。
+   * ────────────────────────────────────────────────────────────── */
+  /* 2026-10-16（墨与纸 v4，WorkBuddy 对照采样后定稿）：中性轴回到
+     **纯中性灰**（R=G=B），松墨绿只保留给「主行动按钮 / 链接 / 焦点环」。
+     此前 2026-10-15 的"染色轴"实验（≤4% 绿相）被用户实测否决——大气感
+     的来源是**克制**，不是色相贯穿；WorkBuddy 双主题逐像素采样证明
+     组件层 100% 中性灰反而更贵。色相个性收敛到 accent（2026-10-24 起为墨蓝）。
+     其余桌面端纪律沿用：级差 ≥4%、亮度比 ≥1.06、全实色。 */
+  --color-bg-app: #ececec;         /* 案·最外层：窗口底、列间空隙 */
+  --color-bg-primary: #ffffff;     /* 纸·对话与主区底 = 最亮最纯 */
+  --color-bg-card: #f6f6f6;         /* 面·卡片 */
+  --color-bg-base: #f5f5f5;
+  --color-bg-secondary: #f5f5f5;   /* 案·侧栏 / 顶栏 */
+  --color-bg-inset: #f5f5f5;
+  --color-bg-input: #f6f6f6;
+  /* 输入框卡面：比 bg-input 再亮一档（亮色 = 纸白），让 composer 是"白卡"
+     而不是"一块灰"——底栏垫更深一档，两块靠材质差分层，不靠横线切割。 */
+  --color-bg-composer: #ffffff;
+  --color-bg-card-hover: #ededed;
+  --color-bg-tertiary: #ededed;    /* 案·深一档：分隔区 / chip */
+  --color-bg-hover: #ededed;
+  /* 瞬时按压反馈（`:active` / 鼠标按下）。**只给瞬时态**：
+     持久选中请用 --color-bg-selected。此前两者共用这一个令牌，导致
+     「当前选中」是一块 #e3e3e3 的死灰（用户：这个极其恶心），
+     而它在侧栏 #f5f5f5 上就是一块更深的脏方块。 */
+  --color-bg-active: #e3e3e3;
+  --color-bg-quaternary: #e3e3e3;  /* 案·最深：轨道底 / 选中药丸 */
+  /* 持久选中 / 当前项。取 accent 自淡染 —— 与 `.sidebar-row.is-active`
+     已有的做法一致，暗色主题下自动跟着 accent 走，不需要另外覆盖。
+     不用 accent-soft（那是混白派生，暗色下会翻成亮块）。 */
+  --color-bg-selected: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  /* 悬停轻档。中性灰 hover 令牌（#ededed / #dbe3de）在浅面上是一块脏灰，
+     列表行一悬停就"糊一块"。悬停只需要"可点"的暗示，所以取 accent 7%。 */
+  --color-bg-hover-subtle: color-mix(in srgb, var(--color-accent) 7%, transparent);
+  --color-bg-elevated: #ffffff;     /* 浮·弹层 / 菜单 / 悬浮球 */
+
+  /* Code / chat 场景面板 */
+  --color-bg-code: #f8f8f8;
+  --color-bg-code-header: #f4f4f4;
+  --color-bg-code-border: #e7e7e7;
+  --color-chat-assistant-bg: #ffffff;
+  --color-chat-tool-bg: #f8f8f8;
+  --color-chat-terminal-bg: #17181b;  /* 终端恒暗：任何主题都一样 */
+
+  /* ── 分隔线：发丝观感，看得见但不抢戏 ── */
+  /* 描边与所压底色的亮度比 ≥1.10（不是 1.05）：1px 线在 125% / 150% 缩放
+     的重采样里会被削成半透明，必须留出余量才不至于整条消失。 */
+  --color-border-subtle: #f0f0f0;
+  --color-border-primary: #e5e5e5;
+  --color-border-secondary: #d4d4d4;  /* 发丝分隔线：与所压底色亮度比 ≥1.10。
+     **不是** 3:1 —— WCAG 1.4.11 的 3:1 落在 --color-border 上（控件边界）。
+     原注释写「WCAG 1.4.11 3:1」是错的（实测仅 1.48:1），已改正。 */
+  --color-border: #7c7c7c;             /* 强描边 / focus 参照 */
+  --color-border-strong: #7c7c7c;
+  /* 2026-09-29：此前的 --color-border-strong 在暗色下会翻成近白（#e9eaee），
+     却被当边框色用（workbench.css / components-layout.css），语义已不成立。
+     现两套主题同值，且它现在表示"强调描边"而非"更重的分隔线"。 */
+
+  /* ── 文字：四级墨 + hero 满对比（WorkBuddy 规律 2：英雄纯黑，正文降档）── */
+  /* 四级墨全部满足 WCAG AA（≥4.5:1 压在本主题案面 #f5f5f5 上）。 */
+  --color-text-primary: #181818;
+  --color-text-secondary: #565656;
+  --color-text-tertiary: #5f5f5f;
+  --color-text-muted: #5f5f5f;
+  --color-text-faint: #6a6a6a;
+  --color-text-on-code: #3a3a3a;
+  /* 思考（过程）专用：比正文浅一档 + 小一档字号。过程不是内容，
+     不能和结论抢同一条视觉通道。 */
+  --color-text-thinking: #5f5f5f;
+  /* hero 满对比（浅 #000 / 暗 #fff，由主题覆盖）：空态大标题专用，
+     全屏唯一的最粗最黑元素 —— 一屏一主角（2026-10-16 墨与纸 v4）。 */
+  --color-text-hero: #000000;
+
+  /* ── 墨：品牌陶土红（terracotta）。绝不用作 error/success 语义 ──
+   * 抄 cc-haha：强调色与 warning 原本同属橙系（色相差仅约 30°），
+   * 同一屏上"品牌强调"和"⚠ 需要注意"互相稀释；warning 已被挪到芥黄，
+   * 两者拉开到 60°+。 */
+  /* 2026-09-30：强调色换松墨绿（用户定调：不要橙、不要蓝，要「高级感」）。
+     松墨绿在暖白/纸色背景上不刺眼，长时间看不累，且与 ink 暗色主题同族。 */
+  /* 2026-10-04（L1 修正）：强调色**必须声明在 @theme 内**且用**字面量**。
+     此前它被拆成「@theme 的 `--color-accent-base`」+「base.css 里一条把它
+     接到 `--color-accent` 的接桥声明」两层。拆分的初衷是让 useTheme 的行内
+     注入能压过主题值，但代价被低估了：
+
+     **Tailwind v4 只为注册在 @theme 颜色命名空间里的键生成 bg / text /
+     border 三类工具类**。裸 `--color-accent` 只是普通 :root 自定义属性，对扫描器
+     不可见 → `bg-accent` / `text-accent` / `border-accent` **一条都不生成**。
+     实测构建产物中 0 处，而源码有 117 处调用（bg 44 / text 59 / border 14），
+     全部静默失效：主按钮退化成白底白字（隐形），强调色文字回落成继承色。
+
+     现在 @theme 直接持有字面量 `--color-accent`：工具类正常生成，主题层
+     （本文件亮色 / themes/dark.css 暗色）改写同一个键，用户层 useTheme 的
+     行内样式优先级仍然最高——三层语义与原先逐层一致，只是少了一跳桥接。
+
+     刻意**不**写成「`--color-accent` 间接引用 `--color-accent-base`」的形式：
+     @theme 发出的 `:root` 与别名层同源，var() 间接会形成循环依赖导致整条
+     声明 invalid（见 2026-10-01-audit-and-batches-report）。字面量彻底绕开该
+     问题。
+
+     注：注释里也别把已删掉的间接引用写成 `var(--…)` 的完整形式——Check 2 的
+     孤儿扫描不跳过注释，会把它当成活跃引用。 */
+  --color-accent: #2f4a63;
+
+  /* 压在 accent 实色块上的文字色。
+     与下面 --color-accent-on-text 是**两件事，名字却只差词序**：
+       on-accent     = 文字坐在 accent 实色底上 → 必须是浅色/深色（高对比）
+       accent-on-text= accent 自身 16% 的淡色   → 适合次级文字、描边、淡底
+     2026-10-05：此前本 token 只在 base.css 的 :root 里定义，Tailwind v4
+     不从别名层生成工具类，于是 `text-on-accent` 是个**不存在的类**；同时
+     10 处 accent 实色按钮（ToolTabs 的导入/确认添加、SecurityTab、
+     AdvancedSettingsTab、Sidebar 确认键等）误用了 `text-accent-on-text`
+     ——accent 底 + 16% 淡 accent 字，文字与底色几乎同色，肉眼等于隐形。
+     放进 @theme 才能生成 `text-on-accent`；暗色主题的值在 themes/dark.css
+     覆写（accent 提亮后白字对比度不足）。 */
+  --color-on-accent: #ffffff;
+
+  /* accent 的派生档位：hover / on-text / soft / soft-strong。
+     2026-10-04 起与本体同处 @theme。此前它们在 base.css 的别名层
+     （:root），Tailwind v4 只从 @theme 生成工具类，于是
+     bg-accent-soft / bg-accent-soft-strong / hover:bg-accent-hover /
+     text-accent-on-text 四类工具类不生成任何规则 —— 与 7413e1fc 修掉的
+     117 处本体失效同源，只是当时没人统计派生档。
+
+     为什么放回 @theme 不会让「用户注入绿 accent、hover 仍是主题绿」
+     那个坑复发（2026-10-01 审核提出的反对理由）：那针对的是**静态字面量**。
+     这里写的是 color-mix 表达式，在使用点才求值，基准仍是运行时的
+     --color-accent，useTheme 注入的强调色照样流进每一档派生。取值与
+     搬移前逐字节相同，对已有 20 余处 raw var() 消费方零视觉变化，
+     变的只是这四类工具类从「不生成」变成「生成」。
+
+     --color-on-accent 已于 2026-10-05 并入本块（见上方字面量声明）：它是
+     字面量而非 color-mix 派生，值随主题在 themes/dark.css 覆写。 */
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 88%, black);
+  --color-accent-on-text: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  /* soft 档：accent 极淡的底（纸面语义）。混白而非降低 alpha——半透明叠在
+     不同底色上会算出不同观感，token 就失去「唯一定义」的意义。
+
+     2026-10-21：暗色主题必须覆盖这两档（见 themes/dark.css）。这里的
+     「混白」是**为白纸面调的**，暗底上混白 = 近白亮块：preview 的行内代码
+     底 + text-primary 字会变成白底浅字、引用块同样读不出来。暗色改成
+     「accent 混纸面底」，保持同样的极淡染色而不反色。 */
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 10%, white);
+  --color-accent-soft-strong: color-mix(in srgb, var(--color-accent) 18%, white);
+  /* accent-line：给「恒暗底浮层」用的可见强调线（截图覆盖窗的选区边框、
+     标注输入框 outline）。与 soft 档语义相反 —— soft 是纸面上的淡染色，
+     line 是暗底上的亮线，因此**不随暗色主题变暗**，恒为 accent 混白。 */
+  --color-accent-line: color-mix(in srgb, var(--color-accent) 18%, white);
+  /* 渠道品牌色（2026-09-30）：只用于渠道徽标小圆牌，让 QQ / 企业微信
+     一眼可辨。亮色用品牌原色，暗色在 themes/dark.css 提亮一档。 */
+  --color-brand-qq: #12b7f5;
+  --color-brand-wecom: #07c160;
+
+  --color-link: #2f4a63;
+  --color-link-hover: #24384a;
+  --color-link-soft: #5f5f5f;
+  --color-link-soft-hover: #2f4a63;
+  /* ── 按钮语义对 ──────────────────────────────────────────────────
+     2026-09-30：这里此前有**两套并存的按钮 token**（`-fg` 与 `-text`），
+     键名重复、CSS 后者覆盖前者 —— 结果 primary 按钮实际是苹果蓝 #0071e3，
+     改 -fg 那套完全没生效。现只保留 `-text` 一套（代码里 21 处引用它），
+     并把主按钮并入强调色（2026-10-24 起为墨蓝）。 */
+  --color-btn-primary-bg: #2f4a63;
+  --color-btn-primary-text: #ffffff;
+  --color-btn-primary-hover: #24384a;
+  --color-btn-secondary-bg: transparent;
+  --color-btn-secondary-fg: #181818;
+  --color-btn-secondary-hover: #ededed;
+  --color-on-primary: #ffffff;   /* 品牌绿实底上的文字 */
+  --color-on-error: #ffffff;     /* 错误红实底上的文字（暗色主题翻成深色） */
+  --color-inverse-surface: #181818;
+  --color-inverse-on-surface: #ffffff;
+  /* 描边按钮 / 品牌徽标的淡染描边。原先是暖陶土粉 #efded4，浅色下整排按钮
+     边框发粉、与绿色强调色打架——"浅色主题看起来像粉色"的头号嫌疑。改为随
+     强调色淡染的中性描边：亮色压在卡片底上是一层极淡的绿调，暗色同理，
+     既保留"描边"语义又不引入第二个色相。 */
+  --color-primary-fixed-dim: color-mix(in srgb, var(--color-accent) 15%, var(--color-bg-card));
+  /* 主按钮阴影（墨与纸 v4：阴影零色相——绿调阴影在暗色下发脏，全部转中性） */
+  --shadow-button-primary: 0 1px 2px rgba(20, 20, 20, 0.20), 0 3px 10px rgba(20, 20, 20, 0.14);
+  --shadow-focus-ring: 0 0 0 1px rgba(20, 20, 20, 0.30);
+
+
+  /* ── 语义四色：色相彼此拉开 ≥30°，全部避开品牌蓝区 ──
+        success 松绿 / warning 芥黄 / error 绛红（偏品红）/ info 靛灰蓝 */
+  --color-success: #3e8153;
+  --color-success-soft: #e8f2e9;
+  /* 芥黄：与陶土红强调色拉开色相，避免「品牌」与「注意」互相稀释。 */
+  --color-warning: #a8751f;
+  --color-warning-soft: #f8f0dc;
+  --color-error: #c74436;
+  --color-error-soft: #faece8;
+  --color-info: #4f7fa3;
+  --color-info-soft: rgba(79, 127, 163, 0.12);
+
+  /* ── 语义四色的「文字安全档」────────────────────────────────
+     原始语义色（--color-success 等）是为**图标 / 描边 / 填充**设计的，
+     直接拿来当 12px 小字并不总是够对比度。实测（WCAG，纸面 + 各自 -soft 底）：
+       success 4.70/4.10 · warning 4.02/3.54 · error 4.87/4.23 · info 4.29/3.72
+     下面四个是**保持色相、只压暗**解出来的文字档，两处都 ≥4.5:1。
+     用法：12px 以下的语义文字一律走 `text-text-*`；原始档留给图标与描边。 */
+  --color-text-success: #3a794e;   /* 5.20 / 4.53 */
+  --color-text-warning: #7a5e0c;   /* 6.12 / 4.75 */
+  --color-text-error: #bf4134;     /* 5.22 / 4.53 */
+  --color-text-info: #467191;      /* 5.21 / 4.52 */
+
+  /* ── 分类色板（8 档 · 仅给「图标身份」用）──────────────────────────
+     2026-10-23 新增，回答「配置/设置界面的图标全是灰的」：图标是**分类的
+     身份**，8 档色相让同一屏里的不同类目一眼可分（线性推出的结论：人眼在
+     扫视列表时先抓色块再读文字，灰图标等于把这条通道关掉）。
+
+     三条硬纪律，别破：
+     1. **与语义四色物理隔离。** success/warning/error/info 表达「状态」，
+        分类色表达「是什么」。两者共用色相会让用户把「数据库」读成「成功」。
+        所以这里的名字是 tone-*，且刻意避开语义四色的名字。
+     2. **只涂图标与图标底，不涂文字。** 分类色是身份色不是文本色，小字用
+        它会掉到 4.5:1 以下（12px 中文尤其明显）。文字层级交给
+        --color-text-* 四级墨。
+     3. **底色档不进契约。** 图标底一律由使用点 color-mix 现算
+        （`color-mix(in srgb, var(--cat-tone) 14%, var(--color-bg-primary))`），
+        亮色混白纸面、暗色混暗纸面，自动跟随主题 —— 若把 soft 档也写进
+        @theme，每套主题都要多维护 8 条且必然与本体漂移。
+
+     色相间距 ≥30°（slate 是无彩色，作「通用/系统」的零号档）。 */
+  --color-tone-slate: #64748b;    /* 通用 / 系统 / 工具 */
+  --color-tone-blue: #3b7fd4;     /* 网络 / 连接器 / 云 */
+  --color-tone-cyan: #0e7c9b;     /* 数据 / 数据库 / 检索 */
+  --color-tone-green: #3d8a5a;    /* 文件 / 办公 / 文档 */
+  --color-tone-amber: #b57f1a;    /* 自动化 / 定时 / 任务 */
+  --color-tone-orange: #d9772f;   /* 媒体 / 音视频 / 图像 */
+  --color-tone-rose: #d1546e;     /* 记忆 / 人格 / 社交 */
+  --color-tone-violet: #7c5cd6;   /* 智能 / 技能 / 模型 */
+
+  /* ── 实心色块上的字形前景色（2026-10-23）────────────────────────
+     配合共享层 .cat-tile：底 = --color-tone-*，字 = 本令牌。
+
+     分主题的原因（实测 WCAG 1.4.11 非文本 ≥3:1）：
+       浅色主题 白字压在 8 档 tone 上 = 3.17~4.82:1 → 全部达标；
+       深色主题的 tone 是"暗底提亮档"，白字只有 2.00~2.61:1 → 全部不达标，
+       必须换成深墨（6.99~9.14:1）。
+     所以这里**不能写死 #ffffff**——深色主题在 themes/dark.css 覆盖为深墨。 */
+  --color-on-tone: #ffffff;
+
+  /* ── 扁平化：焦点反馈不用描边 ──────────────────────────────────
+     全局不用 2px 实线 outline（那正是「焦点描边」）。焦点靠一层**无边界
+     的强调色淡晕**承担：它是 color-mix 到透明的软光晕，没有硬边线，
+     不会在扁平界面上长出第二层框。
+
+     为什么不能直接 `outline: none` 了事：WCAG 2.4.7 要求键盘焦点可见。
+     光晕满足「可见且非描边」，是本方案里唯一同时满足两条的路径。 */
+  --shadow-focus-flat: 0 0 0 2px color-mix(in srgb, var(--color-accent) 26%, transparent);
+
+  /* Tailwind 原生色槽 → 语义令牌重定向（L0，2026-10-01）──────────
+     101 处组件写着 `text-red-400` / `bg-emerald-500` 这类 Tailwind
+     原生色阶类，它们不跟随强调色 —— L1 的"强调色可选"对这些组件会
+     是半吊子的。这里把**实际在用的 21 个色槽**重定向到语义 token：
+     组件里的类名一行不改，自动跟随主题与强调色。
+     放在 @theme 内而非别名层是必需的 —— Tailwind v4 只从 @theme
+     生成工具类，别名层（:root）里的定义不会产生任何 .text-red-400
+     规则（已实测：工具类不生成，重定向落空）。
+
+     shade → alpha：Tailwind 数字越大越浓。同族内不同 shade 在本项目
+     承载**真实的视觉层次**（AnalyticsView 的 `red-300` 是标题、
+     `red-200` 是次要说明），全部塌成同一 token 会让层次消失，故按
+     shade 映射到不同 alpha 保留浓淡。zinc 是中性色阶，映射到文本灰阶
+     而非 alpha 混合。
+
+     只声明实际在用的槽：把整条色阶都重定向，会让将来误用一个未声明
+     的 shade 时静默解析成无关颜色。
+
+     这些槽进 CONTRACT（每套主题须声明）是有意为之——主题各自把
+     它们指向本主题的 error/success/warning，联动才正确。 */
+  --color-red-200:      color-mix(in srgb, var(--color-error) 65%, transparent);
+  --color-red-300:      color-mix(in srgb, var(--color-error) 82%, transparent);
+  --color-red-400:      var(--color-error);
+  --color-red-500:      var(--color-error);
+  --color-rose-200:     color-mix(in srgb, var(--color-error) 65%, transparent);
+  --color-rose-300:     color-mix(in srgb, var(--color-error) 82%, transparent);
+  --color-rose-500:     var(--color-error);
+
+  --color-amber-200:    color-mix(in srgb, var(--color-warning) 65%, transparent);
+  --color-amber-300:    color-mix(in srgb, var(--color-warning) 82%, transparent);
+  --color-amber-400:    var(--color-warning);
+  --color-amber-500:    var(--color-warning);
+  --color-yellow-400:   var(--color-warning);
+
+  --color-green-400:    var(--color-success);
+  --color-green-500:    var(--color-success);
+  --color-emerald-200:  color-mix(in srgb, var(--color-success) 65%, transparent);
+  --color-emerald-300:  color-mix(in srgb, var(--color-success) 82%, transparent);
+  --color-emerald-400:  var(--color-success);
+  --color-emerald-500:  var(--color-success);
+
+  --color-zinc-300:     var(--color-text-tertiary);
+  --color-zinc-400:     var(--color-text-faint);
+  --color-zinc-500:     var(--color-text-secondary);
+
+  /* Status chips（Composer 会话状态胶囊）—— 墨与纸 v4：中性化，
+     色相退出组件层（WorkBuddy 规律 3）；它们是状态不是行动。 */
+  --color-chip-model-bg: rgba(20, 20, 20, 0.06);
+  --color-chip-model-fg: #181818;
+  --color-chip-workspace-bg: #f0f0f0;
+  --color-chip-workspace-fg: #6f6f6f;
+  --color-chip-permission-bg: #f0f0f0;
+  --color-chip-permission-fg: #6f6f6f;
+
+  /* Overlay */
+  --color-overlay-scrim: rgba(20, 20, 20, 0.44);
+  --color-modal-outline: rgba(20, 20, 20, 0.06);
+
+  /* Buttons（primary 见上「按钮语义对」——不重复声明） */
+  --color-btn-secondary-bg: transparent;
+  --color-btn-secondary-text: #353535;
+  --color-btn-secondary-hover: #ededed;
+  --color-btn-ghost-bg: transparent;
+  --color-btn-ghost-text: #6a6a6a;
+  --color-btn-ghost-hover: rgba(20, 20, 20, 0.05);
+
+  /* Shadows（中性，2026-10-16 墨与纸 v4：色相退出阴影） */
+  --shadow-card: 0 1px 2px rgba(20, 20, 20, 0.05);
+  --shadow-pop: 0 6px 20px rgba(20, 20, 20, 0.1), 0 2px 6px rgba(20, 20, 20, 0.06);
+  /* 2026-09-29：纸面层级阴影 —— 抄 cc-haha，比 --shadow-card 更柔和，
+   * 用于输入框、卡片、预览栏等最常用浮起层。 */
+  --shadow-paper: 0 1px 3px rgba(20, 20, 20, 0.06), 0 1px 2px rgba(20, 20, 20, 0.04);
+  /* 弹层投影（墨与纸 v4 · WorkBuddy 纪律）：只投底部、大 y 偏移 + 负扩散
+     —— 左右不投阴影，浮层"坐"在页面上而非"框"住内容（模拟顶光）。 */
+  --shadow-modal: 0 32px 64px -16px rgba(20, 20, 20, 0.28), 0 12px 28px -14px rgba(20, 20, 20, 0.22);
+
+  /* Scene surfaces — 应用骨架四大区（墨与纸 v4：缝变浅，接近平齐，
+     面与面靠发丝线与阴影分界，不再靠深色缝隙 —— WorkBuddy 规律 6）。 */
+  --theme-bg-app: #ececec;
+  --theme-bg-sidebar: #f5f5f5;
+  --theme-bg-titlebar: #f5f5f5;   /* 与侧栏同案面：取消独立色带 */
+  --theme-bg-chat: #ffffff;
+
+  /* ── 玻璃浮层：保留极轻模糊（与纸面/案面区分），不再大面积铺 ── */
+  --glass-frosted-bg: rgba(251, 251, 251, 0.72);
+  --glass-frosted-blur: blur(6px) saturate(140%);
+  --glass-liquid-bg: rgba(251, 251, 251, 0.82);
+  --glass-liquid-blur: blur(8px) saturate(150%);
+  --glass-liquid-strong-bg: rgba(253, 253, 253, 0.9);
+  --glass-liquid-strong-blur: blur(12px) saturate(170%);
+  --glass-inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  --glass-inset-shadow: inset 0 -1px 0 rgba(20, 20, 20, 0.05);
+  --glass-shadow: 0 8px 32px rgba(20, 20, 20, 0.1), 0 2px 8px rgba(20, 20, 20, 0.05);
+}
+
+/* ------------------------------------------------------------------
+ * 三、兼容别名（历史引用不改也能活 —— 新代码禁止再引用这些名字）
+ * ------------------------------------------------------------------ */
+:root {
+  --font-family-primary: var(--font-sans);
+  --color-error-bg: var(--color-error-soft);
+  --color-warning-bg: var(--color-warning-soft);
+  --color-error-text: var(--color-error);
+  /* 旧名的 --color-text-success 曾是「success 当文字用」的别名。语义四色
+     有了自己的文字安全档（见上方 @theme 里的 --color-text-*），这个别名
+     删掉——否则它作为**未分层**的 :root 声明会盖掉 @theme 里的新值
+     （未分层样式永远赢过 @layer theme）。现有 5 处
+     `color: var(--color-text-success)` 引用自动改用新档。 */
+  /* 纸面令牌：表格是一张白纸（白底黑字 + 灰色网格线），与 Office 一致。
+     界面主题不渗进表格里 —— 深色界面配白纸浅字，内容会直接看不见。
+     共享预览层（@hermix/preview）只使用这些令牌，定义权在应用侧。 */
+  --sheet-bg: #ffffff;
+  --sheet-ink: #000000;
+  --sheet-grid: #d0d0d0;
+  --sheet-head-bg: #f0f0f0;
+  --sheet-head-fg: #5a5a5a;
+}

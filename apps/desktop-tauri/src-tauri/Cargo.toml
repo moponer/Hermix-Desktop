@@ -1,0 +1,116 @@
+[package]
+name = "hermix-desktop"
+version = "0.1.10"
+edition = "2021"
+
+[dependencies]
+# `tray-icon`：托盘（显示在菜单栏）用 Tauri 内置 feature，不引第三方插件。
+tauri = { version = "2", features = [ "protocol-asset", "tray-icon" ] }
+# N0 探针（cdp_probe.rs）：进程内 CDP。**必须与 tauri 的传递依赖同 minor**——
+# tauri 2.12.1 拉的是 webview2-com 0.39（配 windows-core 0.62）；写死 0.38 会
+# 出现「同名 crate 两个版本」，ICoreWebView2 类型互不兼容，编译期 E0308。
+# tauri 升 minor 后用这条自查：`cargo tree -i webview2-com`（应只有一条路径）。
+webview2-com = "0.39"
+windows-core = "0.62"
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+# 设置页「通用」的两项系统级能力（2026-10-02）：
+# · notification → 桌面通知
+# · autostart   → 开机自启动（Windows 走注册表 Run 键）
+# 两者都是官方插件，能力此前缺失是因为没人加依赖，不是后端不支持。
+tauri-plugin-notification = "2"
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+# `stream` 是 updater.rs 流式下载（resp.bytes_stream()）直接依赖的特性，
+# 必须自己声明——此前只靠全 workspace 构建时 hermix-tools/hermix-server
+# 的特性合并顺带带上，`cargo test -p hermix-desktop` 等单独构建会 E0599。
+reqwest = { version = "0.12", features = ["json", "stream"] }
+dirs = "6"
+open = "5"
+base64 = "0.22"
+once_cell = "1"
+# 在线更新（updater.rs）：清单/zip 走 reqwest（已有），流式下载 + sha256 校验。
+futures = "0.3"
+sha2 = "0.10"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+# `which` is used by `commands::python_detect` for the Settings → Backend
+# tab "Python 运行时" probe (PATH:python, PATH:python3 etc.). NOT
+# consumed by hermix-tools directly because that crate has its own dep.
+which = "6"
+# browser_view_controller 的日志（几何保存失败 / 小窗创建）。只作日志消费，
+# 与 workspace 其余 crate 的 tracing 是同一个 crate 实例。
+tracing = "0.1"
+
+hermix-plugin = { path = "../../../crates/hermix-plugin" }
+hermix-config = { path = "../../../crates/hermix-config" }
+# 浏览器小窗（browser_view_controller）：读 hermix-tools 侧 screencast 帧通道。
+# 会话本身在 tools crate 的静态单例里，本 crate 只消费帧、管子窗。
+hermix-tools = { path = "../../../crates/hermix-tools" }
+
+tauri-plugin-global-shortcut = "2"
+# 文件关联设置页（HKCU\Software\Classes 登记；版本与 installer 同代）。
+winreg = "0.10"
+# png：截图编辑器裁剪/剪贴板无损输出。jpeg 已随幕布下沉原生层移除
+# （backdrop.rs 直贴原始 BGRA，不编码）。
+image = { version = "0.25", features = ["png"] }
+
+# 索引遍历线程降为 BELOW_NORMAL 优先级：全盘扫描不抢 UI 线程。
+[target.'cfg(windows)'.dependencies]
+# 截图抓屏走 GDI BitBlt（screenshot.rs），不引 xcap：
+# xcap 逐显示器抓帧（~200ms）+ RGBA↔BGRA 全帧转换，且只覆盖光标所在
+# 那台显示器（多屏其余区域是黑的）。直连 GDI 一次抓整块虚拟桌面 ~10ms。
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Ioctl",
+  "Win32_System_Pipes",
+  "Win32_System_Power",
+  "Win32_System_Threading",
+  "Win32_System_WindowsProgramming",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+  # 截图：剪贴板直写（DataExchange/Ole）+ 窗口识别排除 cloak（Dwm）
+  # + ESC 键盘监听（KeyboardAndMouse，覆盖窗失去焦点时也能退出）
+  "Win32_System_DataExchange",
+  "Win32_System_Ole",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_Input_KeyboardAndMouse",
+  # 原生幕布窗（backdrop.rs）：GetModuleHandleW（窗口类注册）
+  "Win32_System_LibraryLoader",
+  # desktop_log.rs：GUI 子系统没有控制台，stderr 句柄必须自己指到日志文件
+  "Win32_System_Console",
+] }
+
+[target.windows.dependencies]
+
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+# feature 垫片：schemars 0.8（tauri-build 的 build-dependency）开 preserve_order
+# 后拉起 indexmap 1.9.3，其 build.rs 靠 autocfg 运行时探测 emit `has_std`，本机
+# 探测静默失败 → 走 no_std 分支（IndexMap<K, V, S> 三泛型无默认）→ schemars
+# 两参调用直接 E0107。resolver v2 下 build-dep 图与普通依赖图 feature 不互通，
+# 所以垫片必须放在这里（build-dependencies）才统一进 schemars 的编译单元。
+# 显式 std 后 build.rs 走 CARGO_FEATURE_STD 快速路径无条件 emit，跳过探测。
+# 代码不引用，仅为传递依赖统一 feature。
+indexmap1 = { package = "indexmap", version = "1.9", features = ["std"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lib]
+name = "hermix_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+# 生产构建（release.sh）必须开：tauri-build 见不到 CARGO_FEATURE_CUSTOM_PROTOCOL
+# 就发 cfg(dev)，generate_context! 不嵌前端资产、窗口直接导航 devUrl
+# （127.0.0.1:1420）——用户机器上表现为「拒绝连接」错误页。
+# dev 工作流（cargo run）不开此 feature，走 devUrl 热更新，互不干扰。
+custom-protocol = ["tauri/custom-protocol"]

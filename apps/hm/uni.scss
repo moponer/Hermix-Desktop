@@ -1,0 +1,145 @@
+/* 设计令牌 —— 逐值取自 desktop-tauri 的暗色主题
+ * （apps/desktop-tauri/src/styles/themes/dark.css）。**不新造一套色**：
+ * 两个端同源，用户看过去是一家人而不是两个产品。
+ *
+ * 抬升顺序沿用主题文件那一行：
+ *   #101113 < #161719(页) < #1d1f22(卡) < #24262a < #2e3136(线)
+ * 主题注释点明了原因：「纯灰在暗底上是水泥灰，带 4% 以内的色相偏移才有
+ * 通透感」——所以这套不是纯中性灰，主文字也不用纯白。
+ *
+ * 「不新造一套色」的例外仅有一处：下方并列的「墨绿」浅色主题套（2026-10-15
+ * 起），原因与边界见该节注释。
+ *
+ * ── 2026-10-09 改造：取消描边 ─────────────────────────────────────
+ * 原来的 `$line` / `$edge` 两支边框色被移除，全站不再有任何 `border`。
+ * 层次改由三样东西承担：
+ *   1. **底色差**——上面那条抬升序列本身就是层次，卡片比页底高一档；
+ *   2. **阴影**——暗底上阴影很弱，只用来给浮层（抽屉、悬浮卡片）一点脱离感；
+ *   3. **间距**——分隔靠留白，不靠一条线。
+ * 这是全站统一的规则，不要在局部页例外加回 border。
+ */
+/* 下列颜色变量改为引用 CSS 自定义属性（定义见 App.vue 的 :root / :root.theme-dark）。
+ * 这样所有消费这些 $ 变量的页面 / 组件无需改动即可随主题切换：
+ * 浅色（墨绿）为默认主题，深色通过 :root.theme-dark 提供。 */
+$base: var(--c-base);
+$paper: var(--c-paper);
+$card: var(--c-card);
+$raised: var(--c-raised);
+
+$fg: var(--c-fg);
+$fg2: var(--c-fg2);
+$fg3: var(--c-fg3);
+$fg4: var(--c-fg4);
+
+$accent: var(--c-accent);
+$on-accent: var(--c-on-accent);
+$ok: var(--c-ok);
+$warn: var(--c-warn);
+$warn-bg: var(--c-warn-bg);
+$err: var(--c-err);
+$err-bg: var(--c-err-bg);
+
+/* ── 2026-10-27：旧色系（墨绿 $hm-* 与夜墨）**已删除** ────────────
+ * 全站只剩 Notion 亮/暗两套，取值在 App.vue 的 :root 与
+ * :root.theme-notion-dark（与桌面端 themes/notion*.css 同源）。
+ * 页面/组件一律用上面的 $base/$card/$fg… 别名，不要再新造第二套颜色。 */
+
+/* 阴影：暗底上几乎看不见，只用于浮层与抽屉的「脱离页面」暗示。
+ * 卡片级别的层次靠 $paper → $card 的底色差，不靠这里。 */
+$shadow-pop: 0 8rpx 32rpx rgba(0, 0, 0, 0.45);
+$shadow-drawer: -8rpx 0 48rpx rgba(0, 0, 0, 0.5);
+
+/* 形状：Notion 的克制圆角 —— 卡片 6、气泡 8、控件 4（原来卡片 12 / 气泡 15 /
+ * 按钮全圆角，是移动端卡片流的形状，和桌面端的稿纸观感对不上）。 */
+$r-bubble: 8px;
+$r-card: 6px;
+$r-pill: 4px;
+
+/* ── 2026-10-12 移动端原生感改造 ─────────────────────────────────
+ * 字号梯度对齐原生（Android sp / iOS pt ≈ 2×rpx），不再用网页小字：
+ *   标题 34 · 正文 30 · 次级 26 · 脚注 22（rpx）
+ * 旧页面通篇 20~26rpx 是桌面网页的印刷尺度，在手机上要眯眼看。
+ * 触控目标统一 88rpx（= 44pt，成人指尖的下限）；页边距统一 32rpx。 */
+$fs-title: 34rpx;
+$fs-body: 30rpx;
+$fs-sub: 26rpx;
+$fs-mini: 22rpx;
+$tap: 88rpx;
+$gutter: 32rpx;
+
+/* markdown 渲染样式（rich-text 不吃 scoped，所以放全局） */
+.txt.md {
+  word-break: break-word;
+  line-height: 1.6;
+}
+.md-code {
+  background: $base;
+  border-radius: 8rpx;
+  padding: 16rpx 20rpx;
+  margin: 12rpx 0;
+  overflow-x: auto;
+  font-family: monospace;
+  font-size: 26rpx;
+  color: $fg;
+  white-space: pre;
+}
+.md-code-inline {
+  background: $raised;
+  border-radius: 6rpx;
+  padding: 2rpx 10rpx;
+  font-family: monospace;
+  font-size: 26rpx;
+  color: $accent;
+}
+.md-link {
+  color: $accent;
+  text-decoration: underline;
+}
+.md-h {
+  display: block;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: $fg;
+  margin: 8rpx 0;
+}
+.md-ul {
+  margin: 8rpx 0;
+  padding-left: 36rpx;
+}
+.md-li {
+  font-size: 30rpx;
+  color: $fg;
+  line-height: 1.6;
+}
+/* 表格 */
+.md-table {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 12rpx 0;
+  border-collapse: collapse;
+  font-size: 28rpx;
+}
+.md-th,
+.md-td {
+  padding: 10rpx 16rpx;
+  color: $fg;
+  text-align: left;
+  border-bottom: 1px solid $raised;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300rpx;
+}
+.md-th {
+  font-weight: 600;
+  color: $fg2;
+  background: $raised;
+}
+
+/* 键盘弹出补偿：把滚动区上移，保持底部输入栏贴近键盘。--kb-height 由 JS 设置。 */
+.kb-open .content {
+  transform: translateY(calc(-1 * var(--kb-height, 0px)));
+  transition: transform 0.12s ease-out;
+}

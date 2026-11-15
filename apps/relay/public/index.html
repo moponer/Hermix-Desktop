@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hermix —— 跑在你自己电脑上的 AI 助手</title>
+<meta name="description" content="一个便携 exe，双击就开；手机端扫一下配对。会话、文件、任务记录全落在本机。产品下载、文档、Blog 与更新日志。" />
+<link rel="icon" type="image/png" href="favicon.png" />
+<link rel="stylesheet" href="assets/site.css?v=2" />
+<script>var HERMIX_M_VERSION = "0.1.5";</script>
+</head>
+<body>
+<a class="skip" href="#main">跳到主要内容</a>
+
+<nav class="nav" data-nav></nav>
+
+<div class="hero">
+  <div class="wrap">
+    <p class="kicker">Hermix · 本机优先的 AI 助手</p>
+    <h1>AI 助手装回你的电脑，<br>数据也是</h1>
+    <p class="sub">桌面端一个便携 exe，双击就开；手机端扫一下配对，在外面遥控它。模型调用走云端 API，其余一切不经过任何人。</p>
+    <div class="acts">
+      <a class="btn" href="hermix.html">了解 Hermix</a>
+      <a class="btn ghost" href="docs.html">使用文档</a>
+      <span class="m">桌面端 <span data-ver="desktop.version">—</span> · 手机端 <span data-ver="apk.version">—</span></span>
+    </div>
+    <ul class="trust">
+      <li>Windows 10+ · Android</li>
+      <li>不装服务，不写注册表</li>
+      <li>数据落在本机 SQLite</li>
+      <li>老办公机跑得动</li>
+    </ul>
+  </div>
+</div>
+
+<main id="main">
+
+<div class="sec">
+  <div class="wrap">
+    <h2>三条底线</h2>
+    <p class="lead">不是特性列表，是这个产品立起来的三根柱子。</p>
+    <div class="cols3">
+      <div class="it"><b>不设服务器</b><span>会话、文件、任务记录只存在你的机器上，我们不存你的数据。备份就是复制一个 SQLite 文件。</span></div>
+      <div class="it"><b>先划界，再放行</b><span>装好那一刻按用途划定审批边界：边界内不打扰，越界必问你。弹窗少了，每一次都值得看。</span></div>
+      <div class="it"><b>远程不失控</b><span>手机能下指令、能接通话，但每次敏感操作都要你在手机上亲眼点允许——没有「永久允许」这个口子。</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="wrap">
+    <h2>一个产品，两个客户端</h2>
+    <p class="lead">电脑上是主战场，手机是遥控器。</p>
+    <div class="picks">
+      <a class="pick main" href="hermix.html">
+        <div class="n">Hermix</div>
+        <div class="p">桌面端便携 exe，双击就开；手机端扫一下配对，在外面下指令、审操作、接通话。工具调用、审批、会话留痕，全程明面上。</div>
+        <div class="v"><span data-ver="desktop.version">—</span> · <span data-ver="desktop.date">—</span></div>
+        <span class="go">查看 →</span>
+      </a>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="wrap">
+    <h2>实现笔记</h2>
+    <p class="lead">不写趋势，只写机制：它怎么运转，当时为什么这么取舍。</p>
+    <div class="arts">
+      <a class="a" href="article.html?id=compact-not-delete">
+        <div><div class="t">压缩之后，聊天记录还在吗<span class="tag">会话</span></div>
+        <div class="d">到阈值压一次。折掉的轮次没删，它们搬进一个子会话，原会话一行不动。</div></div>
+        <div class="r">约 1400 字<br>会话</div>
+      </a>
+      <a class="a" href="article.html?id=uac-on-startup">
+        <div><div class="t">启动时那次 UAC 是干嘛的<span class="tag">本机能力</span></div>
+        <div class="d">文件索引想快就得读磁盘元数据，读它要管理员权限。这篇讲为什么不退化成全盘遍历。</div></div>
+        <div class="r">约 1200 字<br>本机能力</div>
+      </a>
+      <a class="a" href="article.html?id=approval-boundary">
+        <div><div class="t">审批卡为什么变少了<span class="tag">安全</span></div>
+        <div class="d">每个命令都弹一次确认，用三天就会习惯性点同意。改成启动时划一次边界，边界内放行。</div></div>
+        <div class="r">约 1100 字<br>安全</div>
+      </a>
+      <a class="a" href="article.html?id=terminal-remembers">
+        <div><div class="t">终端终于能记住上一条命令<span class="tag">本机能力</span></div>
+        <div class="d">ConPTY 持久会话，命令之间状态连续；一次性命令走同一条通道，不留两套实现。</div></div>
+        <div class="r">约 1000 字<br>本机能力</div>
+      </a>
+      <a class="a" href="article.html?id=one-sentence-exe">
+        <div><div class="t">一句话生成一个自带全部资源的 exe<span class="tag">自定义应用</span></div>
+        <div class="d">从自然语言到多文件前端工程，再到单个 exe：资源嵌进 PE 资源节，运行期从内存直喂。</div></div>
+        <div class="r">约 1600 字<br>自定义应用</div>
+      </a>
+    </div>
+    <p style="margin-top:20px"><a href="articles.html">全部 24 篇 →</a></p>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="wrap">
+    <h2>透明发布</h2>
+    <p class="lead">这个页面上的版本号与校验值，和客户端点「检查更新」读到的是同一份文件。</p>
+    <dl class="kv">
+      <dt>桌面端清单</dt><dd class="mono">/desktop/manifest.json</dd>
+      <dt>桌面端 SHA-256</dt><dd class="mono" data-ver="desktop.sha">—</dd>
+      <dt>Spiker 清单</dt><dd class="mono">/spiker/manifest.json</dd>
+      <dt>Spiker SHA-256</dt><dd class="mono" data-ver="spiker.sha">—</dd>
+      <dt>APK 信息</dt><dd class="mono">/api/app-info</dd>
+    </dl>
+  </div>
+</div>
+
+</main>
+
+<footer class="ft" data-footer></footer>
+
+<!-- 首页不加载 articles.js（43KB）：只为渲染 5 条标题不值当，列表页与阅读页才引它。 -->
+<script src="assets/site.js?v=4"></script>
+<script>HERMIX.boot('home');</script>
+</body>
+</html>

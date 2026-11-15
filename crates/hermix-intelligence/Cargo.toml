@@ -1,0 +1,40 @@
+[package]
+name = "hermix-intelligence"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "Smart router, error classifier, usage tracking, and prompt builder for Hermix Agent"
+
+[dependencies]
+hermix-config = { workspace = true }
+hermix-core = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+minijinja = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+strsim = "0.11"
+dirs = "6"
+tempfile = "3"
+# L1: optional. fastembed-rs 5.16 + ort 2.0.0-rc.12 need to download
+# the ONNX runtime from cdn.pyke.io at build time, which is geo-blocked
+# in some regions. CI / dev machines without the binary get a clean
+# `cargo check` either way; production builds flip the feature on.
+fastembed = { workspace = true, optional = true }
+parking_lot = "0.12"
+
+[features]
+default = []
+# Production: real ONNX-backed embeddings (bge-small / jina / mxbai ...).
+fastembed = ["dep:fastembed"]
+
+[dev-dependencies]
+proptest = { workspace = true }

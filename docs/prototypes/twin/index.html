@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>分身 · 主界面原型</title>
+    <link rel="stylesheet" href="./twin.css" />
+  </head>
+  <body>
+    <div class="twin-shell twin-scope">
+      <!-- ── 左侧导航（沿用桌面端侧栏，新增"分身"入口） ── -->
+      <aside class="twin-side">
+        <div class="twin-side__brand">
+          <span class="twin-side__mark" aria-hidden="true"></span>
+          <span class="twin-side__name">HERMIX</span>
+        </div>
+
+        <nav class="twin-nav" aria-label="主导航">
+          <button class="twin-nav__item" type="button"><span>对话</span></button>
+          <button class="twin-nav__item" type="button" aria-current="page">
+            <span>助手阿黎</span><span class="twin-nav__count">2</span>
+          </button>
+          <button class="twin-nav__item" type="button">
+            <span>自动化</span><span class="twin-nav__count">7</span>
+          </button>
+          <button class="twin-nav__item" type="button"><span>专家</span></button>
+          <button class="twin-nav__item" type="button"><span>工作台</span></button>
+          <button class="twin-nav__item" type="button"><span>阅读器</span></button>
+        </nav>
+
+        <div class="twin-side__foot">
+          上次唤醒 · 3 分钟前<br />档案 · 42 条事实
+          <div class="twin-theme" role="group" aria-label="主题预览">
+            <button
+              class="twin-theme__btn"
+              type="button"
+              data-theme-btn="light"
+              aria-pressed="true"
+            >
+              浅色
+            </button>
+            <button
+              class="twin-theme__btn"
+              type="button"
+              data-theme-btn="dark"
+              aria-pressed="false"
+            >
+              深色
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ── 主区 ── -->
+      <main class="twin-main">
+        <!-- 顶栏：她是谁 + 读数 + 权限 -->
+        <header class="twin-top">
+          <div class="twin-ident">
+            <span class="twin-ident__avatar" aria-hidden="true"></span>
+            <span class="twin-ident__text">
+              <span class="twin-ident__name">阿黎</span>
+              <span class="twin-ident__state">
+                <span class="twin-dot" aria-hidden="true"></span>
+                思考中 · 守望 3 个会话
+              </span>
+            </span>
+          </div>
+
+          <div class="twin-readouts">
+            <div class="twin-readout">
+              <span class="twin-readout__label">今日整理</span>
+              <span class="twin-readout__value">12<small>条</small></span>
+            </div>
+            <div class="twin-readout">
+              <span class="twin-readout__label">在跑</span>
+              <span class="twin-readout__value">3<small>个</small></span>
+            </div>
+            <div class="twin-readout">
+              <span class="twin-readout__label">待你定夺</span>
+              <span class="twin-readout__value">2</span>
+            </div>
+            <div class="twin-readout">
+              <span class="twin-readout__label">今日花费</span>
+              <span class="twin-readout__value">86<small>k</small></span>
+            </div>
+          </div>
+
+          <button
+            class="twin-perm"
+            type="button"
+            data-level="full"
+            id="permBtn"
+            aria-label="切换权限级别"
+          >
+            <span class="twin-perm__label">权限</span>
+            <span class="twin-perm__value" id="permValue">放手模式</span>
+          </button>
+        </header>
+
+        <!-- 三栏信息板 -->
+        <div class="twin-board">
+          <!-- 一、新鲜情报 -->
+          <section class="twin-col">
+            <div class="twin-col__head">
+              <span class="twin-col__title">新鲜情报</span>
+              <span class="twin-col__meta">按相关度 · 24h</span>
+            </div>
+            <div class="twin-col__body">
+              <article class="twin-card">
+                <div class="twin-card__top">
+                  <span class="twin-card__source">codex</span>
+                  <span class="twin-tag twin-tag--warn">等你回复</span>
+                  <span class="twin-card__age">3m</span>
+                </div>
+                <div class="twin-card__title">
+                  PR #482 的 review 里有 2 条意见需要你回
+                </div>
+                <div class="twin-card__note">
+                  一条是命名建议（可接受），一条质疑了锁的粒度。我看了下，对方的说法与
+                  `session_persistence` 的事务边界冲突。
+                </div>
+                <div class="twin-card__foot">
+                  <span class="twin-tag">hermix-desktop</span>
+                  <span class="twin-tag twin-tag--accent">已核对代码</span>
+                </div>
+              </article>
+
+              <article class="twin-card">
+                <div class="twin-card__top">
+                  <span class="twin-card__source">rust-lang/rfcs</span>
+                  <span class="twin-tag twin-tag--info">新进展</span>
+                  <span class="twin-card__age">1h</span>
+                </div>
+                <div class="twin-card__title">
+                  2026 edition 的一项提案进入 FCP
+                </div>
+                <div class="twin-card__note">
+                  与你上个月说的「等它定了再动 migration」直接相关。结论段我摘出来了，
+                  其余 4000 字留在笔记里。
+                </div>
+                <div class="twin-card__foot">
+                  <span class="twin-tag">rust</span>
+                  <span class="twin-tag">已入笔记</span>
+                </div>
+              </article>
+
+              <article class="twin-card">
+                <div class="twin-card__top">
+                  <span class="twin-card__source">atomcode</span>
+                  <span class="twin-tag twin-tag--error">2 次失败</span>
+                  <span class="twin-card__age">昨天</span>
+                </div>
+                <div class="twin-card__title">
+                  两次任务挂在同一个编译错误上
+                </div>
+                <div class="twin-card__note">
+                  `E0308` 在 `automation_trigger.rs` 的 match 分支。两次都是同一处：
+                  不是偶发，是任务书里的工作目录写错了。
+                </div>
+                <div class="twin-card__foot">
+                  <span class="twin-tag">atomcode</span>
+                  <span class="twin-tag twin-tag--warn">建议改任务书</span>
+                </div>
+              </article>
+
+              <article class="twin-card">
+                <div class="twin-card__top">
+                  <span class="twin-card__source">zcode-ref</span>
+                  <span class="twin-tag">你关注的仓库</span>
+                  <span class="twin-card__age">2h</span>
+                </div>
+                <div class="twin-card__title">新增 3 个 ACP 适配器</div>
+                <div class="twin-card__note">
+                  其中一个是 Codex 的。之前我们判断「Codex 只能走 headless」，
+                  这条证据需要更新。
+                </div>
+                <div class="twin-card__foot">
+                  <span class="twin-tag">acp</span>
+                  <span class="twin-tag twin-tag--accent">与你判断冲突</span>
+                </div>
+              </article>
+
+              <article class="twin-card">
+                <div class="twin-card__top">
+                  <span class="twin-card__source">本地</span>
+                  <span class="twin-tag">工作台</span>
+                  <span class="twin-card__age">4h</span>
+                </div>
+                <div class="twin-card__title">data-panel 有 3 个文件两天没动过</div>
+                <div class="twin-card__note">
+                  你上周说要在周五前把它的数据源接完。要我提醒，还是先放着？
+                </div>
+                <div class="twin-card__foot">
+                  <span class="twin-tag">workbench</span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <!-- 二、正在执行 -->
+          <section class="twin-col">
+            <div class="twin-col__head">
+              <span class="twin-col__title">正在执行</span>
+              <span class="twin-col__meta">3 跑 · 1 排队</span>
+            </div>
+            <div class="twin-col__body">
+              <article class="twin-task">
+                <div class="twin-task__row">
+                  <span class="twin-task__name">超星刷课 · 6.1 系统规划</span>
+                  <span class="twin-task__pct">38%</span>
+                </div>
+                <div class="twin-bar">
+                  <span class="twin-bar__fill" style="--p: 0.38"></span>
+                </div>
+                <div class="twin-task__sub">
+                  <span class="twin-dot" aria-hidden="true"></span>
+                  <span>第 3 / 8 步 · 测验重做中</span>
+                  <code>12m</code>
+                  <span>锚定 · 原会话</span>
+                </div>
+              </article>
+
+              <article class="twin-task">
+                <div class="twin-task__row">
+                  <span class="twin-task__name">Codex · 重构 auth 模块</span>
+                  <span class="twin-task__pct">62%</span>
+                </div>
+                <div class="twin-bar">
+                  <span class="twin-bar__fill" style="--p: 0.62"></span>
+                </div>
+                <div class="twin-task__sub">
+                  <span class="twin-dot twin-dot--idle" aria-hidden="true"></span>
+                  <span>正在写测试 · 已改 7 文件</span>
+                  <code>headless</code>
+                  <span>安静中 · 不打扰</span>
+                </div>
+              </article>
+
+              <article class="twin-task">
+                <div class="twin-task__row">
+                  <span class="twin-task__name">守望 · hermix-desktop 3 个会话</span>
+                  <span class="twin-task__pct">—</span>
+                </div>
+                <div class="twin-bar">
+                  <span class="twin-bar__fill" style="--p: 1"></span>
+                </div>
+                <div class="twin-task__sub">
+                  <span class="twin-dot twin-dot--idle" aria-hidden="true"></span>
+                  <span>无异常 · 最近一次检查 3 分钟前</span>
+                </div>
+              </article>
+
+              <article class="twin-task">
+                <div class="twin-task__row">
+                  <span class="twin-task__name">每日资料整理</span>
+                  <span class="twin-task__pct">排队</span>
+                </div>
+                <div class="twin-bar">
+                  <span class="twin-bar__fill" style="--p: 0"></span>
+                </div>
+                <div class="twin-task__sub">
+                  <span class="twin-dot twin-dot--idle" aria-hidden="true"></span>
+                  <span>等前一个让出并发 · 预计 15:40</span>
+                </div>
+              </article>
+
+              <div class="twin-card" style="border-style: dashed">
+                <div class="twin-card__top">
+                  <span class="twin-card__source">她建议</span>
+                </div>
+                <div class="twin-card__note">
+                  Codex 那个任务已经 26 分钟没输出。要不要我给它换一次模型重试？
+                  它现在用的是最慢的那档。
+                </div>
+                <div class="twin-card__foot">
+                  <button class="twin-btn twin-btn--primary" type="button">
+                    换档重试
+                  </button>
+                  <button class="twin-btn" type="button">再等等</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 三、待你定夺 + 她的成长 -->
+          <section class="twin-col twin-col--third">
+            <div class="twin-col__head">
+              <span class="twin-col__title">待你定夺</span>
+              <span class="twin-col__meta">2 件</span>
+            </div>
+            <div class="twin-col__body">
+              <article class="twin-ask">
+                <div class="twin-ask__q">
+                  把「盯 hermix 的 3 个会话」转成每天 9:00 的常驻任务？
+                </div>
+                <div class="twin-ask__why">
+                  依据：过去 3 天你都在早上 9 点前后手动让我看一遍。
+                  转成任务后我不再问你，只在有异常时说。
+                </div>
+                <div class="twin-ask__acts">
+                  <button class="twin-btn twin-btn--primary" type="button">
+                    就这样
+                  </button>
+                  <button class="twin-btn" type="button">只今天</button>
+                  <button class="twin-btn" type="button">不用</button>
+                </div>
+              </article>
+
+              <article class="twin-ask">
+                <div class="twin-ask__q">
+                  Codex 请求确认：删除 3 个已合并的临时分支
+                </div>
+                <div class="twin-ask__why">
+                  它跑了 <code>git branch --merged</code>，三个分支都已在 main 里。
+                  删除可恢复（reflog 30 天），但这是不可逆操作清单里的项。
+                </div>
+                <div class="twin-ask__acts">
+                  <button class="twin-btn twin-btn--primary" type="button">
+                    批准
+                  </button>
+                  <button class="twin-btn" type="button">我自己看</button>
+                </div>
+              </article>
+
+              <div class="twin-learn">
+                <div class="twin-col__head" style="padding: 12px 0 6px; border: none">
+                  <span class="twin-col__title">她最近学到</span>
+                  <span class="twin-col__meta">42 条 · 可回滚</span>
+                </div>
+                <div class="twin-learn__item">
+                  <span class="twin-learn__ev">10-21</span>
+                  <span
+                    >汇报时先给结论，再给过程。你不看中间步骤，只看判断对不对。</span
+                  >
+                  <span class="twin-learn__conf">明说</span>
+                </div>
+                <div class="twin-learn__item">
+                  <span class="twin-learn__ev">10-20</span>
+                  <span
+                    >当前项目聚焦 agent loop 稳定性，不是新功能。新功能提案先问再写。</span
+                  >
+                  <span class="twin-learn__conf">推断</span>
+                </div>
+                <div class="twin-learn__item">
+                  <span class="twin-learn__ev">10-18</span>
+                  <span>周五晚上不要打扰，包括「任务完成了」这类好消息。</span>
+                  <span class="twin-learn__conf">明说</span>
+                </div>
+                <div class="twin-learn__item">
+                  <span class="twin-learn__ev">10-16</span>
+                  <span
+                    >外部 CLI 的任务书要写明工作目录，否则一半的失败来自路径错。</span
+                  >
+                  <span class="twin-learn__conf">推断</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- 底部输入口 -->
+        <div class="twin-dock">
+          <div class="twin-dock__hint">
+            <span>回车发送</span>
+            <kbd>Shift</kbd><span>+</span><kbd>Enter</kbd><span>换行</span>
+            <span>·</span>
+            <span>她记得你上次说的：外部 CLI 任务书要写工作目录</span>
+          </div>
+          <div class="twin-dock__row">
+            <span class="twin-dock__caret" aria-hidden="true">›</span>
+            <input
+              class="twin-dock__input"
+              type="text"
+              placeholder="跟她说点什么，或者直接派活：让 Codex 把 auth 模块的测试补完"
+              aria-label="给分身发消息"
+            />
+            <div class="twin-dock__chips" role="group" aria-label="动作模式">
+              <button
+                class="twin-chip"
+                type="button"
+                aria-pressed="false"
+                data-chip
+              >
+                盯住
+              </button>
+              <button
+                class="twin-chip"
+                type="button"
+                aria-pressed="false"
+                data-chip
+              >
+                派活
+              </button>
+              <button
+                class="twin-chip"
+                type="button"
+                aria-pressed="true"
+                data-chip
+              >
+                总结
+              </button>
+            </div>
+            <button class="twin-send" type="button" aria-label="发送">↑</button>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      // 主题切换：模拟应用外观设置（接入后由全局主题接管）
+      document.querySelectorAll("[data-theme-btn]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const theme = btn.dataset.themeBtn;
+          document.documentElement.dataset.theme = theme;
+          document
+            .querySelectorAll("[data-theme-btn]")
+            .forEach((b) =>
+              b.setAttribute(
+                "aria-pressed",
+                String(b.dataset.themeBtn === theme)
+              )
+            );
+        });
+      });
+
+      // 权限级别切换：演示"放手模式 / 默认"两态
+      const permBtn = document.getElementById("permBtn");
+      const permValue = document.getElementById("permValue");
+      permBtn.addEventListener("click", () => {
+        const full = permBtn.dataset.level === "full";
+        permBtn.dataset.level = full ? "default" : "full";
+        permValue.textContent = full ? "默认" : "放手模式";
+      });
+
+      // 动作 chip：单选态演示
+      document.querySelectorAll("[data-chip]").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          document
+            .querySelectorAll("[data-chip]")
+            .forEach((c) => c.setAttribute("aria-pressed", "false"));
+          chip.setAttribute("aria-pressed", "true");
+        });
+      });
+    </script>
+  </body>
+</html>

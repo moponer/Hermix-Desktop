@@ -1,0 +1,5 @@
+# AtomCode editor local directory (machine-specific state, skills, settings)
+.atomcode/
+
+# Tauri 打包在本机生成的许可文件（未被 tauri.conf.json 引用，不入仓）
+src-tauri/license.rtf

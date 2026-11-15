@@ -1,0 +1,236 @@
+/* ════════════════════════════════════════════════════════════════════
+   任务台（工单 / 团队 / 资源）— 状态行语言（2026-10-28）
+   ──────────────────────────────────────────────────────────────────
+   为什么单独一个文件：这个组件同时出现在「任务台」独立页和阿黎值守页的
+   「任务」页签里。它此前用 Tailwind 原子类在 TSX 里就地写状态块，结果是：
+
+   1. **状态块靠整块淡底说话**：`bg-error-soft` 铺满一行 + 红字大段说明，
+      在纸面上非常刺眼（用户实测「多难看」）；同一屏出现两块，整页立刻
+      变成告警墙。
+   2. **同一语义三套写法**：加载失败、资源闸门越限、角色解析失败各写一套，
+      颜色深浅、圆角、字号都不同 —— 用户读到的不是"三种状态"，是"三个
+      不同的人做的三块东西"。
+   3. **宽高不齐**：`p-3` / `p-4` / `px-3 py-2` 混用，行高错位。
+
+   现在的语言（与值守页的观测台一致）：
+     一枚 6px 灯 + 一行说明 + （可选）等宽错误码 + 右侧重连钮；
+     纸面保持中性，**颜色只出现在灯与错误码上**。
+   —— 状态要能一眼扫到，但不该把整页染红。
+
+   取色纪律：只用 --color-* 语义令牌，无字面色；不写 border（结构分隔靠
+   底色与间距），符合 G11。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 状态行：一行式（资源正常 / 闸门越限 / 角色解析失败）───────── */
+.mboard-stat {
+  --mboard-led: var(--color-text-faint);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  font-size: var(--text-ui);
+  line-height: var(--leading-ui);
+  color: var(--color-text-secondary);
+}
+
+.mboard-stat[data-tone="ok"] {
+  --mboard-led: var(--color-success);
+}
+
+.mboard-stat[data-tone="warning"] {
+  --mboard-led: var(--color-warning);
+}
+
+.mboard-stat[data-tone="error"] {
+  --mboard-led: var(--color-error);
+}
+
+/* 灯：状态唯一的彩色出口。6px 是"看得见但不当主角"的尺寸。 */
+.mboard-stat__led {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--mboard-led);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mboard-led) 20%, transparent);
+}
+
+/* 越限/中断是持续态：灯缓慢呼吸，表示"还在断着"（一次性状态不呼吸）。 */
+.mboard-stat[data-tone="error"] .mboard-stat__led {
+  animation: m-breathe 1.8s var(--ease-out) infinite;
+}
+
+.mboard-stat__text {
+  min-width: 0;
+  flex: 1;
+}
+
+.mboard-stat__text b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.mboard-stat__detail {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+  overflow-wrap: anywhere;
+}
+
+/* ── 故障条：哪一条链路断了 + 断在哪 + 重连 ─────────────────────
+   比状态行多两件事：等宽错误码（可直接搜/贴给开发者）与重连按钮。 */
+.mboard-fault {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+
+.mboard-fault__led {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--color-error);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-error) 20%, transparent);
+  animation: m-breathe 1.8s var(--ease-out) infinite;
+}
+
+.mboard-fault__body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mboard-fault__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mboard-fault__what {
+  font-size: var(--text-ui);
+  color: var(--color-text-primary);
+}
+
+/* 错误码：等宽 + 文字安全档红。它承载"断在哪"，所以要能被复制与搜索。 */
+.mboard-fault__code {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  letter-spacing: 0.02em;
+  color: var(--color-text-error);
+  overflow-wrap: anywhere;
+}
+
+.mboard-fault__hint {
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+}
+
+.mboard-fault__retry {
+  flex: none;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: var(--text-meta);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.mboard-fault__retry:hover {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+}
+
+.mboard-fault__retry:active {
+  transform: scale(0.97);
+}
+
+/* ── 通道页签（工单 / 团队 / 资源）──────────────────────────────
+   替换通用分段控件（胶囊白底）：同一屏里的「对话 / 数据 / 任务」是通道
+   页签，这里若还是第二种页签形态，一屏就有两套语言。
+   语法与 `.twin-ctab` 一致：编号 + 标签 + 等宽计数；选中项靠 2px 实心
+   底线（背景绘制，不用伪元素色条也不用 border）+ 一档淡底，不位移。 */
+.board-tabs {
+  --board-hair: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  display: flex;
+  align-self: flex-end;
+  align-items: stretch;
+  gap: 2px;
+  height: 30px;
+  background-image: linear-gradient(var(--board-hair), var(--board-hair));
+  background-size: 100% 1px;
+  background-position: left bottom;
+  background-repeat: no-repeat;
+}
+
+.board-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background-color: transparent;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-tiny);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+
+.board-tab:hover {
+  color: var(--color-text-primary);
+}
+
+.board-tab[aria-pressed="true"] {
+  color: var(--color-text-primary);
+  background-color: var(--color-bg-secondary);
+  background-image: linear-gradient(var(--color-accent), var(--color-accent));
+  background-size: 100% 2px;
+  background-position: left bottom;
+  background-repeat: no-repeat;
+}
+
+.board-tab__code {
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  letter-spacing: 0.08em;
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-tab[aria-pressed="true"] .board-tab__code {
+  color: var(--color-accent);
+}
+
+.board-tab__n {
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-tab[aria-pressed="true"] .board-tab__n {
+  color: var(--color-text-secondary);
+}

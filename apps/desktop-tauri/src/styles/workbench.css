@@ -1,0 +1,514 @@
+/* 工作台宿主外壳：左侧画布渲染工作台代码，右侧对话栏由宿主渲染。
+   对话栏与折叠按钮属于宿主 chrome，工作台代码无权改动或隐藏。 */
+
+.wb-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  /* 与 .pane-main 同源令牌：主区背景由 --theme-bg-chat 决定，workbench 页
+     显式铺同色，避免空态链路（wb-boot/wb-empty 均透明）任何一层漏出
+     WebView2 默认白底 —— 暗色主题下尤其刺眼。 */
+  background: var(--theme-bg-chat, var(--color-bg-primary));
+}
+
+/* 首次列表加载完成前占位，避免空态闪一下又跳走。 */
+.wb-boot {
+  flex: 1;
+  background: var(--theme-bg-chat, var(--color-bg-primary));
+}
+
+.wb-shell {
+  position: relative; /* 悬浮折叠钮的定位锚点 */
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.wb-canvas {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  /* 画布底 = **--color-bg-base**，不是 --color-bg-primary（纸白 #ffffff）。
+     2026-10-24 用户实机反馈："工作台命名后还没开发完，背景色一直是白色的
+     网页背景" —— 根因就是这里铺的是纯白纸面：未开发的工作台没有自己的
+     背景规则，iframe 透明 → 露出父容器的纯白 → 整块画布看起来就是一张
+     没加载出来的网页。
+
+     改用 base 面（浅色 #f5f5f5 / 暗色 #1f1f1f）：画布与右侧对话的纸白
+     拉开一档，工作台读作"应用里的一块画布"而不是"浏览器里的一个网页"。
+     工作台自己的代码若要整页底色，写 body/html 的 background 即可覆盖
+     （iframe 文档 html 是透明的，body 的背景按 CSS 规范优先于父层）。 */
+  background: var(--color-bg-base);
+}
+
+.wb-frame {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent; /* 让父容器 .wb-canvas 的 --color-bg-base 透出 */
+}
+
+.wb-canvas-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  color: var(--color-text-secondary);
+  font-size: var(--text-ui);
+}
+
+/* 旧的「悬浮折叠钮」（.wb-toggle / .wb-shell-collapsed）已删除：
+   它骑在右栏分隔线上，依赖那条已经没了的固定右栏。收起/展开改由
+   .wb-orb（球）与 .wb-float（浮窗）承担。 */
+/* 旧版固定右栏（width: min(460px,38vw)）已删除：它把画布永久切掉
+   三分之一。对话改由 .wb-float-host 下的球 / 浮窗承载。 */
+.wb-float-host {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;   /* 只有球和浮窗本身接收指针，画布照常交互 */
+}
+
+/* ── 在场球（收起态）──────────────────────────────────────────
+   球是这一屏唯一"会动"的东西，所以状态环用 accent（忙）/ ok（完成），
+   且完成态只闪一次对勾就回到静息 —— 常驻动画会变成背景噪音。 */
+.wb-orb {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  /* 2026-09-30 重设计：--color-border 是强描边（#8c8c8c），48px 圆上显得
+     又重又脏；shadow-modal 在一个小球上也是杀鸡用牛刀。改纸面 + 细边 +
+     pop 级阴影 —— 安静地浮在画布上，忙碌时才由状态环吸引注意。 */
+  background: var(--color-bg-primary);
+  box-shadow: var(--shadow-pop);
+  display: grid;
+  place-items: center;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  color: var(--color-text-primary);
+  transition: transform var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+.wb-orb:hover { box-shadow: var(--shadow-modal); }
+.wb-orb:active { cursor: grabbing; transform: scale(0.96); }
+.wb-orb__icon {
+  color: var(--color-accent);
+  fill: none;
+}
+.wb-orb__ring {
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  pointer-events: none;
+}
+.wb-orb--busy .wb-orb__ring {
+  border-top-color: var(--color-accent);
+  border-right-color: var(--color-accent-soft-strong);
+  animation: wb-orb-spin 1.1s linear infinite;
+}
+@keyframes wb-orb-spin { to { transform: rotate(360deg); } }
+.wb-orb__check {
+  position: absolute;
+  inset: 12px;
+  color: var(--color-success);
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: wb-orb-check 0.32s var(--ease-out) forwards;
+}
+@keyframes wb-orb-check { to { stroke-dashoffset: 0; } }
+
+/* ── 浮窗（展开态）──────────────────────────────────────────── */
+/* fixed：portal 挂到 body 后脱离 .wb-float-host 的 absolute 坐标系，
+   改以视口为基准，与拖拽坐标（clientX/clientY）天然对齐。 */
+.wb-float {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-primary);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  pointer-events: auto;
+}
+.wb-float__head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 6px 0 12px;
+  background: var(--color-bg-secondary);
+  cursor: grab;
+  touch-action: none;
+}
+.wb-float__head:active { cursor: grabbing; }
+.wb-float__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  flex: 0 0 6px;
+}
+.wb-float__dot--busy { background: var(--color-accent); animation: wb-orb-blink 1.4s ease-in-out infinite; }
+.wb-float__dot--done { background: var(--color-success); }
+@keyframes wb-orb-blink { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+.wb-float__title {
+  font-size: var(--text-ui);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 头部动作钮（新会话 / 历史 / 收起）共用：24px 方钮，安静 hover。 */
+.wb-float__actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.wb-float__btn {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.wb-float__btn:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.wb-float__btn.is-open { background: var(--color-bg-active); color: var(--color-text-primary); }
+/* 历史下拉：贴在头部下沿、右对齐；elevated 面 + 细边 + pop 阴影。 */
+.wb-float__menu {
+  position: absolute;
+  top: 44px;
+  right: 8px;
+  z-index: 5;
+  min-width: 200px;
+  max-width: calc(100% - 16px);
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-pop);
+}
+.wb-float__menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.wb-float__menu-item:hover { background: var(--color-bg-hover); }
+.wb-float__menu-item.is-current { background: var(--color-bg-selected); }
+.wb-float__menu-item.is-current .wb-float__menu-title { color: var(--color-text-primary); font-weight: var(--font-weight-medium); }
+.wb-float__menu-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-ui);
+  color: var(--color-text-primary);
+}
+.wb-float__menu-time {
+  flex-shrink: 0;
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+}
+.wb-float__menu-empty {
+  padding: 10px 8px;
+  font-size: var(--text-ui);
+  color: var(--color-text-faint);
+  text-align: center;
+}
+.wb-float__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.wb-float__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background:
+    linear-gradient(135deg, transparent 0 52%, var(--color-border) 52% 60%, transparent 60% 68%,
+    var(--color-border) 68% 76%, transparent 76% 84%, var(--color-border) 84% 92%, transparent 92%);
+}
+
+/* ── 停靠态（双击头部切换）────────────────────────────────────
+   贴视口右缘、标题栏以下全高；左侧 3px 把手拖动调宽。常驻面板：
+   不失焦收起、不随拖拽改位。 */
+.wb-float--docked {
+  border-radius: 0;
+  border-right: 0;
+  border-top: 0;
+  border-bottom: 0;
+}
+.wb-float__dockresize {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  touch-action: none;
+  background: transparent;
+  transition: background var(--duration-fast) ease;
+}
+.wb-float--docked:hover .wb-float__dockresize {
+  background: var(--color-bg-hover);
+}
+
+/* 工作台对话栏 chrome：消息流 + 状态条。
+   只做反馈，不碰 ChatView 内部 —— 消息流逻辑仍由宿主 chatNode 提供。
+   原 chip 已删：浮窗标题栏已显示工作台名，chip 只会叠出双层标题。 */
+
+.wb-chat-frame {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.wb-chat-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.wb-chat-status {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  font-size: var(--text-tiny);
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-secondary);
+}
+
+.wb-chat-status-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-secondary);
+}
+
+.wb-chat-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-success);
+}
+
+/* tab 条：多个工作台时出现。主台只决定默认落到哪个，切 tab 不改变主台。 */
+
+.wb-tabs {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--color-bg-secondary);
+  overflow-x: auto;
+}
+
+/* tab 右键菜单：挂在 tab 容器（wb-tab-item）下方。 */
+
+.wb-tab-item {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.wb-tab-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 30;
+  min-width: 140px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+}
+
+.wb-tab-menu-item {
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: var(--text-meta);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.wb-tab-menu-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.wb-tab-menu-danger {
+  color: var(--color-error);
+}
+
+/* 二次确认态：整行填充警示色，让"再点一下就真删"足够醒目。 */
+.wb-tab-menu-confirm,
+.wb-tab-menu-confirm:hover {
+  background: var(--color-error);
+  color: #fff;
+}
+
+.wb-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 7px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--text-ui);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.wb-tab:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.wb-tab-active {
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-text-primary);
+}
+
+/* 主台标记：一个点就够，不用文字占位置。 */
+.wb-tab-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+}
+
+.wb-tab-new {
+  padding: 7px 10px;
+  font-size: var(--text-body);
+}
+
+.wb-tab-input {
+  flex-shrink: 0;
+  width: 140px;
+  margin: 4px 0;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font-size: var(--text-ui);
+}
+
+/* 空态：一个工作台都没有时的起步界面（方案 C 定案版：零教学，居中单列） */
+
+.wb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+  padding: 48px;
+  overflow-y: auto;
+  /* 空态画布铺主题底色（与 .pane-main 同源），不依赖祖先链透传。 */
+  background: var(--theme-bg-chat, var(--color-bg-primary));
+}
+
+.wb-empty-title {
+  margin: 0;
+  font-size: var(--text-title);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+/* 容器要有「框感」：跟底色拉开一级明度 + 发丝边框（保守 token 路线，
+   不改共享 token 值 —— 方案 C 定案 6）。 */
+.wb-empty-create {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 360px;
+  padding: 10px;
+  /* 无描边：原先这里写的是 `var(--color-border-primary, var(--color-border))`，
+     而 `--color-border` 根本不存在 —— 一旦主令牌缺失，整条声明静默失效。 */
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-hover);
+}
+
+.wb-error-inline {
+  margin: 0;
+  max-width: 360px;
+  font-size: var(--text-meta);
+  color: var(--color-error);
+  word-break: break-all;
+}
+
+.wb-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font-size: var(--text-ui);
+}
+
+/* 焦点反馈走 1px 边框着色（输入类已豁免全局 2px outline）。 */
+.wb-input:focus,
+.wb-input:focus-visible {
+  outline: none;
+  border-color: var(--color-accent, var(--color-border));
+}
+
+.wb-btn {
+  padding: 6px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: var(--text-ui);
+  cursor: pointer;
+}
+
+.wb-btn:hover {
+  background: var(--color-bg-hover);
+}
+
+.wb-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

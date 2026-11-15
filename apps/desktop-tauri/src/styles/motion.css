@@ -1,0 +1,133 @@
+/* ════════════════════════════════════════════════════════════════════
+   motion.css — 全站交互动效（m- 前缀）
+   ──────────────────────────────────────────────────────────────────
+   2026-10-23 建立。此前动效是「每个组件自己写一条 transition」，
+   结果：有的 120ms、有的 250ms、有的干脆没有，同一屏里按钮的响应速度
+   不一致 —— 这是「界面死板」与「动效廉价」同时存在的原因（不是没动，
+   是动得不统一）。
+
+   四条硬纪律：
+
+   1. **只动 transform / opacity。** 这两个属性走合成层，不触发布局与重绘。
+      动 width/height/padding/margin 每帧都要重排 —— 长列表里必然掉帧。
+      （impeccable 的 layout-transition 反模式，同一条。）
+   2. **出场用 ease-out，不用弹性缓动。** 回弹（overshoot）在工具类界面里
+      显得廉价；`--ease-out` 是 cubic-bezier(0.16,1,0.3,1)，起手快、收尾稳。
+   3. **时长只有三档** —— fast 120 / base 160 / slow 240。hover 反馈一律
+      fast（超过 160ms 的 hover 会被感知为「卡了一下」）；入场用 base；
+      大面积位移（抽屉 / 弹层）才用 slow。
+   4. **reduced-motion 由 base.css 全局压掉**，这里不再各写一遍。
+
+   性能边界：入场动画只给「一次挂载」的元素（列表项、卡片、弹层），不给
+   滚动中会反复重挂的元素；消息流用 content-visibility:auto 已在
+   components-prose.css 里隔离，动画不会在离屏时跑。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 入场：淡入上浮（默认档，卡片 / 列表项 / 面板）─────────────── */
+@keyframes m-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.m-rise { animation: m-rise var(--duration-base) var(--ease-out) both; }
+
+/* ── 入场：轻微放大（弹层 / 菜单 / 气泡）───────────────────────── */
+@keyframes m-pop {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.m-pop { animation: m-pop var(--duration-base) var(--ease-out) both; }
+
+/* ── 入场：纯淡入（最轻，正文与文本块用，避免位移干扰阅读）──────── */
+@keyframes m-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.m-fade { animation: m-fade var(--duration-base) var(--ease-out) both; }
+
+/* ── 入场：自右滑入（抽屉 / 侧栏面板 / toast 同侧来源）──────────── */
+@keyframes m-slide-r {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.m-slide-r { animation: m-slide-r var(--duration-base) var(--ease-out) both; }
+
+/* ── 错峰入场 ────────────────────────────────────────────────────
+   列表一次挂载 N 项时，逐项延后 45ms 形成节奏。用 nth-child 而不是
+   在 tsx 里注入 `--i`（内联样式在此项目被明令禁止），代价是最多支持
+   8 项 —— 一屏可见项本来就在这个量级，超出的项直接同步出现，看不出差别。 */
+.m-stagger > * { animation: m-rise var(--duration-base) var(--ease-out) both; }
+.m-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.m-stagger > *:nth-child(2) { animation-delay: 45ms; }
+.m-stagger > *:nth-child(3) { animation-delay: 90ms; }
+.m-stagger > *:nth-child(4) { animation-delay: 135ms; }
+.m-stagger > *:nth-child(5) { animation-delay: 180ms; }
+.m-stagger > *:nth-child(6) { animation-delay: 225ms; }
+.m-stagger > *:nth-child(7) { animation-delay: 270ms; }
+.m-stagger > *:nth-child(8) { animation-delay: 315ms; }
+.m-stagger > *:nth-child(n + 9) { animation-delay: 315ms; }
+
+/* ── 悬停抬起 ────────────────────────────────────────────────────
+   卡片 / 列表行的 hover 反馈。1px 位移 + 阴影加深，不用描边、不用缩放
+   （缩放会让同行文字抖动）。 */
+.m-lift {
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+.m-lift:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-pop);
+}
+
+/* ── 按下回弹（只做「缩」，不做「弹」）─────────────────────────────
+   0.985 是手感阈值：小于它看着像被压扁，大于它看不出来。 */
+.m-press { transition: transform var(--duration-fast) var(--ease-out); }
+.m-press:active { transform: scale(0.985); }
+
+/* ── 淡染底过渡 ──────────────────────────────────────────────────
+   给「hover 换底色」的元素用。单独抽出来是因为 hover 底色变化是本项目
+   最高频的交互反馈，但各组件写的 transition 属性各不相同（有的只过渡
+   background、有的连 color 一起过渡、有的压根没过渡）。 */
+.m-tint {
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+/* ── 图标轻放大（可点图标的 hover 反馈）────────────────────────── */
+.m-icon-hover { transition: transform var(--duration-fast) var(--ease-out); }
+.m-icon-hover:hover { transform: scale(1.08); }
+
+/* ── 焦点呼吸环（运行中的循环指示）───────────────────────────────
+   给「正在跑」的指示点用。只动 opacity + 微小 scale，不动宽高。
+   周期 1.6s：比人眼可辨的下限（约 0.3s）慢，不会造成闪烁感。 */
+@keyframes m-breathe {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(0.86); }
+}
+.m-breathe { animation: m-breathe 1.6s var(--ease-out) infinite; }
+
+/* ── 进度条不确定态（横扫）─────────────────────────────────────── */
+@keyframes m-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.m-sweep { animation: m-sweep 1.4s linear infinite; }
+
+/* ── 骨架屏微光（加载占位）───────────────────────────────────────
+   用 background-position 而非 width —— 骨架块宽度固定，扫光在背景里走。 */
+@keyframes m-shimmer {
+  0%   { background-position: -160% 0; }
+  100% { background-position: 260% 0; }
+}
+.m-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-bg-tertiary) 0%,
+    var(--color-bg-hover) 40%,
+    var(--color-bg-tertiary) 80%
+  );
+  background-size: 220% 100%;
+  animation: m-shimmer 1.5s linear infinite;
+}

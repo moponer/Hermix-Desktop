@@ -1,0 +1,99 @@
+[package]
+name = "hermix-viewer"
+version = "0.1.0"
+edition = "2021"
+description = "Hermix 独立文件浏览器：多标签 + AI 右栏（决策笔记 proposed/feature/2026-10-09-standalone-file-viewer.md）"
+license = "MIT"
+default-run = "hermix-viewer"
+
+[build-dependencies]
+tauri-build = { version = "2" }
+# feature 垫片：schemars 0.8（tauri-build 的 build-dependency）开 preserve_order
+# 后拉起 indexmap 1.9.3，其 build.rs 靠 autocfg 运行时探测 emit `has_std`，本机
+# 探测静默失败 → 走 no_std 分支（IndexMap<K, V, S> 三泛型无默认）→ schemars
+# 两参调用直接 E0107。resolver v2 下 build-dep 图与普通依赖图 feature 不互通，
+# 所以垫片必须放在这里（build-dependencies）才统一进 schemars 的编译单元。
+# 显式 std 后 build.rs 走 CARGO_FEATURE_STD 快速路径无条件 emit，跳过探测。
+# 代码不引用，仅为传递依赖统一 feature。与 desktop-tauri 同一坑，见其注释。
+indexmap1 = { package = "indexmap", version = "1.9", features = ["std"] }
+
+[dependencies]
+# protocol-asset：开 asset 协议（媒体预览用；它原生支持 Range 请求，
+# 几百 MB 的视频不必经 IPC 搬两遍）。只是 tauri 的 feature，不是新依赖。
+# unstable：Windows 上「主窗口内的子 webview」（add_child）是 unstable API，
+# 内嵌网页视图（通道 A）要用它。
+tauri = { version = "2", features = ["protocol-asset", "unstable"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 图片处理内核（F5 重量模式）。与 desktop-tauri 的 image 声明并存：
+# feature 集不同（viewer 还要 ico / tiff / webp / gif / bmp 供编辑与转换），
+# Cargo 取 feature 并集。刻意 default-features = false 且**不开 avif**——
+# avif 走 ravif → rav1e，rav1e 的 asm feature 需要 nasm（本机 MSVC 没有）。
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico", "tiff"] }
+# 「另存为」系统对话框：只调 Rust 侧 API，前端不装 npm 包
+#（@tauri-apps/plugin-dialog），前端依赖增量保持 0。
+tauri-plugin-dialog = "2"
+# PDF 结构级操作（F6）：删页/提取/旋转/重排/插空白页。
+# 纯 Rust、无 C 依赖；0.34 已被 crates/hermix-tools 锁定在工作区 Cargo.lock，
+# 传递依赖（chrono/encoding_rs/flate2/nom/weezl…）全在 → 新增编译成本 ≈ 0。
+# 刻意不开 lopdf 的 embed_image feature：它会拉 image 0.25 的默认特性，
+# 传染 F5 的 image feature 集（bmp/exr/gif/ico/tiff/webp 全开）。
+lopdf = "0.34"
+# Windows 自带的 WinRT OCR（扫描件 → 隐形文字层）。
+# windows 0.58 已经在依赖树里（hermix-desktop / hermix-server / hermix-tools 在用），
+# 这里只开 feature —— **不引入新 crate**，只是这个 crate 带新 feature 重编一次。
+windows = { version = "0.58", features = [
+  "Foundation",
+  "Foundation_Collections",
+  "Globalization",
+  "Graphics_Imaging",
+  "Media_Ocr",
+  "Storage_Streams",
+  "Win32_System_Com",
+] }
+# AI 右栏：直连 OpenAI 兼容端点（继承主程序 = 读同一份 config.yaml + .env；
+# 独立模型 = 查看器自己一套）。不走本地 server 的 /v1/：桌面端 sidecar 是
+# --stdio，不绑端口，那条路在「只开主程序」时根本没人监听。
+reqwest = { workspace = true, features = ["json", "stream"] }
+futures = "0.3"
+# 主程序的配置层（config.yaml / .env / 路径解析）。viewer 要「继承主程序」
+# 的模型与供应商，就该读**同一份**文件，而不是自己存一份密钥。
+hermix-config = { path = "../../../crates/hermix-config" }
+# Word paragraph editor kernel: docx = ZIP + OOXML.
+# zip / quick-xml are already in Cargo.lock (transitive deps of hermix-tools'
+# docx-rs / rust_xlsxwriter) -- adding them here adds zero new build units.
+zip = "8.6"
+quick-xml = "0.41"
+# 同步 WebSocket 客户端（通道 B 的 CDP 传输）。
+# tungstenite 0.29 已在 Cargo.lock（tokio-tungstenite 的依赖），默认 feature
+# 只有 handshake（不含 TLS）→ 不新增任何下载，也不引入 TLS 栈。
+tungstenite = "0.29"
+# 系统资源管理（进程快照 / CPU 差分 / 磁盘容量）。工作区已锁定，
+# 无新增下载成本；它的 Windows 后端就是 SystemProcessInformation 全量快照。
+sysinfo = { workspace = true }
+# 老版 .doc（Word 97-2003）的 OLE 复合文档读取：抽出 WordDocument 流做
+# 尽力文本预览。纯 Rust、零 C 依赖；二进制很小，编译成本可忽略。
+cfb = "0.10"
+# 单实例互斥体（CreateMutexW：Foundation + Security 双 feature 门控）；
+# GetLastError 在 Foundation（同 updater.rs 教训：跨模块声明依赖它）。
+[target.'cfg(windows)'.dependencies]
+# Win32_System_WindowsProgramming：DRIVE_FIXED / DRIVE_REMOTE / DRIVE_CDROM
+# 等盘符类型常量在 windows-sys 0.52 里位于该模块（不在 FileSystem 下），
+# 用来在不碰文件系统的前提下判定盘符类型（见 commands.rs::viewer_drives）。
+# Win32_UI_Shell + Win32_System_Registry：ShellExecuteExW 提权拉起索引
+# helper（filesearch.rs::spawn_elevated）；SHELLEXECUTEINFOW 还需要
+# System_Registry（HKEY 字段）。
+# Win32_UI_WindowsAndMessaging：桌面 GUI 自动化（gui.rs：列窗口/找控件/
+# 点击/填文本/按键）。全走 Win32 消息，不引 windows crate 的 COM 层。
+# Win32_System_DataExchange + Win32_System_Memory + Win32_System_Ole：
+# 剪贴板文件操作（clipboard.rs）——OpenClipboard/SetClipboardData/
+# GlobalAlloc 在 DataExchange/Memory，CF_HDROP 在 Ole。
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_Registry", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Services", "Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse"] }
+
+[dev-dependencies]
+# legacy_doc 单测的临时文件目录。工作区其他 crate 已锁定 3.x，零新增下载。
+tempfile = "3"
+
+[[bin]]
+name = "hermix-viewer"
+path = "src/main.rs"

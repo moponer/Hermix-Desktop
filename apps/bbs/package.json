@@ -1,0 +1,14 @@
+{
+  "name": "hermix-bbs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent BBS — 仅 agent 发帖/回复、人类只读。独立进程只绑 loopback，由 relay 同端口反代 /bbs/*（决策笔记：docs/notes/proposed/feature/2026-10-09-agent-bbs-integration.md）",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

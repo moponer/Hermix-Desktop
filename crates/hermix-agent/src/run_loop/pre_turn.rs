@@ -1,0 +1,441 @@
+//! Pre-turn setup + per-turn prefetch (O1.1)
+//!
+//! Moved verbatim from `run_loop.rs` (pure relocation, no behavior
+//! change). Methods are `pub(super)` because their callers live in the
+//! parent `run_loop` module. All names resolve via the parent glob.
+
+#[allow(unused_imports)]
+use super::*;
+use crate::agent_loop::extract_last_user_assistant;
+use crate::context::ContextManager;
+use hermix_core::ToolErrorRecord;
+use serde_json::json;
+
+/// 连续多少次「撞 max_turns 且收尾摘要失败」才停止自动续跑。
+///
+/// 一次失败可能只是瞬时故障，直接停会把长任务误杀；但连续三次说明收尾通道
+/// 本身坏了（模型 id 不可用/配额耗尽），此时归零重跑只是在原地空转。
+const MAX_SUMMARY_FAILURE_STREAK: u32 = 3;
+
+impl AgentLoop {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn do_pre_turn_setup(
+        &self,
+        ctx: &mut ContextManager,
+        state: &mut LoopState,
+        session_id: &str,
+        tool_errors: &[ToolErrorRecord],
+        session_started_hooks_fired: bool,
+        persist_user_idx: Option<usize>,
+        _finish_reason: Option<&str>,
+    ) -> Result<PreTurnAction, AgentError> {
+        // (type-B diagnostic): INFO log every pre-turn setup
+        // entry so a future hang between turns shows up in stdout.
+        // Without this, the only signal between `PostToolExec` and the
+        // `PreTurnSetup` phase is a `tracing::debug!` that the default
+        // log level never emits — and the user sees an unexplained
+        // "● ● ● 正在思考" forever. Pair this with the matching
+        // "post-tool finished" INFO at the end of
+        // `do_post_tool_iteration` and you can pinpoint the hang to
+        // exactly one frame.
+        tracing::info!(
+            turn    = state.total_turns + 1,
+            session = session_id,
+            "do_pre_turn_setup: entering"
+        );
+
+        // --- Graceful interrupt ---
+        if self.interrupt.take_interrupt_graceful().is_some() {
+            return Ok(PreTurnAction::Stop(self.graceful_interrupt_result(
+                ctx,
+                state.total_turns,
+                tool_errors,
+                state.cost_guard.accumulated_usage.clone(),
+                state.cost_guard.session_cost_usd,
+                session_started_hooks_fired,
+                persist_user_idx,
+            )));
+        }
+
+        // poll any background-spawned compression ---
+        // Non-blocking probe: if a previous spawn finished while the
+        // agent loop was processing the last turn, roll the result
+        // into `ctx` *before* anything else reads `ctx` (memory
+        // recall, skill injection, LLM call). This is the only point
+        // in the loop where the in-flight handle is reliably polled
+        // every turn.
+        let _ = self.poll_in_flight_compression(ctx, false).await;
+
+        // --- `/steer` pre-API drain ---
+        self.pre_api_apply_pending_steer(ctx);
+
+        // --- Max turns: soft cap ---
+        // max_turns == 0 means unlimited. The real hard stops are:
+        // ErrorLoop (convergence detector), Cost Guard (max_cost_usd),
+        // and the LLM's natural stopping (no tool calls → finalize).
+        // max_turns is NOT a hard stop — hitting it triggers a progress
+        // summary (using the conversation's active model) and resets the
+        // turn counter so long tasks keep running. Without this, every
+        // task longer than max_turns turns is silently truncated.
+
+        // --- Turn counter ---
+        state.total_turns += 1;
+        tracing::debug!("Agent turn {}", state.total_turns);
+
+        // --- OAuth refresh ---
+        self.oauth_refresh
+            .refresh_if_needed(&self.auth_tokens_path(), &self.config.runtime_providers)
+            .await;
+
+        // --- Skill nudge counter ---
+        if self.config.skill_creation_nudge_interval > 0
+            && self
+                .tool_registry
+                .names()
+                .iter()
+                .any(|n| n == "skill_manage")
+        {
+            if let Ok(mut c) = self.evolution_counters.lock() {
+                c.iters_since_skill = c.iters_since_skill.saturating_add(1);
+            }
+        }
+
+        // --- Checkpoint ---
+        if self.config.checkpoint_interval_turns > 0
+            && (state.total_turns - 1).is_multiple_of(self.config.checkpoint_interval_turns)
+        {
+            state.message_cache.store_checkpoint(ctx.get_messages().to_vec());
+        }
+
+        // --- Memory turn-start notification ---
+        self.memory_on_turn_start(state.total_turns, "");
+
+        // Removed Memory review hint (every 20 turns).
+        // The system prompt already contains memory management guidance.
+        // Injecting "review and consolidate" hints pollutes the context
+        // and distracts the LLM from the user's actual task.
+
+        // --- Memory sync at flush interval ---
+        if state.total_turns.is_multiple_of(self.config.memory_flush_interval) && state.total_turns > 0 {
+            let msgs = ctx.get_messages();
+            let (u, a) = extract_last_user_assistant(msgs);
+            self.memory_sync(&u, &a, session_id);
+        }
+
+        // --- Background snapshot + frame cap ---
+        self.maybe_freeze_snapshot(session_id, state.total_turns);
+        self.maybe_enforce_frame_cap(state.total_turns);
+
+        //(A): per-turn memory recall ---
+        // Cheap heuristic: every Nth turn (default 5) OR when the
+        // user turn's first token differs from the previous recall,
+        // we re-pull the top-N salient facts and emit a
+        // `memory_recall` status event. The drift check uses the
+        // first meaningful token of the user text (no embedding).
+        let user_text: String = ctx
+            .get_messages()
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::User)
+            .and_then(|m| m.content.as_deref())
+            .unwrap_or("")
+            .to_string();
+        if let Some(plan) = self.maybe_recall(state, &user_text) {
+            // Track keys for next-turn drift detection.
+            state.last_recall_keys =
+                plan.items.iter().map(|i| i.canonical_key.clone()).collect();
+            // Inject recall block into ctx so the LLM can actually
+            // use it. Previously this was emit-only (user could see
+            // "thought of N items" but the agent couldn't). Now the
+            // rendered block lands in message history as a system
+            // message, same pattern as `memory_prefetch` at session
+            // start. Compression will fold old recall blocks when
+            // the context grows past the threshold.
+            let recall_block = crate::recall_scheduler::render_prompt_block(&plan);
+            if !recall_block.is_empty() {
+                ctx.add_message(Message::system(&recall_block));
+            }
+        }
+
+        //跨会话教训注入（Harness² 的 harnessing 级递归，读取侧）。
+        //
+        //`harness_self_edit` 的写入链与 `experience_archive` 的读取链都早已
+        //写好，但**两端都没有生产调用点**——`classify_convergence` 的注释
+        //自己写着 "once the harness self-edit integration is complete"。写入
+        //侧在 `finalize_agent_result`（`maybe_record_experience`），这里补
+        //读取侧：把"与本轮工具相关、且上次真的重复失败过"的教训提前摆到
+        //模型面前，避免同一个坑掉两次。
+        //
+        //预算 1200 字符（`experience_prompt_for_tools` 内部还会按 top-5 截断），
+        //因为这是"提醒"不是"教案"——它排在 skills 正文之前，不抢主任务的
+        //注意力。
+        {
+            let exp_root = hermix_config::paths::hermix_home().join("experience");
+            if exp_root.is_dir() {
+                if let Ok(archive) =
+                    crate::experience_archive::ExperienceArchive::open(&exp_root)
+                {
+                    let tool_names: Vec<String> =
+                        self.tool_registry.names().into_iter().collect();
+                    match crate::experience_archive::experience_prompt_for_tools(
+                        &archive,
+                        &tool_names,
+                        1200,
+                    ) {
+                        Ok(Some(block)) => ctx.add_message(Message::system(&block)),
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::debug!(error = %e, "experience prompt skipped");
+                        }
+                    }
+                }
+            }
+        }
+
+        //: auto-activate matching skills ---
+        // Cheap keyword + subsequence-fuzzy match the user's message
+        // against the skill directory and inject up to 3 skills'
+        // full bodies into ctx. The skill bodies are appended as a
+        // system message so the LLM sees them alongside the recall
+        // block. Compression folds them on context pressure.
+        if !user_text.is_empty() {
+            let skills_dir =
+                hermix_config::paths::hermix_home().join("skills");
+            match build_active_skills_block_with_tools(
+                &skills_dir,
+                &user_text,
+                self.config.skill_injection_char_budget,
+            ) {
+                Some((trimmed, tools)) => {
+                    // A turn with tool rounds re-enters pre_turn once per
+                    // round; the matched skills (and their bodies) are
+                    // identical, so re-appending them only grows the
+                    // *uncached* tail of every request. Skip when the
+                    // exact same block is already in the recent window.
+                    let already_present = ctx
+                        .get_messages()
+                        .iter()
+                        .rev()
+                        .take(8)
+                        .any(|m| m.content.as_deref() == Some(trimmed.as_str()));
+                    if !already_present {
+                        ctx.add_message(Message::system(&trimmed));
+                    }
+                    // allowed-tools enforcement (subtract-only): the tools
+                    // union of the activated skills narrows this turn's
+                    // dispatch surface. Recomputed every turn so a stale
+                    // restriction can never leak into the next one.
+                    state.active_skill_tools = tools;
+                }
+                None => state.active_skill_tools = None,
+            }
+        } else {
+            state.active_skill_tools = None;
+        }
+
+        // Plan mode reminder: one short system note per turn while the mode
+        // is on, skipped when a recent message already carries it (so
+        // repeated turns don't stack duplicates before compression).
+        if self.tool_registry.plan_mode_active() {
+            let already_present = ctx
+                .get_messages()
+                .iter()
+                .rev()
+                .take(8)
+                .any(|m| m.content.as_deref().unwrap_or("").contains("[PLAN MODE]"));
+            if !already_present {
+                ctx.add_message(Message::system(
+                    "[PLAN MODE] 当前处于计划模式（只读调研）：写文件、执行命令、自动化类工具会被拒绝。\
+                     先完成调研并给出清晰计划，用户确认后调用 exit_plan_mode 恢复执行。",
+                ));
+            }
+        }
+
+        // --- Pre-LLM hook + route resolution ---
+        let turn_runtime_route = state
+            .route_state
+            .forced_runtime_route
+            .clone()
+            .or_else(|| self.resolve_smart_runtime_route(ctx.get_messages()));
+        let active_model = turn_runtime_route
+            .as_ref()
+            .map(|r| r.model.as_str())
+            .unwrap_or(self.config.model.as_str())
+            .to_string();
+        let hook_ctx = serde_json::json!({"turn": state.total_turns, "model": active_model});
+
+        // Soft turn cap: at the boundary, summarize progress with the
+        // conversation's own model, inject the summary, reset the counter
+        // and keep going. Long tasks are no longer truncated at
+        // `max_turns`; CostGuard / ErrorLoop remain the hard stops.
+        if self.config.max_turns > 0 && state.total_turns >= self.config.max_turns {
+            tracing::warn!(
+                "Max turns ({}) reached — summarizing progress and continuing",
+                self.config.max_turns
+            );
+            self.emit_status(
+                "lifecycle",
+                &format!(
+                    "已执行 {} 轮，正在整理进度并继续…",
+                    self.config.max_turns
+                ),
+            );
+            let summary_msg = self.handle_max_iterations(ctx, &active_model).await?;
+            let mut summary_failed = false;
+            if let Some(msg) = summary_msg {
+                // 摘要调用失败时注入的是**机械进度记录**，模型会把它转述成
+                // 「已完成 / 未完成 / 下一步」—— 用户读起来就是"计划都写好了
+                // 却停了"，而真正的原因是撞了轮次预算 + 摘要模型不可用
+                // （实测 `400 unknown model`）。这条状态把归因摆到台面上，
+                // 避免机械记录被误当成模型的完成总结。
+                if msg.role == hermix_core::MessageRole::System
+                    && msg.content.as_deref().is_some_and(|c| {
+                        c.contains(crate::session_lifecycle::DETERMINISTIC_SUMMARY_MARKER)
+                    })
+                {
+                    summary_failed = true;
+                    state.max_turns_summary_failures = state.max_turns_summary_failures.saturating_add(1);
+                    tracing::warn!(
+                        model = %active_model,
+                        streak = state.max_turns_summary_failures,
+                        "max turns reached and the wrap-up summary call failed — a mechanical progress record was injected instead"
+                    );
+                    self.emit_status(
+                        "lifecycle",
+                        "已达轮次预算，但收尾摘要调用失败（当前模型报错/不可用），已改用本地进度记录继续；下面这段「状态/下一步」是记录，不是模型的完成总结。",
+                    );
+                }
+                ctx.add_message(msg);
+            }
+
+            // 熔断：摘要连续失败时，模型永远收不到"停止探索、汇报"的指令，
+            // 归零重跑只会把同一段工具循环再走一遍（实机 229 轮）。
+            // 到了阈值就如实停机，把原因交给前端展示，而不是继续空转。
+            if summary_failed && state.max_turns_summary_failures >= MAX_SUMMARY_FAILURE_STREAK {
+                self.emit_status(
+                    "lifecycle",
+                    "收尾摘要连续失败（模型 id 不可用或配额不足），已停止自动续跑。请检查模型配置后重新发送。",
+                );
+                return Ok(PreTurnAction::Stop(self.graceful_interrupt_result_errored(
+                    ctx,
+                    state.total_turns,
+                    tool_errors,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
+                    session_started_hooks_fired,
+                    persist_user_idx,
+                    Some(format!(
+                        "收尾摘要连续 {} 次调用失败（model={active_model}），已停止自动续跑以避免空转",
+                        state.max_turns_summary_failures
+                    )),
+                )));
+            }
+            if !summary_failed {
+                state.max_turns_summary_failures = 0;
+            }
+            state.total_turns = 0;
+        }
+
+        let pre_results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
+        self.inject_hook_context(&pre_results, ctx);
+
+        Ok(PreTurnAction::Continue {
+            turn_runtime_route,
+            active_model,
+        })
+    }
+
+    /// O1.1: shared prefetch block — was ~80 lines of duplication between
+    /// run() and run_stream(). Identical logic: intent classification,
+    /// safe tool dispatch, thinking mode selection, ACUI emission.
+    pub(super) async fn do_prefetch(
+        &self,
+        ctx: &mut ContextManager,
+        tool_schemas: &[ToolSchema],
+        total_turns: u32,
+    ) {
+        let Some(ref prefetcher) = self.prefetcher else {
+            return;
+        };
+        let tool_names: Vec<String> = tool_schemas.iter().map(|t| t.name.clone()).collect();
+        let user_text: String = ctx
+            .get_messages()
+            .iter()
+            .filter(|m| m.role == MessageRole::User)
+            .filter_map(|m| m.content.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let recent_msgs: Vec<Message> = ctx
+            .get_messages()
+            .iter()
+            .cloned()
+            .rev()
+            .take(10)
+            .collect();
+        let tc = hermix_intelligence::TurnContext::from_user_message(user_text.clone())
+            .with_recent_messages(recent_msgs);
+        if let Some(ref outcome) = prefetcher.run(&tc, &tool_names).await {
+            let block = outcome.to_system_prompt_block();
+            // Same block again? Then re-appending buys nothing but grows the
+            // uncached tail of the next request (a turn with tool rounds
+            // reaches this point once per round).
+            let already_present = !block.is_empty()
+                && ctx
+                    .get_messages()
+                    .iter()
+                    .rev()
+                    .take(8)
+                    .any(|m| m.content.as_deref() == Some(block.as_str()));
+            if !block.is_empty() && !already_present {
+                ctx.add_message(Message::system(&block));
+                tracing::trace!(intent = ?outcome.intent, confidence = outcome.confidence, "prefetch result injected as system prompt block");
+            }
+            if let Some(ref on_prefetch_intent) = self.callbacks.on_prefetch_intent {
+                let json = serde_json::to_string(&json!({
+                    "intent": serde_json::to_value(outcome.intent.clone()).unwrap_or_default(),
+                    "confidence": outcome.confidence,
+                    "results": outcome.results.iter().map(|r| json!({
+                        "tool": &r.tool,
+                        "args": &r.args,
+                        "output": &r.output,
+                        "errored": r.errored,
+                        "duration_ms": r.duration_ms,
+                    })).collect::<Value>(),
+                }));
+                if let Ok(ref payload) = json {
+                    on_prefetch_intent(payload);
+                }
+            }
+        }
+
+        // L4: dual-layer thinking mode selection
+        let thinking_decision = {
+            use hermix_intelligence::{select_mode, ThinkingConfig};
+            let cfg = ThinkingConfig::default();
+            let history_len = ctx.get_messages().len();
+            select_mode(user_text.as_str(), history_len, &cfg)
+        };
+        tracing::trace!(
+            mode = thinking_decision.mode.as_str(),
+            reason = thinking_decision.reason.as_str(),
+            confidence = thinking_decision.confidence,
+            "L4 thinking mode selected for this turn"
+        );
+        if let Some(ref on_acui) = self.callbacks.on_acui_directive {
+            let directive = hermix_core::AcuiDirective::Show(
+                hermix_core::AcuiShow::new(
+                    format!("thinking-mode-{}", total_turns),
+                    "thinking_mode",
+                    serde_json::json!({
+                        "mode": thinking_decision.mode.as_str(),
+                        "reason": thinking_decision.reason.as_str(),
+                        "confidence": thinking_decision.confidence,
+                    }),
+                ),
+            );
+            if let Ok(json) = serde_json::to_string(&directive) {
+                on_acui(&json);
+            }
+        }
+    }
+}

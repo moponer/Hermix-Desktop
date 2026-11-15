@@ -1,0 +1,1316 @@
+//! Skills and toolset management endpoints.
+
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use axum::extract::{Path as AxumPath, State};
+use axum::Json;
+use serde::{Deserialize, Serialize};
+
+use super::types::*;
+use crate::{HttpError, HttpServerState};
+
+/// `/api/skills` 的 15s TTL 缓存。
+///
+/// `store.list()` 是同步目录扫描（`FileSkillStore` 内部全是 `std::fs`），而设置
+/// 页每次打开/切页都会拉一次。技能目录的变化都经由本文件的 `toggle_skill`
+/// 或用户手改磁盘 —— 前者显式清缓存，后者最多延迟 15s 可见。
+static SKILLS_CACHE: crate::ttl_cache::TtlCache<(), Vec<SkillInfo>> =
+    crate::ttl_cache::TtlCache::new(std::time::Duration::from_secs(15));
+
+pub(crate) fn invalidate_skills_cache() {
+    SKILLS_CACHE.invalidate();
+}
+
+/// GET /api/skills
+pub async fn list_skills(State(state): State<HttpServerState>) -> Json<Vec<SkillInfo>> {
+    if let Some(cached) = SKILLS_CACHE.get(&()) {
+        return Json(cached);
+    }
+    let Some(store) = state.skill_store.as_ref() else {
+        return Json(vec![]);
+    };
+
+    let metas = store.list().await.unwrap_or_default();
+    let skills: Vec<SkillInfo> = metas
+        .into_iter()
+        .map(|m| SkillInfo {
+            name: m.name,
+            display_name: m.display_name,
+            description: m.description.unwrap_or_default(),
+            category: m.category.unwrap_or_default(),
+            // Truth from the store: `false` when the skill directory
+            // sits under `.disabled/` (the toggle moves it there).
+            enabled: m.enabled,
+        })
+        .collect();
+    SKILLS_CACHE.put((), skills.clone());
+    Json(skills)
+}
+
+/// GET /api/skills/{name}
+pub async fn get_skill(
+    State(state): State<HttpServerState>,
+    AxumPath(name): AxumPath<String>,
+) -> Result<Json<SkillContentResponse>, HttpError> {
+    let Some(store) = state.skill_store.as_ref() else {
+        return Err(HttpError {
+            status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            message: "skill store not configured".to_string(),
+        });
+    };
+
+    match store.load(&name).await {
+        Ok(Some(skill)) => Ok(Json(SkillContentResponse {
+            name: skill.name,
+            content: skill.content,
+            category: skill.category,
+            description: skill.description,
+        })),
+        Ok(None) => Err(HttpError {
+            status: axum::http::StatusCode::NOT_FOUND,
+            message: format!("skill '{}' not found", name),
+        }),
+        Err(e) => Err(HttpError {
+            status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            message: e.to_string(),
+        }),
+    }
+}
+
+/// PUT /api/skills/toggle
+pub async fn toggle_skill(
+    State(state): State<HttpServerState>,
+    Json(body): Json<SkillToggle>,
+) -> Result<Json<OkResponse>, HttpError> {
+    let Some(store) = state.skill_store.as_ref() else {
+        return Err(HttpError {
+            status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            message: "skill store not configured".to_string(),
+        });
+    };
+
+    if !body.enabled {
+        // Disable: move skill directory to .disabled/ sibling
+        store.disable(&body.name).await.map_err(|e| HttpError {
+            status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            message: e.to_string(),
+        })?;
+    } else {
+        // Enable: move skill back from .disabled/ sibling
+        store.enable(&body.name).await.map_err(|e| HttpError {
+            status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            message: e.to_string(),
+        })?;
+    }
+
+    // 开关会移动技能目录 → 立刻让列表缓存失效，否则 UI 15s 内仍显示旧状态。
+    invalidate_skills_cache();
+    Ok(Json(OkResponse { ok: true }))
+}
+
+/// GET /api/tools/toolsets
+/// Returns the **toolset categories** actually registered in the
+/// in-process `ToolRegistry` (e.g. `web`, `terminal`, `file`,
+/// `memory`, `browser`, ...), not individual tool definitions —
+/// the previous implementation conflated the two and the UI
+/// displayed one entry per tool. For each category we attach:
+/// * `tools` — the list of tool names belonging to it
+/// (filtered by `e.toolset == category`),
+/// * `enabled` — the persisted + runtime current state (we read
+/// the per-tool `is_enabled` flag and AND-reduce across the
+/// toolset; if any tool in the group is disabled the whole
+/// toolset is reported as disabled, since the LLM will not see
+/// the disabled ones and we want the toggle to reflect that),
+/// * `configured` — always `true` for built-in toolsets (the
+/// "needs configuration" badge is reserved for plugin-style
+/// optional adapters that the upstream has but we do not
+/// surface here yet).
+pub async fn list_toolsets(State(state): State<HttpServerState>) -> Json<Vec<ToolsetInfo>> {
+    // Use `list_tools()` (not `get_definitions()`) so we see
+    // *every* registered tool, including the ones whose
+    // `is_enabled` is currently false — otherwise a freshly
+    // disabled toolset would disappear from this list and the
+    // UI could not toggle it back on.
+    let all_tools = state.tool_registry.list_tools();
+
+    // Group tool names by toolset tag, preserving the order
+    // `ToolRegistry::list_toolsets()` returns (sorted, deduped)
+    // so the UI's grid is stable across reloads.
+    let mut grouped: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for t in &all_tools {
+        grouped.entry(t.toolset.clone()).or_default().push(t.name.clone());
+    }
+
+    let mut out: Vec<ToolsetInfo> = Vec::with_capacity(grouped.len());
+    for (ts_name, tools) in grouped {
+        // A toolset is reported `enabled` only if every tool in
+        // it has `is_enabled=true`. The Settings UI toggles
+        // the whole group at once (via
+        // `ToolRegistry::set_toolset_enabled`), so in practice
+        // this is always uniform — but we read the live state
+        // defensively in case a partial-disable path ever
+        // lands.
+        let total = tools.len();
+        let enabled_count = all_tools
+            .iter()
+            .filter(|t| t.toolset == ts_name)
+            .filter(|t| state.tool_registry.is_available(&t.name))
+            .count();
+        let enabled = enabled_count == total;
+        // Pull a representative description from the first
+        // tool in the group; the per-toolset `description`
+        // field does not exist in `ToolEntryInfo`, so we
+        // synthesise a stable human label. The Settings UI
+        // shows the tool-name chips regardless, so this label
+        // is the only thing the description slot is used for.
+        let description = format!("{} category — {} tools", ts_name, total);
+        out.push(ToolsetInfo {
+            name: ts_name.clone(),
+            label: ts_name,
+            description,
+            enabled,
+            configured: true,
+            tools,
+        });
+    }
+    Json(out)
+}
+
+// ---------------------------------------------------------------------------
+// Toolset toggle (runtime enable/disable)
+// ---------------------------------------------------------------------------
+
+/// On-disk format for the user's toolset enable/disable
+/// preferences. Persisted to
+/// `$HERMIX_HOME/enabled_toolsets.json`. We only store the
+/// *enabled* list; the absence of a toolset name from this list
+/// is what means "disabled" — keeping the file small and the
+/// merge logic obvious. The "all"/"*" wildcard that the startup
+/// path accepts is *not* persisted (it is a startup-only
+/// convenience); a file that contains `"enabled": ["*"]` is
+/// treated as "every toolset enabled".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EnabledToolsetState {
+    #[serde(default)]
+    enabled: Vec<String>,
+}
+
+fn toolset_state_path(state: &HttpServerState) -> std::path::PathBuf {
+    state.hermix_home.join("enabled_toolsets.json")
+}
+
+/// Path-only variant of [`load_toolset_state`] for use during
+/// `HttpServerState::build_with_hermes_home` (when the
+/// `HttpServerState` is still being constructed). Kept `pub` so
+/// `lib.rs` can call it without having to thread the
+/// half-built state through.
+pub fn load_toolset_state_for_home(hermix_home: &Path) -> EnabledToolsetState {
+    let path = hermix_home.join("enabled_toolsets.json");
+    let data = match std::fs::read_to_string(&path) {
+        Ok(v) => v,
+        // File doesn't exist — this is a fresh install / first run.
+        // Default to wildcard "all tools enabled" so the user doesn't
+        // get an empty tool list on their very first chat. Once they
+        // toggle any toolset in Settings, the file is written with an
+        // explicit list.
+        Err(_) => {
+            tracing::info!(
+                path = %path.display(),
+                "enabled_toolsets.json not found — defaulting to all tools enabled"
+            );
+            return EnabledToolsetState {
+                enabled: vec!["*".to_string()],
+            };
+        }
+    };
+    match serde_json::from_str::<EnabledToolsetState>(&data) {
+        Ok(v) => {
+            // An empty enabled list means "nothing enabled" — which
+            // can happen when a previous version of the Settings UI
+            // wrote `{"enabled":[]}` to disk. Treat it the same as
+            // the wildcard: all tools enabled. The user can still
+            // explicitly disable toolsets in Settings.
+            if v.enabled.is_empty() {
+                tracing::info!(
+                    path = %path.display(),
+                    "enabled_toolsets.json has empty list — defaulting to all tools enabled"
+                );
+                return EnabledToolsetState {
+                    enabled: vec!["*".to_string()],
+                };
+            }
+            v
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "enabled_toolsets.json is corrupt; ignoring and starting fresh"
+            );
+            EnabledToolsetState::default()
+        }
+    }
+}
+
+/// Apply the user's persisted toolset preferences to the given
+/// registry. Called from `HttpServerState::build_with_hermes_home`
+/// right after `register_builtin_tools` so the in-process state
+/// matches what the user last persisted in
+/// `enabled_toolsets.json` — otherwise the dashboard UI would
+/// show the user's saved preferences on the *Settings* tab but
+/// the LLM would see the default (everything-on) state until the
+/// user re-toggled every toolset.
+/// Toolset names not present in the persisted file are flipped
+/// to `is_enabled=false` so a *new* toolset added in a later
+/// binary version starts out off (acceptable — the user has not
+/// seen it in the UI yet, and toggling it on costs one click).
+/// A file containing `"all"` or `"*"` in the enabled list is
+/// treated as "all currently-registered toolsets enabled",
+/// matching the wildcard semantics from the startup
+/// `register_builtin_tools` path.
+pub fn apply_persisted_toolset_state(
+    registry: &hermix_tools::ToolRegistry,
+    hermix_home: &Path,
+) {
+    let persisted = load_toolset_state_for_home(hermix_home);
+    let wildcard = persisted
+        .enabled
+        .iter()
+        .any(|n| n == "all" || n == "*");
+    let registered: HashSet<String> = registry.list_toolsets().into_iter().collect();
+    let mut applied = 0usize;
+    for ts in &registered {
+        let on = wildcard || persisted.enabled.iter().any(|n| n == ts);
+        let n = registry.set_toolset_enabled(ts, on);
+        if on {
+            applied += 1;
+        }
+        tracing::info!(
+            toolset = %ts,
+            entries = n,
+            initial_enabled = on,
+            "applied persisted enabled_toolsets.json"
+        );
+    }
+    tracing::info!(
+        applied_enabled = applied,
+        total = registered.len(),
+        "toolset startup state reconciled from enabled_toolsets.json"
+    );
+
+    // Essential toolset floor — runs AFTER the whitelist
+    // reconciliation above. Optional toolsets are governed by the
+    // user's `enabled_toolsets.json`; the HARD floor (terminal, file,
+    // code_execution, web, memory, pdf, core, security,
+    // security_guidance, custom_app) is always re-enabled so a
+    // hand-edited or partially migrated list containing only
+    // `["file", "web"]` cannot leave the LLM answering "I don't have
+    // terminal". The SOFT floor (document, storage) is
+    // re-enabled only when the list is the default
+    // wildcard, so an explicit disable is respected. See
+    // `hermix_tools::essential` for the full rationale.
+    // `soft_floor_active = wildcard`: when the saved whitelist is the
+    // default `["*"]`, fill in the soft essentials too (fresh install
+    // boots fully-capable). When the user has an explicit list, the
+    // soft tier is NOT re-asserted, so a soft toolset they left out
+    // stays disabled (explicit disable respected — no override warning).
+    let reasserted = hermix_tools::essential::ensure_essentials_enabled(registry, wildcard);
+    if reasserted > 0 {
+        // Only a HARD essential being overridden (user explicitly
+        // disabled a hard floor toolset in a non-wildcard list) is worth
+        // warning about. Soft toolsets are intentionally left to the
+        // user's choice and never produce this warning.
+        let overridden: Vec<&str> = hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS
+            .iter()
+            .copied()
+            .filter(|ts| !wildcard && !persisted.enabled.iter().any(|n| n == ts))
+            .collect();
+        if !overridden.is_empty() {
+            tracing::warn!(
+                reasserted_entries = reasserted,
+                overridden_toolsets = ?overridden,
+                "hard-essential toolset floor overrode whitelist: the listed \
+                 toolsets were re-enabled because the product cannot run \
+                 safely without them. Edit HARD_ESSENTIAL_TOOLSETS in \
+                 hermix_tools::essential if this is no longer desired."
+            );
+        }
+    }
+    // Opt-in toolsets (native OS automation: `desktop`) - LAST,
+    // after both the whitelist reconciliation above and the essential
+    // floor. A fresh install starts from the wildcard ["*"], which means
+    // "everything we already knew about", not consent to let the agent
+    // drive the operator's real desktop. Only a literal
+    // toolset name in the persisted list opts in. (`browser` left the
+    // opt-in list in 2026-10-16 — see essential::HARD_ESSENTIAL_TOOLSETS.)
+    // Same helper `register_builtin_tools` calls at registration time -
+    // the two paths must agree or a restart flips them back on.
+    let persisted_set: HashSet<String> = persisted.enabled.iter().cloned().collect();
+    let opt_in_off = hermix_tools::apply_opt_in_defaults(registry, Some(&persisted_set));
+    if opt_in_off > 0 {
+        tracing::info!(
+            toolsets = opt_in_off,
+            "opt-in toolsets left disabled until explicitly enabled in Settings"
+        );
+    }
+}
+
+fn save_toolset_state(
+    state: &HttpServerState,
+    body: &EnabledToolsetState,
+) -> Result<(), String> {
+    let path = toolset_state_path(state);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(body).map_err(|e| e.to_string())?;
+    // Atomic-ish write: write to a sibling tmp file, then
+    // rename. Avoids leaving a half-written `enabled_toolsets.json`
+    // if the process is killed mid-write. The rename is atomic
+    // on the same filesystem on both Windows and Unix.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Ensure the `"mcp"` toolset is persisted as enabled and turned on in the
+/// registry. Called whenever an MCP server connects (install / toggle-on /
+/// startup) — installing a connector is an explicit user action, so the
+/// gate that carries its tools must not stay shut behind it.
+///
+/// Why this exists (2026-11-04, the filesearch/viewer night): MCP tools all
+/// register under the `"mcp"` toolset (hermix-mcp/src/client.rs). On machines
+/// whose `enabled_toolsets.json` is an explicit curated list written before
+/// that toolset existed, the whitelist has no `"mcp"` entry → connect
+/// succeeds, tools register, then get filtered from every prompt — silently,
+/// with zero errors. Fresh installs are unaffected (missing file → wildcard
+/// `["*"]`), which is why only long-lived machines ever saw it.
+///
+/// Deliberate-disable tradeoff: a user who explicitly disabled `"mcp"` in
+/// Settings will see it re-enabled after the next connector connect. That is
+/// accepted — the silent-invisible failure mode is far worse, and re-enabling
+/// a visible toggle costs one click, while rediscovering this bug costs a
+/// night. (The essential-floor route was tried first and reverted: its
+/// alignment test correctly forbids floor entries no builtin tool is tagged
+/// with, and `"mcp"` tools are runtime-registered, not builtin.)
+///
+/// Idempotent and cheap: wildcard state (`*` / `all`) and lists already
+/// containing `"mcp"` return without writing.
+pub fn ensure_mcp_toolset_persisted(
+    hermix_home: &Path,
+    registry: &hermix_tools::ToolRegistry,
+) {
+    let persisted = load_toolset_state_for_home(hermix_home);
+    let wildcard = persisted.enabled.iter().any(|n| n == "all" || n == "*");
+    if wildcard || persisted.enabled.iter().any(|n| n == "mcp") {
+        return; // everything already enabled — nothing to do
+    }
+    let mut updated = persisted;
+    updated.enabled.push("mcp".to_string());
+    let path = hermix_home.join("enabled_toolsets.json");
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(error = %e, "cannot create dir for enabled_toolsets.json");
+            return;
+        }
+    }
+    let json = match serde_json::to_string_pretty(&updated) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot serialize enabled_toolsets.json");
+            return;
+        }
+    };
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, &path)).is_err() {
+        tracing::warn!("failed to persist enabled_toolsets.json for mcp toolset");
+        return;
+    }
+    let n = registry.set_toolset_enabled("mcp", true);
+    tracing::info!(
+        entries = n,
+        "mcp toolset auto-enabled and persisted (connector install/toggle)"
+    );
+}
+
+/// Build a canonical enabled-set from a fresh toggle call.
+/// "Enabled wins" semantics: the `enabled` list is the post-toggle
+/// set; any name in `disabled` that is *not* in `enabled` is also
+/// disabled. Names that appear in neither list are flipped to
+/// disabled (because we are now in an explicit-state world; this
+/// prevents stale UI state from silently keeping a toolset on
+/// after the user dismissed it).
+fn canonical_enabled_set(toggle: &ToolsetToggle) -> HashSet<String> {
+    let set: HashSet<String> = toggle.enabled.iter().cloned().collect();
+    for name in &toggle.disabled {
+        if !set.contains(name) {
+            // explicit disable wins over implicit enable
+            // (defensive — should not happen in practice)
+        }
+    }
+    set
+}
+
+/// PUT /api/tools/toolsets/enabled
+/// Apply the user's toolset enable/disable choices to the
+/// in-process `ToolRegistry` *and* persist them to
+/// `enabled_toolsets.json`. Idempotent: re-sending the same
+/// payload is a no-op. Unknown toolset names (typos, removed
+/// toolsets) are reported in the response so the UI can show a
+/// warning instead of silently ignoring them.
+pub async fn set_enabled_toolsets(
+    State(state): State<HttpServerState>,
+    Json(body): Json<ToolsetToggle>,
+) -> Result<Json<ToolsetToggleResult>, HttpError> {
+    let enabled = canonical_enabled_set(&body);
+    let registered: HashSet<String> =
+        state.tool_registry.list_toolsets().into_iter().collect();
+
+    // Separate requested names into known vs unknown before we
+    // touch the registry.
+    let mut unknown: Vec<String> = Vec::new();
+    for name in enabled.iter().chain(body.disabled.iter()) {
+        if !registered.contains(name) {
+            unknown.push(name.clone());
+        }
+    }
+    unknown.sort();
+    unknown.dedup();
+
+    // The desired state: every registered toolset whose name
+    // is in `enabled` is on; everything else is off. This
+    // makes the call a "set absolute state" rather than a
+    // diff, which is the contract the UI expects.
+    // (P1.7): the helper `apply_toggle_with_floor` (defined
+    // below) does the toggle *and* re-asserts the essential toolset
+    // floor in one pass. Without the floor re-assert, a user can
+    // use the Settings UI to toggle `terminal` off; the in-process
+    // state then has it disabled, and the next `set_enabled_toolsets`
+    // call persists the disabled state to `enabled_toolsets.json`.
+    // The next process restart would load the persisted file, see
+    // `terminal` missing from the enabled list, and
+    // `apply_persisted_toolset_state` would (correctly) re-enable it
+    // — *but the running process is now broken until restart*. We
+    // close the gap by applying the floor here, the same way the
+    // startup paths do. The trade-off (see `hermix_tools::essential`
+    // for the full rationale): the UI may show a toolset as "off"
+    // briefly, but the in-process state always matches what the
+    // LLM will be told exists. We also extend the persisted list
+    // to include the re-asserted floor, so a restart doesn't undo
+    // the override.
+    let new_enabled =
+        apply_toggle_with_floor(&state.tool_registry, &registered, &enabled);
+
+    // Persist. We save the *enabled* list (the disabled set is
+    // derivable as the complement of `registered`, which the
+    // server rebuilds on every restart). This means a
+    // downgrade of the binary that adds a new toolset will
+    // start with that new toolset *off* — acceptable, since
+    // the user has not yet seen it in the UI.
+    let to_save = EnabledToolsetState {
+        enabled: new_enabled.clone(),
+    };
+    if let Err(e) = save_toolset_state(&state, &to_save) {
+        return Err(HttpError {
+            status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            message: format!("failed to persist enabled_toolsets.json: {}", e),
+        });
+    }
+
+    // 开关改的是 `is_enabled`，而 `/v1/tools` 的缓存里就含这个字段：
+    // 不清缓存的话，设置页和聊天侧最多 10s 内看到的还是旧状态。
+    crate::routes::invalidate_tool_list_cache();
+
+    Ok(Json(ToolsetToggleResult {
+        enabled: new_enabled,
+        unknown,
+    }))
+}
+
+/// Apply a "set absolute state" toggle to a [`ToolRegistry`] and
+/// re-assert the essential toolset floor in the same pass. Returns
+/// the canonical enabled list (sorted, with the floor folded in)
+/// that the caller should both report to the UI and persist to
+/// `enabled_toolsets.json`.
+/// Why one helper, not two? The floor re-assertion is part of the
+/// toggle contract: a user-facing toggle of `terminal` to "off"
+/// is overridden by the floor, and that override has to be
+/// reflected in **both** the in-process state *and* the persisted
+/// file. Splitting them into two steps is what made the runtime
+/// path silently drop the floor (P1.7 bug) — the floor was
+/// applied at startup but not at toggle time, and the toggle
+/// path did not see a reason to consult the floor.
+/// Splitting out a helper also makes the toggle logic testable
+/// without spinning up the full `HttpServerState` (which the
+/// test module in this file already does for the seed path).
+fn apply_toggle_with_floor(
+    registry: &hermix_tools::ToolRegistry,
+    registered: &HashSet<String>,
+    requested_enabled: &HashSet<String>,
+) -> Vec<String> {
+    let mut new_enabled: Vec<String> = Vec::new();
+    for ts in registered {
+        let on = requested_enabled.contains(ts);
+        let n = registry.set_toolset_enabled(ts, on);
+        if on {
+            new_enabled.push(ts.clone());
+            tracing::info!(toolset = %ts, entries = n, "toolset enabled at runtime");
+        } else {
+            tracing::info!(toolset = %ts, entries = n, "toolset disabled at runtime");
+        }
+    }
+
+    // The user is actively curating their toolset list here, so the soft
+    // floor is NOT applied — a soft toolset the user turned off stays off
+    // (explicit disable respected). Only the hard floor is enforced.
+    let reasserted = hermix_tools::essential::ensure_essentials_enabled(registry, false);
+    if reasserted > 0 {
+        for ts in hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS {
+            if registered.contains(*ts) && !new_enabled.iter().any(|n| n == ts) {
+                new_enabled.push(ts.to_string());
+            }
+        }
+        tracing::warn!(
+            reasserted_entries = reasserted,
+            floor = ?hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS,
+            "runtime toolset toggle overrode hard-essential floor; re-enabling \
+             and persisting the floor-applied state so a restart sees the \
+             same set."
+        );
+    }
+    new_enabled.sort();
+    new_enabled
+}
+
+// ── Builtin skill seeding ────────────────────────────────────────────
+// The 16 .md files in `dashboard/skills/` are bundled into the binary at
+// compile time. On first start we materialise them into the user's skills
+// directory (`~/.hermix/skills/<category>/<name>/SKILL.md`) so the front-end
+// "扩展 → 技能" tab has a populated list right away.
+// Seeding is upgrade-aware (see `seed_one`): a stock (never-edited) copy
+// is refreshed in place when the bundled content changes, while a
+// user-edited SKILL.md is preserved and the new builtin is staged as
+// `SKILL.md.new` next to it. The per-directory `.seed-meta.json` sidecar
+// carries the hash that distinguishes the two cases.
+
+/// `(category, name, raw .md content)` — the .md files include YAML
+/// frontmatter that we use as the source of truth for category/name, so the
+/// tuple here is just the dispatch index.
+const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
+    // (category, skill name, embedded .md content)
+    (
+        "software-development",
+        "architecture-design",
+        include_str!("skills/architecture-design.md"),
+    ),
+    (
+        "software-development",
+        "code-review",
+        include_str!("skills/code-review.md"),
+    ),
+    (
+        "software-development",
+        "debugging-methodology",
+        include_str!("skills/debugging-methodology.md"),
+    ),
+    (
+        "software-development",
+        "tdd-practice",
+        include_str!("skills/tdd-practice.md"),
+    ),
+    (
+        "software-development",
+        "github-workflow",
+        include_str!("skills/github-workflow.md"),
+    ),
+    (
+        "software-development",
+        "browser-automation",
+        include_str!("skills/browser-automation.md"),
+    ),
+    (
+        "productivity",
+        "plan-writing",
+        include_str!("skills/plan-writing.md"),
+    ),
+    (
+        "productivity",
+        "summarize-research",
+        include_str!("skills/summarize-research.md"),
+    ),
+    (
+        "productivity",
+        "spreadsheet-analysis",
+        include_str!("skills/spreadsheet-analysis.md"),
+    ),
+    (
+        "productivity",
+        "pdf-processing",
+        include_str!("skills/pdf-processing.md"),
+    ),
+    (
+        "productivity",
+        "image-workflow",
+        include_str!("skills/image-workflow.md"),
+    ),
+    (
+        "productivity",
+        "self-improvement",
+        include_str!("skills/self-improvement.md"),
+    ),
+    (
+        "hermix",
+        "skill-vetting",
+        include_str!("skills/skill-vetting.md"),
+    ),
+    // custom-app-development: hx-shell 自定义应用开发指南（含真实 schema / API / 图标库），
+    // 内置为 seed 以便分发到其它机器；单一真相位置定为 "hermix" 分类（与 store 动态扫描
+    // 所有子目录的读取机制一致；运行期副本只在 ~/.hermix/skills/hermix/ 一份）。
+    (
+        "hermix",
+        "custom-app-development",
+        include_str!("skills/custom-app-development.md"),
+    ),
+    // impeccable-design: 界面/平面/PPT 设计规范 + `npx impeccable detect`
+    // 反模式检测收尾。description 带自动激活触发词（界面设计/配色/排版/
+    // 做 PPT 等），命中设计类请求时由 skill_orchestrator 自动注入。
+    (
+        "design",
+        "impeccable-design",
+        include_str!("skills/impeccable-design.md"),
+    ),
+    // document-authoring: 文档编制画布协议（<hermix-canvas> marker / 页面
+    // 几何声明 / 块边界 / 版面规范 / 落盘要求）。与 DocCanvasView 的流式
+    // 分流协议一一对应（决策笔记 2026-10-13-html-canvas-pipeline）。
+    (
+        "design",
+        "document-authoring",
+        include_str!("skills/document-authoring.md"),
+    ),
+    // chaoxing-learning: 超星学习通刷课 + 交作业的站点知识。通用操作能力
+    // （怎么用 MCP 驱动查看器内嵌浏览器）在 browser-automation skill 里，
+    // 这里只留超星自己的门道（URL 形态 / 目录图标 / 播放器 API / 作业页 DOM）。
+    (
+        "lifestyle",
+        "chaoxing-learning",
+        include_str!("skills/chaoxing-learning.md"),
+    ),
+];
+
+/// Sidecar next to a seeded `SKILL.md`, recording the SHA-256 of the
+/// content we last wrote there. It is the upgrade-detection anchor: on a
+/// later start the on-disk file is re-hashed and compared against this
+/// hash — a match means the user never edited the skill, so a newer
+/// builtin version can overwrite it; a mismatch means user content and
+/// the stock file must be preserved.
+#[derive(Serialize, Deserialize)]
+struct SeedMeta {
+    hash: String,
+}
+
+/// What `seed_one` did for one builtin skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeedOutcome {
+    /// No `SKILL.md` existed — builtin content written (first install).
+    Fresh,
+    /// On-disk copy still matched the last-seeded hash (user never edited
+    /// it) — refreshed in place with the current builtin content.
+    Updated,
+    /// On-disk copy is byte-identical to the builtin — nothing to do
+    /// beyond making sure the meta sidecar records the hash (this is also
+    /// how pre-sidecar installs are adopted).
+    AlreadyCurrent,
+    /// On-disk copy diverged from the last-seeded hash (or predates the
+    /// sidecar and differs from the builtin) — treated as user content:
+    /// `SKILL.md` preserved, builtin staged as `SKILL.md.new` alongside.
+    PreservedUserEdit,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn seed_meta_path(dir: &Path) -> PathBuf {
+    dir.join(".seed-meta.json")
+}
+
+/// Hash recorded by the last successful seed of this directory, if any.
+fn read_seed_hash(dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(seed_meta_path(dir)).ok()?;
+    let meta: SeedMeta = serde_json::from_str(&raw).ok()?;
+    Some(meta.hash)
+}
+
+fn write_seed_meta(dir: &Path, hash: &str) -> std::io::Result<()> {
+    let json = serde_json::to_string(&SeedMeta {
+        hash: hash.to_string(),
+    })
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(seed_meta_path(dir), json)
+}
+
+/// Seed one builtin skill into `skills_dir/<category>/<name>/SKILL.md`
+/// with upgrade detection. See [`SeedOutcome`] for the four possible
+/// results; only [`SeedOutcome::Fresh`] and [`SeedOutcome::Updated`]
+/// write `SKILL.md`.
+///
+/// Why a hash sidecar instead of "never touch existing files": the old
+/// rule froze builtin skills at whatever content shipped with the first
+/// install the user ran — bug fixes and improvements to the bundled .md
+/// never reached existing machines. The sidecar distinguishes "stock
+/// copy from an older version" (safe to upgrade) from "user-authored
+/// content" (never clobbered).
+pub fn seed_one(
+    skills_dir: &Path,
+    category: &str,
+    name: &str,
+    content: &str,
+) -> std::io::Result<SeedOutcome> {
+    let dir = skills_dir.join(category).join(name);
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("SKILL.md");
+    let builtin_hash = sha256_hex(content.as_bytes());
+
+    let on_disk = std::fs::read_to_string(&path).ok();
+    let outcome = match (&on_disk, read_seed_hash(&dir)) {
+        // Fresh install (or the file was deleted): write the builtin.
+        (None, _) => {
+            std::fs::write(&path, content)?;
+            write_seed_meta(&dir, &builtin_hash)?;
+            SeedOutcome::Fresh
+        }
+        // Verified stock copy (disk hash == last-seeded hash): the user
+        // has not edited it, so a changed builtin upgrades in place.
+        (Some(disk), Some(seeded)) if sha256_hex(disk.as_bytes()) == seeded => {
+            if *disk == content {
+                SeedOutcome::AlreadyCurrent
+            } else {
+                std::fs::write(&path, content)?;
+                write_seed_meta(&dir, &builtin_hash)?;
+                SeedOutcome::Updated
+            }
+        }
+        // Everything else is user content we must not clobber — unless it
+        // happens to be byte-identical to the builtin (legacy install
+        // from before the sidecar existed, never edited), which we adopt
+        // by recording its hash so future upgrades can overwrite.
+        (Some(disk), _) => {
+            if *disk == content {
+                write_seed_meta(&dir, &builtin_hash)?;
+                SeedOutcome::AlreadyCurrent
+            } else {
+                let staged = dir.join("SKILL.md.new");
+                if std::fs::read_to_string(&staged).ok().as_deref() != Some(content) {
+                    std::fs::write(&staged, content)?;
+                }
+                SeedOutcome::PreservedUserEdit
+            }
+        }
+    };
+
+    match outcome {
+        SeedOutcome::Fresh => {
+            tracing::info!("seeded builtin skill: {} ({})", name, category);
+        }
+        SeedOutcome::Updated => {
+            tracing::info!(
+                "updated builtin skill: {} ({}) — previous copy was unmodified",
+                name,
+                category
+            );
+        }
+        SeedOutcome::PreservedUserEdit => {
+            tracing::info!(
+                "preserved user-edited skill: {} ({}); new builtin staged as SKILL.md.new",
+                name,
+                category
+            );
+        }
+        SeedOutcome::AlreadyCurrent => {}
+    }
+    Ok(outcome)
+}
+
+/// Materialise the bundled builtin skills into `skills_dir`. Returns the
+/// number of `SKILL.md` files written or refreshed (fresh installs plus
+/// stock copies upgraded to a newer builtin version). User-edited skills
+/// are never clobbered — see [`seed_one`].
+pub fn seed_builtin_skills(skills_dir: &Path) -> std::io::Result<usize> {
+    std::fs::create_dir_all(skills_dir)?;
+
+    let mut written = 0;
+    for (category, name, content) in BUILTIN_SKILLS {
+        if matches!(
+            seed_one(skills_dir, category, name, content)?,
+            SeedOutcome::Fresh | SeedOutcome::Updated
+        ) {
+            written += 1;
+        }
+    }
+    Ok(written)
+}
+
+/// Helper for `lib.rs`: seed the default skills directory. Idempotent.
+pub fn seed_builtin_skills_default() -> usize {
+    let dir = hermix_skills::FileSkillStore::default_dir();
+    match seed_builtin_skills(&dir) {
+        Ok(n) if n > 0 => {
+            tracing::info!("Seeded {} builtin skills into {}", n, dir.display());
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!("Failed to seed builtin skills: {}", e);
+        }
+    }
+    // n is informational only; the actual count is logged above.
+    BUILTIN_SKILLS.len()
+}
+
+/// 内置技能条数。
+///
+/// 导出它是为了消灭「加了技能、忘了改测试里的数字」这类漂移：
+/// `BUILTIN_SKILLS` 是唯一的真相源，测试读这里而不是各自硬编码一份。
+/// 2026-10-18 就是三处硬编码 13 与实际 16 条对不上，红了四个测试。
+pub fn builtin_skills_len() -> usize {
+    BUILTIN_SKILLS.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hermix_skills::SkillStore;
+    use tempfile::tempdir;
+
+    #[test]
+    fn seed_builtin_skills_writes_all_skills() {
+        let dir = tempdir().unwrap();
+        let count = seed_builtin_skills(dir.path()).unwrap();
+        assert_eq!(count, BUILTIN_SKILLS.len(), "should seed all builtin skills");
+        // Verify some exist
+        assert!(
+            dir.path().join("software-development").join("architecture-design").join("SKILL.md").exists(),
+            "architecture-design SKILL.md should exist"
+        );
+        assert!(
+            dir.path().join("software-development").join("github-workflow").join("SKILL.md").exists(),
+            "github-workflow SKILL.md should exist"
+        );
+        // Idempotent: second call writes 0
+        let second = seed_builtin_skills(dir.path()).unwrap();
+        assert_eq!(second, 0, "second seed should write nothing");
+    }
+
+    #[tokio::test]
+    async fn file_skill_store_load_by_name() {
+        let dir = tempdir().unwrap();
+        seed_builtin_skills(dir.path()).unwrap();
+
+        let store = hermix_skills::FileSkillStore::new(dir.path().to_path_buf());
+
+        // Load a skill by name only (no category needed)
+        let skill = store.load("architecture-design").await.unwrap()
+            .expect("architecture-design should be found by name alone");
+        assert_eq!(skill.name, "architecture-design");
+        assert!(skill.content.contains("## 工具接线"), "content should have markdown body");
+        assert_eq!(skill.category.as_deref(), Some("software-development"));
+        assert!(skill.description.as_deref().unwrap_or("").contains("架构决策"));
+
+        // Non-existent name returns None
+        let missing = store.load("no-such-skill").await.unwrap();
+        assert!(missing.is_none(), "unknown skill should return None");
+    }
+
+    #[tokio::test]
+    async fn file_skill_store_load_from_all_categories() {
+        let dir = tempdir().unwrap();
+        seed_builtin_skills(dir.path()).unwrap();
+        let store = hermix_skills::FileSkillStore::new(dir.path().to_path_buf());
+
+        // Skills across different categories — all loadable by plain name
+        for name in &["architecture-design", "github-workflow", "plan-writing"] {
+            let skill = store.load(name).await.unwrap()
+                .unwrap_or_else(|| panic!("{name} should be loadable by name"));
+            assert_eq!(&skill.name, name);
+        }
+    }
+
+    #[tokio::test]
+    async fn list_skills_returns_seeded_skills() {
+        let dir = tempdir().unwrap();
+        seed_builtin_skills(dir.path()).unwrap();
+        let store = hermix_skills::FileSkillStore::new(dir.path().to_path_buf());
+        let metas = store.list().await.unwrap();
+        assert_eq!(metas.len(), BUILTIN_SKILLS.len(), "list should return all seeded skills");
+        // Verify names from each category
+        let names: Vec<&str> = metas.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"architecture-design"));
+        assert!(names.contains(&"github-workflow"));
+        assert!(names.contains(&"plan-writing"));
+        assert!(names.contains(&"summarize-research"));
+    }
+
+    // ── P1.7: essential-floor override at runtime ────────────────────
+    // Regression: the floor was applied at startup (twice: once in
+    // `register_builtin_tools` and once in
+    // `apply_persisted_toolset_state`) but NOT in
+    // `set_enabled_toolsets`. A user could use the Settings UI to
+    // toggle `terminal` off; the in-process state would then have
+    // it disabled, and the next LLM call would 4xx the terminal
+    // tool — even though the floor docstring in
+    // `hermix_tools::essential` promised the LLM would always see
+    // it. The fix: `apply_toggle_with_floor` re-asserts the floor
+    // and folds the re-enabled toolsets into the returned list, so
+    // a restart sees the same effective state.
+    // Test strategy: `ToolRegistry` is a closed shape (no public
+    // `is_toolset_enabled` getter; `set_toolset_enabled` returns
+    // the *number of flipped entries*, not the new state). We
+    // exercise the floor override behaviour against a real
+    // registry built by `register_builtin_tools` and observe the
+    // *returned list*, which is the contract callers care about:
+    // it must include the floor toolsets regardless of the user's
+    // request.
+
+    use hermix_core::{CommandOutput, SkillProvider, TerminalBackend};
+    use std::sync::Arc;
+
+    /// No-op skill provider so `register_builtin_tools` accepts
+    /// our `Arc<dyn SkillProvider>` argument. The runtime toggle
+    /// path doesn't touch it; we just need the registry to come
+    /// up with the canonical toolset list.
+    struct NoopSkillProvider;
+    #[async_trait::async_trait]
+    impl SkillProvider for NoopSkillProvider {
+        async fn create_skill(
+            &self,
+            _name: &str,
+            _content: &str,
+            _category: Option<&str>,
+        ) -> Result<hermix_core::Skill, hermix_core::AgentError> {
+            //( / ): return a structured error
+            // instead of unreachable!() so a routing mistake degrades
+            // gracefully instead of panicking the dashboard.
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopSkillProvider::create_skill should never be called".into()
+            ))
+        }
+        async fn get_skill(
+            &self,
+            _name: &str,
+        ) -> Result<Option<hermix_core::Skill>, hermix_core::AgentError> {
+            Ok(None)
+        }
+        async fn list_skills(
+            &self,
+        ) -> Result<Vec<hermix_core::SkillMeta>, hermix_core::AgentError> {
+            Ok(vec![])
+        }
+        async fn update_skill(
+            &self,
+            _name: &str,
+            _content: &str,
+        ) -> Result<hermix_core::Skill, hermix_core::AgentError> {
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopSkillProvider::update_skill should never be called".into()
+            ))
+        }
+        async fn delete_skill(
+            &self,
+            _name: &str,
+        ) -> Result<(), hermix_core::AgentError> {
+            Ok(())
+        }
+    }
+
+    /// No-op terminal backend. `register_builtin_tools` only uses
+    /// it to construct `TerminalHandler`; the test itself never
+    /// dispatches a terminal call.
+    struct NoopBackend;
+    #[async_trait::async_trait]
+    impl TerminalBackend for NoopBackend {
+        async fn execute_command(
+            &self,
+            _cmd: &str,
+            _timeout: Option<u64>,
+            _workdir: Option<&str>,
+            _background: bool,
+            _pty: bool,
+        ) -> Result<CommandOutput, hermix_core::AgentError> {
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopBackend::execute_command should never be called".into()
+            ))
+        }
+        async fn read_file(
+            &self,
+            _path: &str,
+            _offset: Option<u64>,
+            _limit: Option<u64>,
+        ) -> Result<String, hermix_core::AgentError> {
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopBackend::read_file should never be called".into()
+            ))
+        }
+        async fn write_file(
+            &self,
+            _path: &str,
+            _content: &str,
+        ) -> Result<(), hermix_core::AgentError> {
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopBackend::write_file should never be called".into()
+            ))
+        }
+        async fn file_exists(
+            &self,
+            _path: &str,
+        ) -> Result<bool, hermix_core::AgentError> {
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopBackend::file_exists should never be called".into()
+            ))
+        }
+    }
+
+    fn fixture_registry() -> (hermix_tools::ToolRegistry, HashSet<String>) {
+        // Isolate HERMIX_HOME so the BrowserConfig loader doesn't
+        // pick up the dev machine's real ~/.hermix/config.yaml —
+        // a tempdir is the only safe way to make the fixture
+        // hermetic. (See hermix_config::paths::hermix_home().)
+        let home = tempdir().unwrap();
+        // 守卫：离开时把 HERMIX_HOME 还原。此前裸 set_var 会让这个临时目录
+        // 被删之后仍被并行测试读到（pairing 测试写 TLS 证书偶发 os error 2）。
+        let _home_guard = crate::test_env::EnvGuard::set("HERMIX_HOME", home.path());
+        let reg = hermix_tools::ToolRegistry::new();
+        let skill_provider: Arc<dyn SkillProvider> = Arc::new(NoopSkillProvider);
+        let terminal: Arc<dyn TerminalBackend> = Arc::new(NoopBackend);
+        hermix_tools::register_builtin_tools(&reg, terminal, skill_provider, None, None, None, None, None);
+        let registered: HashSet<String> =
+            reg.list_toolsets().into_iter().collect();
+        // Sanity: at least the *core* floor must be present
+        // (`terminal` is the documented regression test). We don't
+        // hard-pin every entry in `ESSENTIAL_TOOLSETS` because
+        // the constant has historically out-paced registration
+        // (e.g. `pdf`, `office` were once in
+        // the floor but not in the runtime registry — a separate
+        // P-bug tracked elsewhere). The P1.7 contract is "floor
+        // toolsets that *are* registered must survive a runtime
+        // toggle-off", which is what the tests below check.
+        assert!(
+            registered.iter().any(|n| n == "terminal"),
+            "P1.7 fixture: `terminal` must be in registry, got {registered:?}"
+        );
+        assert!(
+            registered.iter().any(|n| n == "file"),
+            "P1.7 fixture: `file` must be in registry, got {registered:?}"
+        );
+        (reg, registered)
+    }
+
+    /// Native OS automation split (2026-10-16): `desktop` ships **opt-in**
+    /// — a fresh install starts from the wildcard `["*"]`, and that must
+    /// not switch on tools that drive the operator's real desktop. Only a
+    /// literal toolset name in `enabled_toolsets.json` opts in.
+    /// `browser` left the opt-in list when the virtual-window P0 removed
+    /// the "drives the user's real browser" concern; it is now on the
+    /// essential HARD floor, so it must be enabled even under the wildcard
+    /// default and even when a curated list omits it. Regression guard for
+    /// the two reconcile paths (this function and `register_builtin_tools`
+    /// step 6) drifting apart.
+    #[test]
+    fn desktop_is_opt_in_but_essentials_survive_curated_lists() {
+        let home = tempdir().unwrap();
+        let _home_guard = crate::test_env::EnvGuard::set("HERMIX_HOME", home.path());
+        let reg = hermix_tools::ToolRegistry::new();
+        hermix_tools::register_builtin_tools(
+            &reg,
+            Arc::new(NoopBackend),
+            Arc::new(NoopSkillProvider),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let all_disabled = |toolset: &str| {
+            let entries: Vec<_> = reg
+                .list_tools()
+                .into_iter()
+                .filter(|e| e.toolset == toolset)
+                .collect();
+            !entries.is_empty() && entries.iter().all(|e| !e.is_enabled)
+        };
+        let all_enabled = |toolset: &str| {
+            let entries: Vec<_> = reg
+                .list_tools()
+                .into_iter()
+                .filter(|e| e.toolset == toolset)
+                .collect();
+            !entries.is_empty() && entries.iter().all(|e| e.is_enabled)
+        };
+
+        // Fresh install: no file at all -> wildcard default.
+        assert!(!home.path().join("enabled_toolsets.json").exists());
+        apply_persisted_toolset_state(&reg, home.path());
+        for ts in hermix_tools::OPT_IN_TOOLSETS {
+            assert!(
+                all_disabled(ts),
+                "opt-in toolset `{ts}` must stay disabled under the wildcard default"
+            );
+        }
+        // `browser` left the hard floor on 2026-10-21 (the viewer's MCP server
+        // owns browser automation now), so the floor semantics this test
+        // pins are exercised with `terminal` instead — same class: essential
+        // toolsets survive a curated whitelist that omits them.
+        assert!(
+            all_enabled("terminal"),
+            "`terminal` is on the essential hard floor — it must be enabled \
+             under the wildcard default, not hidden behind an opt-in"
+        );
+
+        // A curated list that omits `terminal` is still overridden by the
+        // hard floor (same semantics `browser` used to have), while the
+        // opt-in `desktop` stays off.
+        std::fs::write(
+            home.path().join("enabled_toolsets.json"),
+            r#"{"enabled":["file","web"]}"#,
+        )
+        .unwrap();
+        apply_persisted_toolset_state(&reg, home.path());
+        assert!(
+            all_enabled("terminal"),
+            "hard-floor toolset `terminal` must be re-enabled even when the \
+             curated whitelist omits it"
+        );
+        assert!(
+            all_disabled(hermix_tools::DESKTOP_TOOLSET),
+            "opt-in toolset `desktop` must stay disabled unless explicitly named"
+        );
+
+        // Operator names `desktop` in Settings -> it comes back on.
+        std::fs::write(
+            home.path().join("enabled_toolsets.json"),
+            r#"{"enabled":["desktop"]}"#,
+        )
+        .unwrap();
+        apply_persisted_toolset_state(&reg, home.path());
+        assert!(
+            all_enabled(hermix_tools::DESKTOP_TOOLSET),
+            "an explicitly listed opt-in toolset must be enabled"
+        );
+    }
+    #[test]
+    fn apply_toggle_with_floor_keeps_essentials_even_when_user_toggles_off() {
+        let (reg, registered) = fixture_registry();
+
+        // User toggles everything off — including `terminal` and
+        // `file`, which are in the essential floor. The `requested`
+        // set intentionally contains *no* floor toolsets.
+        let requested: HashSet<String> = HashSet::new();
+        let returned = apply_toggle_with_floor(&reg, &registered, &requested);
+
+        // Persisted list: the floor is folded in, so a restart
+        // sees the same effective state. This is the observable
+        // contract of the helper; the in-process state is mirrored
+        // exactly (we call `set_toolset_enabled` on the same
+        // registry) but the public API doesn't expose a getter to
+        // assert on, so we test through the returned list.
+        for ts in hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS {
+            if registered.iter().any(|n| n == ts) {
+                assert!(
+                    returned.iter().any(|n| n == ts),
+                    "P1.7 regression: returned list must include hard floor toolset {ts} \
+                     even when user requested everything off. Got: {returned:?}"
+                );
+            }
+        }
+        // Returned list is sorted (contract callers rely on).
+        let mut sorted = returned.clone();
+        sorted.sort();
+        assert_eq!(returned, sorted, "returned list must be sorted");
+    }
+
+    #[test]
+    fn apply_toggle_with_floor_is_idempotent_when_user_already_kept_essentials() {
+        let (reg, registered) = fixture_registry();
+        // User requests the full floor plus `browser`. The
+        // helper should be a near-no-op (no re-assertion needed).
+        let requested: HashSet<String> = registered.clone();
+        let returned = apply_toggle_with_floor(&reg, &registered, &requested);
+        // The returned list must at minimum contain every
+        // registered toolset (no floor override needed, no extras
+        // dropped).
+        for ts in &registered {
+            assert!(
+                returned.contains(ts),
+                "P1.7: requested-full toggle must preserve toolset {ts} in returned list"
+            );
+        }
+        // Defensive: the returned set must equal the requested
+        // set (the floor is a subset of requested, so no
+        // additions). Sort both into Vec for a deterministic
+        // comparison (HashSet itself has no `sort`).
+        let mut req_vec: Vec<String> = requested.into_iter().collect();
+        req_vec.sort();
+        assert_eq!(
+            returned, req_vec,
+            "P1.7: when user requests everything, returned should mirror it"
+        );
+    }
+
+    #[test]
+    fn apply_toggle_with_floor_keeps_essentials_when_user_passes_partial_set() {
+        let (reg, registered) = fixture_registry();
+        // User keeps only `web`. Floor must re-assert. We pick
+        // `web` because it is both in the floor *and* registered.
+        let mut requested: HashSet<String> = HashSet::new();
+        requested.insert("web".to_string());
+        let returned = apply_toggle_with_floor(&reg, &registered, &requested);
+        for ts in hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS {
+            if registered.iter().any(|n| n == ts) {
+                assert!(
+                    returned.iter().any(|n| n == ts),
+                    "P1.7: partial-user toggle must still re-include hard floor toolset {ts}"
+                );
+            }
+        }
+        assert!(
+            returned.contains(&"web".to_string()),
+            "P1.7: user's `web` choice must be honoured"
+        );
+    }
+
+    #[test]
+    fn apply_toggle_with_floor_respects_explicit_soft_disable() {
+        let (reg, registered) = fixture_registry();
+        // User keeps only `web` (a hard essential). Any soft essential
+        // that is registered must NOT be force-re-enabled by the floor —
+        // an explicit disable must be respected. This is the
+        // anti-regression test for the "essential toolset floor overrode
+        // whitelist" warning that used to fire on startup for `document`.
+        let mut requested: HashSet<String> = HashSet::new();
+        requested.insert("web".to_string());
+        let returned = apply_toggle_with_floor(&reg, &registered, &requested);
+
+        for ts in hermix_tools::essential::SOFT_ESSENTIAL_TOOLSETS {
+            if registered.iter().any(|n| n == ts) {
+                assert!(
+                    !returned.iter().any(|n| n == ts),
+                    "soft essential {ts} must stay off when the user toggled it \
+                     off and did not request it. Got: {returned:?}"
+                );
+            }
+        }
+        // Hard essentials still survive the toggle-off.
+        for ts in hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS {
+            if registered.iter().any(|n| n == ts) {
+                assert!(
+                    returned.iter().any(|n| n == ts),
+                    "hard essential {ts} must survive an explicit toggle-off"
+                );
+            }
+        }
+    }
+}

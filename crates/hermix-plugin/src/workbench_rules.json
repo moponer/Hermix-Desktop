@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "limits": {
+    "js": 200,
+    "css": 300,
+    "html": 150,
+    "duplicateBlockLines": 15
+  },
+  "lockedFiles": ["src/main.js", "styles/tokens.css"],
+  "rules": [
+    {
+      "id": "W001",
+      "title": "禁止内联样式属性",
+      "applies": ["html", "js"],
+      "pattern": "style\\s*=",
+      "message": "禁止内联样式 style= 属性",
+      "fix": "移到 styles/components.css，用 var(--token)"
+    },
+    {
+      "id": "W002",
+      "title": "禁止 HTML 内 style 块",
+      "applies": ["html"],
+      "pattern": "<style[\\s>]",
+      "message": "禁止 HTML 内嵌 <style> 块",
+      "fix": "移到 styles/ 下的 css 文件并用 <link> 引入"
+    },
+    {
+      "id": "W003",
+      "title": "禁止内联脚本",
+      "applies": ["html"],
+      "pattern": "<script",
+      "excludePattern": "\\bsrc=",
+      "message": "禁止 HTML 内嵌 <script> 内容",
+      "fix": "改为 <script type=\"module\" src=\"...\"> 外链"
+    },
+    {
+      "id": "W004a",
+      "title": "CSS 禁止裸色值",
+      "applies": ["css"],
+      "exceptFiles": ["styles/tokens.css"],
+      "pattern": "#[0-9a-fA-F]{3,8}\\b|\\brgba?\\(|\\bhsla?\\(",
+      "message": "CSS 禁止裸色值，只能用 var(--token)",
+      "fix": "改用 styles/tokens.css 中已定义的变量"
+    },
+    {
+      "id": "W005",
+      "title": "禁止 !important",
+      "applies": ["css"],
+      "pattern": "!important",
+      "message": "禁止 !important",
+      "fix": "提高选择器特异性或调整顺序"
+    },
+    {
+      "id": "W006",
+      "title": "禁止 ID 选择器",
+      "applies": ["css"],
+      "pattern": "^\\s*#[A-Za-z][\\w-]*",
+      "message": "禁止 ID 选择器，一律用类选择器",
+      "fix": "改为 .class 选择器"
+    },
+    {
+      "id": "W007",
+      "title": "禁止挂载全局变量",
+      "applies": ["js"],
+      "pattern": "\\bwindow\\.[A-Za-z_]\\w*\\s*=",
+      "excludePattern": "\\bwindow\\.wb\\b",
+      "message": "禁止向 window 挂载全局变量（宿主注入的 wb 除外）",
+      "fix": "改用模块 export 传递"
+    },
+    {
+      "id": "W008",
+      "title": "禁止 var 声明",
+      "applies": ["js"],
+      "pattern": "\\bvar\\s+[A-Za-z_$]",
+      "message": "禁止 var，一律 const / let",
+      "fix": "改为 const 或 let"
+    },
+    {
+      "id": "W009",
+      "title": "数据访问只能在 api.js",
+      "applies": ["js"],
+      "onlyOutside": "src/api.js",
+      "pattern": "\\bwb\\.(db|fs|exec)\\b",
+      "message": "全仓只有 src/api.js 能调用 wb.*",
+      "fix": "把调用移到 api.js 并导出函数，此处改为 import 调用"
+    },
+    {
+      "id": "W011",
+      "title": "必须是 ESM 模块",
+      "applies": ["js"],
+      "pattern": "(^|[;\\s])(import|export)\\s",
+      "wholeFile": true,
+      "invert": true,
+      "message": "每个模块必须含 import 或 export（ESM）",
+      "fix": "至少导出一个函数或引入一个依赖"
+    },
+    {
+      "id": "W014",
+      "title": "DOM 查询限定在自身 root 内",
+      "applies": ["js"],
+      "pattern": "\\bdocument\\.querySelector",
+      "message": "禁止裸 document.querySelector，只能在自身 root 内查询",
+      "fix": "改用 root.querySelector 或传入的容器查询"
+    },
+    {
+      "id": "W019",
+      "title": "禁止从 CDN 导入",
+      "applies": ["js", "html"],
+      "pattern": "(from|import)\\s*[\"']https?://",
+      "message": "禁止从 CDN / 远程 URL 导入依赖",
+      "fix": "走宿主 importmap 白名单（先申请进 vendor）"
+    },
+    {
+      "id": "W021",
+      "title": "禁止非 ESM 加载方式",
+      "applies": ["js"],
+      "pattern": "\\brequire\\s*\\(",
+      "message": "禁止 require()，一律 ESM import",
+      "fix": "改为 import ... from '...'"
+    },
+    {
+      "id": "W022",
+      "title": "必须加载宿主 SDK",
+      "applies": ["html"],
+      "pattern": "<script[^>]+src=[^>]*_vendor/wb-sdk\\.js",
+      "mustMatch": true,
+      "wholeFile": true,
+      "message": "index.html 必须引用宿主 wb-sdk.js",
+      "fix": "在 main.js 之前加 <script src=\"../../_vendor/wb-sdk.js\"></script>"
+    },
+    {
+      "id": "W015",
+      "title": "事件必须成对解绑",
+      "applies": ["js"],
+      "pattern": "\\.addEventListener\\s*\\(",
+      "requiresPattern": "\\.removeEventListener\\s*\\(",
+      "message": "绑定了事件但没有解绑，unmount 后会泄漏",
+      "fix": "在 unmount() 里对称 removeEventListener"
+    },
+    {
+      "id": "W023",
+      "title": "禁止动态执行代码",
+      "applies": ["js"],
+      "pattern": "\\beval\\s*\\(|\\bnew\\s+Function\\s*\\(",
+      "message": "禁止 eval / new Function",
+      "fix": "改用静态逻辑或宿主 SDK 提供的能力"
+    },
+    {
+      "id": "W024",
+      "title": "禁止直接发起网络请求",
+      "applies": ["js"],
+      "pattern": "\\bfetch\\s*\\(|\\bXMLHttpRequest\\b",
+      "message": "禁止直接 fetch / XHR，网络访问必须经宿主",
+      "fix": "把请求移到 src/api.js 并走 window.wb.*"
+    },
+    {
+      "id": "W025",
+      "title": "禁止浏览器本地存储",
+      "applies": ["js"],
+      "pattern": "\\b(local|session)Storage\\b",
+      "message": "禁止 localStorage / sessionStorage，代码回滚会连带丢数据",
+      "fix": "持久化走 window.wb.db（经 src/api.js）"
+    }
+  ]
+}

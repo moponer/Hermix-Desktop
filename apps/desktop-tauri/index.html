@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="./favicon-48.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./favicon-180.png" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Hermix Desktop</title>
+    <script>
+      // Theme bootstrap — 早于 React / Vite 加载运行，避免 FOUC。
+      // 与 useTheme.ts 共用 STORAGE_KEYS.theme = "hermix.desktop.theme"。
+      // 主程序挂载后 useTheme 会再 readStored() 一次（已存 key 同名），不会覆写。
+      // 暗色兜底：没设置主题且系统偏好暗色 → 默认 dark。
+      (function() {
+        var root = document.documentElement;
+        // 截图覆盖窗：底色压黑。主启动遮罩/亮色主题都是白底，覆盖窗复用
+        // 本页面时白底会在 JS 就绪前整屏闪白。
+        if (location.hash.indexOf("#/screenshot-overlay") === 0) {
+          root.setAttribute("data-overlay", "1");
+        }
+        function apply(id) {
+          root.setAttribute("data-theme", id);
+          try { root.style.colorScheme = id === "notion-dark" ? "dark" : "light"; } catch (_) {}
+        }
+        var stored = null;
+        try { stored = localStorage.getItem("hermix.desktop.theme"); } catch (_) {}
+        // 2026-10-27：旧色系主题（light / dark / rainforest / sunset）已删除，
+        // 只保留 Notion 亮/暗两套；旧存储值一律落到 notion。
+        if (stored === "notion" || stored === "notion-dark") {
+          apply(stored);
+        } else {
+          var darkPref = false;
+          try { darkPref = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches; } catch (_) {}
+          apply(darkPref ? "notion-dark" : "notion");
+        }
+      })();
+    </script>
+    <script>
+      // 启动遮罩终极保险 —— 独立于 main.tsx 的模块图运行（经典脚本，不依赖任何 import）。
+      // 若 main.tsx 因某个依赖在求值期抛错而整体崩掉，第 122 行那个 22s 兜底根本不会注册，
+      // 这里的内联兜底仍能无条件关掉 splash，避免界面永久卡在启动页。
+      (function () {
+        var SP_FALLBACK_MS = 10000;
+        function hideSplash() {
+          var s = document.getElementById("splash");
+          if (s && !s.classList.contains("hide")) {
+            s.classList.add("hide");
+            setTimeout(function () { if (s.parentNode) s.parentNode.removeChild(s); }, 400);
+          }
+        }
+        window.__hermixHideSplash = hideSplash;
+        setTimeout(hideSplash, SP_FALLBACK_MS);
+        // 把模块求值/运行期错误打到 console，便于无头探测抓取真实根因（安装版无 devtools 时也留痕）。
+        window.addEventListener("error", function (e) {
+          try { console.error("[hermix-boot] error:", e.message, (e.filename || "") + ":" + (e.lineno || 0)); } catch (_) {}
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          try { console.error("[hermix-boot] unhandledrejection:", e.reason && (e.reason.stack || e.reason.message || e.reason)); } catch (_) {}
+        });
+      })();
+    </script>
+    <style>
+      /* ── Splash tokens：与主程序主题 token 同名映射（4 主题） ──
+         React 挂载前 themes/*.css 未加载，这里按 data-theme 直接给值；
+         主程序挂载后同 token 名自然让位。 */
+      :root {
+        --sp-bg: var(--color-bg-app, #0b0b0b);
+        --sp-ink: var(--color-text-primary, #f4f4f4);
+        --sp-ink-soft: var(--color-text-tertiary, #adadad);
+        --sp-accent: var(--color-accent, #6fae94);
+        --sp-track: var(--color-border-subtle, #2b271f);
+      }
+      /* 2026-10-27：旧色系主题（light / dark / rainforest / sunset）已删除，
+         启动遮罩只保留 Notion 亮/暗两套，取值与 themes/notion*.css 同源。 */
+      html[data-theme="notion"]:root, :root:not([data-theme]) {
+        --sp-bg: #ffffff; --sp-ink: #37352f; --sp-ink-soft: #6b6862;
+        --sp-accent: #1c6ac4; --sp-track: #e9e9e7;
+      }
+      html[data-theme="notion-dark"]:root {
+        --sp-bg: #191919; --sp-ink: #d4d4d4; --sp-ink-soft: #9b9b9b;
+        --sp-accent: #6ba6ff; --sp-track: #2f2f2f;
+      }
+
+      html, body, #root { height: 100%; margin: 0; }
+      /* 截图覆盖窗：整页透明（2026-10-24 幕布下沉原生分层窗，冻结画面在
+         backdrop.rs 直贴，webview 只画选区几何，必须透出底下的画面）。
+         亮窗前 webview 一直隐藏，无需再压黑防白闪。 */
+      html[data-overlay], html[data-overlay] body { background: transparent !important; }
+      /* 覆盖窗静态隐藏启动遮罩——#splash 是静态 HTML，覆盖窗加载时就先渲染
+         （启动屏样式、亮色白底），JS 层移除要等 bundle 加载完。CSS 静态
+         隐藏从源头堵住"兜底 show 时窗口亮成全屏启动屏"的整类问题。 */
+      html[data-overlay] #splash { display: none !important; }
+      /* 覆盖窗首帧占位（React 挂载前）：黑底 + 提示文字，与 .so-loading 同文无缝交接 */
+      #overlay-boot {
+        display: none;
+        position: fixed; inset: 0;
+        align-items: center; justify-content: center;
+        background: #000; color: rgba(255, 255, 255, 0.75);
+        font-size: 14px; z-index: 9998;
+      }
+      html[data-overlay] #overlay-boot { display: flex; }
+      body {
+        background: var(--sp-bg);
+        color: var(--sp-ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ── Splash root（2026-10-27 重设计 · Notion 式）─────────────────
+         旧版是「墨点 + 描边环 + 6px 流光条 + 百分比 + 四段阶段列表」，
+         五层装饰叠在一张启动屏上。启动屏停留 3–8 秒，元素越多越廉价。
+
+         新版只留三样东西：**字标 / 一条 2px 进度 / 一句状态**。
+         字标与主界面欢迎页同一套处理（600 / 0.26em 字距 / 满对比墨），
+         切换那一刻是「同一张纸翻过来」，而不是两个品牌。
+
+         退场：上移 6px + 淡出（缩放会让文字末尾抖一帧）。 */
+      #splash {
+        position: fixed; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--sp-bg);
+        z-index: 9999;
+        transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        overflow: hidden;
+      }
+      #splash.hide {
+        opacity: 0;
+        transform: translateY(-6px);
+        pointer-events: none;
+      }
+
+      /* ── Titlebar drag region ── */
+      .sp-titlebar {
+        position: absolute; top: 0; left: 0; right: 0; height: 40px;
+        -webkit-app-region: drag; z-index: 10;
+      }
+
+      /* ── Window controls：无边框窗口，启动异常时给用户退路 ── */
+      .sp-win-controls {
+        position: absolute; top: 0; right: 0; height: 40px;
+        display: flex; z-index: 20; -webkit-app-region: no-drag;
+      }
+      .sp-win-btn {
+        width: 46px; height: 40px; border: 0; padding: 0;
+        background: transparent; color: var(--sp-ink-soft);
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer; transition: background 0.15s ease, color 0.15s ease;
+      }
+      .sp-win-btn:hover { background: color-mix(in srgb, var(--sp-ink) 12%, transparent); }
+      .sp-win-btn.sp-close:hover { background: #c42b1c; color: #fff; }
+
+      /* ── 舞台：字标 + 进度，垂直居中 ── */
+      .sp-stage {
+        position: relative; z-index: 1;
+        display: flex; flex-direction: column; align-items: center;
+        text-align: center;
+      }
+
+      /* ── 字标：逐字上浮（与 WelcomeHero 同一组参数）── */
+      .sp-wordmark {
+        display: inline-flex;
+        font-size: 26px; font-weight: 600;
+        letter-spacing: 0.26em;
+        /* 字距会在末字后留一份空白，左侧补一份保持视觉居中 */
+        padding-left: 0.26em;
+        line-height: 1;
+        color: var(--sp-ink);
+        user-select: none;
+      }
+      .sp-wordmark span {
+        display: inline-block;
+        opacity: 0;
+        transform: translateY(8px);
+        animation: sp-rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+
+      /* ── 进度：220px 发丝条，纯 accent 填充，无流光无阴影 ── */
+      .sp-progress-wrap {
+        margin-top: 44px; width: 220px;
+        opacity: 0;
+        animation: sp-fade 0.6s ease 0.42s forwards;
+      }
+      .sp-progress-track {
+        position: relative; width: 100%; height: 2px;
+        background: var(--sp-track); border-radius: 999px; overflow: hidden;
+      }
+      .sp-progress-bar {
+        height: 100%; width: 0%;
+        background: var(--sp-accent); border-radius: 999px;
+        transition: width 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      }
+      .sp-status {
+        margin-top: 14px;
+        font-size: 12px; letter-spacing: 0.02em;
+        color: var(--sp-ink-soft);
+        min-height: 1.2em;
+      }
+
+
+
+      /* ── Keyframes ── */
+      @keyframes sp-rise {
+        to { opacity: 1; transform: none; }
+      }
+      @keyframes sp-fade {
+        to { opacity: 1; }
+      }
+
+      /* ── Reduced motion ── */
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          animation-delay: 0ms !important;
+          transition-duration: 0.15s !important;
+        }
+        .sp-wordmark span, .sp-progress-wrap { opacity: 1 !important; transform: none !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- React 挂载点。splash 必须是 body 的直接子节点而非 #root 内部——
+         createRoot(#root).render() 会清空容器内所有现有子节点，
+         splash 放在里面活不过 React 首帧（进度状态机因此全部空转）。 -->
+    <div id="root"></div>
+
+    <div id="splash" role="status" aria-label="Hermix Desktop 正在启动">
+      <div class="sp-titlebar" aria-hidden="true"></div>
+
+      <div class="sp-win-controls">
+        <button class="sp-win-btn" id="sp-minimize" type="button" title="最小化" aria-label="最小化">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+            <path d="M2 6h8" />
+          </svg>
+        </button>
+        <button class="sp-win-btn sp-close" id="sp-close" type="button" title="关闭" aria-label="关闭">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+            <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="sp-stage">
+        <!-- 字标：纯文本，CSS 就绪的同一帧就能画出来（位图要等一次往返，
+             慢启动时会先闪一个空格子）。逐字上浮与主界面欢迎页一致。 -->
+        <div class="sp-wordmark" aria-hidden="true"><span style="animation-delay:0ms">H</span><span style="animation-delay:70ms">E</span><span style="animation-delay:140ms">R</span><span style="animation-delay:210ms">M</span><span style="animation-delay:280ms">I</span><span style="animation-delay:350ms">X</span></div>
+
+        <div class="sp-progress-wrap">
+          <div class="sp-progress-track">
+            <div class="sp-progress-bar" id="sp-progress-bar"></div>
+          </div>
+          <div class="sp-status" id="sp-progress-text">正在准备运行环境</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 截图覆盖窗（data-overlay）的 React 前占位：黑底 + 「正在截取屏幕…」，
+         主窗里 display:none。React 挂载后由 ScreenshotOverlay 移除。 -->
+    <div id="overlay-boot">正在截取屏幕…</div>
+
+    <!-- 启动状态由 /src/main.tsx 驱动: 走 stdio bridge 探活, 并按
+         hermix:boot-stage 事件刷新阶段文案。此处不再内联 HTTP 轮询
+         —— stdio 模式没有 HTTP 服务, 内联 fetch 必然全部失败。 -->
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

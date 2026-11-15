@@ -1,0 +1,11 @@
+{
+  "id": "playground",
+  "name": "Playground · Todo",
+  "version": "0.1.0",
+  "entry": "index.html",
+  "icon": "bookmark",
+  "tile_color": "#1A1A1A",
+  "icon_glyph": "✓",
+  "category": "productivity",
+  "description": "Hermix 自定义应用示例 — Todo 应用，演示 Hermix.store/icon/route/storage/sqlite/defineComponent 全套原语"
+}

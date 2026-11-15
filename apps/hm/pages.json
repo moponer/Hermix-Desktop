@@ -1,0 +1,66 @@
+{
+  "pages": [
+    {
+      "path": "pages/boot/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "Hermix M"
+      }
+    },
+    {
+      "path": "pages/chat/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "对话"
+      }
+    },
+    {
+      "path": "pages/pairing/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "配对"
+      }
+    },
+    {
+      "path": "pages/tasks/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "任务"
+      }
+    },
+    {
+      "path": "pages/approval/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "审批"
+      }
+    },
+    {
+      "path": "pages/call/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "通话"
+      }
+    },
+    {
+      "path": "pages/settings/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "设置"
+      }
+    },
+    {
+      "path": "pages/history/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "历史会话"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationStyle": "custom",
+    "backgroundColor": "#161719",
+    "backgroundColorTop": "#101113",
+    "backgroundColorBottom": "#161719"
+  }
+}

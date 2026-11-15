@@ -1,0 +1,22 @@
+[package]
+name = "hermix-transport"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "Wire-level transport types and JSON Schemas shared between Hermes server, cloud control plane, SDKs and front-ends"
+
+[dependencies]
+hermix-core = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+# 前端类型绑定（P2-1）：默认不编译（optional + feature），
+# `cargo test -p hermix-transport --features typescript export_bindings`
+# 会把标注了 `#[ts(export)]` 的类型写到前端 bindings 目录。
+ts-rs = { version = "10", features = ["serde-compat", "no-serde-warnings"], optional = true }
+
+[features]
+typescript = ["dep:ts-rs"]

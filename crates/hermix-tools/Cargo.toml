@@ -1,0 +1,65 @@
+[package]
+name = "hermix-tools"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "Tool registry, toolsets, and tool implementations for Hermix Agent"
+
+[dependencies]
+hermix-core = { workspace = true }
+hermix-store = { workspace = true }
+hermix-vault = { path = "../hermix-vault" }
+hermix-config = { workspace = true }
+hermix-context = { workspace = true }
+hermix-plugin = { workspace = true }
+tokio = { workspace = true }
+csv = "1"
+encoding_rs = "0.8"
+once_cell = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true, features = ["json", "multipart", "stream"] }
+rusqlite = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+indexmap = { workspace = true }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+serde_yaml = { workspace = true }
+rand = "0.8"
+url = { workspace = true }
+which = "6"
+walkdir = "2"
+lopdf = "0.34"
+# `fs4` is the maintained fork of `fs2` — provides
+# `lock_exclusive()` (Windows `LockFileEx` / Unix `flock`) for the
+# FileMemoryBackend. Picked over `fs2` because `fs2` hasn't shipped
+# since 2017 and `fs4` is the de-facto replacement.
+fs4 = "0.13"
+# `image` provides the codec APIs used by read_image / file_converter
+# (`PngEncoder`, `ExtendedColorType`, JPEG/WebP writers).
+image = { workspace = true }
+# Native OS automation (2026-10-13 decision note): browser line drives the
+# system Edge over CDP via chromiumoxide; desktop line drives UI Automation
+# COM through the `windows` crate. Both are opt-in toolsets — see
+# `src/tools/os_auto/`.
+chromiumoxide = { workspace = true }
+windows = { workspace = true }
+# Link-time plugin/extension registration. See
+# `hermix_tools::factory::ToolFactory` for the usage pattern.
+inventory = { workspace = true }
+sha2 = { workspace = true }
+rust_xlsxwriter = "0.99.1"
+docx-rs = "0.4.22"
+ppt-rs = "0.2.36"
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = "3"
+hermix-config = { workspace = true, features = ["test-helpers"] }

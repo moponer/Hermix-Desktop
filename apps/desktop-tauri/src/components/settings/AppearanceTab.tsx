@@ -1,0 +1,135 @@
+import { RotateCcw, Sun, Moon, Monitor, Check, Palette } from "lucide-react";
+
+import { useTheme, SYSTEM_THEME } from "../../hooks/useTheme";
+import { THEMES, isDarkTheme } from "../../styles/themes/registry";
+import { ACCENT_PALETTE, accentLabel } from "../../styles/themes/accentPalette";
+import { SettingsGroup, SettingsRow, Switch, IconTile } from "../ui";
+import { ChoiceCard } from "./ChoiceCard";
+import { cx } from "../../lib/cx";
+import { ThemeToggle } from "../ThemeToggle";
+
+/**
+ * 外观页：明暗三选 + 强调色调色板。
+ *
+ * 对比度滑杆（L3.5 后半）刻意不在这里：`--color-text-*` 在 tokens.css 的
+ * `@theme` 里，改名会断掉 Tailwind 工具类生成；不改名就只有"在根元素挂
+ * filter"一条路，而 filter 会创建包含块、打断所有 fixed 定位的弹窗与
+ * toast。两条路都会伤到别处，等有人能一次改对再补。
+ */
+export function AppearanceTab() {
+  const { mode, resolved, setMode, accent, setAccent } = useTheme();
+
+  /* 明暗三选的选中态必须按**主题 id** 判断，不能写死 "light"/"dark"：
+     `mode` 存的是 registry 里的主题 id（"notion" / "notion-dark"），
+     旧代码 `mode === "light"` 恒为 false，导致「浅色」永远不显示选中
+     （2026-10-28 用户报「主题色没有默认的选择（浅色）」）。
+     这里从 registry 取各自的 id，避免硬编码。 */
+  const lightThemeId = THEMES.find((t) => !isDarkTheme(t.id))?.id ?? "notion";
+  const darkThemeId = THEMES.find((t) => isDarkTheme(t.id))?.id ?? "notion-dark";
+  const isSystem = mode === SYSTEM_THEME;
+
+  return (
+    <div className="space-y-7">
+      {/* 明暗模式 */}
+      <section className="space-y-2">
+        <h3 className="px-1 text-[length:var(--text-ui)] font-medium text-[var(--color-text-secondary)]">
+          明暗模式
+        </h3>
+        <div className="grid grid-cols-3 gap-3" role="radiogroup" aria-label="明暗模式">
+          <ChoiceCard
+            label="浅色"
+            icon={<Sun className="icon-lg" />}
+            tone="amber"
+            selected={!isSystem && !isDarkTheme(resolved)}
+            onSelect={() => setMode(lightThemeId)}
+          />
+          <ChoiceCard
+            label="深色"
+            icon={<Moon className="icon-lg" />}
+            tone="violet"
+            selected={!isSystem && isDarkTheme(resolved)}
+            onSelect={() => setMode(darkThemeId)}
+          />
+          <ChoiceCard
+            label="跟随系统"
+            icon={<Monitor className="icon-lg" />}
+            tone="slate"
+            selected={isSystem}
+            onSelect={() => setMode(SYSTEM_THEME)}
+            meta={`当前：${THEMES.find((t) => t.id === resolved)?.label ?? resolved}`}
+          />
+        </div>
+      </section>
+
+      {/* 强调色 */}
+      <SettingsGroup title="强调色">
+        <SettingsRow
+          icon={<IconTile icon={<Palette className="icon-md" />} tone="violet" />}
+          title="主题默认色"
+          control={
+            <Switch
+              checked={accent === null}
+              onChange={(v) => setAccent(v ? null : ACCENT_PALETTE[1]?.value ?? null)}
+              label="使用主题默认强调色"
+            />
+          }
+        />
+        {accent !== null && (
+          <>
+            <div className="px-4 py-3">
+              <div className="mb-2 flex items-center gap-2 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+                <span
+                  aria-hidden
+                  className="inline-block h-4 w-4 rounded-full"
+                  /* design-guard: allow — `accent` 是用户当场选中的颜色值（数据），
+                   不是主题令牌，无法类化。 */
+                style={{ background: accent }}
+                />
+                <span className="font-mono">{accentLabel(accent)}</span>
+                <button
+                  onClick={() => setAccent(null)}
+                  className="ml-auto flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+                >
+                  <RotateCcw className="icon-sm" /> 重置
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {ACCENT_PALETTE.filter((c) => c.value !== null).map((c) => (
+                  <button
+                    key={c.label}
+                    onClick={() => setAccent(c.value)}
+                    title={c.label}
+                    aria-label={c.label}
+                    aria-pressed={c.value === accent}
+                    className={cx(
+                      "flex h-7 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] px-2 text-[length:var(--text-meta)] transition-colors",
+                      c.value === accent
+                        ? "bg-[var(--color-accent-soft-strong)] text-[var(--color-text-primary)]"
+                        : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-quaternary)] hover:text-[var(--color-text-primary)]",
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className="h-3.5 w-3.5 rounded-full"
+                      style={{ background: c.swatch }}
+                    />
+                    {c.label}
+                    {c.value === accent && <Check className="icon-sm" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+      </SettingsGroup>
+
+      {/* 自定义主题 */}
+      <SettingsGroup title="主题">
+        <SettingsRow
+          title="当前主题"
+          control={<ThemeToggle />}
+        />
+      </SettingsGroup>
+    </div>
+  );
+}

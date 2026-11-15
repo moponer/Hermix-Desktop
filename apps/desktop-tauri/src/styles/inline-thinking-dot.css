@@ -1,0 +1,66 @@
+/* ── InlineThinkingDot ────────────────────────────────────────────
+   "模型思考中" 指示器 — 三脉冲点 + 可选文字。
+   redesign: 从呼吸光点改为三脉冲点，更克制、更通用。
+   两种渲染模式：
+     • cursor (default)：inline，挂在段末游标位
+     • gap             ：block，独占一行，段下方行首
+   动画：1.4s 三脉冲 (opacity stagger)，纯 CSS。 */
+
+/* ── Host ─────────────────────────────────────────────────────── */
+.inline-thinking-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 0.15em;
+  vertical-align: baseline;
+  user-select: none;
+  pointer-events: none;
+  color: var(--color-text-muted);
+  font-size: 0.85em;
+}
+
+
+
+
+
+/* ── Three-dot pulse ──────────────────────────────────────────── */
+
+
+
+/* Stagger each dot by 0.2s */
+
+/* Warning variant: slower pulse */
+
+/* Quiet variant: even slower, lower opacity */
+
+@keyframes h-dot-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1); }
+}
+
+/* ── Hint text ────────────────────────────────────────────────── */
+
+
+
+/* ── Reduced motion ───────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .inline-thinking-dot__dot {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+/* ── Shimmer variant (2026-07-11) ───────────────────────────────
+   "正在回复" 流光扫过动效。
+   - 文字本身用 --color-text-muted 作 baseline
+   - 在文字前景叠加一层 linear-gradient mask, 从 -150% 扫到 +150%
+   - 循环 1.8s, ease-in-out, 无蓝紫, 纯灰/锌系
+   - 严格只在 StreamingBubble 内部渲染（isStreaming=true）,
+     历史消息重载时 isStreaming=false → 根本不渲染此组件,
+     自然满足"恢复历史不显示"的边界. */
+
+@keyframes h-text-shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -50% 0; }
+}
+

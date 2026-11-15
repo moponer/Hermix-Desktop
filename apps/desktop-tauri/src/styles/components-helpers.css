@@ -1,0 +1,1895 @@
+/* ════════════════════════════════════════════════════════════════════
+   § 19.  ANIMATION HELPERS
+   ════════════════════════════════════════════════════════════════════ */
+
+/* 2026-10-23：位移从 2px 提到 6px、时长从 fast(120ms) 提到 base(160ms)。
+   2px 的位移在 14px 正文里根本感知不到 —— 「有动画但看不出来」正是
+   「界面死板」的来源之一。6px + 160ms 是能看出「这一条是新来的」的
+   最小值，再大就会在流式输出里显得晃。
+
+   注意：同一个 keyframe 被 25 处复用（消息气泡、工具卡、列表项），
+   改这里等于全站入场统一 —— 这是有意的，不要为单个组件另开一套。 */
+@keyframes h-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.h-enter { animation: h-fade-up var(--duration-base) var(--ease-out) both; }
+
+@keyframes h-modal-in {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.h-modal-enter { animation: h-modal-in var(--duration-base) var(--ease-out) both; }
+
+/* § 19.1  TEXT HELPERS (h- prefix)
+   These are project-internal utility classes referenced from TSX.
+   Defining them here turns the previous silent-fallback behavior
+   (browser default <span>) into a proper muted, small text style.
+   Used in: MessageBubble (header chips, system banner), ChatView
+   (thinking state, image-size hint), RightSidebar (counts, empty
+   placeholders), InlineClarifyCard / InlineApprovalCard. */
+.h-tiny {
+  font-size: var(--text-tiny);
+  line-height: 1.35;
+  color: var(--color-text-secondary);
+}
+.h-meta {
+  font-size: var(--text-meta);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+}
+
+/* ── H3: Prefetch intent chip ── */
+.prefetch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 6px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  background: var(--color-bg-secondary);
+  cursor: default;
+  transition: border-color var(--duration-fast) ease;
+}
+.prefetch-chip:hover {
+  border-color: var(--color-border-secondary);
+}
+.prefetch-chip .prefetch-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--color-success);
+  flex-shrink: 0;
+}
+.prefetch-chip .prefetch-label {
+  font-family: var(--font-mono);
+}
+.prefetch-chip .prefetch-confidence {
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+}
+
+/* ── H3: Tool row fade-in animation ── */
+@keyframes h-tool-fade-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.tool-row {
+  animation: h-tool-fade-in var(--duration-fast) ease-out both;
+}
+
+/* ── H3: Stronger running state glow ── */
+@keyframes h-tool-running-glow {
+  0%, 100% { box-shadow: 0 0 0 0 var(--color-warning-soft); }
+  50%      { box-shadow: 0 0 0 6px var(--color-warning-soft); }
+}
+.tool-row.tool-running .rail-dot {
+  animation: h-tool-running-glow 1.2s ease-in-out infinite;
+}
+
+/* ── H3: ThoughtStreamCard (EKG / heart-monitor style) ── */
+.thought-stream-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px 5px 10px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-tiny);
+  color: var(--color-text-muted);
+  background: var(--color-bg-secondary);
+  max-width: 100%;
+  flex-wrap: wrap;
+  transition: border-color var(--duration-fast) ease;
+}
+.thought-stream-card:hover {
+  border-color: var(--color-border-secondary);
+}
+
+.thought-stream-monitor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.thought-stream-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-success);
+  flex-shrink: 0;
+  /* drop-shadow is a GPU-composited filter; box-shadow would force a
+     repaint every frame, which keeps WebView2 from idling even when
+     the user isn't reading. */
+  filter: drop-shadow(0 0 0 var(--color-success-soft));
+  will-change: transform, opacity;
+  animation: h-thought-dot-pulse 1.4s ease-in-out infinite;
+}
+@keyframes h-thought-dot-pulse {
+  0%   { transform: scale(0.85); opacity: 0.7; }
+  50%  { transform: scale(1.15); opacity: 1;   }
+  100% { transform: scale(0.85); opacity: 0.7; }
+}
+
+.thought-stream-ekg {
+  width: 96px;
+  height: 16px;
+  display: block;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.thought-stream-ekg-path {
+  stroke: var(--color-accent);
+  opacity: 0.78;
+  /* 60px = one P-QRS-T cycle. Translating by exactly one cycle keeps
+     the seam invisible — the path is 240px wide (4 cycles), so we
+     always have content past the right edge of the 96px viewport. */
+  animation: h-thought-ekg-scroll 2.2s linear infinite;
+  transform-origin: 0 50%;
+  will-change: transform;
+}
+@keyframes h-thought-ekg-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-60px); }
+}
+
+.thought-stream-hint {
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.thought-stream-events {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-left: 2px;
+}
+.thought-stream-event {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-tiny);
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  background: var(--color-bg-primary);
+  white-space: nowrap;
+}
+.thought-stream-event-info { color: var(--color-text-muted); }
+.thought-stream-event-tool { color: var(--color-accent); }
+.thought-stream-event-intent {
+  color: var(--color-success);
+  border-color: var(--color-success-soft, var(--color-accent-soft));
+}
+
+/* Quiet mode — used when the agent has settled reasoning but the WS
+   round-trip hasn't closed yet. Tones down the dot + waveform so the
+   user doesn't get visual fatigue from a "still pulsing" indicator. */
+.thought-stream-quiet .thought-stream-dot {
+  background: var(--color-text-faint);
+  animation: none;
+  opacity: 0.6;
+}
+.thought-stream-quiet .thought-stream-ekg-path {
+  opacity: 0.35;
+  animation-duration: 4.5s;
+}
+
+/* ── ReasoningBlock ───────────────────────────────────────────────
+ * Collapsible "思考过程" block rendered above each assistant
+ * message card when `message.reasoningContent` is non-empty.
+ * Default state is collapsed: a one-line header with a chevron,
+ * brain icon, label and bullet count. The body — when expanded —
+ * is an ordered list of bullet points split on double-newlines.
+ *
+ * Visual language: subordinate to the message body. Quiet,
+ * barely-there tone: no colored border, no fill, just a small
+ * italic-ish muted line that reads as scratch work rather than
+ * a primary surface. We use small font + faint color so the
+ * think text never competes with the visible reply for visual
+ * weight.
+ */
+/* ── Reasoning inline (merged into body, not a separate block) ──
+
+   Thinking content flows as regular body text: same font size, same
+   color, no border, no background. The only visual hint is a subtle
+   separator line above so the user can tell where scratch work ends
+   and the final reply begins. There is no chevron/collapse UI. */
+
+/* 不渲染分隔线 — 视觉与正文完全无差别 */
+
+/* refined reasoning block — left accent rail +
+   soft tint background, feels like a "margin note" rather than a
+   raw collapsible dump. */
+.reasoning-header {
+  display: inline-flex;
+  align-items: center;
+  /* 2026-10-01 用户修正（左对齐）：`padding-left: 8px` + 前导箭头槽
+     合计把「工作完成」推到正文左边 26px 之外，上下两行读起来是歪的。
+     缩进层级是靠**左边缘**读的，所以这一行的文字必须和它下面的正文
+     落在同一条 x 上：左内边距归零，箭头搬到行尾。 */
+  gap: 6px;
+  padding: 3px 6px 3px 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  user-select: none;
+  transition: background var(--duration-fast) ease;
+}
+.reasoning-header:hover {
+  background: var(--color-bg-hover);
+}
+.reasoning-header:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* 折叠箭头尺寸（2026-10-01 用户修正，箭头右置）：折叠头的箭头原先在
+ * **行首**，把「工作完成」整体右移了一截（正文左边之外 26px），上下两行
+ * 读起来是歪的。缩进层级是靠左边缘读的，所以折叠头的标签必须顶到 x=0：
+ * 箭头搬去行尾，左内边距归零。
+ *
+ * 注意与思考行的分工：**折叠箭头在行尾（它是可点击 affordance），
+ * 思考图标在行首（它是这一行的身份标记）**。两者不互换 —— 上一版把
+ * Brain 图标也撤到行尾，图标就和箭头抢位置，身份标记变成了装饰件。
+ *
+ * 尺寸走图标 3 档（globals.css: icon-sm=12 / icon-md=14 / icon-lg=16），
+ * 不再自造 13px 这种哪一档都不是的值。整轮折叠头是这一层**最大的可点
+ * 控件**（它收起的是整轮的思考 + 全部工具），用 icon-lg；思考行是段级
+ * 控件，icon-md；身份图标不参与这套分级，维持 13px。 */
+.reasoning-header .reasoning-chevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.tl-reasoning-chev {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.tl-reasoning-icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.reasoning-chev {
+  transition: transform 0.2s ease;
+  color: var(--color-text-faint);
+}
+
+/* 轮次摘要行 —— 字体规范角色：text-ui(13) / medium(500) / text-tertiary。
+   折叠态下这一行是用户判断"这一轮分量"的唯一线索，所以颜色比
+   元信息档（tiny/tertiary）重一档，但绝不与正文抢层级。 */
+.reasoning-label {
+  /* 2026-09-29：secondary → tertiary。抄 cc-haha ActivityGroup 的注释：
+     「deliberately a whisper: 12px, tertiary, no icons, commas not
+     middots」—— 任何更重的东西都会和正文抢注意力。
+     2026-10-01 用户修正：12px → 13px。标签必须和它标记的思考正文
+     （`.tl-reasoning-row` 同为 13px）**同号** —— 12px 标签配 13px 正文，
+     两档字号挤在一行里互相削弱，读起来像两个层级而不是一行。 */
+  font-size: var(--text-ui);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+  line-height: var(--leading-compact);
+  white-space: nowrap;
+}
+
+
+/* ── reasoning body（2026-10-01 合并双定义 + 三层级 L3）────────────
+   **本类此前在同一文件里被定义了两次**：上面这版写了
+   `max-height:340px` + 滚动，5a-0b1 那版又把 max-height 改回
+   `none`、overflow 改回 `visible`。后者位置靠后 → 胜出 → 2026-09-30
+   「长思考不再把整屏撑开」的意图被静默撤销。现在只有这一份定义。
+
+   层级契约（L3 推理）：
+   - 层级**不靠更浅的颜色**。深色下正文 primary 是 15.32:1、思考
+     tertiary 是 4.77:1，都过 AA —— 色阶本来就不缺。
+   - 也不靠一根细竖线。旧轨道的 `--color-border-primary` 对聊天底色
+     只有 **1.37:1**，比它标记的思考正文还弱 3.5 倍，视觉上等于没有。
+   - 真正扛得住的是三个几何标记：**12px 缩进 + 标签行 + 可见轨道**。
+     顺带实测：`--color-chat-tool-bg`(#1d1f22) 对聊天底(#161719) 只有
+     1.09:1，所以「给思考块加淡背景」在深色下同样不可行 —— 这条
+     备选方案被实测否掉了，改用缩进 + 标签 + 可见轨道（轨道画法见
+     下方 `.tl-reasoning-row` 的 background 渐变，2026-10-26 恢复）。 */
+.tl-reasoning-row {
+  position: relative;
+  margin: 6px 0 4px 18px;      /* 旁注缩进 18px —— 展开后的思考正文比它的
+                                   标签行往右一档，这是「这是旁注」的标记，
+                                   不是为了给任何图标让位（行首图标已撤销） */
+  padding: 2px 0 2px 12px;
+  /* 旁注轨道（2026-10-26 恢复）。
+     2026-10-23 的「CSS 层描边清零」把这里的 border-left 一起删了 ——
+     缩进（18px + 12px）还在，但没有任何标记标出「这是一段旁注」，正文
+     右边空出一截像是没排完的缩进（用户实机反馈：竖条没了）。
+     两点说明：
+     ① 用 background 渐变画，不写 border —— G11 门禁禁的是 CSS 层的
+        1px 中性结构描边（89 处粗框的来源）；2px 实心轨道是**功能性**标记
+        （引用块的旁注竖线同款），不在其列。
+     ② 背景画在 padding box 上，不随思考块内部滚动 —— 轨道始终贴着可见
+        区左缘；用 ::before 绝对定位会跟着内容滚走，下半截没线。
+     色值回到 2026-10-01 之前的 `--color-text-faint`（浅色 #6a6a6a /
+     深色 #8f8f8f）：当时把它调成 1px `--color-border-secondary` 是因为
+     那个值对聊天底只有 1.37:1，比它标记的思考正文（4.77:1）还弱 3.5
+     倍，视觉上等于没有。 */
+  background: linear-gradient(
+    to right,
+    var(--color-text-faint) 0 2px,
+    transparent 2px
+  );
+  color: var(--color-text-thinking);
+  font-size: var(--text-ui);
+  line-height: var(--leading-reading, 1.75);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  /* 长思考不再把整屏撑开，展开只占一块固定高度，内部滚动 */
+  max-height: 340px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* 内嵌 MarkdownBody 的 .prose 会把字色/字号拉回正文档 —— 在这里整体压回思考档 */
+.tl-reasoning-row .prose,
+.tl-reasoning-row .prose :is(p, li, td, th, blockquote, strong, em) {
+  color: var(--color-text-thinking);
+  font-size: var(--text-ui);
+  line-height: var(--leading-reading, 1.75);
+}
+.tl-reasoning-row .prose :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--color-text-secondary);
+  font-size: var(--text-meta);
+  margin-top: 0.6em;
+  margin-bottom: 0.3em;
+}
+.tl-reasoning-row .prose strong { color: var(--color-text-secondary); }
+.tl-reasoning-row .prose code {
+  font-size: var(--text-meta);
+  color: var(--color-text-secondary);
+}
+.tl-reasoning-row :is(p, li, td, th, blockquote) {
+  font-size: inherit;
+  line-height: inherit;
+}
+.tl-reasoning-row pre { font-size: var(--text-meta); }
+.tl-reasoning-row .prose :is(em, blockquote) { font-style: normal; }
+/* 思考里的行内代码/链接也不要跳成 accent 大字 */
+.tl-reasoning-row a { color: var(--color-text-secondary); text-decoration: underline; text-underline-offset: 2px; }
+/* 滚动条：细、贴轨，不抢注意力 */
+.tl-reasoning-row::-webkit-scrollbar { width: 6px; }
+.tl-reasoning-row::-webkit-scrollbar-thumb {
+  background: var(--color-border-secondary);
+  border-radius: 999px;
+}
+.tl-reasoning-row::-webkit-scrollbar-thumb:hover { background: var(--color-text-faint); }
+
+
+/* ── 5a-0. Timeline Iterations — 轮次分组系统 ────────── */
+.tl-iterations {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;                     /* 轮次间距 — 唯一的视觉分隔; 取 14px 而非更大, 避免长对话被间距切碎 */
+}
+
+.tl-iteration {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;                      /* 轮内元素间距 — reasoning/tools/text 三块紧凑成一组 */
+}
+
+/* 单轮消息不需要底部间距 */
+.tl-iterations:only-child .tl-iteration:only-child {
+  /* 保持 gap 但无额外空间 */
+}
+
+/* ── 5a-0a. Text Step — 纯文本流 ── */
+.tl-text-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;                     /* body → file-changes 等紧密排列 */
+  /* 无 background, 无 border, 无 border-radius, 无 padding */
+  /* 正文就是正文 — 不该包在任何卡片里 */
+}
+
+.tl-text-inner {
+  line-height: 1.65;
+  font-size: var(--text-body);
+  color: var(--color-text-primary);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.tl-text-inner--meta {
+  margin-top: 6px;
+  padding-top: 8px;
+}
+
+/* ── 5a-0a1. 过程旁白 ──
+   夹在工具调用之间、说完还要继续干活的那几句（"先看那个目录"、"路径没对上"）。
+   模型把它写进 `content` 而不是 `reasoning_content`，于是落库成 text step；
+   按正文待遇渲染时，一场十几次工具调用的任务下来，正文区就是一长串没折叠的
+   思考。旁白退到次级色，轮次结束后随过程区一起收进折叠头 —— 正文只留收尾段
+   （判据见 `messageParser.lastTextStepIndex`：位置，不是长度）。 */
+.tl-text-step--narration .tl-text-inner {
+  color: var(--color-text-secondary);
+}
+
+/* ── 5a-0a2. 工具轮正文占位 ──
+   一轮只调工具、没写正文时，正文区原本整段空白：过程折叠区里字一直在动，
+   正文却一个字没有，读起来像卡住。这一行把 execution_timeline 已记录的事实
+   （调了几次、调了什么）写在正文位置。它不是模型的正文，所以用次级色、
+   ui 字号，且不进复制内容。 */
+.tl-toolrun-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--text-ui);
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+.tl-toolrun-note-tools { color: var(--color-text-primary); }
+.tl-toolrun-note-tail {
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+}
+
+/* ── 5a-0b. Process Timeline — the ONE foldable block ──
+   一个 message 整个过程（所有 reasoning + 所有 tool 调用）共用一个
+   折叠头"处理中… / 已完成 N 个工具 ▼"。展开时按时间顺序流式显示
+   每个 reasoning 段和每个 tool 行；折叠时压缩到一行小 chip。
+   结论（text）渲染在折叠块之外，扫一眼就看到。 */
+.tl-process-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 跟周围 text step 视觉上一致:无背景无边框,只是组织性容器 */
+}
+
+/* 折叠头复用 .reasoning-header 的"小一行 + chevron + label"风格，
+   不画新外观,让用户一眼就认出"可折叠"的语义。 */
+.tl-process-header {
+  align-self: flex-start;       /* 不占满整行,像 chip */
+  opacity: 0.85;
+}
+
+.tl-process-header:hover {
+  opacity: 1;
+}
+
+
+/* 2026-10-01 第二轮：折叠头不再显示失败/跳过计数，也不再有
+   `data-has-failure` 染色 —— 用户实机反馈「头部不要显示红色错误和
+   跳过啥的」。失败信息在展开后的过程行里（错误文本本身是 error 色），
+   并保留在折叠头的 hover title 里（`foldTitle`）。
+
+   相关规则一并删除：留着没人会触发的选择器，下一个人会以为这条策略
+   还活着。 */
+
+
+/* P4-3: warning-tinted icon when any tool in the turn errored */
+
+
+@keyframes tl-process-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes tl-process-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
+
+/* ── LLM 输出 prose 区域（暖纸·2026-08-31） ──────
+   主区为浅色时直接铺在主区背景上，不要白底卡片/不要 frosted glass：
+   文字本身就是内容，prose 流应当与对话区背景融合，不该包在任何盒子里。 */
+:root[data-theme="light"] .tl-process-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  margin: 4px 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-radius: 0;
+  box-shadow: none;
+  transition: none;
+}
+:root[data-theme="light"] .tl-process-body:hover {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="light"] .tl-process-body { transition: none; }
+}
+
+.tl-process-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 折叠内容是 process 步骤的有序流 */
+}
+
+/* 工具执行区块（L2 过程行容器）。
+   2026-10-01：gap 由 4px 收到 2px。过程行是旁注，彼此之间只差
+   2px；与正文（L1）之间由 `.tl-iteration` 的 6px 隔开。层级靠
+   「行间距的落差」表达，不靠给每行加边框。 */
+.tl-tool-step {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+}
+
+/* 思考块的外壳：折叠头 + 可选正文。
+   2026-10-01：思考变成**每段一个**独立折叠项 —— 正在想的那段展开，
+   刚结束的那段自动收起。所以外壳既要能当折叠头容器，也要在收起时
+   只剩一行。 */
+.tl-reasoning-wrap {
+  display: flex;
+  flex-direction: column;
+  margin: 6px 0;
+}
+
+.tl-reasoning-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 2026-10-01 用户修正：左内边距归零，让这一行贴着正文列起排 —— 缩进
+     层级是靠左边缘读的，思考行和它上面的折叠头必须共用同一条起排线。
+     行首留给身份图标（`.tl-reasoning-icon`），行尾留给折叠箭头。 */
+  padding: 3px 6px 3px 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 4px;
+  align-self: flex-start;
+  max-width: 100%;
+}
+/* 2026-10-01 箭头垂直居中：这一行是 flex + align-items:center，但标签
+   继承了 1.75 的行高 —— 文字行盒比 12px 图标高得多，于是**图标按盒子
+   真中心、文字按行盒顶部**排，箭头就显得比「思考」低了一截。
+   把标签行高压到 1，盒子高度就和图标齐平，两者才对得齐。 */
+.tl-reasoning-label,
+.tl-reasoning-count {
+  line-height: 1;
+}
+.tl-reasoning-head:hover { color: var(--color-text-secondary); }
+.tl-reasoning-head:focus-visible {
+  outline: 2px solid var(--color-border);
+  outline-offset: 1px;
+}
+/* 2026-10-01：箭头在**行尾**且无焦点时隐藏。
+   收起态常驻箭头不携带任何信息（它每次长得一样），却把「行首」那一列
+   占掉 —— 而缩进层级正是靠左边缘对齐来读的，箭头一占位，思考行和
+   下面的正文就对不齐了。hover / focus 才显形。尺寸见上方行尾图标槽。
+   左边距由 `.tl-reasoning-icon` 的 `margin-left:auto` 撑开，这里
+   不再重复撑一次。 */
+/* 行尾箭头：把「行首图标槽」和它之间的空白推开，箭头自身落在最右。
+   （`.tl-reasoning-head` 是 `align-self:flex-start`，宽度=内容宽，
+   所以这里没有多余空间可推 —— `margin-left:auto` 在 flex 行里仍然把
+   箭头顶到内容末端，与行内秒数之间留出间距。） */
+.tl-reasoning-chev {
+  flex: none;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+.tl-reasoning-head:hover .tl-reasoning-chev,
+.tl-reasoning-head:focus-visible .tl-reasoning-chev { opacity: 1; }
+/* 正在想：accent 色 + 轻微呼吸，让「正在生成」在余光里也成立 */
+.tl-reasoning-wrap[data-active="true"] .tl-reasoning-head { color: var(--color-accent); }
+.tl-reasoning-wrap[data-active="true"] .tl-reasoning-icon { animation: tl-reasoning-pulse 1.6s ease-in-out infinite; }
+@keyframes tl-reasoning-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+/* 行首图标槽（2026-10-01 用户修正）：思考行的身份图标回到**行首** ——
+   上一轮把它撤到行尾是错的，图标标记的是「这一行是什么」，和折叠箭头
+   不是一类东西，挤在行尾会互相抢位置。行首这一列本来就是图标槽：
+   左对齐说的是「整行贴着正文列起排」，不是「文字顶到 x=0」。 */
+.tl-reasoning-icon { flex: none; }
+.tl-reasoning-label {
+  font-size: var(--text-ui);
+  color: inherit;
+  white-space: nowrap;
+}
+.tl-reasoning-count {
+  /* 2026-10-01 用户修正：11px → 13px。它和「思考」在同一行里，差一档
+     字号就变成两级信息；行内数字用 faint 颜色区分已经够了。 */
+  font-size: var(--text-ui);
+  color: var(--color-text-faint);
+  white-space: nowrap;
+}
+
+/* 轮次耗时：贴在「工作完成」右边、右对齐到折叠头末端。 */
+.tl-process-elapsed {
+  margin-left: auto;
+  padding-left: 12px;
+  /* 同上：与「工作完成」同号（13px），别在一行里造第二档字号。 */
+  font-size: var(--text-ui);
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 整轮折叠头的次级明细：耗时是主标签，动词聚合挂这里 */
+.tl-process-detail {
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+
+/* ── 5a-0b-old. Reasoning Block (legacy) — kept for back-compat ── */
+
+/* `.tl-reasoning-row` 的唯一定义见本文件上方「reasoning body」节。
+   2026-10-01 之前这里还有第二份定义，把上一份的 max-height / overflow
+   写回 none / visible，导致「长思考封顶滚动」的设计意图静默失效。
+   教训与 H2 同源：同一个类的两份定义，位置靠后的赢 —— 契约必须只有
+   一处，分散定义等于没有契约。 */
+
+/* Copy affordance — always reserves one quiet line below the message,
+   but only reveals the label on hover/focus. This keeps the action tied
+   to its own message without putting it in the global metadata header. */
+.message-copy-row {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+.msg-copyable:hover .message-copy-row,
+.message-copy-row:focus-within {
+  opacity: 1;
+}
+.message-copy-row--user {
+  justify-content: flex-end;
+}
+.message-copy-row--assistant {
+  justify-content: flex-start;
+}
+.message-copy-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-faint);
+  font-size: var(--text-tiny);
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.message-copy-button:hover,
+.message-copy-button:focus-visible {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  outline: none;
+}
+.message-copy-button:active {
+  background: var(--color-bg-tertiary);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   消息操作行（2026-10-01）
+   ════════════════════════════════════════════════════════════════════
+   复制 / 赞 / 踩 / 重新生成 / 时刻。沿用 `.message-copy-row` 的
+   hover 淡入机制 —— 不 hover 时不占注意力，但**时刻常驻**（它是这条
+   消息的身份信息，不是操作）。
+
+   纯图标按钮（赞/踩/重生成）没有文字标签，靠 `title` + `aria-label`
+   承载语义；`aria-pressed` 告诉读屏「这个现在是选中态」。 */
+.message-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  min-width: 24px;
+  justify-content: center;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-faint);
+  /* 2026-10-01 用户反馈：操作条与正文视觉大小失衡（11px 太小）。
+     操作是可点击的界面控件，按 7 档体系对齐 --text-ui（按钮/列表项档），
+     不再占用元信息档。 */
+  font-size: var(--text-ui);
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.message-action-btn:hover,
+.message-action-btn:focus-visible {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  outline: none;
+}
+/* 纯图标按钮：hover 显形，静态时让位给文字 */
+.message-action-icon {
+  opacity: 0.45;
+}
+.message-action-row:hover .message-action-icon,
+.message-action-btn:focus-visible { opacity: 1; }
+/* 选中态：赞用 success、踩用 error —— 选中即表态，颜色跟着表态走 */
+.message-action-btn[data-active="true"] {
+  opacity: 1;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-hover);
+}
+.message-action-btn[data-active="true"] svg { color: var(--color-success); }
+.message-action-btn[data-active="true"][aria-label="没帮上忙"] svg { color: var(--color-error); }
+
+/* 时刻：常驻，不需要 hover */
+.message-action-clock {
+  margin-left: 4px;
+  padding-left: 8px;
+  font-size: var(--text-meta);
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── 5a-0c. Tools Block — 流式时视觉接近正文 ──
+   流式时 tool 行（"查看文件: lib.rs"）应该像 prose 一样自然
+   流出来,而不是被一个明显 chip 框起来。每个 tool 仍是 ToolGroupCard
+   但去掉 --flat 时的额外 margin-top,跟 reasoning 段紧密相连。 */
+.tl-tools {
+  /* gap 由父 .tl-iteration 管理 */
+}
+
+.tl-tools--flat {
+  margin-top: 0;                        /* 跟 reasoning 段无间距 */
+}
+
+.tl-tools-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;                             /* 工具行之间极紧凑,跟 prose 行距一致 */
+  margin-top: 0;
+}
+
+/* ── 5a-1. 主回复 vs 工具调用 视觉区分 ──
+   通过 tokens.css 的 CSS 变量自动响应 light/dark:
+     浅色: assistant bg = --color-chat-assistant-bg (#ffffff)
+           tool       bg = --color-chat-tool-bg (#f8fafc)
+     深色: assistant bg = --color-chat-assistant-bg (#0f172a)
+           tool       bg = --color-chat-tool-bg (rgba(30,41,59,0.6))
+   兄弟间隔由父 .tl-iteration flex-column 维持. */
+.chat-tool-call {
+  border-radius: 0;
+  transition: color var(--duration-fast) ease;
+}
+.chat-tool-call--tool {
+  background: transparent;
+  margin-left: 0;
+  padding-left: 0;
+}
+
+/* ── 5b. 工具状态徽章贴末尾 (inline-flex, vertical-align, ml-8px) ──
+   取代两端对齐 (justify-between) 的视觉, 状态徽章 inline 贴消息末尾. */
+.chat-status-inline {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 6.  DARK THEME OVERRIDES — 对话流组件
+   ════════════════════════════════════════════════════════════════════
+   tokens.css 定义了 `.dark` CSS 变量覆盖层, 但部分组件用了硬编码的
+   background/color, 必须显式加 `.dark` 选择器才能覆盖 (否则深色主题
+   下这些组件仍显示浅色硬编码值, 内容不可见)。 */
+
+/* 消息气泡 - 硬编码白底需换成深色 app 底色 */
+
+/* ── Timeline Iterations — dark mode ── */
+
+/* 用户气泡 — dark mode 用中性炭灰底 + 淡边框，避免 accent 冷灰/蓝味 */
+
+/* 用户消息附属 (file-pill 等已有独立 dark 规则) */
+
+/* 对话流中 agent-activity pill */
+
+/* ── Tool event cards (tw-msg) ── */
+/* 工具调用展开后跟正文一样, 没有层次感.
+   解法: 输出区用 --color-bg-code (独立背景) + 1px 全边框,
+   形成"代码/终端面板"感, 跟 chat 气泡/思考区明显分层. 主题色自动适配
+   (每个主题都有专属 --color-bg-code + --color-border-subtle).
+   （2026-10-06：原来的单侧 3px rail 属于 impeccable side-tab 反模式
+   —— AI 生成 UI 的典型标志；全边框同样给出面板分层。） */
+.tw-msg-output {
+  background: var(--color-bg-code);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-top: 6px;
+  color: var(--color-text-primary);
+  transition: background var(--duration-fast) ease,
+              border-color var(--duration-fast) ease;
+}
+.tw-msg-output-text {
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tw-msg-output-empty {
+  color: var(--color-text-faint);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: var(--text-meta);
+}
+.tw-msg-output-copy {
+  color: var(--color-text-muted);
+  background: transparent;
+}
+.tw-msg-output-copy:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* ── StreamingBubble meta 行 ── */
+
+/* ── ToolEventCard (tool-event-card.css 或这里的 .tool-event-*) ── */
+/* tool-terminal-dot 是 macOS 红绿灯语义色, 不需要改 */
+
+/* ── InlineThinkingDot ── 用 CSS 变量 + fallback, 不需要额外 dark 规则 */
+/* 但 orb 内的 #fff 高光在暗色太亮, 调暗 */
+
+/* tool terminal 红绿灯 dots 保持原色 (语义色) */
+
+/* ── archive refs banner ── */
+
+/* ── 端连接器 (chat-composer-input) ── */
+
+/* ── 消息行右侧 copy 按钮 ── */
+
+/* ── markdown 段落内联代码 ── */
+
+/* ── markdown 代码块 ── 用 tokens.css 的 --color-bg-code 和 --color-bg-code-header */
+/* 已由 CSS 变量覆盖 */
+
+/* ════════════════════════════════════════════════════════════════════
+   § 7.  DARK THEME — 对话流兜底
+   ════════════════════════════════════════════════════════════════════
+   § 6 已覆盖 tw-msg / agent-activity 等, 这里补齐容易漏掉的兜底:
+     · prose 容器与子元素 (blockquote border / inline code / pre)
+     · msg-bubble-body 默认色 (传递 var 让 markdown 文字自然深浅)
+     · approval-card light/dark 双模
+     · prefetch-chip / prefetch-label
+     · cmd-meta / h-tiny / 等小元素
+   全部用 token vars — 不写 hardcoded 色, 保证一致性。 */
+
+/* ── Markdown prose container ── */
+
+/* ── CodeBlock wrapper (.code-block-body + toolbar) ── */
+
+/* ── Message body text color ── 默认让 .msg-bubble-body 跟随主前景色,
+   这样 prose 内的 a/code/em 自动响应暗色 (它们都 inherit 的). */
+
+/* ── Approval card ── */
+/* light/dark 都是 var(--color-bg-card) 切换, 但 hover/border 需要单独保 */
+
+/* ── Prefetch chip ── */
+
+/* ── H-* helper utilities (状态条和打包) ── */
+
+/* ── agent-activity 弹点 dot ── */
+
+/* ── chat-tool-call 兜底
+   tokens.css 已切 light/dark 变量, 但有些 cascade 顺序问题, 显式覆盖 */
+
+/* ── tw-msg 附加 dark 兜底 ── */
+
+/* ── InlineThinkingDot ── (warning 状态在 dark 用 warning-soft) */
+
+/* ── Tool terminal 红绿灯 dots: 不变 (macOS red/yellow/green 语义色) ── */
+
+/* ── scrollbar in dark: 调亮一档, 不然太黑看不见 ── */
+
+/* ── [data-theme="dark"] 与 .dark 同步覆盖 (有些旧 CSS 用属性选择器) ── */
+
+/* ════════════════════════════════════════════════════════════════════
+   § X.  TODO CARD (live task list — TodoItemUpserted / Removed)
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Root panel container. Sits in the right rail of ChatView or
+ * floats above the message list (mount decision lives in ChatView). */
+.todo-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-secondary);
+  overflow: hidden;
+}
+.todo-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background var(--duration-fast) ease;
+}
+.todo-card-header:hover { background: var(--color-bg-hover); }
+.todo-card-chevron { color: var(--color-text-faint); flex-shrink: 0; }
+.todo-card-icon { color: var(--color-text-secondary); flex-shrink: 0; }
+.todo-card-title {
+  font-size: var(--text-meta);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-primary);
+  flex: 1;
+}
+.todo-card-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+}
+.todo-card-body {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px 8px;
+  gap: 2px;
+}
+.todo-card-empty {
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  font-style: italic;
+  padding: 8px 8px 4px;
+  text-align: center;
+}
+
+/* Single row. */
+.todo-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  transition: background var(--duration-fast) ease;
+  background: transparent;
+}
+.todo-row:hover { background: var(--color-bg-hover); }
+.todo-row-done .todo-row-title {
+  text-decoration: line-through;
+  color: var(--color-text-faint);
+}
+.todo-row-busy { opacity: 0.6; }
+
+.todo-row-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  margin-top: 1px;
+  transition: all var(--duration-fast) ease;
+  color: var(--color-text-secondary);
+}
+.todo-row-check:hover {
+  border-color: var(--color-text-secondary);
+  color: var(--color-text-primary);
+}
+.todo-row-check:disabled { cursor: progress; }
+.todo-row-done .todo-row-check {
+  border-color: var(--color-text-primary);
+  background: var(--color-text-primary);
+  color: var(--color-bg-app);
+}
+.todo-row-glyph {
+  font-size: var(--text-tiny);
+  line-height: 1;
+  font-weight: 700;
+}
+/* Pulse dot — 模型正在向本会话流式输出时显示。
+   2026-09-29 从已删除的 components.css 迁回：唯一定义在那个陈旧副本里，
+   删除时会静默丢失（orphan 检查抓不到——它只查 var() 引用）。 */
+@keyframes li-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.8); }
+}
+
+
+.todo-row-spin {
+  animation: li-pulse 1.2s ease-in-out infinite;
+}
+
+.todo-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.todo-row-title {
+  font-size: var(--text-meta);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.4;
+  word-break: break-word;
+}
+.todo-row-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-micro);
+  color: var(--color-text-faint);
+  line-height: 1.3;
+}
+.todo-row-desc { word-break: break-word; }
+.todo-row-deps { font-style: italic; }
+.todo-row-priority {
+  font-size: var(--text-tiny);
+  font-weight: 600;
+  color: var(--color-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  margin-top: 2px;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 99.  CUSTOM APPS VIEW
+   ════════════════════════════════════════════════════════════════════ */
+
+.custom-apps-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 24px 32px;
+  overflow-y: auto;
+}
+
+.custom-apps-view__header {
+  margin-bottom: 20px;
+}
+
+.custom-apps-view__title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.custom-apps-view__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-display);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.custom-apps-view__refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.custom-apps-view__refresh:hover {
+  background: var(--color-bg-tertiary);
+}
+
+.custom-apps-view__alert {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm, 6px);
+  font-size: var(--text-ui);
+  margin-bottom: 12px;
+}
+
+/* 语义四色令牌（2026-10-18）：此前是 Material 的 #f44336 / #4caf50 /
+   #6c63ff —— 与「宣纸·青碧」语义色系无关且不跟随主题（亮色主题下
+   一块荧光绿/紫的告警）。accent 派生一律 color-mix，不拼 hex8。 */
+.custom-apps-view__alert--error {
+  background: var(--color-error-soft);
+  color: var(--color-error-text);
+}
+
+.custom-apps-view__alert--success {
+  background: var(--color-success-soft);
+  color: var(--color-text-success);
+}
+
+
+
+
+
+
+
+
+
+.custom-apps-view__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.custom-apps-view__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  max-width: 400px;
+  padding: 8px 12px;
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--color-text-muted);
+}
+
+.custom-apps-view__search input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: var(--text-ui);
+  outline: none;
+}
+
+.custom-apps-view__content {
+  flex: 1;
+}
+
+.custom-apps-view__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.custom-apps-view__empty-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid var(--color-accent-soft-strong);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 12px;
+}
+
+.custom-apps-view__empty-icon {
+  color: var(--color-text-faint);
+  margin-bottom: 12px;
+}
+
+.custom-apps-view__empty-title {
+  font-size: var(--text-title);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  margin: 0 0 6px 0;
+}
+
+.custom-apps-view__empty-desc {
+  font-size: var(--text-ui);
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+.custom-apps-view__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+/* App Card — 不用边框线
+   bg 与视图背景拉开层级 (zinc #1c1c20 vs 父视图 #0f0f12 #18181b 系列)
+   靠 box-shadow 双层浮起来 + hover 时阴影进一步抬升 + 微微上浮 */
+.custom-app-card {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  background: var(--color-bg-secondary);
+  border: none;
+  border-radius: var(--radius-md, 10px);
+  box-shadow: var(--shadow-pop);
+  transition:
+    background 0.15s,
+    box-shadow 0.15s,
+    transform 0.15s;
+}
+
+.custom-app-card:hover {
+  background: var(--color-bg-tertiary);
+  box-shadow: var(--shadow-modal);
+  transform: translateY(-1px);
+}
+
+.custom-app-card__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+/* icon 容器固定 36×36，圆角 8px，浅灰底色（容器即"图标框"） */
+.custom-app-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-accent);
+  font-size: var(--text-display);
+  line-height: 1;
+}
+
+.custom-app-card__icon-img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background: var(--color-bg-tertiary);
+}
+
+.custom-app-card__info {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 名称行：name + version + badge 同行横排, badge 紧贴 version */
+.custom-app-card__name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.custom-app-card__name {
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.custom-app-card__version {
+  font-size: var(--text-tiny);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.custom-app-card__badge {
+  flex-shrink: 0;
+}
+
+.custom-app-card__badge {
+  font-size: var(--text-tiny);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm, 4px);
+  font-weight: 500;
+}
+
+/* 语义色令牌（2026-10-18）：Material 三原色 #4caf50 / #6c63ff / #f44336
+   换成不跟随主题就是错的——亮色主题下它们照样荧光。run/package/delete
+   分别落 success / accent / error，hover 用 soft-strong 加深一档。 */
+.custom-app-card__badge--packaged {
+  background: var(--color-success-soft);
+  color: var(--color-text-success);
+}
+
+.custom-app-card__description {
+  font-size: var(--text-meta);
+  color: var(--color-text-muted);
+  margin: 10px 0;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.custom-app-card__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--text-tiny);
+  color: var(--color-text-faint);
+  margin-bottom: 12px;
+}
+
+.custom-app-card__category {
+  padding: 2px 8px;
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-sm, 4px);
+}
+
+.custom-app-card__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.custom-app-card__btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: var(--radius-sm, 4px);
+  font-size: var(--text-meta);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+  background: var(--color-bg-tertiary);
+  /* 文字/图标默认色：跟随主题的次级文本色，不再写死暗色 #d0d0dc */
+  color: var(--color-text-secondary);
+}
+
+.custom-app-card__btn:hover {
+  background: var(--color-bg-quaternary);
+  color: var(--color-text-primary);
+}
+
+.custom-app-card__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.custom-app-card__btn--run {
+  background: var(--color-success-soft);
+  color: var(--color-text-success);
+}
+
+.custom-app-card__btn--run:hover {
+  background: color-mix(in srgb, var(--color-success) 25%, transparent);
+}
+
+.custom-app-card__btn--package {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.custom-app-card__btn--package:hover {
+  background: var(--color-accent-soft-strong);
+}
+
+
+
+.custom-app-card__btn--delete {
+  background: transparent;
+  color: var(--color-text-faint);
+  margin-left: auto;
+}
+
+.custom-app-card__btn--delete:hover {
+  background: var(--color-error-soft);
+  color: var(--color-error-text);
+}
+
+.modal-loading,
+.modal-error {
+  padding: 40px;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.modal-header__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-header__icon {
+  font-size: 24px;
+}
+
+.modal-header__icon-img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+
+.modal-header__title h2 {
+  font-size: var(--text-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.modal-header__version {
+  font-size: var(--text-meta);
+  color: var(--color-text-muted);
+}
+
+.modal-header__badge {
+  font-size: var(--text-tiny);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--color-success-soft);
+  color: var(--color-text-success);
+}
+
+.modal-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 20px;
+}
+
+.modal-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-ui);
+  cursor: pointer;
+}
+
+.modal-tab--active {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.modal-alert {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm, 6px);
+  font-size: var(--text-ui);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.modal-alert__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.modal-alert__dismiss {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 0;
+  padding: 2px;
+  margin: -2px -2px -2px 0;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-alert__dismiss:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+}
+
+/* 语义色令牌（2026-10-18）：同 custom-apps 段，Material 三原色不跟随主题 */
+.modal-alert--error {
+  background: var(--color-error-soft);
+  color: var(--color-error-text);
+}
+
+.modal-alert--success {
+  background: var(--color-success-soft);
+  color: var(--color-text-success);
+}
+
+.btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  font-size: var(--text-ui);
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.app-detail-code__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 240px;
+  padding: 24px;
+  color: var(--color-text-muted);
+  font-size: var(--text-ui);
+  text-align: center;
+  border: 1px dashed var(--color-border-subtle);
+  border-radius: var(--radius-md, 6px);
+}
+
+.app-detail-modal .modal-alert {
+  margin: 16px 20px 0;
+  flex-shrink: 0;
+}
+
+.app-detail-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+}
+
+.app-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.app-detail-section__title {
+  font-size: var(--text-meta);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.app-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.app-detail-meta__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--color-bg-primary);
+  border-radius: var(--radius-md, 6px);
+  color: var(--color-text-muted);
+  font-size: var(--text-ui);
+}
+
+.app-detail-meta__item--full {
+  grid-column: 1 / -1;
+}
+
+.app-detail-meta__label {
+  color: var(--color-text-faint);
+  font-size: var(--text-meta);
+  flex-shrink: 0;
+}
+
+.app-detail-meta__value {
+  color: var(--color-text-primary);
+  word-break: break-all;
+  min-width: 0;
+}
+
+.app-detail-meta__value code {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  background: var(--color-bg-secondary);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--color-text-secondary);
+}
+
+.app-detail-perms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-detail-perms__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: var(--radius-full, 999px);
+  font-size: var(--text-meta);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-secondary);
+  cursor: help;
+}
+
+.app-detail-empty {
+  font-size: var(--text-ui);
+  color: var(--color-text-faint);
+  margin: 0;
+}
+
+/* Code panel */
+.app-detail-code-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--color-bg-primary);
+}
+
+.app-detail-filebar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 20px 0;
+  background: var(--color-bg-secondary);
+}
+
+.app-detail-filebar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-ui);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.app-detail-filebar__item:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.app-detail-filebar__item--active {
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-border-primary);
+  background: var(--color-bg-primary);
+}
+
+/* code-panel must be a flex column so editor-wrap's flex:1 works */
+.app-detail-code-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-detail-code__editor-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px 20px 20px;
+}
+
+.app-detail-code__editor {
+  width: 100%;
+  height: 100%;
+  min-height: 360px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-md, 6px);
+  padding: 14px;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  font-size: var(--text-ui);
+  line-height: 1.55;
+  resize: none;
+  outline: none;
+  tab-size: 2;
+}
+
+.app-detail-code__editor:focus {
+  border-color: var(--color-border-secondary);
+}
+
+/* Header badge */
+.modal-header__badge--success {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+/* ── App Detail README Tab ─────────────────────────────────────── */
+
+.app-detail-readme {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.app-detail-readme__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-detail-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: var(--text-meta);
+  font-weight: 500;
+  line-height: 1.4;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+}
+
+/* badge 状态色：语义令牌 + color-mix 软底（2026-10-18，Material 原色不跟随主题）。 */
+.app-detail-badge--version {
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 20%, transparent);
+}
+
+.app-detail-badge--author {
+  background: color-mix(in srgb, var(--color-info) 8%, transparent);
+  color: var(--color-info);
+  border-color: color-mix(in srgb, var(--color-info) 15%, transparent);
+}
+
+.app-detail-badge--category {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 15%, transparent);
+}
+
+.app-detail-badge--success {
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 20%, transparent);
+}
+
+.app-detail-badge--muted {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
+}
+
+.app-detail-badge--info {
+  background: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
+  color: var(--color-text-secondary);
+  border-color: color-mix(in srgb, var(--color-text-secondary) 15%, transparent);
+}
+
+.app-detail-badge--perm {
+  background: color-mix(in srgb, var(--color-warning) 8%, transparent);
+  color: var(--color-warning);
+  border-color: color-mix(in srgb, var(--color-warning) 15%, transparent);
+}
+
+.app-detail-readme__section {
+  background: var(--color-bg-primary);
+  border-radius: var(--radius-lg, 8px);
+  padding: 16px 20px;
+}
+
+.app-detail-readme__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0 0 12px 0;
+}
+
+.app-detail-readme__text {
+  font-size: var(--text-ui);
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.app-detail-readme__text p {
+  margin: 0 0 6px 0;
+}
+
+.app-detail-readme__text p:last-child {
+  margin-bottom: 0;
+}
+
+.app-detail-readme__text--muted {
+  color: var(--color-text-tertiary);
+}
+
+.app-detail-readme__long {
+  margin: 12px 0 0 0;
+  padding: 12px 16px;
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-md, 6px);
+  font-size: var(--text-ui);
+  line-height: 1.7;
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text-secondary);
+}
+
+.app-detail-readme__tags,
+.app-detail-readme__perms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

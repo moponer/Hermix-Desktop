@@ -1,0 +1,82 @@
+[build]
+# sccache 编译缓存 (2026-10-07 加入):
+#   rustc-wrapper 让每次 rustc 调用先过 sccache —— 命中缓存时直接复用产物、
+#   跳过编译; 删了 target 重编也能秒回, 多 worktree / 多 profile 共享同一套
+#   依赖编译产物, 根治 "target 持续增大" 的痛点.
+#   sccache.exe 在 PATH, 这里用绝对路径更稳 (不受 shell PATH 影响).
+rustc-wrapper = "<USERPROFILE>/.cargo/bin/sccache.exe"
+
+# 编译产物位置（2026-08-10 定案，最终形态）:
+# 这里**不配置 target-dir**. 原因:
+#   1. 绝对路径 (如 "<repo>/release/target") 锁死仓库位置,
+#      换机器/clone 全炸 —— 绝不允许.
+#   2. 相对路径 (如 "release/target") 会被 cargo 按**运行时的 cwd** 解析:
+#      纯 cargo 在仓库根跑 → 仓库内, 但 tauri build 的 cargo 子进程相对
+#      src-tauri manifest 解析 → 上溯 4 级跑到仓库外 (<repo-parent>\release),
+#      产物分裂两处, 用户找不到 —— 同样废弃.
+#   3. 不写 target-dir 时 cargo 用默认位置: 纯 cargo → <仓库根>/target/,
+#      src-tauri 内 → src-tauri/target/. 都在仓库内, .gitignore 已盖,
+#      不会跑到仓库外.
+#   4. 如需统一产物位置 (如 CI 打包), 用环境变量 CARGO_TARGET_DIR 覆盖,
+#      优先级高于本文件任何配置. 项目不内置脚本设它——各环境自己决定.
+#
+# 为什么不在 Cargo.toml 的 [workspace] 段配 target-dir:
+# Cargo 不支持 [workspace].target-dir (会报 `unused manifest key:
+# workspace.target-dir`), 唯一合规的入口是环境变量 CARGO_TARGET_DIR.
+
+[target.x86_64-pc-windows-msvc]
+# 2026-06-24: 改用 rust-lld.exe 替代 MSVC link.exe. 原因: MSVC link.exe
+# 在 hermix workspace 全量 link 时吃 1.5GB+ 内存, 主人机器卡死.
+# lld 同样出 MSVC 兼容的 COFF 目标文件 + 找 MSVC LIB/INCLUDE 路径,
+# 内存占用降到 ~500MB, 增量重 build 更快.
+#
+# **触发回退条件** (能不用 lld 的场景):
+#   1. VS 调试器 attach 时报 "section merge failed" → 临时换回下方 MSVC 绝对路径
+#   2. 发布构建 ([profile.release]) 想用 MSVC 的 /LTCG 链接时代码生成优化
+#   3. 链接时遇到 rust-lld 已知 bug (极少见, 通常是带 debug-info 的静态库)
+#
+# 反 Git Bash link.exe 坑仍然存在: 不要恢复 `link` (无路径), 必须用
+# MSVC 绝对路径或 rust-lld.exe. 本机 rust 装在
+# "C:\Program Files\Rust stable MSVC 1.92", rust-lld.exe 在
+# lib\rustlib\x86_64-pc-windows-msvc\bin\ 下, cargo 能解析.
+#
+# 2026-06-29 临时切到 MSVC link.exe 试验失败 → 切回 rust-lld.exe。
+# 失败原因: MSVC link.exe 在 build script 链接阶段 (libsqlite3-sys / moxcms
+# / ravif / hermix-config / http) 报 exit code: 1 但 stderr 被 cargo
+# 吞掉, 看不到具体缺什么 .lib。rust-lld 是链接 Rust 标准产物经过验证的,
+# build script 一般不挑。
+linker = "rust-lld.exe"
+
+# 2026-07-05: rust-lld 不读 `LIB` 环境变量, 需要显式传 LIBPATH.
+#   Cargo 调用 rustc 时把以下 rustflags 注入到链接命令, 让 lld 知道
+#   去哪里找 MSVC SDK 提供的 .lib (kernel32, oldnames, msvcrt, ...).
+#   注意: test profile 会加更多 proc-macro dylib, 仍然走同一条链接路径,
+#   所以这条配置对 `cargo test` 也生效.
+rustflags = [
+    "-C", "link-arg=/LIBPATH:C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64",
+    "-C", "link-arg=/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64",
+    "-C", "link-arg=/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\ucrt\\x64",
+]
+
+# 2026-10-07 引入 sccache; 2026-10-15 修正使其真正生效:
+#   rustc-wrapper 让每次 rustc 调用先过 sccache, 命中即复用产物.
+#   关键修正 (sccache 0.18.0):
+#   1. in-process 模式忽略 SCCACHE_DIR, 只有 sccache server 才读它.
+#      故必须单独启动一个带 SCCACHE_DIR 的 server (见 scripts/start-sccache.ps1
+#      / 计划任务开机自启), server 常驻并接管所有缓存, 落 H 盘共享目录,
+#      多人 / 多 worktree 复用同一套依赖编译产物, 根治 target 膨胀.
+#   2. incremental 必须关 (已在根 Cargo.toml 的 [profile.dev]/[profile.test]
+#      设 incremental = false): sccache 对带 -C incremental 的编译一律
+#      non-cacheable, 不关则缓存命中率 0%, sccache 形同虚设.
+#   3. SCCACHE_CACHE_SIZE 调大 (见下 [env]): 依赖树 ~30GB, 默认 10GiB 会
+#      频繁驱逐, 放大到 50G 让绝大多数依赖常驻缓存, 重建接近秒回.
+[env]
+# sccache 共享缓存目录 (H 盘, 多人复用). 此变量只有 sccache SERVER 才读取;
+# in-process 模式会忽略它, 因此必须有一个带 SCCACHE_DIR 的 server 在跑
+# (见 scripts/start-sccache.ps1 / 计划任务开机自启).
+SCCACHE_DIR = "H:/sccache-cache"
+# 缓存上限放大到 50G (依赖树 ~30GB, 默认 10GiB 会频繁驱逐). server 读取.
+SCCACHE_CACHE_SIZE = "50G"
+# 如需把产物统一挪到仓库外、避免各 worktree 各编译一份 target 滚雪球,
+# 取消下一行注释即可 (项目作者授权用环境变量而非 config 内置 target-dir):
+# CARGO_TARGET_DIR = "F:/rust-targets/hermix-desktop"  # 已回退(2026-10-13): 启用会破坏 release.sh / ensure-sidecar.mjs 等依赖仓库根 target/release 的脚本; 若要共享 target 须先让这些脚本支持 CARGO_TARGET_DIR 环境变量
