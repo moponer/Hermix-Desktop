@@ -48,6 +48,8 @@ LLM 推理由用户在设置里自行配置的云端服务商完成（内置十�
 
 从[官网](https://hermix.cssso.com/desktop.html)下载安装包（NSIS）。应用内置自动更新（从同域 `desktop/manifest.json` 取更新）。便携设计：不写系统注册表、不留残留，删除安装目录即卸载。
 
+> **域名说明**：`hermix.cssso.com` 仅为开发测试使用的中转域名（官网、手机端 relay 与更新源都挂在它上面），**仅作测试用途，不保证可用性**。正式使用请部署自己的 relay（源码在 `apps/relay/`），客户端域名可通过自有 relay 与更新 manifest 配置。
+
 ### 开发者
 
 环境要求：
