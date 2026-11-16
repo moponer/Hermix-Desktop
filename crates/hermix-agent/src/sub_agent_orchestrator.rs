@@ -819,15 +819,38 @@ impl SubAgentOrchestrator {
         // in the async execute_async path's spawned task; now that
         // execute_async delegates to execute_inner, the emit must live
         // here so both code paths share the same lifecycle events.
-        let (phase, turns, cost_usd, err) = match &outcome {
+        //
+        // H1 观测（docs/optimization-plan.md）：终态带 reason 枚举落
+        // agent 类目结构化日志，淘汰自由文本 error 归因。
+        let (phase, reason, turns, cost_usd, err) = match &outcome {
             Ok(result) => (
                 "done",
+                "reported",
                 Some(result.total_turns),
                 result.usage.as_ref().and_then(|u| u.estimated_cost),
                 None,
             ),
-            Err(e) => ("failed", None, None, Some(e.to_string())),
+            Err(e) => (
+                "failed",
+                match e {
+                    SubAgentError::Timeout => "timeout",
+                    SubAgentError::Cancelled => "aborted_user",
+                    SubAgentError::Agent(_) => "failed",
+                },
+                None,
+                None,
+                Some(e.to_string()),
+            ),
         };
+        tracing::info!(
+            target: "hermix.agent.sub_agent",
+            sub_agent_id = %sub_agent_id,
+            reason,
+            parent_session = ?lineage.parent_session_id,
+            task = %req.task,
+            turns = ?turns,
+            "sub_agent_exit"
+        );
         let steps_snapshot: Vec<String> = recent_steps
             .lock()
             .map(|v| v.clone())
@@ -849,6 +872,7 @@ impl SubAgentOrchestrator {
                 json!({
                     "sub_agent_id": sub_agent_id,
                     "status": "completed",
+                    "reason": "reported",
                     "task": req.task,
                     "total_turns": result.total_turns,
                     "finished_naturally": result.finished_naturally,

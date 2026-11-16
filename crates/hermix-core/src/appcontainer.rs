@@ -44,7 +44,7 @@ const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
 const GENERIC_EXECUTE: u32 = 0x2000_0000;
 const HANDLE_FLAG_INHERIT: Dword = 0x0000_0001;
-const ERROR_ALREADY_EXISTS: HResult = 183;
+// ensure_profile 以 hr != 0 统一走 Derive 分支，无需比对具体错误码。
 
 extern "system" {
     // userenv.dll —— AppContainer profile 生命周期。
@@ -423,7 +423,7 @@ pub fn spawn_and_collect(
         );
     }
 
-    let mut siex = StartupInfoExW {
+    let siex = StartupInfoExW {
         startup: StartupInfoW {
             cb: std::mem::size_of::<StartupInfoExW>() as u32,
             reserved: std::ptr::null_mut(),
@@ -503,11 +503,11 @@ pub fn spawn_and_collect(
     {
         use std::io::Read;
         use std::os::windows::io::{FromRawHandle, OwnedHandle};
-        let mut out = std::fs::File::from(unsafe {
+        let out = std::fs::File::from(unsafe {
             OwnedHandle::from_raw_handle(stdout_parent as _)
         });
         let _ = out.take(256 * 1024).read_to_end(&mut stdout_buf);
-        let mut err = std::fs::File::from(unsafe {
+        let err = std::fs::File::from(unsafe {
             OwnedHandle::from_raw_handle(stderr_parent as _)
         });
         let _ = err.take(256 * 1024).read_to_end(&mut stderr_buf);

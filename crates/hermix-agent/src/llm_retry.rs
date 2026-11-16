@@ -33,6 +33,27 @@ use crate::plugins::{HookType, PluginManager};
 use crate::prompt_assembly::{extract_provider_and_model, messages_for_api_call};
 use crate::runtime_provider::{build_runtime_provider, credential_pool_for_route};
 
+/// H1 观测（docs/optimization-plan.md）：上次请求的 prefix 指纹。
+/// hash 不变 = 前缀稳定（缓存友好）；变化即记 `cache_break`——这是唯一能
+/// **证明**"没在破坏缓存"的手段（lynn 17 §4）。进程级即可：重启必然
+/// 是新前缀，记 `first` 没有诊断价值。
+static LAST_PREFIX: Mutex<Option<String>> = Mutex::new(None);
+
+/// prefix 指纹：模型 + 工具面 + 全部 API 消息的 md5。任何一处变化都会
+/// 改变指纹，与端点的 prompt-cache 前缀语义一致。
+fn prefix_fingerprint(
+    config: &AgentConfig,
+    api_messages: &[hermix_core::Message],
+    tool_schemas: &[ToolSchema],
+) -> String {
+    let mut material = config.model.clone();
+    material.push('|');
+    material.push_str(&serde_json::to_string(tool_schemas).unwrap_or_default());
+    material.push('|');
+    material.push_str(&serde_json::to_string(api_messages).unwrap_or_default());
+    format!("{:x}", md5::compute(material.as_bytes()))
+}
+
 /// Build the routed or primary provider, retrying OAuth refresh once on
 /// auth failures so an expired token doesn't burn retry slots.
 async fn build_provider_for_call(
@@ -140,6 +161,28 @@ pub(crate) async fn call_llm_with_retry(
     }
 
     let api_messages = messages_for_api_call(config, ctx);
+
+    // H1 观测：prefixHash 断点诊断。指纹变化 = 缓存断点，落
+    // `cache_break { reason }`（first = 会话首条，changed = 中途被改写）。
+    let prefix_hash = prefix_fingerprint(config, &api_messages, tool_schemas);
+    {
+        let mut last = LAST_PREFIX.lock().expect("prefix lock poisoned");
+        let reason = match last.as_deref() {
+            None => "first",
+            Some(prev) if prev != prefix_hash => "changed",
+            _ => "",
+        };
+        if !reason.is_empty() {
+            tracing::info!(
+                target: "hermix.agent.cache",
+                prefix_hash = %prefix_hash,
+                reason,
+                "cache_break"
+            );
+        }
+        *last = Some(prefix_hash);
+    }
+
     let retry = &config.retry;
     let (effective_max_retries, effective_base_delay_ms) =
         (retry.max_retries, retry.base_delay_ms);
@@ -158,6 +201,9 @@ pub(crate) async fn call_llm_with_retry(
 
     // Track whether we've already tried an OAuth refresh during this call.
     let mut oauth_refreshed = false;
+    // H1 观测（docs/optimization-plan.md）：429/额度类错误计数——
+    // 第 1 次退避重试，第 2 次即切 fallback_model（不再等重试穷尽）。
+    let mut quota_hits = 0u32;
 
     for attempt in 0..=effective_max_retries {
         interrupt.check_interrupt()?;
@@ -206,7 +252,23 @@ pub(crate) async fn call_llm_with_retry(
         let _ = invoke_hook(plugin_manager, HookType::PostApiRequest, &post_api_ctx);
 
         match result {
-            Ok(response) => return Ok(response),
+            Ok(response) => {
+                // H1 观测：逐轮增量告警——delta = prompt − cache_read，
+                // 超阈值记 cache_delta_spike（lynn 17 §5）。
+                if let Some(u) = &response.usage {
+                    let delta = u.prompt_tokens.saturating_sub(u.cache_read_tokens);
+                    if delta > 150 {
+                        tracing::warn!(
+                            target: "hermix.agent.cache",
+                            delta,
+                            prompt = u.prompt_tokens,
+                            cache_read = u.cache_read_tokens,
+                            "cache_delta_spike"
+                        );
+                    }
+                }
+                return Ok(response);
+            }
             Err(e) => {
                 let err_str = e.to_string();
                 let class = classify_error(&err_str);
@@ -239,10 +301,69 @@ pub(crate) async fn call_llm_with_retry(
                             "Auth error persisted after token refresh: {err_str}"
                         )));
                     }
-                    // Quota is terminal: the same account's fallback model
-                    // hits the same wall, so retry/fallback only adds
-                    // latency before the inevitable error surfaces.
-                    ErrorClass::Fatal | ErrorClass::Quota | ErrorClass::ContextOverflow => {
+                    // Quota（429/额度类）：第 1 次退避后用主模型再试；
+                    // 第 2 次即切 fallback_model（若配置且不同于主模型），
+                    // 不等重试穷尽——额度耗尽后继续撞同一堵墙只会空转
+                    //（lynn 01 复盘：429 后空转 100 分钟的教训）。
+                    ErrorClass::Quota => {
+                        quota_hits += 1;
+                        tracing::warn!(
+                            quota_hits,
+                            model,
+                            "LLM quota error (429/plan limit)"
+                        );
+                        if quota_hits >= 2 {
+                            if let Some(ref fallback) = retry.fallback_model {
+                                if request_model != fallback.as_str() {
+                                    let (fallback_provider_name, fallback_model_only) =
+                                        extract_provider_and_model(config, fallback);
+                                    tracing::warn!(
+                                        "Quota hit {}x on {}; switching to fallback: {}",
+                                        quota_hits, model, fallback
+                                    );
+                                    let fallback_result = match build_runtime_provider(
+                                        config, oauth,
+                                        &fallback_provider_name, &fallback_model_only,
+                                        None, None, None, None, None,
+                                    ) {
+                                        Ok(fb_provider) => {
+                                            execute_llm_call(
+                                                &fb_provider,
+                                                &api_messages, tool_schemas, config,
+                                                &fallback_model_only,
+                                                extra_body_for_api_mode(config, &config.api_mode).as_ref(),
+                                            ).await
+                                        }
+                                        Err(_) => {
+                                            execute_llm_call(
+                                                llm_provider,
+                                                &api_messages, tool_schemas, config,
+                                                &fallback_model_only,
+                                                extra_body_for_api_mode(config, &config.api_mode).as_ref(),
+                                            ).await
+                                        }
+                                    };
+                                    return fallback_result
+                                        .map_err(|e| AgentError::LlmApi(e.to_string()));
+                                }
+                            }
+                            return Err(AgentError::LlmApi(err_str));
+                        }
+                        // 首次 quota：退避（尊重 Retry-After）后重试。
+                        let delay = parse_retry_after_ms(&err_str)
+                            .map(Duration::from_millis)
+                            .unwrap_or_else(|| {
+                                jittered_backoff(
+                                    attempt,
+                                    effective_base_delay_ms,
+                                    retry.max_delay_ms,
+                                )
+                            });
+                        tracing::info!("Quota backoff {}ms before retry", delay.as_millis());
+                        sleep(delay).await;
+                        continue;
+                    }
+                    ErrorClass::Fatal | ErrorClass::ContextOverflow => {
                         return Err(AgentError::LlmApi(err_str));
                     }
                     ErrorClass::RateLimit | ErrorClass::Retryable => {
