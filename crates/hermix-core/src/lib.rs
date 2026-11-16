@@ -22,6 +22,10 @@ pub mod path_security;
 pub mod console_decode;
 #[cfg(windows)]
 pub mod win_job;
+// AppContainer 沙箱（Windows 8+ 原生）：execute_code 的 python 在低权限
+// 容器内执行——无 capability = 系统级断网，文件系统走 DACL 白名单。
+#[cfg(windows)]
+pub mod appcontainer;
 // 总管方案 P0：资源治理原语（scratch 配额 / 磁盘水位），Windows 专属。
 #[cfg(windows)]
 pub mod resource_governor;

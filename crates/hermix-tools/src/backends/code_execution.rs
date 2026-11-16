@@ -323,6 +323,38 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
             }
         };
 
+        // AppContainer 沙箱（Windows 8+ 原生，无 Docker）：python 内联代码
+        // 在低完整性容器内执行——无 capability = 系统级断网，文件系统走
+        // DACL 白名单（工作目录读写、解释器安装树只读）。启动失败回退
+        // 宿主直跑（功能不中断）。HERMIX_APPCONTAINER=off 显式关闭。
+        #[cfg(windows)]
+        if (lang == "python" || lang == "python3")
+            && std::env::var("HERMIX_APPCONTAINER").as_deref() != Ok("off")
+        {
+            let workdir = std::env::temp_dir().join("hermix-exec-work");
+            std::fs::create_dir_all(&workdir).map_err(|e| {
+                ToolError::ExecutionFailed(format!("sandbox workdir: {e}"))
+            })?;
+            // spawn_and_collect 是同步阻塞（wait + 有界读），丢进
+            // spawn_blocking 避免占死 tokio worker。
+            let interpreter_c = interpreter.clone();
+            let code_c = code.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                hermix_core::appcontainer::spawn_and_collect(&interpreter_c, &code_c, &workdir)
+            })
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("sandbox join: {e}")))?
+            .map_err(|e| ToolError::ExecutionFailed(format!("sandbox: {e}")))?;
+            return Ok(json!({
+                "exit_code": result.exit_code,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "language": lang,
+                "interpreter": interpreter.display().to_string(),
+            })
+            .to_string());
+        }
+
         // For Python the flag is `-c`; for JS it's `-e`; for bash it's
         // `-c`. TypeScript wraps in npx + a temp file because `ts-node`
         // doesn't read from stdin.
@@ -350,7 +382,12 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
             cmd = hermix_core::proc::cmd_tokio(hermix_core::runtime::resolve_binary("npx"));
             cmd.arg("ts-node").arg(tmp.to_str().unwrap_or(""));
         } else {
-            cmd.arg(flag).arg(code);
+            // Windows 的 python 已由 AppContainer 接管（code 经 stdin 下发），
+            // cmdline 不重复放 code；其余语言/平台照旧。
+            let skip_code = cfg!(windows) && (lang == "python" || lang == "python3");
+            if !skip_code {
+                cmd.arg(flag).arg(code);
+            }
         }
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
