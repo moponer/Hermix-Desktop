@@ -16,12 +16,7 @@ import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
 import {
   renderRoutes,
-  TWIN_SESSION_ID,
   type RouteContext,
-  type TwinInlineApi,
-  type TwinPendingDecision,
-  type TwinSendOptions,
-  type TwinTurn,
 } from "./app/routes";
 import { SettingsDialog, type ConfigCategory } from "./components/SettingsDialog";
 
@@ -57,7 +52,6 @@ import {
   evictSessionMessages,
   finalizeAssistantStopReason,
   markAssistantError,
-  mergeSessionMeta,
   prependOlderMessages,
   resolveClarify,
   stampApprovalDecision,
@@ -65,28 +59,6 @@ import {
   stampTrailingAssistantStopReason,
 } from "./lib/sessionUpdaters";
 import { updateSession } from "./lib/sessionUpdates";
-import { toolStepLabel } from "./lib/toolStepLabel";
-import {
-  QUEUE_MAX,
-  batchPrompt,
-  enqueue as enqueueQueueTask,
-  loadQueue,
-  makeTask,
-  matchReturned,
-  moveTask as moveQueueTask,
-  returnLines,
-  saveQueue,
-  takeBatch,
-  type TwinBatch,
-  type TwinTask,
-} from "./lib/twinQueue";
-import {
-  PATROL_INTERVAL_MS,
-  patrol,
-  patrolBrief,
-  type PatrolResult,
-  type PatrolTickets,
-} from "./lib/twinPatrol";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastContainer } from "./components/ToastContainer";
 import { toastError, toastInfo } from "./hooks/useToast";
@@ -118,27 +90,6 @@ import { reportError } from "./lib/reportError";
 import { cleanSessionTitle } from "./lib/sessionTitle";
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
-
-/**
- * 阿黎从任务面板拉取需求的节奏。比这更快，用户下达后就没机会调整优先级；
- * 更慢则"下达即可执行"的体感丢失（轮次结束时会立即接力，不等这个周期）。
- */
-const TWIN_PULL_MS = 4_000;
-
-/**
- * 当前权限档（现读 localStorage）。为什么不在 App 里用 hook：这一页切档只写
- * 这个键，另一个 hook 实例收不到跨实例更新 —— 读时机 = 下发时机才是真值。
- */
-function twinPermissionLevel(): "default" | "full" {
-  try {
-    return storage.getItem(STORAGE_KEYS.permissionLevel) === "full" ? "full" : "default";
-  } catch {
-    return "default";
-  }
-}
-
-/** 自动干预的最小间隔：她刚被叫过就别再叫（防止异常持续时每 2 分钟一次）。 */
-const TWIN_AUTO_INTERVENE_MS = 10 * 60_000;
 
 /** 后台 run 活动计数轮询间隔。保活信号丢一次无害，取值偏保守。 */
 const KEEP_AWAKE_POLL_MS = 10_000;
@@ -220,8 +171,6 @@ function computeLeftMin(vw: number): number {
  * 的桥接占位名（见 `stream_collect.rs` 的 bridge tool），`tool` / `function`
  * 是解析兜底值 —— 它们进「刚才发生」只会在流水里留下几行同名的废话。
  */
-const BRIDGE_TOOL_NAMES = new Set(["tool", "tool_call", "function", ""]);
-
 export default function App() {
   const [page, setPageRaw] = useState<NavPage>("chat");
   // 设置落点分类。默认「模型」：配置入口绝大多数是"没配模型/想换模型"，
@@ -656,543 +605,13 @@ setPage("chat");
   // 改由 ChatView 通过 StreamChatContext 直接读，不再逐层透传。
   const { streaming, streamingSessionId, setContextUsage, setUsageSnapshot, setStreamingStatus: setStreamingStatusImpl, send: sendStream, cancel: cancelStream, wsSendRaw } = streamChatApi;
 
-  // ── 阿黎的独立发送器 ────────────────────────────────────────────────
-  // 第二个 `useStreamChat` 实例，会话固定 `twin:ali`。为什么单开一个：
-  // 一个实例的发送状态（pendingResolveRef / streamingSessionIdRef /
-  // activeSendIdRef）是单例槽，共用一个实例就等于「她与任何对话互斥」。
-  // 传输层是按 `stream:<sessionId>` 分频道的，两个实例天然并行。
-  //
-  // 必须挂在这里（App 顶层）而不是 TwinView 内部：她跑了长任务时用户切去
-  // 别的页，TwinView 会卸载 —— 实例留在顶层，流不会断，回来接着看。
-  const twinChat = useStreamChat(TWIN_SESSION_ID);
-  const [twinTurn, setTwinTurn] = useState<TwinTurn | null>(null);
-  /** 本轮的同步镜像：失败判定要读"这一轮有没有真的动过手"。 */
-  const twinTurnRef = useRef<TwinTurn | null>(null);
-  useEffect(() => {
-    twinTurnRef.current = twinTurn;
-  }, [twinTurn]);
-  const [twinPending, setTwinPending] = useState<TwinPendingDecision[]>([]);
-  /**
-   * 任务面板队列（2026-11-06 重构）。顺序 = 优先级，落 localStorage：
-   * 关窗口不该把用户刚写下的需求弄丢（她没开工的那部分）。
-   *
-   * 状态放在 App 顶层而不是 TwinView：拉取调度必须在她这一页被切走时
-   * 照常运行（用户去别的页之后她仍在值守）。
-   */
-  const [twinQueue, setTwinQueue] = useState<TwinTask[]>(() => loadQueue());
-  /** 队列的同步镜像：拉取调度在 interval 闭包里读它，不依赖渲染时机。 */
-  const twinQueueRef = useRef<TwinTask[]>(twinQueue);
-  /** 这一轮整合进来的需求批次（内存态 —— 落盘会留下永远 running 的幽灵批次）。 */
-  const [twinBatch, setTwinBatch] = useState<TwinBatch | null>(null);
-  /** 批次的同步镜像：失败判定/重投都要读"此刻"的批次，不依赖渲染时机。 */
-  const twinBatchRef = useRef<TwinBatch | null>(null);
-  useEffect(() => {
-    twinBatchRef.current = twinBatch;
-  }, [twinBatch]);
-  /** 拉取互斥：一次 tick 未结算前不许并发出第二次（否则同一批会被下发两遍）。 */
-  const twinPullingRef = useRef(false);
-  /** 心跳巡查结果（状态页展示 + 右翼建议），`null` = 还没巡查过。 */
-  const [twinPatrol, setTwinPatrol] = useState<PatrolResult | null>(null);
-  /** 上次巡查时刻；0 = 还没跑过（首 tick 立即巡查）。 */
-  const twinPatrolAtRef = useRef(0);
-  /**
-   * 实验开关：巡查发现异常时**自动叫她看一眼**（她可能自行处理）。
-   *
-   * 默认关。这是整个阿黎里唯一让她"没人叫也动手"的开关 —— 所以只在这几种
-   * 情况下触发：有 warn/alert、她空闲、没有待审批、**面板里没有待拉取的活**
-   * （有活就让 4s 快循环先走，别和它抢），且距上次自动触发 ≥ 10 分钟。
-   */
-  const [twinAutoIntervene, setTwinAutoIntervene] = useState(() => {
-    try {
-      return storage.getItem(STORAGE_KEYS.twinAutoIntervene) === "1";
-    } catch {
-      return false;
-    }
-  });
-  const twinAutoAtRef = useRef(0);
-  const setTwinAutoIntervenePersist = useCallback((on: boolean) => {
-    setTwinAutoIntervene(on);
-    try {
-      storage.setItem(STORAGE_KEYS.twinAutoIntervene, on ? "1" : "0");
-    } catch {
-      /* 存不下只影响下次启动的默认值，不影响本次 */
-    }
-  }, []);
-  /** 巡查互斥：一轮没结算前不再开一轮（工单请求慢时不叠请求）。 */
-  const twinPatrolBusyRef = useRef(false);
-  /**
-   * 下一次拉取要捎上的「上一批情况」（巡查发现）。一次性：注入后清空，
-   * 下一轮巡查会按当时的事实重新算，不累积历史噪音。
-   */
-  const twinPatrolBriefRef = useRef<string | null>(null);
-  /** 最近一次下发的失败原因 —— 批次面板要显示真实原因，不是"见下方错误"。 */
-  const twinSendErrorRef = useRef<string | null>(null);
-  /** 本轮序号 —— 结算后作废，用来丢弃迟到帧（见 sendToTwin）。 */
-  const twinTurnSeq = useRef(0);
-  const twinApprovalResolvers = useRef(
-    new Map<string, (v: { decision: "approved" | "denied"; remember?: boolean }) => void>(),
-  );
-  const twinClarifyResolvers = useRef(new Map<string, (v: { answer: string }) => void>());
+  // 「助手阿黎」（Twin）功能已暂停（2026-11-16）：独立发送器、任务面板、
+  // 心跳巡查与自动干预整体移除。`twin:ali` 会话前缀约定保留在后端，
+  // 恢复功能时从 git 历史整批找回。
 
-  const stopTwin = useCallback(() => {
-    twinChat.cancel(TWIN_SESSION_ID);
-  }, [twinChat]);
 
-  /** 结算她的一件待决事项。审批与澄清各自一份 resolver，按 id 找。 */
-  const resolveTwin = useCallback(
-    (id: string, decision: "approved" | "denied", answer?: string) => {
-      const approval = twinApprovalResolvers.current.get(id);
-      if (approval) {
-        approval({ decision });
-        twinApprovalResolvers.current.delete(id);
-      } else {
-        const clarify = twinClarifyResolvers.current.get(id);
-        if (clarify) {
-          clarify({ answer: answer ?? "" });
-          twinClarifyResolvers.current.delete(id);
-        }
-      }
-      setTwinPending((prev) => prev.filter((p) => p.id !== id));
-    },
-    [],
-  );
 
-  const sendToTwin = useCallback(
-    async (text: string, opts: TwinSendOptions): Promise<boolean> => {
-      if (twinChat.streaming) {
-        // 驱动侧也会先判一次；这里是最后一道闸，失败原因要能定位。
-        twinSendErrorRef.current = "她还在跑上一轮，这一批没有下发";
-        return false;
-      }
-      twinSendErrorRef.current = null;
-      setTwinPending([]);
-      // 对话里显示"你说的话"，但线上消息可能是一段带编号的批次指令 ——
-      // 两者分开传（`display`），否则对话流里会出现一大段没人读的内部指令。
-      setTwinTurn({
-        user: opts.display ?? text,
-        reply: "",
-        activity: null,
-        error: null,
-        events: [],
-      });
-      // 本轮序号：结算之后（await 返回）才到的迟到帧一律丢弃。流被停止/断流
-      // 时曾有 tool_start、approval_request 在结算后才送达，于是在「静默」的
-      // 屏幕上留下「她正在用 task_create」和一张已经没人等待的审批卡。
-      const seq = ++twinTurnSeq.current;
-      const alive = () => twinTurnSeq.current === seq;
-      const patch = (fn: (t: TwinTurn) => TwinTurn) =>
-        setTwinTurn((t) => (t && alive() ? fn(t) : t));
-      const pushPending = (item: TwinPendingDecision) => {
-        if (!alive()) return;
-        setTwinPending((prev) => [...prev, item]);
-      };
-      try {
-        await twinChat.send(
-          TWIN_SESSION_ID,
-          text,
-          {
-            onChunk: (chunk) => patch((t) => ({ ...t, reply: t.reply + chunk })),
-            onToolStart: (info) => {
-              // 桥接占位名（`tool_call`）不是用户认识的工具：既不记流水，
-              // 也不拿它当"正在用 X"的 X（见 stream_collect.rs 的 bridge tool）。
-              const name = BRIDGE_TOOL_NAMES.has(info.tool) ? null : info.tool;
-              patch((t) => ({
-                ...t,
-                activity: name,
-                // 工具流水：值守页「刚才发生」实时体现这一轮做了什么。
-                // 带参数（`terminal: <命令>`）—— 只写工具名时屏幕上三行
-                // 一模一样的 `terminal`，用户看不出跑的是什么（2026-11-06 实报）。
-                events: name
-                  ? [...(t.events ?? []), toolStepLabel(name, info.args)].slice(-30)
-                  : t.events,
-              }));
-            },
-            onToolComplete: () => patch((t) => ({ ...t, activity: null })),
-            onApprovalRequest: (req) =>
-              new Promise<{ decision: "approved" | "denied"; remember?: boolean }>((resolve) => {
-                twinApprovalResolvers.current.set(req.requestId, resolve);
-                pushPending({
-                  id: req.requestId,
-                  kind: "approval",
-                  tool: req.tool,
-                  reason: req.reason ?? null,
-                });
-              }),
-            // 批量审批：一次点击结算整批，与后端「一个决策应用到所有项」一致。
-            onApprovalBatchRequest: (req) =>
-              new Promise<{ decision: "approved" | "denied"; remember?: boolean }>((resolve) => {
-                twinApprovalResolvers.current.set(req.batchId, resolve);
-                pushPending({
-                  id: req.batchId,
-                  kind: "approval",
-                  tool: req.items.map((i) => i.tool).join(" / "),
-                  reason: null,
-                });
-              }),
-            onClarifyRequest: (req) =>
-              new Promise<{ answer: string }>((resolve) => {
-                twinClarifyResolvers.current.set(req.requestId, resolve);
-                pushPending({
-                  id: req.requestId,
-                  kind: "clarify",
-                  question: req.question,
-                  choices: req.choices ?? [],
-                });
-              }),
-            onDone: (full) => {
-              patch((t) => ({ ...t, reply: full || t.reply, activity: null }));
-              setTwinPending([]);
-            },
-            onError: (msg) => {
-              twinSendErrorRef.current = msg;
-              patch((t) => ({ ...t, error: msg, activity: null }));
-              setTwinPending([]);
-            },
-          },
-          {
-            // 人格固定 `ali`：桌面与手机两个入口看到的是同一个她。
-            personality: "ali",
-            permissionLevel: opts.permissionLevel,
-          },
-        );
-        return true;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        twinSendErrorRef.current = msg;
-        patch((t) => ({ ...t, error: msg, activity: null }));
-        setTwinPending([]);
-        return false;
-      } finally {
-        // 结算即作废本轮：此后到达的帧不再写进面板。
-        twinTurnSeq.current += 1;
-      }
-    },
-    [twinChat],
-  );
 
-  // ── 任务面板：入队 / 排序 / 删除 / 拉取调度 ──────────────────────────
-  // 交互模型：输入口只负责「下达需求」，她从面板按顺序拉取一批开工；
-  // 拉走的需求离开面板，进入 `twinBatch`（状态区与团队看板都读它）。
-  useEffect(() => {
-    twinQueueRef.current = twinQueue;
-    saveQueue(twinQueue);
-  }, [twinQueue]);
-
-  const enqueueTwinTask = useCallback((text: string) => {
-    const task = makeTask(text);
-    if (!task.text) return;
-    setTwinQueue((prev) => enqueueQueueTask(prev, task));
-  }, []);
-
-  const removeTwinTask = useCallback((id: string) => {
-    setTwinQueue((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
-  const moveTwinTask = useCallback((id: string, dir: -1 | 1) => {
-    setTwinQueue((prev) => moveQueueTask(prev, id, dir));
-  }, []);
-
-  /**
-   * 从面板拉一批开工。返回是否真的发出去了。
-   *
-   * 失败处理是这里的重点：任务**放回队首**并写明原因 —— 拉走却没下发，
-   * 等于用户的指令凭空消失（旧版"这一轮没发出去（原因见下方错误）"正是
-   * 这种沉默丢单的产物）。
-   */
-  const pullTwinTasks = useCallback(async (): Promise<boolean> => {
-    if (twinPullingRef.current) return false;
-    if (twinChat.streaming) return false;
-    const queue = twinQueueRef.current;
-    if (queue.length === 0) return false;
-    twinPullingRef.current = true;
-    const { batch, rest } = takeBatch(queue);
-    const startedAt = Date.now();
-    const batchId = `b${startedAt.toString(36)}`;
-    setTwinQueue(rest);
-    twinQueueRef.current = rest;
-    setTwinBatch({ id: batchId, tasks: batch, startedAt, status: "running" });
-    // 权限档现读 localStorage：这一页切档只写这个键，App 里的 hook 实例
-    // 收不到跨实例的状态更新（读时机 = 下发时机才是真值）。
-    // 巡查有发现时先告诉她「上一批情况」，让她在这一轮里自己决定要不要调整
-    // 计划；一次性消费，避免同一个异常在每一批里重复唠叨。
-    const brief = twinPatrolBriefRef.current;
-    twinPatrolBriefRef.current = null;
-    const prompt = brief ? `${brief}\n\n${batchPrompt(batch)}` : batchPrompt(batch);
-    const ok = await sendToTwin(prompt, {
-      permissionLevel: twinPermissionLevel(),
-      display: batch.map((t) => t.text).join("；"),
-    });
-    twinPullingRef.current = false;
-    if (!ok) {
-      const reason = twinSendErrorRef.current ?? "下发失败（没有拿到原因）";
-      // 这一批到底有没有动过手：有工具流水或回复 = 做过事。删文件、发消息、
-      // 提交作业都不是幂等的 —— 这种情况**不自动回队**，只在面板上给出
-      // 「把这一批放回面板」的入口；完全没发出去/没产出时才自动放回，
-      // 避免用户的指令凭空消失。
-      const turn = twinTurnRef.current;
-      const didWork =
-        !!turn && ((turn.events?.length ?? 0) > 0 || turn.reply.trim().length > 0);
-      if (!didWork) {
-        setTwinQueue((prev) => [...batch, ...prev].slice(-QUEUE_MAX));
-      }
-      setTwinBatch((b) =>
-        b && b.id === batchId
-          ? { ...b, status: "failed", error: reason, requeued: !didWork }
-          : b,
-      );
-    }
-    return ok;
-  }, [sendToTwin, twinChat.streaming]);
-
-  /** 用户确认后，把失败批次的需求放回队首（已回队的不重复放）。 */
-  const requeueTwinBatch = useCallback(() => {
-    const b = twinBatchRef.current;
-    if (!b || b.status !== "failed" || b.requeued) return;
-    setTwinQueue((prev) => [...b.tasks, ...prev].slice(-QUEUE_MAX));
-    setTwinBatch({ ...b, requeued: true });
-  }, []);
-
-  /** 「补充」：把待补充的那条取回草稿（同时从面板移除），改完重新下达。 */
-  const reviseTwinTask = useCallback((id: string): string | null => {
-    const t = twinQueueRef.current.find((x) => x.id === id);
-    if (!t) return null;
-    setTwinQueue((prev) => prev.filter((x) => x.id !== id));
-    return t.text;
-  }, []);
-
-  // ── 心跳巡查（2 分钟，零 LLM） ─────────────────────────────────────
-  // 只做机械判定：卡住 / 待补充 / 上一批失败 / 工单出事 / 队列根本没被拉走。
-  // 不在这里叫醒模型 —— 2 分钟一次 × 一天 = 720 轮，成本与信息量都不成立。
-  //
-  // 运行时快照每帧同步一次：`lastActivityAt` 每来一个 chunk 就变，若塞进
-  // 依赖会让 interval 被反复重建（等于心跳永远从头开始计时）。
-  const twinSnapshotRef = useRef({
-    streaming: twinChat.streaming,
-    lastActivityAt: twinChat.lastActivityAt,
-    pending: twinPending.length,
-  });
-  useEffect(() => {
-    twinSnapshotRef.current = {
-      streaming: twinChat.streaming,
-      lastActivityAt: twinChat.lastActivityAt,
-      pending: twinPending.length,
-    };
-  });
-
-  const runTwinPatrol = useCallback(async () => {
-    if (twinPatrolBusyRef.current) return;
-    twinPatrolBusyRef.current = true;
-    try {
-      // 工单：**查不到就记 null**，不能当成"没有工单"（那是两句完全不同的话）。
-      let tickets: PatrolTickets | null = null;
-      try {
-        const v = await api.fetchJSON<{
-          members: Array<{ status: string; started_at: string }>;
-        }>("/api/members");
-        const since = twinBatchRef.current?.startedAt ?? 0;
-        const inWindow = (v.members ?? []).filter((m) => {
-          const t = Date.parse(m.started_at);
-          return !Number.isNaN(t) && t >= since;
-        });
-        const count = (statuses: string[]) =>
-          inWindow.filter((m) => statuses.includes(m.status)).length;
-        tickets = {
-          running: count(["running"]),
-          done: count(["completed"]),
-          failed: count(["failed", "cancelled", "timeout"]),
-        };
-      } catch {
-        tickets = null;
-      }
-
-      const queue = twinQueueRef.current;
-      const oldestQueuedAt = queue
-        .filter((t) => !t.blocked)
-        .reduce<number | null>((min, t) => {
-          const ts = Date.parse(t.createdAt);
-          if (Number.isNaN(ts)) return min;
-          return min == null || ts < min ? ts : min;
-        }, null);
-      const snap = twinSnapshotRef.current;
-      const result = patrol({
-        now: Date.now(),
-        queue,
-        batch: twinBatchRef.current,
-        streaming: snap.streaming,
-        lastActivityAt: snap.streaming ? snap.lastActivityAt : null,
-        pendingCount: snap.pending,
-        tickets,
-        oldestQueuedAt,
-      });
-      twinPatrolAtRef.current = result.at;
-      // 发现要能进到她的执行回路：压成一段「上一批情况」，由下一次拉取
-      // 捎上（一次性）。没有发现就清空 —— 不把已经解决的旧问题带进新一批。
-      twinPatrolBriefRef.current = patrolBrief(result.findings);
-      setTwinPatrol(result);
-    } finally {
-      twinPatrolBusyRef.current = false;
-    }
-  }, []);
-
-  useEffect(() => {
-    const tick = () => {
-      if (Date.now() - twinPatrolAtRef.current < PATROL_INTERVAL_MS) return;
-      void runTwinPatrol();
-    };
-    // 首屏稍等，等启动请求落定；之后每 30s 检查是否到期 —— 窗口隐藏时
-    // Chromium 会节流定时器，恢复后下一次 tick 立刻补一次（不追求精确）。
-    const first = window.setTimeout(tick, 5_000);
-    const id = window.setInterval(tick, 30_000);
-    return () => {
-      window.clearTimeout(first);
-      window.clearInterval(id);
-    };
-  }, [runTwinPatrol]);
-
-  // L3（默认关）：巡查发现异常、**且她手上没活**时，单独叫她看一眼。
-  // 与「塞进下一批」（patrolBrief）分工：
-  //   有活要干 → 顺路带下去，零额外调用；
-  //   没活可干却出了异常（工单失败 / 卡住 / 待补充）→ 不叫她，这事就永远没人管。
-  useEffect(() => {
-    if (!twinAutoIntervene) return;
-    if (!twinPatrol || twinPatrol.findings.length === 0) return;
-    if (twinChat.streaming || twinPending.length > 0) return;
-    // 面板里有待拉取的活：让 4s 快循环先走，别和它抢同一条会话。
-    if (twinQueueRef.current.some((t) => !t.blocked)) return;
-    if (Date.now() - twinAutoAtRef.current < TWIN_AUTO_INTERVENE_MS) return;
-    const brief = patrolBrief(twinPatrol.findings);
-    if (!brief) return;
-    twinAutoAtRef.current = Date.now();
-    void sendToTwin(
-      `${brief}\n\n自己判断要不要处理：能就地处理的就处理（重派失败工单、把卡住的任务收尾等），不需要处理就回一句结论，不要写长文。`,
-      { permissionLevel: twinPermissionLevel(), display: "巡查：她自己看一眼" },
-    );
-  }, [twinAutoIntervene, twinPatrol, twinChat.streaming, twinPending.length, sendToTwin]);
-
-  // 定时拉取（她这一页被切走也照跑）。空闲且面板非空时开工。
-  useEffect(() => {
-    const tick = () => {
-      if (twinChat.streaming) return;
-      if (twinQueueRef.current.length === 0) return;
-      void pullTwinTasks();
-    };
-    const id = window.setInterval(tick, TWIN_PULL_MS);
-    return () => window.clearInterval(id);
-  }, [pullTwinTasks, twinChat.streaming]);
-
-  /**
-   * 轮次结束的即时接力：本批跑完立刻结算批次状态，面板里若已有新需求，
-   * 立刻拉下一批（不必等下一个 4s tick）。
-   *
-   * 「执行中拿到的新需求」只能落在**轮次边界**上：协议层没有 mid-turn
-   * 注入通道，raw 帧在流式期间发过去会被当成"重连重发"并回一个终态 Done
-   * （ws/mod.rs 的 task_in_flight 分支），会把正在看的流提前结算 —— 得不偿失。
-   * 所以新需求在面板上如实标成「等本轮结束接入」，边界一到立刻下派。
-   */
-  const twinWasStreamingRef = useRef(twinChat.streaming);
-  useEffect(() => {
-    const was = twinWasStreamingRef.current;
-    twinWasStreamingRef.current = twinChat.streaming;
-    if (!was || twinChat.streaming) return;
-
-    // 她退回的需求（缺目标、没动手）：从本批摘掉、放回面板标"待补充"。
-    // 不这么做的话，4s 一次的拉取会把它原样再拉一遍、再退一次 —— 烧钱死循环。
-    const batchNow = twinBatchRef.current;
-    const returns = returnLines(twinTurnRef.current?.reply ?? "");
-    if (batchNow && returns.length > 0) {
-      const { matched } = matchReturned(batchNow.tasks, returns);
-      if (matched.length > 0) {
-        const returnedIds = new Set(matched.map((m) => m.task.id));
-        setTwinQueue((prev) =>
-          [
-            ...matched.map((m) => ({
-              ...m.task,
-              blocked: true,
-              blockReason: m.reason,
-              returns: (m.task.returns ?? 0) + 1,
-            })),
-            ...prev,
-          ].slice(-QUEUE_MAX),
-        );
-        setTwinBatch((b) =>
-          b ? { ...b, tasks: b.tasks.filter((t) => !returnedIds.has(t.id)) } : b,
-        );
-      }
-    }
-
-    const reason = twinSendErrorRef.current;
-    setTwinBatch((b) =>
-      b && b.status === "running"
-        ? { ...b, status: reason ? "failed" : "done", error: reason ?? undefined }
-        : b,
-    );
-    if (twinQueueRef.current.length > 0) void pullTwinTasks();
-  }, [twinChat.streaming, pullTwinTasks]);
-
-  const twinApi: TwinInlineApi = useMemo(
-    () => ({
-      stop: stopTwin,
-      streaming: twinChat.streaming,
-      // `activity` 只在跑的时候有意义：流在工具中途断掉时 `onToolComplete`
-      // 不会再来，于是「正在用 X」会永远挂在屏幕上（顶栏却写着静默）。
-      // 在出口归一，消费侧不必各自防。
-      turn: twinTurn && !twinChat.streaming ? { ...twinTurn, activity: null } : twinTurn,
-      pending: twinPending,
-      resolve: resolveTwin,
-      queue: twinQueue,
-      enqueueTask: enqueueTwinTask,
-      removeTask: removeTwinTask,
-      moveTask: moveTwinTask,
-      batch: twinBatch,
-      requeueBatch: requeueTwinBatch,
-      reviseTask: reviseTwinTask,
-      patrol: twinPatrol,
-      autoIntervene: twinAutoIntervene,
-      setAutoIntervene: setTwinAutoIntervenePersist,
-    }),
-    [
-      stopTwin,
-      twinChat.streaming,
-      twinTurn,
-      twinPending,
-      resolveTwin,
-      twinQueue,
-      enqueueTwinTask,
-      removeTwinTask,
-      moveTwinTask,
-      twinBatch,
-      requeueTwinBatch,
-      reviseTwinTask,
-      twinPatrol,
-      twinAutoIntervene,
-      setTwinAutoIntervenePersist,
-    ],
-  );
-
-  /**
-   * 会话表只在启动时全量拉一次（`getSessions()` 那条 effect 的依赖是 `[]`），
-   * 于是值守页「最近会话」在她跑完一轮后仍是**启动那一刻的快照**：标题、
-   * 相对时间、消息条数全都停在旧值（2026-10-28 截图核对：面板写
-   * 「New chat · 19h · 2 条」，同一屏的工具流水明明正在跑）。
-   *
-   * 这里在她每轮结束时补一次元信息：只覆盖 title / message_count /
-   * updated_at，并追加服务端新出现的会话行；已载入的 `messages` 一律不碰
-   * （清空会触发主对话重新拉取，流式期间更是灾难）。
-   */
-  const refreshSessionMeta = useCallback(async () => {
-    try {
-      const list = await api.getSessions();
-      setSessions((prev) => mergeSessionMeta(prev, list));
-    } catch {
-      /* 保留旧快照：刷不到不该把列表清空 */
-    }
-  }, []);
-
-  const twinWasStreaming = useRef(false);
-  useEffect(() => {
-    if (twinWasStreaming.current && !twinChat.streaming) void refreshSessionMeta();
-    twinWasStreaming.current = twinChat.streaming;
-  }, [twinChat.streaming, refreshSessionMeta]);
 
   // Session message eviction — clear the *previous* session's
   // messages array (keeping message_count) when switching away. This solves
@@ -1329,11 +748,9 @@ setPage("chat");
 
   useEffect(() => {
     setKeepAwake(
-      keepAwakeEnabled &&
-        // 她的独立发送器也算「有活在跑」——否则长任务做到一半电脑就睡了。
-        (streamingSessionId !== null || twinApi.streaming || activeRuns > 0 || mobileActive),
+      keepAwakeEnabled && (streamingSessionId !== null || activeRuns > 0 || mobileActive),
     );
-  }, [keepAwakeEnabled, streamingSessionId, twinApi.streaming, activeRuns, mobileActive]);
+  }, [keepAwakeEnabled, streamingSessionId, activeRuns, mobileActive]);
 
   // 上报「人在不在电脑前」。审批的超时按「可送达时间」计费，靠的就是这个信号：
   // 人不在时倒计时暂停，回来还能批，不必让那一轮任务白跑。
@@ -1964,21 +1381,17 @@ setPage("chat");
   // 设置页关掉时后端 no-op，这里不用关心托盘开关。两个发送器各自独立，
   // 计数要把它们加起来 —— 她那一轮也是"正在执行的任务"。
   useEffect(() => {
-    setTrayTaskCount((streamingSessionId ? 1 : 0) + (twinApi.streaming ? 1 : 0)).catch(() => {});
-  }, [streamingSessionId, twinApi.streaming]);
+    setTrayTaskCount(streamingSessionId ? 1 : 0).catch(() => {});
+  }, [streamingSessionId]);
 
   // 托盘菜单「正在执行的任务」：Rust 已唤起主窗，这里负责跳到流式会话；
   // 没有在跑的就地回对话页。id 走 ref，避免每轮流式起停都重挂监听。
   const streamingIdRef = useRef<string | null>(null);
   useEffect(() => { streamingIdRef.current = streamingSessionId; }, [streamingSessionId]);
-  const twinStreamingRef = useRef(false);
-  useEffect(() => { twinStreamingRef.current = twinApi.streaming; }, [twinApi.streaming]);
   useEffect(() => {
     const un = listen("hermix:tray-open-tasks", () => {
       const id = streamingIdRef.current;
       if (id) void handleSelectSession(id);
-      // 只有她在跑：回她自己的页面（那里能看到本轮增量与待审批项）。
-      else if (twinStreamingRef.current) setPage("twin");
       else setPage("chat");
     });
     return () => { void un.then((f) => f()).catch(() => {}); };
@@ -4495,9 +3908,6 @@ return {
     startCreateWorkflowFlow,
     chatNode: chatViewNode,
     activeSessionId,
-    // 值守页「在跑」口径：主对话这条轮次流也算活动（她的轮次在她的 api 里）。
-    mainStreaming: streamingSessionId !== null,
-    twin: twinApi,
     // 运行工作流后的跳转：落到新对话空屏，不落在可能早已过期的激活会话
     // （如工作台会话）。跑起来的会话出现在侧栏，用户自行点入。
     openChat: () => {

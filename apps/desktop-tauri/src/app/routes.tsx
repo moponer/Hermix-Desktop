@@ -3,13 +3,7 @@
 // 的映射集中为一张路由表，App 主区只需调用 renderRoutes 即可。
 import { lazy, Suspense, type ReactNode } from "react";
 import type { NavPage, Session } from "../types";
-import type { TwinBatch, TwinTask } from "../lib/twinQueue";
-import type { PatrolResult } from "../lib/twinPatrol";
 import { Skeleton, SkeletonCard } from "../components/ui";
-
-// 任务面板的数据形态归 `lib/twinQueue`（纯逻辑 + 单测都在那边），
-// 这里只做对外契约的转发，免得组件同时依赖两个来源。
-export type { TwinBatch, TwinTask };
 
 // 重视图（ECharts / 大表单 / 全量列表）懒加载：首次进入才求值模块并挂载，
 // 且切走即卸载，不占常驻内存。chat 页面是首屏主路径，保持静态导入。
@@ -19,97 +13,10 @@ const AnalyticsView = lazy(() => import("../components/AnalyticsView").then((m) 
 const CustomAppsView = lazy(() => import("../components/CustomAppsView").then((m) => ({ default: m.CustomAppsView })));
 const WorkbenchView = lazy(() => import("../components/WorkbenchView").then((m) => ({ default: m.WorkbenchView })));
 const VaultPanel = lazy(() => import("../components/VaultPanel").then((m) => ({ default: m.VaultPanel })));
-const TwinView = lazy(() => import("../components/TwinView").then((m) => ({ default: m.TwinView })));
 
-/**
- * 阿黎（Twin）的会话 id。
- *
- * - 桌面：她的页面读写这一条；侧栏按 `twin:` 前缀把它排除在对话列表之外。
- * - 手机：将来经设备通道带 `target` 打到同一条上（同一份历史）。
- * - PC：这一轮的 `session_id` 用它，历史落库与两边视图同源。
- */
-export const TWIN_SESSION_ID = "twin:ali";
-
-/** 内联对话随这一轮下发的设置（都来自她那页的可见控件）。 */
-export interface TwinSendOptions {
-  /** 顶部「权限」开关：默认会为高风险操作弹审批。 */
-  permissionLevel: "default" | "full";
-  /**
-   * 对话里显示成「你说的话」的那一行。任务面板的批次下发时，线上消息是
-   * 一段带编号清单的指令，直接铺到对话流里没人读得下去 —— 展示用面板
-   * 上那几句需求原文（`；` 分隔）。
-   */
-  display?: string;
-}
-
-/** 她这一轮在干什么 —— 她那页用它就地渲染，不依赖宿主会话表。 */
-export interface TwinTurn {
-  user: string;
-  reply: string;
-  /** 当前正在跑的工具名（工具调用期间有值），给一行动态提示用。 */
-  activity: string | null;
-  error: string | null;
-  /** 这一轮的工具流水（按到达顺序，尾部保留最近 ~30 条）——值守页「刚才发生」用它实时体现进度。 */
-  events?: string[];
-}
-
-/** 等她拍板的一件事：审批（工具）或澄清（问题）。 */
-export interface TwinPendingDecision {
-  id: string;
-  kind: "approval" | "clarify";
-  tool?: string;
-  reason?: string | null;
-  question?: string;
-  choices?: string[];
-}
-
-/**
- * 「助手阿黎」页的独立发送器。
- *
- * 她有自己的 `useStreamChat` 实例（挂在 App 顶层，切页不断流），因此她的
- * 一轮执行与任何对话的一轮执行**完全并行**：两边各自一条 `stream:<sid>`
- * 通道、各自一套发送状态，互不禁用、互不串台。
- */
-export interface TwinInlineApi {
-  /** 停止当前这一轮。 */
-  stop: () => void;
-  streaming: boolean;
-  /** 本轮（内存态）—— 与落库历史分开，避免流式期间被轮询覆盖。 */
-  turn: TwinTurn | null;
-  /** 未决的审批 / 澄清，按到达顺序。 */
-  pending: TwinPendingDecision[];
-  /** 结算一件待决事项：审批给 decision，澄清把选项放进 answer。 */
-  resolve: (id: string, decision: "approved" | "denied", answer?: string) => void;
-
-  // ── 任务面板（2026-11-06 重构：输入口是「下达需求」，不是聊天） ──
-  /** 待拉取的需求，数组顺序 = 优先级（第一项最先开工）。 */
-  queue: TwinTask[];
-  /** 下达一条需求：只入队，不立刻开跑（她按自己的节奏拉取）。 */
-  enqueueTask: (text: string) => void;
-  /** 删除一条还没被拉取的需求。 */
-  removeTask: (id: string) => void;
-  /** 调整优先级：`-1` 上移、`1` 下移。 */
-  moveTask: (id: string, dir: -1 | 1) => void;
-  /** 这一轮整合进来的需求批次（`null` = 还没跑过）；拉取失败时 `status=failed`。 */
-  batch: TwinBatch | null;
-  /**
-   * 把失败批次里还没回面板的需求放回队首。
-   *
-   * 失败时**不无条件自动回队**：这一轮若已经动过手（有工具流水或回复），
-   * 重跑可能重复执行同一条命令 —— 交给用户点一下再决定。
-   */
-  requeueBatch: () => void;
-  /** 「补充」：取回某条待补充需求的原文并从面板移除（改完重新下达）。 */
-  reviseTask: (id: string) => string | null;
-  /** 最近一次心跳巡查的结果（2 分钟一次，零 LLM）；`null` = 还没巡查过。 */
-  patrol: PatrolResult | null;
-  /**
-   * 实验开关（默认关）：巡查发现异常时自动叫她看一眼。
-   * 打开后她可能**自行处理**（重派工单、收尾卡住的任务），成本与后果由用户承担。
-   */
-  autoIntervene: boolean;
-  setAutoIntervene: (on: boolean) => void;
-}
+// 「助手阿黎」（Twin）功能已暂停（2026-11-16，产品未成熟）：TwinView 页面、
+// twin/lib 纯逻辑、App 侧独立发送器与任务面板轮询整体移除。`twin:ali` 会话
+// 前缀约定保留在后端（mobile.rs），恢复功能时从 git 历史整批找回。
 
 /** 渲染各非 chat 页面所需的 App 级依赖。chat 页面 props 复杂，
  *  由 App 预先渲染为 `chatNode` 元素传入，保持逻辑零改写。 */
@@ -117,12 +24,10 @@ export interface RouteContext {
   sessions: Session[];
   /** 切会话并跳回对话页 —— 侧栏、搜索结果用这个。 */
   handleSelectSession: (id: string) => void;
-  /** 删除会话（乐观更新宿主会话表）—— 阿黎值守页「最近会话」的删除钮用。 */
+  /** 删除会话（乐观更新宿主会话表）。 */
   handleDeleteSession: (id: string) => void;
   /** 只切会话，不动当前页面 —— 工作台页面用这个。 */
   selectSessionOnly: (id: string) => void;
-  /** 「助手阿黎」页的内联对话（独立发送器，见 `TwinInlineApi`）。 */
-  twin: TwinInlineApi;
   /**
    * 把会话登记进宿主的会话表，已存在的跳过。
    *
@@ -137,8 +42,6 @@ export interface RouteContext {
   chatNode: ReactNode;
   /** 当前激活会话 id —— 工作台浮窗历史下拉高亮当前对话线。 */
   activeSessionId: string | null;
-  /** 主对话是否有轮次在跑 —— 值守页「在跑」口径要把它和她的轮次一起计入。 */
-  mainStreaming: boolean;
   /** 工作流运行后的跳转：切回对话页（新对话空屏），不落在旧激活会话上。 */
   openChat: () => void;
 }
@@ -148,22 +51,6 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
   switch (page) {
     case "chat":
       return ctx.chatNode;
-    case "twin":
-      // 阿黎吃宿主已有的会话表（避免再拉一次全量）；对话走她自己的发送器。
-      // `twin:ali` 在服务端是独立会话，这里也有独立的流 —— 她与任何对话并行，
-      // 回复就地显示，审批/澄清也在她自己页面处理。
-      return (
-        <Suspense fallback={<RouteLoading />}>
-          <TwinView
-            sessions={ctx.sessions}
-            onOpenChat={() => ctx.handleSelectSession(TWIN_SESSION_ID)}
-            onOpenSession={ctx.handleSelectSession}
-            onDeleteSession={ctx.handleDeleteSession}
-            mainStreaming={ctx.mainStreaming}
-            twin={ctx.twin}
-          />
-        </Suspense>
-      );
     case "automation":
       return <Suspense fallback={<RouteLoading />}><AutomationView openChat={ctx.openChat} onCreateWorkflow={ctx.startCreateWorkflowFlow} /></Suspense>;
     case "experts":
