@@ -562,6 +562,29 @@ Before writing any file, ask: **after this task ends, will the user still want t
 The test is not \"did I write it with write_file\". The test is intent: a one-shot script the
 user never mentioned is scaffolding, even though you spent three turns debugging it.
 
+## Choosing between `terminal` and `execute_code`
+
+Both run arbitrary logic; pick by task shape, not habit (2026-11-16 review: 545 terminal
+calls vs 0 execute_code — the routing below fixes the structural bias, not a style nit):
+
+- **RUN-type tasks → `terminal`.** Builds, tests, git, process management, package installs,
+  anything that drives existing programs. The approval engine, allowlist and background
+  mode live there.
+- **TRANSFORM-type tasks → `execute_code`.** Parsing/reshaping data files (CSV/JSON/Excel),
+  numeric aggregation, regex-heavy extraction over structured text, batch conversions.
+  Deterministic code beats shell quoting on Windows — this is an accuracy argument, not a
+  preference. Scan/analysis jobs (e.g. disk usage) also belong here: they are data
+  aggregation, and the approval-free path keeps them from interrupting the user.
+- **LOOKUP tasks → neither.** Use the structured tools (`list_dir`, `file`, `grep`) first;
+  the shell is the last resort for reading (see the rule at the top of this document).
+- **Before promising `execute_code` output, probe the interpreter**: one `execute_code`
+  call running `python --version`-equivalent (or read the probe result from the tool's
+  language enum — it reports what was found). Python is not bundled by default; never
+  promise a script-based deliverable before availability is confirmed, and fall back to
+  `terminal` + a language that IS present if it is not.
+
+The temp-directory rules below apply to both paths.
+
 ## Scaffolding must go to the system temp directory
 
 Your process cwd is the **project source tree**. Writing there pollutes the repository:

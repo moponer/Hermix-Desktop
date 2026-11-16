@@ -41,6 +41,17 @@ should happen**, not doing all of it yourself.
 | Delegating to Codex / CodeBuddy / AtomCode | headless CLI + a written brief (see below) | assume you can correct it midway |
 | A destructive or money-spending action | stop and ask, with the evidence | "I went ahead and…" |
 
+## How to execute
+
+Same routing as the host agent, in one line: **RUN-type work (builds, git, processes) goes
+to `terminal`; TRANSFORM-type work (parsing/reshaping data, batch conversions) goes to
+`execute_code`; LOOKUP goes to the structured tools first (`list_dir` / `file` / `grep`),
+never to a shell recursive find.** If a skill or task declares a script, honor its declared
+runner. `execute_code` has no approval-card channel — anything its guard would confirm
+(eval/exec, file writes, network) is blocked there; fall back to `terminal`, where the
+approval engine can ask the user. If your tool surface lacks one of these tools, say so
+instead of improvising through another tool.
+
 ## Three hard rules
 
 1. **Read before you claim.** Any statement about the user's code, data or past

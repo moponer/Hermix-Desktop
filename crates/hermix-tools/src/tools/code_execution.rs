@@ -259,11 +259,21 @@ impl ToolHandler for ExecuteCodeHandler {
                 ));
             }
             CodeExecutionDecision::RequiresConfirmation => {
-                tracing::warn!(
-                    code_len = code.len(),
-                    language = ?language,
-                    "code execution with confirmation-required patterns — proceeding"
-                );
+                // 审批对称（2026-11-16）：此前这里只打一条 warn 就照常执行——
+                // 同标 RiskLevel::Caution，terminal 弹审批卡、本工具静默放行，
+                // "confirm" 名不副实（eval/写文件/网络类 pattern 全部免检跑过）。
+                // 本工具没有审批卡通道（guard 在工具内部，不在 ApprovalManager
+                // 体系内），所以与 terminal 的对齐方式是**拒绝执行**并给出
+                // 可行动出口：受审批引擎管辖的 terminal，或改写代码避开 pattern。
+                return Err(ToolError::ExecutionFailed(
+                    "Code blocked for confirmation: it contains patterns that need user \
+                     approval (eval/exec, file writes, network access, ctypes, …) but this \
+                     tool has no approval-card channel. Alternatives: (1) run the same \
+                     logic via the `terminal` tool — it goes through the approval engine \
+                     and the user can approve or allowlist it; (2) rewrite the code to \
+                     avoid the flagged pattern if it is incidental."
+                        .into(),
+                ));
             }
             CodeExecutionDecision::Approved => {}
         }
@@ -648,12 +658,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_code_confirmed_passes() {
-        // RequiresConfirmation just logs a warning — the code still runs.
+    async fn test_execute_code_confirmed_blocked() {
+        // 审批对称（2026-11-16）：RequiresConfirmation 不再 warn 后照跑——
+        // 本工具没有审批卡通道，CONFIRM 类一律拒绝执行并给可行动出口
+        // （改走 terminal 走审批引擎，或改写避开 pattern）。
         let handler = ExecuteCodeHandler::new(Arc::new(MockCodeBackend));
         let result = handler
             .execute(json!({"code": "eval('1+1')"}))
             .await;
-        assert!(result.is_ok(), "confirmed code should still execute: {result:?}");
+        match result {
+            Err(ToolError::ExecutionFailed(msg)) => {
+                assert!(
+                    msg.contains("blocked for confirmation"),
+                    "error should explain the confirmation block: {msg}"
+                );
+                assert!(
+                    msg.contains("terminal"),
+                    "error should offer the terminal fallback: {msg}"
+                );
+            }
+            other => panic!("expected ExecutionFailed, got: {other:?}"),
+        }
     }
 }

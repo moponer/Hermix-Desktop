@@ -127,6 +127,11 @@ pub fn per_tool_budget(tool: &str) -> Duration {
         // terminal 自身默认 120s（tools/terminal.rs），外部预算给 5 倍余量：
         // 前台跑构建/安装是长任务的主要形态，超时提示已引导转后台。
         "terminal" => Duration::from_secs(600),
+        // execute_code 自身默认 30s（tools/code_execution.rs），此前外部落
+        // 默认 60s——与 storage-analyzer 等技能"扫描类走 execute_code"的
+        // 引导直接矛盾（扫描脚本 90s+，结构性地被推向 terminal）。给 6 倍
+        // 余量，低于 terminal：无 background 模式，前台同步等待不宜过长。
+        "execute_code" => Duration::from_secs(180),
         // 子 agent 编排有自己的预算（orchestrator，2026-11-10 收紧到 180s），
         // 外部护栏略放行到 190s（多 10s 供子代理自身超时消息送达）。
         // 编排形态：长任务主 agent 拆分并行派发，或 dispatch_member 后台化。
