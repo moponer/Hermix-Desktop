@@ -2666,6 +2666,89 @@ streamPhaseRef.current = null;
       }
     };
 
+    // reasoning chunk 攒批（与上方 pendingTextChunks 同一模式）：Thinking
+    // 事件是逐 token 的，此前每个 chunk 都走一次 setSessions（O(N) map +
+    // App 级重渲）——模型思考越久越卡，是「一思考就掉帧」的元凶。改为闭包
+    // 局部 buffer + rAF 合帧，同帧 N chunks → 1 次重渲。applyReasoningChunk
+    // 对合并后的长 piece 语义等价（追加 + 末尾 text step 转换是边沿行为，
+    // 与 piece 切分无关）。done/error 处与文本攒批一起强制 flush。
+    let pendingReasoningChunks = "";
+    let reasoningChunkFlushScheduled = false;
+    const flushPendingReasoningChunks = () => {
+      reasoningChunkFlushScheduled = false;
+      const batch = pendingReasoningChunks;
+      pendingReasoningChunks = "";
+      if (!batch) return;
+      const target = currentAssistantIdRef.current;
+      if (!target) return;
+      setSessions((prev) => updateSession(prev, sessionId, (s) => {
+        return {
+          ...s,
+          messages: s.messages.map((m) => {
+            if (m.id !== target) return m;
+            // 逐 chunk 拼批后的单次应用：判定与状态转移都在
+            // `streamEvents::applyReasoningChunk`（2026-10-01 前这里是
+            // 内联 40 行副本，抽出是为了能测——见其注释）。
+            const next = applyReasoningChunk(
+              m.unified_steps,
+              m.content,
+              m.reasoningContent,
+              batch,
+            );
+            return {
+              ...m,
+              content: next.content,
+              reasoningContent: next.reasoningContent,
+              unified_steps: next.steps,
+            };
+          }),
+          updated_at: new Date().toISOString(),
+        };
+      }));
+    };
+    const appendReasoningChunk = (chunk: string) => {
+      streamPhaseRef.current = "reasoning";
+      pendingReasoningChunks += chunk;
+      if (!reasoningChunkFlushScheduled) {
+        reasoningChunkFlushScheduled = true;
+        requestAnimationFrame(flushPendingReasoningChunks);
+      }
+    };
+
+    // 子代理 / 成员事件攒批：后端每步推全量 recentSteps，此前每个事件
+    // 都立即整对象替换一次 state（高频时放大为连续重渲）。事件先落
+    // pending map，rAF 合帧后一次合并写入——同帧多事件 → 1 次渲染。
+    // done/error 的 flush 不需要：最后一次事件最多晚一帧上屏，无一致性
+    // 判据读它（与文本/reasoning 的"done 前必须落盘"不同）。
+    let pendingSubAgentUpdates: Record<
+      string,
+      SubAgentEventPayload & { updatedAt: number }
+    > = {};
+    let pendingMemberUpdates: Record<
+      string,
+      MemberEventPayload & { updatedAt: number }
+    > = {};
+    let subAgentFlushScheduled = false;
+    const flushPendingAgentEvents = () => {
+      subAgentFlushScheduled = false;
+      if (Object.keys(pendingSubAgentUpdates).length) {
+        const batch = pendingSubAgentUpdates;
+        pendingSubAgentUpdates = {};
+        setSubAgents((prev) => ({ ...prev, ...batch }));
+      }
+      if (Object.keys(pendingMemberUpdates).length) {
+        const batch = pendingMemberUpdates;
+        pendingMemberUpdates = {};
+        setMemberTickets((prev) => ({ ...prev, ...batch }));
+      }
+    };
+    const queueAgentEventFlush = () => {
+      if (!subAgentFlushScheduled) {
+        subAgentFlushScheduled = true;
+        requestAnimationFrame(flushPendingAgentEvents);
+      }
+    };
+
     // finalizeToolMessage removed. Tool completion is now
     // tracked via `tool_complete` events in the assistant's
     // `execution_timeline`, not via separate `role: "tool"` messages.
@@ -3066,6 +3149,7 @@ streamPhaseRef.current = null;
             // 文本 chunk 同理：error 文本要写进同一条 assistant，
             // 未 flush 的尾批文本会在 `= null` 之后被丢掉。
             flushPendingTextChunks();
+            flushPendingReasoningChunks();
             // The error frame arrives immediately (no API key,
             // config error, etc.) — React may batch the
             // setStreamingSessionId(sessionId)+null into one render
@@ -3445,85 +3529,43 @@ return {
             // the currently-active assistant message's
             // `reasoningContent` so the folding block in
             // MessageBubble can render it (collapsed by default).
-            const target = currentAssistantIdRef.current;
-            if (!target) return;
-            streamPhaseRef.current = "reasoning";
-            setSessions((prev) => updateSession(prev, sessionId, (s) => {
-              return {
-                ...s,
-                messages: s.messages.map((m) => {
-                  if (m.id !== target) return m;
-                  // Retroactive text→reasoning conversion:
-                  // When the backend detects untagged reasoning
-                  // mid-stream (stream_collect.rs
-                  // `looks_like_untagged_reasoning`), the first few
-                  // chunks were already sent as `StreamEvent::Text`
-                  // and accumulated as `text` steps in
-                  // `unified_steps`. Now that a `StreamEvent::Thinking`
-                  // has arrived, we know those text steps were actually
-                  // reasoning. Convert the trailing text step(s) to a
-                  // reasoning step so the UI folds them inside
-                  // ProcessTimeline instead of showing as body text.
-                  // Also move the text from `content` to
-                  // `reasoningContent` so the persisted state matches.
-                  // 判定与状态转移都在 `streamEvents::applyReasoningChunk` 里
-                  // —— 见那里的注释：2026-10-01 之前这段逻辑是这里的一个
-                  // 内联 40 行副本，条件是「只要末尾有 text step 就转」，于
-                  // 是模型「先说正文 → 又继续思考」时，那段正文被当成无标签
-                  // 推理前缀吞掉（内容丢失）。抽出去是为了能测。
-                  const next = applyReasoningChunk(
-                    m.unified_steps,
-                    m.content,
-                    m.reasoningContent,
-                    piece,
-                  );
-                  return {
-                    ...m,
-                    content: next.content,
-                    reasoningContent: next.reasoningContent,
-                    unified_steps: next.steps,
-                  };
-                }),
-                updated_at: new Date().toISOString(),
-              };
-            }));
+            // 攒批入口（见上方 appendReasoningChunk 注释）：逐 token 事件
+            // 先落 buffer，rAF 合帧后一次 setSessions——
+            // 模型思考越久越卡的元凶（逐 chunk O(N) map + 全树重渲）就此消除。
+            if (piece) appendReasoningChunk(piece);
           },
           onSubAgentEvent: (info: SubAgentEventPayload) => {
             // Accumulate live sub-agent state keyed by subAgentId so the
             // "子代理" panel can show each delegated task's phase in real
-            // time (spawned → started → done / failed). `recentSteps`
-            // (rolling tool/thinking log) replaces wholesale on each
-            // event — the backend sends the full newest-last slice.
+            // time (spawned → started → done / failed). 攒批入口（见上方
+            // pendingSubAgentUpdates 注释）：后端每步推全量 recentSteps，
+            // 事件先落 pending map，rAF 合帧后一次合并写入。
             if (!info?.subAgentId) return;
-            setSubAgents((prev) => ({
-              ...prev,
-              [info.subAgentId]: {
-                subAgentId: info.subAgentId,
-                phase: info.phase,
-                task: info.task,
-                role: info.role,
-                turns: info.turns,
-                costUsd: info.costUsd,
-                error: info.error,
-                recentSteps: info.recentSteps,
-                updatedAt: Date.now(),
-              },
-            }));
+            pendingSubAgentUpdates[info.subAgentId] = {
+              subAgentId: info.subAgentId,
+              phase: info.phase,
+              task: info.task,
+              role: info.role,
+              turns: info.turns,
+              costUsd: info.costUsd,
+              error: info.error,
+              recentSteps: info.recentSteps,
+              updatedAt: Date.now(),
+            };
+            queueAgentEventFlush();
           },
           onMemberEvent: (info: MemberEventPayload) => {
             if (!info?.memberId) return;
-            setMemberTickets((prev) => ({
-              ...prev,
-              [info.memberId]: {
-                memberId: info.memberId,
-                phase: info.phase,
-                task: info.task,
-                turns: info.turns,
-                error: info.error,
-                recentSteps: info.recentSteps,
-                updatedAt: Date.now(),
-              },
-            }));
+            pendingMemberUpdates[info.memberId] = {
+              memberId: info.memberId,
+              phase: info.phase,
+              task: info.task,
+              turns: info.turns,
+              error: info.error,
+              recentSteps: info.recentSteps,
+              updatedAt: Date.now(),
+            };
+            queueAgentEventFlush();
           },
           onResourceAlert: (kind, message) => {
             // 资源闸门边沿（总管方案 P0.5）：breach 红通知、recovered 常规通知。
@@ -3714,6 +3756,7 @@ return {
             // 文本 chunk 同理：done 的 fallback 判据读 target.content，
             // 未 flush 的尾批文本会让判据读到旧值。
             flushPendingTextChunks();
+            flushPendingReasoningChunks();
             setPrefetchIntent(null);
             setStreamPhase(null);
             // `task_in_flight` settle: the backend saw this retry land on a

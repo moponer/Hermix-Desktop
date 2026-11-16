@@ -407,11 +407,20 @@ export const getSessions = async (workbenchId?: string): Promise<Session[]> => {
 };
 
 export const createSession = async (title: string, project?: string): Promise<Session> => {
-  const res = await fetchJSON<SessionSummary>("/v1/sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, project }),
-  });
+  // 30s 死线（默认 10s）：这是「新会话发首条消息」的必经同步调用，发送
+  // 前用户常已选好专家/编码模式（chips 草稿态）。后端正忙于长轮次或全盘
+  // 扫描时，该请求会排队超过 10s 被前端掐断——用户看到的就是
+  // 「request timed out after 10000ms」+ 超时卡片（2026-11-16 实报）。
+  // 桥层自身 120s 预算兜底，这里只放宽前端死线。
+  const res = await fetchJSON<SessionSummary>(
+    "/v1/sessions",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, project }),
+    },
+    { timeoutMs: 30_000 },
+  );
   return toSession(res);
 };
 

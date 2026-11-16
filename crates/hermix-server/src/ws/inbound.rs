@@ -330,15 +330,29 @@ pub(super) async fn handle_inbound_frame(
                 return StreamSendOutcome::Completed;
             }
             WsClientMessage::Stop { .. } => {
-                // Stop outside a streaming turn: there is no in-flight
-                // agent task to interrupt. Idempotent no-op — the
-                // frontend sends Stop after its stop click regardless of
-                // whether the turn already finished (the terminal Done
-                // may have raced the click). Keep the session alive.
-                tracing::debug!(
-                    session = %session_id,
-                    "ws_stream: Stop outside streaming turn — no in-flight task, no-op"
-                );
+                // 这条连接当前没有在转发的流式轮次——但 run 可能从别的路
+                // 径在跑：后台 spawn 的 twin/队列续跑、断线重连后旧任务
+                // 仍在执行。这里 no-op 的话，用户点停止（日志确认服务端
+                // 收到了 `{"type":"stop"}`）完全无效，UI 卡在"正在思考"
+                // 只能等轮次自己结束或重启应用（2026-11-15 实测事故）。
+                //
+                // 兜底：按会话键走 `interrupt_session`——turn_registry 的
+                // `InterruptController::interrupt()` 对该会话所有在跑轮次
+                // 生效，(a) 竞速 in-flight LLM 调用（llm_retry O1.2 select），
+                // (b) 解锁审批等待，(c) 触发每个 `check_interrupt()` 轮询。
+                // 没有在跑轮次时返回 false，等于原 no-op，幂等。
+                let interrupted = state.agent_service().interrupt_session(session_id);
+                if interrupted {
+                    tracing::info!(
+                        session = %session_id,
+                        "ws_stream: Stop outside streaming turn — interrupted registered run via interrupt_session"
+                    );
+                } else {
+                    tracing::debug!(
+                        session = %session_id,
+                        "ws_stream: Stop outside streaming turn — no in-flight task, no-op"
+                    );
+                }
                 return StreamSendOutcome::Completed;
             }
         }

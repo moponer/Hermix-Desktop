@@ -78,18 +78,24 @@ export function TitleBar({ title }: { title?: string }) {
   }, []);
 
   return (
-    <div className="titlebar drag">
+    // 拖拽走 Tauri 标准 `data-tauri-drag-region`（core 注入的 mousedown/dblclick
+    // 处理按 e.target 精确判定，按钮无属性即天然豁免）。不再用 `.drag`（CSS
+    // `-webkit-app-region`）：WebView2 对它的 hit-test 会把整条标题栏映射成
+    // 系统非客户区且 no-drag 子区域不被豁免——单击窗口按钮被拖拽语义吞掉
+    // （click 永不派发），双击却命中系统标题栏的原生最大化，即「双击能最大化、
+    // 按钮全失效」的真实根因。
+    <div className="titlebar" data-tauri-drag-region>
       {/* ① 左栏 —— 与侧栏同宽。墨与纸 v4：品牌区改纯文字（白粗名，
           无图标底板；版本号由侧栏头部承担，不重复）。 */}
-      <div className="titlebar-zone titlebar-zone--left titlebar-brand">
-        <span className="titlebar-title">Hermix</span>
+      <div className="titlebar-zone titlebar-zone--left titlebar-brand" data-tauri-drag-region>
+        <span className="titlebar-title" data-tauri-drag-region>Hermix</span>
       </div>
 
       {/* ② 中栏 —— 与主列同宽。会话标题是这一列的主语，标题栏是它的唯一出口：
           ChatView 的头部不再重复渲染标题（那处只剩左右动作按钮）。
           后端断开时中栏改为状态 + 重试入口：这是全窗口**唯一常驻**的位置，
           会话标题在这时本来也没意义（点任何东西都会失败）。 */}
-      <div className="titlebar-zone titlebar-zone--center">
+      <div className="titlebar-zone titlebar-zone--center" data-tauri-drag-region>
         {offline ? (
           <button
             type="button"
@@ -116,7 +122,7 @@ export function TitleBar({ title }: { title?: string }) {
           title && (
             <>
               <MessageSquare className="icon-sm titlebar-doc-icon" aria-hidden="true" />
-              <span className="titlebar-doc" title={title}>
+              <span className="titlebar-doc" data-tauri-drag-region title={title}>
                 {title}
               </span>
             </>
@@ -130,7 +136,7 @@ export function TitleBar({ title }: { title?: string }) {
           Tauri's own marker and wins regardless of CSS specificity or
           import order — belt and braces, since a swallowed click here
           would leave the window undraggable-but-unclosable. */}
-      <div className="titlebar-zone titlebar-zone--right">
+      <div className="titlebar-zone titlebar-zone--right" data-tauri-drag-region>
         {/* 连接状态点常驻：此前它只存在于侧栏底部，侧栏一折叠/一收起就
             完全看不见，用户只能靠"点东西报错"发现后端没了。 */}
         <TitleBarConnectionIndicator />

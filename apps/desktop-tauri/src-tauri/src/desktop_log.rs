@@ -19,8 +19,12 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// 追加锁：多线程看门狗 / 命令处理器并发写同一文件。
-static WRITE_LOCK: Mutex<()> = Mutex::new(());
+/// 追加锁 + 常驻句柄：多线程看门狗 / 命令处理器并发写同一文件。
+/// 此前每行日志一次 open + metadata + close（三次 syscall，全局锁内），
+/// sidecar 高频输出（storage_analyzer 扫描等）时主进程反复持锁做磁盘
+/// 操作。改为句柄常驻（append 模式每次 write 原子追加到末尾），仅在
+/// 首次 / 滚动 / 写失败时重开。
+static WRITE_LOCK: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
 /// 日志文件路径：`<hermix_home>/logs/desktop.log`。
 ///
@@ -92,21 +96,37 @@ pub fn log(msg: &str) {
 
 fn append_file(msg: &str) {
     let Some(path) = log_path() else { return };
-    let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut held = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    const ROLL_LIMIT: u64 = 5 * 1024 * 1024;
     let result = (|| -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        // 简单大小滚动：超过 5MB 重开（截断）。诊断日志不需要更精细的轮转，
+        // 句柄常驻：首次 / 已滚动超限 / 写失败后 → 重开。
+        // 简单大小滚动：超过 5MB 截断重开。诊断日志不需要更精细的轮转，
         // 但不能无限长 —— 看门狗每 5s 一条失败日志，一年就是 30MB+。
-        if path.metadata().map(|m| m.len() > 5 * 1024 * 1024).unwrap_or(false) {
-            std::fs::write(&path, b"")?;
+        let size = held
+            .as_ref()
+            .and_then(|f| f.metadata().ok())
+            .map(|m| m.len());
+        if size.is_none() || size.is_some_and(|len| len > ROLL_LIMIT) {
+            if size.is_some_and(|len| len > ROLL_LIMIT) {
+                std::fs::write(&path, b"")?;
+            }
+            *held = Some(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)?,
+            );
         }
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        let f = held.as_mut().expect("handle reopened just above");
         writeln!(f, "{} {}", timestamp(), msg)
     })();
     if let Err(e) = result {
-        // 写不进去也别再打扰 stderr 主线（一次即可，失败通常是磁盘问题）。
+        // 写失败（句柄失效等）置空句柄，下次调用重开再试；别再打扰
+        // stderr 主线（失败通常是磁盘问题）。
+        *held = None;
         eprintln!("[Hermix:desktop_log] append failed: {e}");
     }
 }

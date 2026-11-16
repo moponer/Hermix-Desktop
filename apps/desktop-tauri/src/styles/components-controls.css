@@ -248,7 +248,12 @@
 }
 .composer-actions {
   margin-left: auto;
-  flex: 0 1 auto;
+  /* flex: none（原 0 1 auto）：动作组（附件/语音/增强/发送）是这一行的
+     底线能力，空间不足时被 shrink 压没 = 图标消失（2026-11-16 实报：
+     选项目+专家+模式后 chips 变宽，右侧图标全挤没了）。收缩让给左侧
+     chips —— chip 自身 min-width:0 + span ellipsis，文本截断、title
+     悬停可读全名。 */
+  flex: none;
   justify-content: flex-end;
 }
 
