@@ -43,10 +43,6 @@ const STORAGE_ANALYZER_SKILL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/builtin-skills/hermix/storage-analyzer/SKILL.md"
 ));
-const PONYTAIL_SKILL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/builtin-skills/hermix/ponytail/SKILL.md"
-));
 const CUSTOM_APP_SKILL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/builtin-skills/hermix/custom-app-development/SKILL.md"
@@ -79,10 +75,6 @@ const WEB_GUI_TESTER_SKILL: &str = include_str!(concat!(
 // 助手阿黎的能力地图（12 类能力路由 + 三条硬规则 + 外部 CLI 任务书模板）。
 // 存在的理由：按关键词搜工具永远可能漏，而「她该知道你能做到什么」不能靠
 // system prompt 硬编码 —— 新工具上线后这里不用改代码。
-const TWIN_SKILL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/builtin-skills/hermix/twin/SKILL.md"
-));
 // 仓库代码开发工作流（已有仓库的分析/重构/优化六步循环）。与 directions.rs
 // 的 code.full/code.short 指引块同源：块管每轮提醒，skill 管完整方法论。
 const REPO_REFACTORING_SKILL: &str = include_str!(concat!(
@@ -128,7 +120,6 @@ const BUILTIN_AGENT_PROFILES: &[(&str, &str)] = &[
 
 const BUILTIN_SKILLS: &[(&str, &str)] = &[
     ("hermix/storage-analyzer", STORAGE_ANALYZER_SKILL),
-    ("hermix/ponytail", PONYTAIL_SKILL),
     ("hermix/custom-app-development", CUSTOM_APP_SKILL),
     ("hermix/workflow-tdd", WORKFLOW_TDD_SKILL),
     ("hermix/workflow-debugging", WORKFLOW_DEBUGGING_SKILL),
@@ -136,7 +127,6 @@ const BUILTIN_SKILLS: &[(&str, &str)] = &[
     ("hermix/docx", DOCX_SKILL),
     ("hermix/web-gui-tester", WEB_GUI_TESTER_SKILL),
     ("hermix/self-diagnosis", SELF_DIAGNOSIS_SKILL),
-    ("hermix/twin", TWIN_SKILL),
     // 仓库代码开发工作流（2026-11-09）：已有仓库的分析/重构/优化六步循环
     // （orient → baseline → locate → smallest change → verify → report）。
     // 与 directions.rs 的 code.full/code.short 指引块同源：块管每轮提醒，
