@@ -297,9 +297,13 @@ impl ToolHandler for DelegateTaskHandler {
              - The task is genuinely independent of your current focus (no shared state needed mid-task).\n\
              - You want a separate context (e.g. image analysis where you don't want the pixels in YOUR context).\n\
              - Multiple sub-agents can run CONCURRENTLY in a single round — list multiple delegate_task calls in one assistant turn and they execute in parallel.\n\n\
+             # Task discipline\n\
+             - ONE focused objective per delegation. A multi-step plan is a series of delegations, not one mega-task.\n\
+             - If a delegation will plausibly take >3 minutes, SPLIT it into smaller independent pieces or pass `background: true` and continue other work — never leave the main loop blocked on one long child.\n\
+             - FAIL FAST: if the sub-agent hits a blocker, it must return and report instead of retrying endlessly — a rejected/failed child costs far less than a wedged one.\n\n\
              # L1 capacity bounds (hard limits of this tool)\n\
              - ≤ 10 attachments per call (more overflows context).\n\
-             - ≤ ~10 parallel calls per round (LLM should not exceed this; one round fan-out of 10 = 10 concurrent sub-agents).\n\
+             - ≤ 4 sub-agents running concurrently (hard server-side cap; excess calls return \"rejected\" — wait for one to finish, then re-dispatch).\n\
              - LLM does NOT have a persistent task queue — if you start a fan-out, you must wait for results in the same round. Don't say 'process the remaining 90' and expect the next round to remember.\n\n\
              # For larger batches (10–500 items)\n\
              Split into multiple delegate_task calls across rounds yourself, OR tell the user this is L2 territory (Rust-side executor — not yet implemented). Don't fake it by sending >10 attachments in one call.",

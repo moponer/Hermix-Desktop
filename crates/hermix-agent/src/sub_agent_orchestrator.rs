@@ -374,9 +374,27 @@ fn background_tasks() -> &'static Mutex<HashMap<String, tokio::task::AbortHandle
     TASKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 子代理并发上限：同时处于运行态（spawned → 终态之间）的子代理数。
+/// 对标 Claude Code（并发 20，服务端形态）与 OpenHands（max_children=5）：
+/// 桌面单机 4 路足够；超限**直接拒绝并如实告知**，防止代理树无界生长、
+/// 上下文与预算被无感吞噬（2026-11-16 竞品差距分析 P0-1）。
+const MAX_CONCURRENT_SUB_AGENTS: usize = 4;
+
+/// 运行态计数 guard：Drop 时自动减计数——子循环 panic / 取消 / 超时退出
+/// 都保证计数回落，不会泄漏并发槽。
+struct LiveSubAgentGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for LiveSubAgentGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// In-process executor for `delegate_task` tool calls.
 pub struct SubAgentOrchestrator {
     cfg: SubAgentOrchestratorConfig,
+    /// 当前运行中的子代理计数（含同步等待与后台派发两条路径）。
+    live_sub_agents: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Sink for persisting sub-agent lifecycle as `TaskRecord`s
@@ -393,7 +411,10 @@ pub trait TaskRecordSink: Send + Sync {
 
 impl SubAgentOrchestrator {
     pub fn new(cfg: SubAgentOrchestratorConfig) -> Self {
-        Self { cfg }
+        Self {
+            cfg,
+            live_sub_agents: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
     }
 
     /// Attach a TaskRecord producer (§3.3 热路径生产者). Server-side
@@ -424,6 +445,7 @@ impl SubAgentOrchestrator {
                 chunk_emitter,
                 task_record_sink: None,
             },
+            live_sub_agents: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -734,6 +756,35 @@ impl SubAgentOrchestrator {
         sub_agent_id: String,
         announce: bool,
     ) -> String {
+        // 并发上限：先占槽再开跑。超限返回 rejected 终态（父模型会看到
+        // 明确原因，可等已有子代理结束再派）。spawn_background 与同步
+        // await 两条路径都在这里汇合，一个检查点覆盖两者。
+        let live_now = self
+            .live_sub_agents
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        let _live_guard = LiveSubAgentGuard(self.live_sub_agents.clone());
+        if live_now > MAX_CONCURRENT_SUB_AGENTS {
+            tracing::warn!(
+                live_now,
+                max = MAX_CONCURRENT_SUB_AGENTS,
+                task = %req.task,
+                "delegate_task rejected: concurrent sub-agent limit reached"
+            );
+            return json!({
+                "sub_agent_id": sub_agent_id,
+                "status": "rejected",
+                "task": req.task,
+                "error": format!(
+                    "Concurrent sub-agent limit reached ({MAX_CONCURRENT_SUB_AGENTS} already \
+                     running). Wait for one to finish (get_subagent_result), then re-dispatch \
+                     this task — or split it into smaller, independent pieces."
+                ),
+                "depth": req.child_depth,
+                "max_depth": req.max_depth,
+            })
+            .to_string();
+        }
         let lineage = self.build_lineage(&req, &sub_agent_id, SubAgentStatus::Started);
 
         // Best-effort lineage persistence — failures must never break delegation.

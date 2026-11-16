@@ -59,15 +59,24 @@ async fn drain_bounded<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) -> Vec<
     buf
 }
 
+/// Docker 沙箱镜像（P0-3）：slim 变体 ~50MB，仅含 python3。
+/// 缺失时首次执行自动拉取（幂等）；网络禁用、文件系统只暴露专用工作目录。
+const SANDBOX_IMAGE: &str = "python:3-slim";
+
 /// Code execution backend using local interpreters.
 pub struct LocalCodeExecutionBackend {
     default_timeout_secs: u64,
+    /// Docker 沙箱探测状态（P0-3）：0=未探测 1=可用 2=不可用。
+    /// 探测一次缓存：Docker 缺失的环境永久走宿主直跑（功能不中断），
+    /// 可用的环境后续零探测开销。
+    sandbox_state: std::sync::atomic::AtomicUsize,
 }
 
 impl LocalCodeExecutionBackend {
     pub fn new(default_timeout_secs: u64) -> Self {
         Self {
             default_timeout_secs,
+            sandbox_state: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -332,26 +341,82 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
             _ => "",
         };
 
-        let mut cmd = hermix_core::proc::cmd_tokio(&interpreter);
-        if lang == "typescript" {
-            // For TypeScript, write to temp file and run with ts-node.
-            // Use `temp_dir()` (cross-platform).
-            let tmp = std::env::temp_dir()
-                .join(format!("hermes_exec_{}.ts", uuid::Uuid::new_v4()));
-            tokio::fs::write(&tmp, code).await.map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to write temp file: {}", e))
-            })?;
-            // Win 上 `npx` 真名是 `npx.cmd`（npm 把 shim 写成 .cmd），
-            // `Command::new` 不自动加扩展名 → 直接报 "program not found"。
-            // `hermix_core::runtime::resolve_binary` 是项目级别的 npm
-            // shim helper（白名单 npx/npm/pnpm/yarn/bun/...），把
-            // "Win 上要不要加 .cmd" 这个判断集中在一处，避免每个调用点
-            // 都重复 cfg 双分支。
-            cmd = hermix_core::proc::cmd_tokio(hermix_core::runtime::resolve_binary("npx"));
-            cmd.arg("ts-node").arg(tmp.to_str().unwrap_or(""));
-        } else {
-            cmd.arg(flag).arg(code);
+        // Docker 沙箱探测（P0-3）：懒探测一次并缓存。Docker 缺失的环境
+        // 永久回退宿主直跑（功能不因缺 Docker 而中断）；可用环境后续零
+        // 探测开销。仅 python 内联代码进沙箱；js/ts/bash 照旧宿主执行
+        // （镜像与挂载面不同，后续分批覆盖）。
+        let mut sandbox_on = false;
+        if lang == "python" || lang == "python3" {
+            if self.sandbox_state.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+                let probe = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    hermix_core::proc::cmd_tokio("docker")
+                        .args(["version", "--format", "ok"])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .output(),
+                )
+                .await;
+                let ok = matches!(probe, Ok(Ok(out)) if out.status.success());
+                self.sandbox_state.store(
+                    if ok { 1 } else { 2 },
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                tracing::info!(target: "hermix.tools.code_execution", ok, "docker sandbox probe");
+            }
+            sandbox_on = self.sandbox_state.load(std::sync::atomic::Ordering::Relaxed) == 1;
         }
+
+        let mut cmd = if sandbox_on {
+            let work = std::env::temp_dir().join("hermix-sandbox-work");
+            let _ = std::fs::create_dir_all(&work);
+            let work_mount = format!("{}:/work", work.display());
+            // 镜像缺失时拉取一次（幂等：已存在则秒回）。
+            let inspect = hermix_core::proc::cmd_tokio("docker")
+                .args(["image", "inspect", SANDBOX_IMAGE])
+                .output()
+                .await;
+            if !inspect.map(|o| o.status.success()).unwrap_or(false) {
+                tracing::info!(target: "hermix.tools.code_execution", image = SANDBOX_IMAGE, "pulling sandbox image (first run)");
+                let _ = hermix_core::proc::cmd_tokio("docker")
+                    .args(["pull", SANDBOX_IMAGE])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+                    .await;
+            }
+            let mut c = hermix_core::proc::cmd_tokio("docker");
+            c.args(["run", "--rm", "-i", "--network", "none"])
+                .args(["-v", &work_mount])
+                .args(["-w", "/work"])
+                .arg(SANDBOX_IMAGE)
+                .arg("python")
+                .arg(flag)
+                .arg(code);
+            c
+        } else {
+            let mut cmd = hermix_core::proc::cmd_tokio(&interpreter);
+            if lang == "typescript" {
+                // For TypeScript, write to temp file and run with ts-node.
+                // Use `temp_dir()` (cross-platform).
+                let tmp = std::env::temp_dir()
+                    .join(format!("hermes_exec_{}.ts", uuid::Uuid::new_v4()));
+                tokio::fs::write(&tmp, code).await.map_err(|e| {
+                    ToolError::ExecutionFailed(format!("Failed to write temp file: {}", e))
+                })?;
+                // Win 上 `npx` 真名是 `npx.cmd`（npm 把 shim 写成 .cmd），
+                // `Command::new` 不自动加扩展名 → 直接报 "program not found"。
+                // `hermix_core::runtime::resolve_binary` 是项目级别的 npm
+                // shim helper（白名单 npx/npm/pnpm/yarn/bun/...），把
+                // "Win 上要不要加 .cmd" 这个判断集中在一处，避免每个调用点
+                // 都重复 cfg 双分支。
+                cmd = hermix_core::proc::cmd_tokio(hermix_core::runtime::resolve_binary("npx"));
+                cmd.arg("ts-node").arg(tmp.to_str().unwrap_or(""));
+            } else {
+                cmd.arg(flag).arg(code);
+            }
+            cmd
+        };
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         // 超时时 future 被 drop，必须连带杀掉解释器（kill_on_drop）——
@@ -360,8 +425,12 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
 
         // JSON output reports the resolved interpreter path so the LLM
         // can correlate tool errors against "I called python on PATH and
-        // got X".
-        let interpreter_label = interpreter.display().to_string();
+        // got X". 沙箱模式下报告镜像（错误对照的对象是容器，不是宿主 PATH）。
+        let interpreter_label = if sandbox_on {
+            format!("docker:{SANDBOX_IMAGE}")
+        } else {
+            interpreter.display().to_string()
+        };
 
         //( / ) Plant a canary file in the
         // temp directory before execution. After execution, we verify
