@@ -345,7 +345,14 @@ impl ToolHandler for DelegateTaskHandler {
             "max_iterations".into(),
             json!({
                 "type": "integer",
-                "description": "Override the child's max_turns budget. Default is derived from parent remaining turns (clamped to [2, 12]). Set explicitly when you know the task needs more turns (e.g. multi-image analysis)."
+                "description": "Override the child's max_turns budget. Default is derived from the parent's remaining turns (clamped to [2, 40]). Set explicitly when you know the task needs more turns (e.g. edit-and-verify across several files)."
+            }),
+        );
+        props.insert(
+            "timeout_secs".into(),
+            json!({
+                "type": "integer",
+                "description": "Wall-clock cap for this delegation, in seconds. Default 600. Raise it for tasks the child must finish end-to-end (read → edit → run the project's checks); lower it for a quick lookup you would rather fail fast on. A child killed by this deadline returns status=timeout and NO partial result, so size it to the work."
             }),
         );
         props.insert(

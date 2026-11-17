@@ -191,9 +191,13 @@ impl AgentLoop {
             }
             if self.config.is_sub_agent {
                 // 子 agent：把像素转成真正的多模态内容块（下方统一注入）。
-                // 文本结果保持原样不剥——同一份 JSON 还要供 UI 的
-                // ScreenshotPreview 渲染，剥了预览就瞎；子 agent 上下文
-                // 是隔离边界，任务结束即销毁，双份成本有界。
+                // 文本结果里的 base64 已经由 `push_tool_result` 统一剥成占位符
+                // ——过去这里靠"子 agent 是隔离边界、双份成本有界"留了原文，
+                // 但那是同一张图在同一个上下文里存两遍：一次在 tool result
+                // 的 JSON 文本里（模型读不了），一次在 content_parts 里（模型
+                // 真正看的）。隔离边界决定的是"这张图会不会泄漏到父上下文"，
+                // 不是"同一个上下文里要不要付两次钱"。UI 预览走 attachment，
+                // 不依赖这段文本。
                 let payload = crate::tool_result_processor::extract_image_payload(&result.content);
                 if let Some(payload) = payload {
                     child_images.push(payload);
@@ -790,7 +794,7 @@ impl AgentLoop {
             } => {
                 tracing::info!(
                     reason = ?reason,
-                    consecutive = consecutive_count,
+                    count = consecutive_count,
                     "convergence detected (hard stop) — concluding run"
                 );
                 // 硬停必须自己解释（2026-11-05）：以前这里直接 finalize，
@@ -845,7 +849,27 @@ impl AgentLoop {
                 );
                 return ToolTurnOutcome::Converge(Ok(result));
             }
-            _ => {}
+            crate::convergence_detector::ConvergenceSignal::Warn {
+                reason,
+                consecutive_count,
+                message,
+            } => {
+                // 建议性信号过去在这里被 `_ => {}` 静默吞掉（自初始快照起
+                // 就没人接）：检测器算出诊断、日志里什么都没有、模型也不知道，
+                // 于是「10 轮没说话」的提醒等于不存在，一路走到 18 轮的硬停
+                // 才以「任务被砍」的形式暴露。现在两条都送达：
+                //   - 给模型：注入 system 消息，让它换路径或先汇报；
+                //   - 给用户：emit_status 一行，说明为什么界面上多了一段话。
+                tracing::info!(
+                    reason = ?reason,
+                    count = consecutive_count,
+                    "convergence advisory — injecting diagnosis, run continues"
+                );
+                let note = convergence_advisory(&reason, consecutive_count);
+                self.emit_status("lifecycle", &note);
+                ctx.add_message(hermix_core::Message::system(message));
+            }
+            crate::convergence_detector::ConvergenceSignal::Continue => {}
         }
 
         // --- TurnReport ---
@@ -926,6 +950,8 @@ impl AgentLoop {
 /// 硬停以前完全静默：`finalize_agent_result` 只带已有消息，最后一条
 /// assistant 正文往往是空的，界面就停在「正在回复…」，用户唯一的知情
 /// 途径是手动发一句「继续」去问。这条消息把答案直接放进对话里。
+///
+/// 目前只有 `ErrorLoop` 会走到这里（其余信号改为注入诊断、不再停 run）。
 fn convergence_wrap_up(
     reason: &crate::convergence_detector::ConvergenceReason,
     count: u32,
@@ -933,17 +959,41 @@ fn convergence_wrap_up(
     use crate::convergence_detector::ConvergenceReason;
     let head = match reason {
         ConvergenceReason::NoProgressWithTools => format!(
-            "我停在这里了：连续 {count} 轮只在调用工具、没有向你汇报，触发了「无进展」保护。"
+            "我停在这里了：连续 {count} 轮只在调用工具、没有向你汇报。"
         ),
         ConvergenceReason::ErrorLoop => format!(
             "我停在这里了：连续 {count} 轮工具调用全部失败，触发了「死循环」保护。"
         ),
         ConvergenceReason::SimilarContent => format!(
-            "我停在这里了：连续 {count} 轮输出高度重复，触发了「重复内容」保护。"
+            "我停在这里了：连续 {count} 轮输出高度重复。"
         ),
     };
     format!(
         "{head}\n要接着做，回一句「继续」就行（或直接说下一步方向）；\
          上面工具卡里是已经完成的部分。"
     )
+}
+
+/// 收敛**建议**时写给用户看的一行状态。
+///
+/// 与 `convergence_wrap_up` 的区别是 run 没有停：这里只是告诉用户「模型
+/// 被提醒了一次」，模型那边同时收到了 system 诊断，下一轮它会先汇报或换
+/// 路径。以前这些建议信号没有消费者，用户看到的只有「界面莫名安静很久，
+/// 然后任务被砍」。
+fn convergence_advisory(
+    reason: &crate::convergence_detector::ConvergenceReason,
+    count: u32,
+) -> String {
+    use crate::convergence_detector::ConvergenceReason;
+    match reason {
+        ConvergenceReason::NoProgressWithTools => format!(
+            "已经连续 {count} 轮没有汇报了，提醒它先说清进展再继续（任务没有被中断）。"
+        ),
+        ConvergenceReason::ErrorLoop => format!(
+            "连续 {count} 轮工具调用失败，已提示它换工具或换参数。"
+        ),
+        ConvergenceReason::SimilarContent => format!(
+            "最近 {count} 轮回复内容高度重复，已提示它要么收尾要么换做法。"
+        ),
+    }
 }

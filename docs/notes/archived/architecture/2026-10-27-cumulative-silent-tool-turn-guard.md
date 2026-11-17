@@ -1,6 +1,10 @@
 # Decision Note: 累计「有工具无正文」守卫——补上交替空转的缺口
 
-Status: implemented — `ConvergenceDetector` 新增累计沉默工具轮计数，警告 10 / 硬停 18
+Archived: 2026-11-17 — 本篇描述的 18 轮累计硬停已被
+[收敛检测不再终止 run](../bug-fix/2026-11-17-convergence-advisory-only.md) 取代：
+累计计数（`silent_tool_turns_total`，默认阈值 10）仍在，但命中后只注入诊断，不再 `Converge`。
+
+Status: implemented — `ConvergenceDetector` 新增累计沉默工具轮计数（命中后注入诊断）
 
 ## Decision
 

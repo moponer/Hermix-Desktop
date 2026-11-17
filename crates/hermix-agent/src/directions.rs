@@ -125,6 +125,9 @@ Existing-code work follows one loop: **orient → baseline → locate → smalle
 ## 3. Locate precisely, read enough
 - `search_files` for symbol/usage discovery, then `read_file` the exact region: the function you change plus its direct callers and tests.
 - Repo too large to hold? Delegate bounded recon via `delegate_task` with a written brief (paths, acceptance command); keep the conclusion, not the dump.
+- **Reading is a cost, not progress.** Every read costs a full prompt on every later turn; the user pays it and sees nothing. The read/write ratio is the honest measure of whether you are working or stalling: if you have opened more than ~6 files without editing one, you are almost certainly over-orienting.
+- **Convergence rule**: once you know *which* function to change and *what* the change is, stop reading and make the edit. You do not need to have read every caller first — you need the target function, its signature, and its tests. The rest can be discovered by the compiler and the test run, which are cheaper and more truthful than more reading.
+- If a search returns nothing three times in a row, the approach is wrong — change the search (different root, different pattern, list the directory) instead of refining the same query.
 
 ## 4. Smallest change that does the thing
 - One concern per change. Match surrounding style; no drive-by reformatting; no refactors beyond the ask. Prefer editing over rewriting; keep public APIs stable unless asked.
@@ -181,6 +184,13 @@ A task is complete only when you have produced a **verified outcome**:
 - If a tool fails, switch tools or arguments — don't repeat what already failed.
 - Non-final turns: advance with tool calls — preceded by one visible sentence naming \
   the step, not a promise of it.
+- **Report cadence**: never let more than ~5 tool-call turns pass without a \
+  paragraph the user can read. A long silent stretch is indistinguishable from a \
+  hang, and it is the failure mode users complain about most: they see tool cards \
+  scrolling, no text, no idea what is being attempted or whether it is working. \
+  Every 4-5 turns, state what you have established, what is still unknown, and \
+  what you are trying next. This is not a status formality — it is the only \
+  signal the user has that the work is converging.
 
 ## Ending a turn
 A turn ends when the **objective** is met — not when one stage of it is done.
@@ -1569,7 +1579,7 @@ mod tests {
             "首轮 tag 序列变化——若有意，同步更新 EXPECTED_FIRST_TURN_HASH"
         );
         assert_eq!(
-            hash, 11835728321372932212,
+            hash, 11188126300777542920,
             "首轮 guidance 内容变化——若有意，更新 EXPECTED_FIRST_TURN_HASH"
         );
     }
@@ -1578,7 +1588,7 @@ mod tests {
     fn golden_collect_directions_subsequent_turn() {
         let (_tags, hash) = golden_hash("继续");
         assert_eq!(
-            hash, 15690219921935298434,
+            hash, 18325817220379437248,
             "后续轮 guidance 内容变化——若有意，更新 EXPECTED_SUBSEQUENT_HASH"
         );
     }

@@ -42,13 +42,30 @@ use crate::interrupt::InterruptController;
 type BoxSendFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 /// Default wall-clock cap for a single child agent turn-chain.
-/// 2026-11-10 二次收紧 600→180（用户拍板 3 分钟上限）：子代理只做短任务，
-/// 主 agent 拆分并行派发、或长任务走 dispatch_member 后台化。
-pub const DEFAULT_SUB_AGENT_TIMEOUT_SECS: u64 = 180;
+///
+/// History: 600 s → 180 s (2026-11-10, "sub-agents only do short tasks").
+/// That tightening was wrong in practice: a child doing real work — read a
+/// file, edit it, run the project's checks — needs 5–8 turns, and each turn
+/// on this machine costs 30–130 s of provider latency (measured in
+/// `agent.log`). 12 turns × ~15 s of headroom does not fit in 180 s, so the
+/// child was killed mid-work and the parent saw `status=timeout` with no
+/// partial result. Both failed delegations on 2026-11-17 were exactly this.
+///
+/// The timeout must budget for the *turn* ceiling, not the other way round:
+/// see `SUB_AGENT_MAX_TURNS_CAP` × observed per-turn latency.
+pub const DEFAULT_SUB_AGENT_TIMEOUT_SECS: u64 = 600;
 /// Floor on child max_turns regardless of parent budget.
 pub const SUB_AGENT_MIN_TURNS: u32 = 2;
 /// Ceiling on child max_turns to keep sub-tasks bounded.
-pub const SUB_AGENT_MAX_TURNS_CAP: u32 = 12;
+///
+/// Raised 12 → 40. The old ceiling contradicted
+/// `DEFAULT_DELEGATION_MAX_ITERATIONS` (50): the documented default was 50
+/// iterations, then `.clamp(2, 12)` silently cut every request down to 12.
+/// A child that must read a file, change it, and verify the change needs
+/// roughly 6–10 turns; anything involving more than one file exceeds 12.
+/// The cap exists to stop runaway children, not to make ordinary work
+/// impossible — 40 still bounds a child well below the parent's own budget.
+pub const SUB_AGENT_MAX_TURNS_CAP: u32 = 40;
 /// Maximum character length of the sub-agent's final text result
 /// that is returned to the parent context. Without this cap, a
 /// sub-agent that produces a very long analysis (e.g. 50,000 chars)
@@ -369,6 +386,14 @@ pub struct SubAgentRequest {
     /// When set, overrides the derived max_turns from parent budget.
     /// Default: `DEFAULT_DELEGATION_MAX_ITERATIONS` (50).
     pub max_iterations: Option<u32>,
+    /// Per-delegation wall-clock cap in seconds. When set, overrides the
+    /// orchestrator default (`DEFAULT_SUB_AGENT_TIMEOUT_SECS`).
+    ///
+    /// Exists because the right value depends on what the child is being
+    /// asked to do: a 2-turn lookup and a 10-turn edit-and-verify task do
+    /// not deserve the same budget, and the parent — which knows the task —
+    /// is better placed to decide than a crate-level constant.
+    pub timeout_secs: Option<u64>,
     /// Role of the sub-agent. Determines the toolset and system prompt.
     /// Defaults to `General` (full tool access).
     pub role: SubAgentRole,
@@ -1139,6 +1164,13 @@ impl SubAgentOrchestrator {
         // 「停止按钮没反应」。这里让父 interrupt 与 timeout 竞速。
         let parent_abort = join.as_ref().get_ref().abort_handle();
         let parent_interrupt = self.cfg.parent_interrupt.clone();
+        // Per-delegation budget wins over the orchestrator default: the parent
+        // knows whether this child is a 2-turn lookup or a 10-turn
+        // edit-and-verify task, and one constant cannot serve both.
+        let deadline = req
+            .timeout_secs
+            .map(Duration::from_secs)
+            .unwrap_or(self.cfg.timeout);
         let result = tokio::select! {
             biased;
             _ = parent_interrupt.wait_for_interrupt() => {
@@ -1151,7 +1183,7 @@ impl SubAgentOrchestrator {
                 );
                 Err(SubAgentError::Cancelled)
             }
-            timed = timeout(self.cfg.timeout, join.as_mut()) => match timed {
+            timed = timeout(deadline, join.as_mut()) => match timed {
                 Ok(Ok(Ok(result))) if result.interrupted => Err(SubAgentError::Cancelled),
                 Ok(Ok(Ok(result))) => Ok(result),
                 Ok(Ok(Err(AgentError::Interrupted { .. }))) => Err(SubAgentError::Cancelled),

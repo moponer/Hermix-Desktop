@@ -732,7 +732,7 @@ pub fn validate(config: &AgentConfig) -> Result<(), BudgetConfigError> {
 
 fn default_max_turns() -> u32 {
     // 0 = unlimited. The agent loop relies on:
-    // 1. ErrorLoop hard stop (convergence detector: 8 consecutive all-error turns)
+    // 1. ErrorLoop hard stop (convergence detector: 3 consecutive all-error turns)
     // 2. Cost Guard (max_cost_usd, if configured)
     // 3. LLM natural stop (no tool calls → finalize)
     // max_turns > 0 can be set in config.yaml as a last-resort safety net.

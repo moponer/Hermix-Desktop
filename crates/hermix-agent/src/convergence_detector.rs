@@ -16,19 +16,28 @@
 //!    This is the only signal that can *kill* the loop. The LLM is stuck:
 //!    every tool it tries fails, and re-prompting won't help.
 //!
-//! 2. **NoProgressWithTools / SimilarContent** — these are *advisory*.
-//!    Instead of killing the loop, they produce a **warning string** that
-//!    the caller injects as a system message. The LLM can then decide
-//!    whether to summarize and stop, or continue with a different approach.
-//!    This respects the "trust the LLM" principle: the LLM has full
-//!    context and is best positioned to decide if it's stuck.
+//! 2. **NoProgressWithTools / SimilarContent** — these are *advisory and
+//!    repeatable*. They never terminate the run; they return a **diagnosis
+//!    string** that the caller injects as a system message, and they re-fire
+//!    at every multiple of their threshold instead of only once. The LLM has
+//!    full context and is the only party that can tell a long read chain from
+//!    a spin, so the detector's job is to *tell it what looks wrong*, not to
+//!    decide for it.
 //!
-//! Why NoProgressWithTools shouldn't kill the loop:
+//! Why NoProgressWithTools must not kill the loop:
 //! - Many legitimate tasks involve 10+ consecutive tool-only turns
 //!   (e.g. "search this codebase for all uses of X" → read file →
 //!   read another file → grep → … → final summary).
 //! - Raising the threshold to 10 wasn't enough; the real fix is
 //!   to not kill the loop at all, just nudge the LLM.
+//!
+//! Historical note: 2026-10-27 a hard-stop escalation was bolted onto these
+//! advisory signals (18 cumulative silent turns → terminate). It fired on
+//! real sessions three times, and every time the run was *converging*, not
+//! stuck — the damage was latency inflation (api_ms 47 s → 163 s, prompt
+//! 34 K → 186 K tokens) plus a dead stop mid-task. The escalation is gone;
+//! `crate::progress_ledger` is the supported anti-spin mechanism and it also
+//! only injects a diagnosis.
 
 /// Signal returned by the convergence detector.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +53,8 @@ pub(crate) enum ConvergenceSignal {
         message: String,
     },
     /// Hard stop: the agent is definitely stuck.
-    /// Only `ErrorLoop` triggers this — all tools failed for N turns.
+    /// Only `ErrorLoop` triggers this — all tools failed for N turns, so
+    /// re-prompting cannot help. Every other signal is advisory.
     Converge {
         reason: ConvergenceReason,
         consecutive_count: u32,
@@ -66,15 +76,9 @@ pub(crate) enum ConvergenceReason {
 #[derive(Debug, Clone)]
 pub(crate) struct ConvergenceConfig {
     /// Max consecutive turns with tool calls but no visible text before
-    /// issuing a WARN (advisory).
+    /// injecting a diagnosis. Advisory only — never terminates the run.
+    /// Re-fires at every multiple of this value. 0 disables the signal.
     pub max_no_progress_turns: u32,
-    /// Max consecutive turns with tool calls but no visible text before
-    /// issuing a HARD STOP. This is the escalation threshold: after the
-    /// advisory warning at `max_no_progress_turns`, the LLM gets
-    /// `max_no_progress_hard_stop_turns - max_no_progress_turns` extra
-    /// turns to produce visible text before the loop is killed.
-    /// Set to 0 to disable escalation (keep old advisory-only behavior).
-    pub max_no_progress_hard_stop_turns: u32,
     /// Max *cumulative* turns with tool calls but no visible text in this
     /// run before issuing a WARN (advisory). Unlike `max_no_progress_turns`
     /// (which counts a *consecutive* streak), this counts the *total*
@@ -84,22 +88,15 @@ pub(crate) struct ConvergenceConfig {
     /// the consecutive counter every other turn and therefore never trips
     /// it, while still burning a full prompt every turn.
     pub max_silent_tool_turns: u32,
-    /// Hard-stop escalation for the cumulative silent-tool-turn counter.
-    /// Set to 0 to disable.
-    pub max_silent_tool_hard_stop_turns: u32,
     /// Max consecutive turns where ALL tool calls errored.
     /// This triggers a hard stop (Converge).
     pub max_error_turns: u32,
     /// Max consecutive turns where the SAME tool errored (even if
     /// other tools succeeded). This triggers an advisory WARN.
     pub max_per_tool_error_turns: u32,
-    /// Max consecutive turns with similar visible text before issuing
-    /// a WARN (advisory).
+    /// Max consecutive turns with similar visible text before injecting a
+    /// diagnosis. Advisory only — never terminates the run.
     pub max_similar_content_turns: u32,
-    /// Max consecutive turns with similar visible text before issuing
-    /// a HARD STOP. Escalation threshold after the advisory warning.
-    /// Set to 0 to disable escalation.
-    pub max_similar_content_hard_stop_turns: u32,
     /// Similarity threshold (0.0-1.0) for content comparison.
     pub similarity_threshold: f64,
 }
@@ -107,36 +104,21 @@ pub(crate) struct ConvergenceConfig {
 impl Default for ConvergenceConfig {
     fn default() -> Self {
         Self {
-            // 15 turns of tool-only (no visible text) → advisory warning.
+            // 15 turns of tool-only (no visible text) → advisory diagnosis.
             // The LLM might legitimately be doing a long chain of reads.
             max_no_progress_turns: 15,
-            // 25 turns of tool-only → HARD STOP. After the advisory
-            // warning at 15, the LLM gets 10 more turns to produce
-            // visible text. If it doesn't, the loop is killed to prevent
-            // infinite tool chaining and context bloat.
-            //(: was advisory-only; escalated to hard stop
-            // because LLM tends to "persist in current strategy" rather
-            // than self-correct, leading to context exhaustion.)
-            max_no_progress_hard_stop_turns: 25,
-            // 10 cumulative silent-tool turns → advisory warning. Chosen
+            // 10 cumulative silent-tool turns → advisory diagnosis. Chosen
             // below the consecutive threshold (15) because the cumulative
             // counter is strictly monotonic: a run that alternates
             // "silent tool call ↔ tool call + one line" reaches 10 silent
             // turns by turn ~20, well within a normal max_turns budget.
             max_silent_tool_turns: 10,
-            // 18 cumulative silent-tool turns → HARD STOP. Escalation
-            // after the advisory at 10, giving the LLM 8 more silent
-            // turns to start reporting before the loop is killed.
-            max_silent_tool_hard_stop_turns: 18,
             // 3 consecutive turns of ALL-error tool calls → hard stop.
             max_error_turns: 3,
             // 3 consecutive turns where the SAME tool errored → advisory.
             max_per_tool_error_turns: 3,
             // 5 consecutive turns of >80% similar visible text → advisory.
             max_similar_content_turns: 5,
-            // 10 consecutive turns of similar content → HARD STOP.
-            // After the advisory at 5, give 5 more turns to diverge.
-            max_similar_content_hard_stop_turns: 10,
             similarity_threshold: 0.8,
         }
     }
@@ -154,7 +136,6 @@ impl ConvergenceConfig {
         let mut cfg = Self::default();
         if matches!(pin, Some(hermix_intelligence::DomainMode::Operate)) {
             cfg.max_similar_content_turns = 8;
-            cfg.max_similar_content_hard_stop_turns = 16;
         }
         cfg
     }
@@ -171,8 +152,8 @@ pub(crate) struct ConvergenceDetector {
     /// text was produced. Never reset by a talking turn — see
     /// [`ConvergenceConfig::max_silent_tool_turns`].
     silent_tool_turns_total: u32,
-    /// Whether the cumulative silent-tool warning already fired this run.
-    silent_tool_warned: bool,
+    /// Highest multiple of `max_silent_tool_turns` already reported.
+    silent_tool_reported_at: u32,
     /// Consecutive turns where ALL tool calls errored.
     error_loop_count: u32,
     /// Per-tool consecutive error counts. Key = tool name, value =
@@ -183,11 +164,12 @@ pub(crate) struct ConvergenceDetector {
     similar_content_count: u32,
     /// Last turn's visible text (for similarity comparison).
     last_visible_text: String,
-    /// Whether a NoProgressWithTools warning has already been issued
-    /// this run. We only warn once to avoid flooding the context.
-    no_progress_warned: bool,
-    /// Whether a SimilarContent warning has already been issued this run.
-    similar_content_warned: bool,
+    /// Highest multiple of `max_no_progress_turns` already reported this
+    /// run. Report-once-per-bucket rather than report-once-per-run: a run
+    /// that stays silent for 60 turns needs telling twice, not once.
+    no_progress_reported_at: u32,
+    /// Highest multiple of `max_similar_content_turns` already reported.
+    similar_content_reported_at: u32,
     /// Set of tools for which we've already issued a per-tool error
     /// warning this run. Prevents repeated warnings for the same tool.
     per_tool_warned: std::collections::HashSet<String>,
@@ -224,92 +206,72 @@ impl ConvergenceDetector {
         failed_tool_names: &[&str],
         succeeded_tool_names: &[&str],
     ) -> ConvergenceSignal {
-        // --- No-progress detection (advisory, not hard stop) ---
-        // Tools were called but no visible text was produced.
-        // The LLM might be making progress through tool chains.
-        // Issue a one-time warning; don't kill the loop.
-        if tool_call_count > 0 && !has_visible_text {
-            self.no_progress_count += 1;
-        } else {
-            self.no_progress_count = 0;
-            self.no_progress_warned = false; // reset so a future streak can warn again
-        }
-
-        if self.no_progress_count >= self.config.max_no_progress_turns && !self.no_progress_warned {
-            self.no_progress_warned = true;
-            let count = self.no_progress_count;
-            return ConvergenceSignal::Warn {
-                reason: ConvergenceReason::NoProgressWithTools,
-                consecutive_count: count,
-                message: format!(
-                    "You have called tools for {} consecutive turns without producing any visible text for the user. \
-                     If you have gathered enough information, please summarize your findings now. \
-                     If you still need more information, continue with tool calls but consider providing \
-                     a brief progress update to the user.",
-                    count
-                ),
-            };
-        }
-
-        // --- No-progress escalation to HARD STOP ---
-        // After the advisory warning, if the LLM continues without
-        // visible text past the hard-stop threshold, kill the loop.
-        // This prevents infinite tool chaining that exhausts the
-        // context budget.
-        if self.config.max_no_progress_hard_stop_turns > 0
-            && self.no_progress_count >= self.config.max_no_progress_hard_stop_turns
-        {
-            let count = self.no_progress_count;
-            self.no_progress_count = 0; // reset after firing
-            self.no_progress_warned = false;
-            return ConvergenceSignal::Converge {
-                reason: ConvergenceReason::NoProgressWithTools,
-                consecutive_count: count,
-            };
-        }
-
-        // --- Cumulative silent-tool-turn detection (advisory + hard stop) ---
-        // The `no_progress_count` above only fires on a *consecutive*
-        // streak. A loop that alternates "silent tool call" ↔ "tool call
-        // + one line" (e.g. `terminal` → `write_file` → `terminal` → …)
-        // resets the consecutive counter every other turn and so never
-        // trips it, while still paying a full prompt every turn and never
-        // telling the user anything real. Count the *total* silent-tool
-        // turns instead; it is deliberately NOT reset by a talking turn
-        // because a one-line "wrote to file" note is not a user-facing
-        // progress report.
+        // --- Silent tool-turn accounting (cumulative) ---
+        // Counted *before* the advisory returns below so that a turn which
+        // triggers a diagnosis is still accounted for. Deliberately NOT
+        // reset by a talking turn: a one-line "wrote to file" note is not a
+        // user-facing progress report, and a loop that alternates
+        // "terminal (silent)" ↔ "write_file (one line)" would otherwise
+        // reset the consecutive counter forever.
         if tool_call_count > 0 && !has_visible_text {
             self.silent_tool_turns_total += 1;
         }
 
-        if self.silent_tool_turns_total >= self.config.max_silent_tool_turns
-            && !self.silent_tool_warned
-        {
-            self.silent_tool_warned = true;
-            let count = self.silent_tool_turns_total;
-            return ConvergenceSignal::Warn {
-                reason: ConvergenceReason::NoProgressWithTools,
-                consecutive_count: count,
-                message: format!(
-                    "You have made tool calls in {count} turns of this run without producing any \
-                     visible text for the user. If you are stuck in a repeat loop (for example \
-                     observing something and then writing the same status to a file over and over), \
-                     stop now and give the user a real summary: what was done, what was actually \
-                     verified, and what remains. Do not keep observing without reporting.",
-                ),
-            };
+        // --- No-progress detection (advisory, never terminates the run) ---
+        // Tools were called but no visible text was produced. The LLM might
+        // be making progress through a tool chain, so this hands it a
+        // diagnosis and lets it decide — it has the full conversation and is
+        // the only party that can tell a long read chain from a spin.
+        if tool_call_count > 0 && !has_visible_text {
+            self.no_progress_count += 1;
+        } else {
+            self.no_progress_count = 0;
+            self.no_progress_reported_at = 0; // a fresh streak may report again
         }
 
-        if self.config.max_silent_tool_hard_stop_turns > 0
-            && self.silent_tool_turns_total >= self.config.max_silent_tool_hard_stop_turns
-        {
-            let count = self.silent_tool_turns_total;
-            self.silent_tool_turns_total = 0; // reset after firing
-            self.silent_tool_warned = false;
-            return ConvergenceSignal::Converge {
-                reason: ConvergenceReason::NoProgressWithTools,
-                consecutive_count: count,
-            };
+        if self.config.max_no_progress_turns > 0 {
+            let bucket = self.no_progress_count / self.config.max_no_progress_turns;
+            if bucket > self.no_progress_reported_at {
+                self.no_progress_reported_at = bucket;
+                let count = self.no_progress_count;
+                return ConvergenceSignal::Warn {
+                    reason: ConvergenceReason::NoProgressWithTools,
+                    consecutive_count: count,
+                    message: format!(
+                        "[NO-PROGRESS] You have called tools for {count} consecutive turns without \
+                         writing a single line the user can read. Two possibilities: (a) you are \
+                         working through a legitimate chain and simply forgot to speak, or (b) you \
+                         are repeating yourself. Resolve it in your next turn: write one short \
+                         paragraph stating what you have actually established so far, what is still \
+                         unknown, and which specific call comes next. If you already have enough to \
+                         answer, answer now. Do not open another tool call without that paragraph.",
+                    ),
+                };
+            }
+        }
+
+        // --- Cumulative silent-tool-turn detection (advisory only) ---
+        // The `no_progress_count` above only fires on a *consecutive* streak;
+        // this one counts the *total* silent turns in the run, so it also
+        // catches loops that keep the consecutive counter low.
+        if self.config.max_silent_tool_turns > 0 {
+            let bucket = self.silent_tool_turns_total / self.config.max_silent_tool_turns;
+            if bucket > self.silent_tool_reported_at {
+                self.silent_tool_reported_at = bucket;
+                let count = self.silent_tool_turns_total;
+                return ConvergenceSignal::Warn {
+                    reason: ConvergenceReason::NoProgressWithTools,
+                    consecutive_count: count,
+                    message: format!(
+                        "[SILENT-TOOL-RUN] {count} turns of this run made tool calls without any \
+                         visible text for the user (this counts the whole run, not a streak — a \
+                         short \"wrote to file\" note does not reset it). If you are stuck observing \
+                         and re-writing the same status, stop now: report what was actually \
+                         verified and what remains, with the concrete evidence. If the work is \
+                         genuinely incomplete, say what the next step is, then take it.",
+                    ),
+                };
+            }
         }
 
         // --- Per-tool error tracking (advisory WARN) ---
@@ -377,43 +339,34 @@ impl ConvergenceDetector {
                     self.similar_content_count += 1;
                 } else {
                     self.similar_content_count = 0;
-                    self.similar_content_warned = false;
+                    self.similar_content_reported_at = 0;
                 }
             }
             self.last_visible_text = visible_text.to_string();
         } else {
             // No visible text — reset similarity tracking
             self.similar_content_count = 0;
-            self.similar_content_warned = false;
+            self.similar_content_reported_at = 0;
         }
 
-        if self.similar_content_count >= self.config.max_similar_content_turns && !self.similar_content_warned {
-            self.similar_content_warned = true;
-            let count = self.similar_content_count;
-            return ConvergenceSignal::Warn {
-                reason: ConvergenceReason::SimilarContent,
-                consecutive_count: count,
-                message: format!(
-                    "Your recent responses have been very similar for {} consecutive turns. \
-                     If the task is complete, please provide a final summary. \
-                     If you're stuck, try a different approach.",
-                    count
-                ),
-            };
-        }
-
-        // --- Similar content escalation to HARD STOP ---
-        if self.config.max_similar_content_hard_stop_turns > 0
-            && self.similar_content_count >= self.config.max_similar_content_hard_stop_turns
-        {
-            let count = self.similar_content_count;
-            self.similar_content_count = 0; // reset after firing
-            self.similar_content_warned = false;
-            self.last_visible_text.clear();
-            return ConvergenceSignal::Converge {
-                reason: ConvergenceReason::SimilarContent,
-                consecutive_count: count,
-            };
+        if self.config.max_similar_content_turns > 0 {
+            let bucket = self.similar_content_count / self.config.max_similar_content_turns;
+            if bucket > self.similar_content_reported_at {
+                self.similar_content_reported_at = bucket;
+                let count = self.similar_content_count;
+                return ConvergenceSignal::Warn {
+                    reason: ConvergenceReason::SimilarContent,
+                    consecutive_count: count,
+                    message: format!(
+                        "[REPEATED-CONTENT] Your last {count} replies carried almost no new words \
+                         compared with the one before (high overlap, near-zero new vocabulary). \
+                         Either the task is finished and you are padding, or you are circling. Pick \
+                         one: (a) the task is done — give the final answer and stop; (b) it is not — \
+                         name the one thing you have not yet tried and do that instead of restating \
+                         what you already said.",
+                    ),
+                };
+            }
         }
 
         ConvergenceSignal::Continue
@@ -475,7 +428,6 @@ mod tests {
     fn test_for_domain_operate_relaxes_similar_content() {
         let cfg = ConvergenceConfig::for_domain(Some(hermix_intelligence::DomainMode::Operate));
         assert_eq!(cfg.max_similar_content_turns, 8);
-        assert_eq!(cfg.max_similar_content_hard_stop_turns, 16);
         // 其余阈值不变——只放宽 similar-content
         assert_eq!(cfg.max_no_progress_turns, 15);
         assert_eq!(cfg.max_error_turns, 3);
@@ -624,55 +576,53 @@ mod tests {
     fn test_default_no_progress_threshold_is_15() {
         let config = ConvergenceConfig::default();
         assert_eq!(config.max_no_progress_turns, 15);
-        assert_eq!(config.max_no_progress_hard_stop_turns, 25);
     }
 
     #[test]
-    fn test_no_progress_warns_then_escalates_to_hard_stop() {
+    fn test_no_progress_reports_again_at_each_multiple() {
+        // Reporting once per run is not enough: a run that stays silent for
+        // 60 turns gets told twice, not once. Every multiple of the
+        // threshold re-fires, and it never terminates the run.
         let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
             max_no_progress_turns: 3,
-            max_no_progress_hard_stop_turns: 5,
+            max_silent_tool_turns: 100, // isolate the consecutive path
             ..Default::default()
         });
 
-        // Turns 1-2: no warning yet
         assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
         assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
-        // Turn 3: advisory warning
+        // Turn 3: first diagnosis
         assert!(matches!(
             d.check(false, 1, 0, "", &[], &[]),
             ConvergenceSignal::Warn { reason: ConvergenceReason::NoProgressWithTools, .. }
         ));
-        // Turn 4: no repeat warning, still Continue
+        // Turns 4-5: inside the same bucket, stay quiet
         assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
-        // Turn 5: HARD STOP
-        let signal = d.check(false, 1, 0, "", &[], &[]);
-        assert_eq!(
-            signal,
-            ConvergenceSignal::Converge {
-                reason: ConvergenceReason::NoProgressWithTools,
-                consecutive_count: 5,
-            }
-        );
+        assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
+        // Turn 6: second diagnosis, still no hard stop
+        assert!(matches!(
+            d.check(false, 1, 0, "", &[], &[]),
+            ConvergenceSignal::Warn { reason: ConvergenceReason::NoProgressWithTools, .. }
+        ));
     }
 
     #[test]
-    fn test_no_progress_hard_stop_disabled_when_zero() {
+    fn test_no_progress_never_converges() {
+        // No configuration of the no-progress path may terminate a run: a
+        // long tool chain is indistinguishable from a spin at this layer,
+        // and only the model can tell the two apart.
         let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
             max_no_progress_turns: 2,
-            max_no_progress_hard_stop_turns: 0, // disabled
-            // Also disable the cumulative silent-tool hard stop so this
-            // test isolates exactly the consecutive no-progress path.
-            max_silent_tool_hard_stop_turns: 0,
+            max_silent_tool_turns: 2,
             ..Default::default()
         });
 
-        d.check(false, 1, 0, "", &[], &[]);
-        let _ = d.check(false, 1, 0, "", &[], &[]); // warns
-        // With hard stop disabled, should never Converge
-        for _ in 0..20 {
+        for _ in 0..40 {
             let signal = d.check(false, 1, 0, "", &[], &[]);
-            assert!(!matches!(signal, ConvergenceSignal::Converge { .. }));
+            assert!(
+                !matches!(signal, ConvergenceSignal::Converge { .. }),
+                "no-progress/silent paths must never converge, got {signal:?}"
+            );
         }
     }
 
@@ -686,7 +636,6 @@ mod tests {
     fn test_default_similar_content_threshold_is_5() {
         let config = ConvergenceConfig::default();
         assert_eq!(config.max_similar_content_turns, 5);
-        assert_eq!(config.max_similar_content_hard_stop_turns, 10);
     }
 
     #[test]
@@ -742,7 +691,6 @@ mod tests {
         // Punctuation-only variation must NOT evade the detector.
         let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
             max_similar_content_turns: 2,
-            max_similar_content_hard_stop_turns: 0,
             ..Default::default()
         });
         d.check(true, 0, 0, "The file has been created successfully", &[], &[]);
@@ -811,7 +759,6 @@ mod tests {
         let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
             max_no_progress_turns: 100, // keep the consecutive path quiet
             max_silent_tool_turns: 4,
-            max_silent_tool_hard_stop_turns: 0, // disable escalation for this test
             ..Default::default()
         });
 
@@ -832,28 +779,33 @@ mod tests {
     }
 
     #[test]
-    fn cumulative_silent_tool_turns_escalate_to_hard_stop() {
+    fn cumulative_silent_tool_turns_report_again_and_never_converge() {
+        // Two silent turns → diagnosis; two more → diagnosis again, even
+        // though a talking turn sits between each silent pair (so the
+        // consecutive counter never advances). It must never hard stop:
+        // this is exactly the 2026-11-17 session shape (18 silent turns
+        // across a converging run, killed mid-task at 19:21 and 19:40).
         let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
             max_no_progress_turns: 100,
             max_silent_tool_turns: 2,
-            max_silent_tool_hard_stop_turns: 4,
             ..Default::default()
         });
 
-        // Two silent turns → warning; two more → hard stop, even though a
-        // talking turn sits between each silent pair (so the consecutive
-        // counter never advances).
         assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
         assert!(matches!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Warn { .. }));
         assert_eq!(d.check(true, 1, 0, "progress", &[], &[]), ConvergenceSignal::Continue);
         assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
         let signal = d.check(false, 1, 0, "", &[], &[]);
-        assert_eq!(
-            signal,
-            ConvergenceSignal::Converge {
-                reason: ConvergenceReason::NoProgressWithTools,
-                consecutive_count: 4,
-            }
+        assert!(
+            matches!(
+                signal,
+                ConvergenceSignal::Warn {
+                    reason: ConvergenceReason::NoProgressWithTools,
+                    consecutive_count: 4,
+                    ..
+                }
+            ),
+            "cumulative silent turns must report again, got {signal:?}"
         );
     }
 

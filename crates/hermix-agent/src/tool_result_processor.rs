@@ -416,16 +416,23 @@ pub fn push_tool_result(
 
     let filtered = apply_terminal_filter(content, tool_name, tool_calls, tool_call_id);
 
-    // Strip base64 from read_image tool results. A base64 blob inside a JSON
-    // string is not an image to the model — it is 20–80 KB of text noise that
-    // it can neither see nor use. The pixels are carried by the multimodal
-    // content block `run_loop.rs` injects (sub-agent), or the model is told to
-    // delegate (main agent); either way this copy is redundant.
-    let final_content = if tool_name == Some("read_image") {
-        strip_image_base64(&filtered)
-    } else {
-        filtered
-    };
+    // Strip base64 image payloads unconditionally — NOT only when the tool is
+    // named `read_image`.
+    //
+    // A base64 blob inside a JSON string is not an image to the model: it is
+    // 20–80 KB of text it can neither see nor use, re-paid on every subsequent
+    // turn. The pixels travel as a multimodal content block instead (sub-agent)
+    // or the model is told to delegate (main agent), so this copy is always
+    // redundant.
+    //
+    // The old `tool_name == Some("read_image")` guard was a hole: `tool_name`
+    // is `None` whenever the call id is missing from `tool_calls` (replay,
+    // retried batch, restored session), so the same blob leaked straight into
+    // context in exactly the cases nobody was watching. `strip_image_base64`
+    // is keyed on the JSON shape (`_image_meta._image_data_b64` /
+    // `_image_data`), not on the tool name, so it is safe to run on every
+    // result: it returns non-image content untouched.
+    let final_content = strip_image_base64(&filtered);
 
     // H4: an oversized result is not simply truncated away — the full
     // text is written to the spill dir and the model is handed a
@@ -795,6 +802,40 @@ mod tests {
         push_tool_result_from_struct(&mut ctx, &[tc.clone()], &result);
         inject_permission_note_if_needed(&mut ctx, &[tc], &result);
         assert_eq!(count_system_notes(&ctx), 0);
+    }
+
+    /// The base64 blob must never reach the model as text, even when the
+    /// tool name cannot be resolved.
+    ///
+    /// `push_tool_result` looks the name up from `tool_calls`; on a replayed
+    /// batch, a restored session, or a retried call the id may be absent and
+    /// `tool_name` is `None`. The old code gated stripping on
+    /// `tool_name == Some("read_image")`, so exactly those cases stored a
+    /// 20–80 KB blob in context forever — paid on every later turn, invisible
+    /// to the model. Stripping is keyed on the JSON shape, not the name.
+    #[test]
+    fn image_base64_is_stripped_even_when_tool_name_is_unknown() {
+        let mut ctx = make_ctx();
+        // Deliberately pass an EMPTY tool_calls slice: no name can be resolved.
+        push_tool_result(&mut ctx, &[], "orphan_call", &read_image_result("image/png", "iVBORw0KGgo="));
+        let stored = ctx.get_messages().last().expect("tool result pushed");
+        let text = format!("{stored:?}");
+        assert!(
+            !text.contains("iVBORw0KGgo="),
+            "base64 leaked into context with an unresolvable tool name: {text}"
+        );
+    }
+
+    /// A non-image tool result that happens to carry an `_image_data` key is
+    /// still stripped — and content without the key is returned untouched.
+    #[test]
+    fn strip_image_base64_is_shape_keyed_not_name_keyed() {
+        let with_data = serde_json::json!({"path": "a.png", "_image_data": "AAAA"});
+        let out = strip_image_base64(&with_data.to_string());
+        assert!(!out.contains("AAAA"), "legacy flat blob must be stripped");
+
+        let plain = serde_json::json!({"path": "a.txt", "ok": true});
+        assert_eq!(strip_image_base64(&plain.to_string()), plain.to_string());
     }
 
     // ---- extract_image_payload: the sub-agent vision path ----

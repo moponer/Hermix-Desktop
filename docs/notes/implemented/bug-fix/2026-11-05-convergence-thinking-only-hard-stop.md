@@ -2,6 +2,11 @@
 
 Status: implemented — `assistant_produced_output` 取代「只认 content」的可见性判据，收敛硬停同时留下用户可见的收尾说明。
 
+> 后续（2026-11-17）：`NoProgressWithTools` / `SimilarContent` 已不再硬停，改为可重复
+> 注入诊断，见 [收敛检测不再终止 run](2026-11-17-convergence-advisory-only.md)。
+> 本篇的可见性判据（`assistant_produced_output`）与「硬停必须留收尾说明」仍然有效，
+> 但只对 `ErrorLoop` 生效。
+
 ## Decision
 
 工具轮的收敛判定改用 `message_helpers::assistant_produced_output`：本轮**有正文**（剥掉 `<think>` 块后非空）**或有 `reasoning_content`** 都算「有输出」。此前只认 `content`，thinking 模型（MiniMax-M3.1-Flash 等）把推演写进 `reasoning_content`、正文留空，于是每一轮都被记成「只调工具、什么都不说」，累计 18 轮触发 `NoProgressWithTools` 硬停（2026-11-05 实测：超星课程目录探查跑到第 22 轮被砍，用户界面上只是「正在回复…」定格，用户须手动发「继续」才知道发生了什么）。

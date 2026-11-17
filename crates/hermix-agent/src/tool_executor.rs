@@ -546,6 +546,12 @@ impl AgentLoop {
                         .and_then(|v| v.as_u64())
                         .map(|v| v as u32)
                         .or(profile_max_turns),
+                    // Per-delegation wall-clock cap: caller arg wins; None
+                    // falls back to DEFAULT_SUB_AGENT_TIMEOUT_SECS in the
+                    // orchestrator. Mirrors `max_iterations` above.
+                    timeout_secs: parsed
+                        .get("timeout_secs")
+                        .and_then(|v| v.as_u64()),
                     //Parse role from args; default to General.
                     role: parsed
                         .get("role")
