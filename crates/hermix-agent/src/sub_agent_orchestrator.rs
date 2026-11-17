@@ -225,7 +225,18 @@ impl SubAgentRole {
     /// whitelist: the child is told what its final answer must look like.
     pub fn return_contract(&self) -> &'static str {
         match self {
-            Self::General => "",
+            // B3-2（docs/optimization-plan.md）：General 补轻量回报契约——
+            // 四字段 Report 对齐 lynn 交接协议（status/scope/evidence/open），
+            // 让 General 子代理的报告可验收，而不是一锅散文。
+            Self::General => {
+                "\n# Return contract (General role)\n\
+                 End your final response with a short **Report** section:\n\
+                 - `status`: done / concerns / blocked\n\
+                 - `scope`: files or areas you touched\n\
+                 - `evidence`: how the result was verified (command output, tests run)\n\
+                 - `open`: anything left for the parent to decide\n\
+                 If you finished cleanly, one line each is enough — do not pad.\n"
+            }
             Self::Explore => {
                 "\n# Return contract (Explore role)\n\
                  Your job is FINDINGS, not dumps. Your final response must be:\n\
@@ -1901,9 +1912,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initial_messages_general_role_has_no_contract() {
+    async fn initial_messages_general_role_has_report_contract() {
         let msgs = initial_messages("do it", None, &[], None, SubAgentRole::General).await;
         let guidance = msgs[0].content.as_deref().unwrap_or("");
-        assert!(!guidance.contains("Return contract"));
+        // B3-2：General 也带轻量回报契约（status/scope/evidence/open）。
+        assert!(
+            guidance.contains("Return contract (General role)"),
+            "General 角色必须有 Report 契约，否则报告无法验收"
+        );
     }
 }

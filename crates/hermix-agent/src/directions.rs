@@ -1519,6 +1519,64 @@ mod tests {
         );
     }
 
+    /// B3-3（docs/optimization-plan.md）：提示词 golden 快照——固定输入下
+    /// collect_directions 的 tag 序列与内容 hash 必须稳定。改任何 guidance
+    /// 文本都会改 hash：若差异是**有意**的，更新 EXPECTED_* 并在提交信息里
+    /// 说明影响面；若是**无意**的（改 A 动了 B），先查清楚再合。
+    fn golden_hash(user_message: &str) -> (Vec<&'static str>, u64) {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let absent = std::collections::HashSet::new();
+        let ctx = RouteContext {
+            user_message,
+            tool_names: &absent,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+            tool_call_count: 0,
+            domain_mode: None,
+            workbench_id: None,
+        };
+        let dirs = collect_directions(&ctx, None);
+        let tags: Vec<&'static str> = dirs.iter().map(|d| d.tag).collect();
+        let mut h = DefaultHasher::new();
+        for d in &dirs {
+            d.tag.hash(&mut h);
+            d.body.hash(&mut h);
+        }
+        (tags, h.finish())
+    }
+
+    #[test]
+    fn golden_collect_directions_first_turn() {
+        let (tags, hash) = golden_hash("");
+        assert_eq!(
+            tags,
+            vec![
+                "think.full",
+                "tools.full",
+                "plan.full",
+                "explore.full",
+                "code.full",
+                "autonomous.block",
+                "compression_awareness.first"
+            ],
+            "首轮 tag 序列变化——若有意，同步更新 EXPECTED_FIRST_TURN_HASH"
+        );
+        assert_eq!(
+            hash, 11835728321372932212,
+            "首轮 guidance 内容变化——若有意，更新 EXPECTED_FIRST_TURN_HASH"
+        );
+    }
+
+    #[test]
+    fn golden_collect_directions_subsequent_turn() {
+        let (_tags, hash) = golden_hash("继续");
+        assert_eq!(
+            hash, 5058882969430964588,
+            "后续轮 guidance 内容变化——若有意，更新 EXPECTED_SUBSEQUENT_HASH"
+        );
+    }
+
     /// Harness² alignment: a guidance block must be replaceable from
     /// `$HERMIX_HOME/guidance/<name>.md` — the one component that used to be
     /// compiled-only. Three properties matter and are all pinned here:
