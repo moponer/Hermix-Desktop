@@ -45,15 +45,12 @@ export function ReasoningBlock({
   active = false,
   startedAt,
   endedAt,
-  label: baseLabel = "思考",
 }: {
   content: string;
   /** 本段是否正在流式生成。 */
   active?: boolean;
   startedAt?: string;
   endedAt?: string;
-  /** 折叠标题。默认"思考"；过程旁白传"过程"以与思考同一折叠语言。 */
-  label?: string;
 }) {
   // Strip both <think> and <reasoning> wrappers — providers use both tags
   // for internal monologue, and the surrounding ProcessTimeline already
@@ -76,7 +73,7 @@ export function ReasoningBlock({
   const elapsed = spanMs(startedAt, endedAt);
   // 主标签只说「这是什么」；时长挂在右侧。标签里再带一次秒数会和
   // 右侧重复，且收起的行会变得比展开的还长。
-  const label = active ? `${baseLabel}中…` : baseLabel;
+  const label = active ? "思考中…" : "思考";
 
   if (!clean) return null;
 

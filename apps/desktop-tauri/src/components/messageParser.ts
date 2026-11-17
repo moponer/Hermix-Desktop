@@ -267,6 +267,26 @@ export function lastTextStepIndex(steps: TimelineStep[]): number {
   return -1;
 }
 
+/**
+ * 过程块何时可以整体折起（2026-11-17）。
+ *
+ * "思考过程结束"的判据是**收尾正文已开写**，不是整轮流完：模型一旦从
+ * "边想边调工具"切到"写最终答复"，用户要看的就是正文，之前那串工具调用
+ * 与推理旁白应按发生顺序折成一个块留在正文之上。旧实现要等 `settled`
+ * （最后那个字也输出完）才折，运行中正文和过程糊在一起 —— 用户截图里
+ * "总结前面一堆没折叠的思考"就是这个成因。
+ *
+ * 收尾 text step 有字即视为开写；仍在内部推理、只有旁白/工具时返回 false。
+ */
+export function canFoldProcess(steps: TimelineStep[], settled: boolean): boolean {
+  if (settled) return true;
+  const lastText = lastTextStepIndex(steps);
+  return (
+    lastText >= 0 &&
+    (steps[lastText] as { content: string }).content.trim().length > 0
+  );
+}
+
 function feedTimelineEvent(acc: TimelineAcc, ev: ExecutionTimelineEvent, owner: number): void {
   const groups = acc.groups;
   const active = acc.active;

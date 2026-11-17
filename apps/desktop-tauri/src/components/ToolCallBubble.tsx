@@ -13,7 +13,7 @@ import type { ChatMessage, TimelineStep } from "../types";
 import { ApprovalRequestView } from "./ApprovalBubble";
 import { ApprovalBatchView } from "./ApprovalBatchBubble";
 import {
-  parseContent, groupTimelineSteps, lastTextStepIndex,
+  parseContent, groupTimelineSteps, lastTextStepIndex, canFoldProcess,
   type FileChangeEntry, type MemoryUpdateEntry, type MemoryRecallEntry,
 } from "./messageParser";
 import { parseMemoryResult } from "../utils/memoryToolResult";
@@ -150,7 +150,14 @@ export function ProcessTimeline({
   const fallbackKey = useId();
   const [userOverride, setUserOverride] = useDisclosure(disclosureKey ?? `pt${fallbackKey}`);
   const settled = !(isStreaming || keepOpen);
-  const expanded = settled ? (userOverride ?? false) : true;
+  // 正文 = 收尾那一段 text；其余 text 是过程旁白（见 messageParser）。
+  const lastTextIndex = lastTextStepIndex(steps);
+  // 正文一开写就把过程整体折起（判据见 canFoldProcess）。
+  // 运行中不因 chunk 抖动反复开合 —— userOverride 跨流记忆折叠态。
+  const canFold = canFoldProcess(steps, settled);
+  // 未到可折叠时点（还在想/调工具、正文未出）过程按发生顺序平铺；
+  // canFold 一到默认收起，除非用户此前手动展开过（userOverride 跨流记忆）。
+  const expanded = canFold ? (userOverride ?? false) : true;
 
   // Report fold state up to the parent so the bottom-of-chat
   // `<ReasoningTicker>` can mount when the user has folded this
@@ -232,8 +239,6 @@ export function ProcessTimeline({
     0,
   );
   const reasoningSteps = steps.filter((s) => s.kind === "reasoning");
-  // 正文 = 收尾那一段 text；其余 text 是过程旁白（见 messageParser）。
-  const lastTextIndex = lastTextStepIndex(steps);
   const resolvedApprovals = steps.filter(
     (s) => s.kind === "approval_request" && s.meta.decision !== null,
   ).length;
@@ -339,11 +344,11 @@ export function ProcessTimeline({
 
   return (
     <div className="tl-process-timeline">
-      {/* 整轮折叠头 —— **只在轮次结束后出现**。
-          运行中不渲染它：那时的界面是「每段思考各自折叠 + 工具行平铺」
-          的实时视图，加一个总折叠头会让人误以为整轮已经结束。
-          结束后多段思考 + 全部执行过程收成这一行，下面只剩正文。 */}
-      {settled && hasProcessContent && (
+      {/* 过程折叠头 —— **正文一开始出现就出现**（canFold）。
+          "思考过程结束"的判据是收尾正文已开写，不是整轮流完。那时把多段
+          思考 + 全部执行过程按原顺序收成这一行，正文留在块外直接可读。
+          正文未出时（还在想/还在调工具）平铺过程、不渲染总头。 */}
+      {canFold && hasProcessContent && (
         <button
           type="button"
           onClick={() => setUserOverride(!expanded)}
@@ -359,7 +364,7 @@ export function ProcessTimeline({
               （顺带修掉一个潜在 bug：原先展开态挂的
               `reasoning-chevron-open` 会把 ChevronDown 再转 90°，
               展开时箭头其实指向侧面。图标本身已经区分了朝向，不该再转。） */}
-          <span className="reasoning-label">工作完成</span>
+          <span className="reasoning-label">{settled ? "工作完成" : "思考过程"}</span>
           {/* 耗时挂在「工作完成」**右边**并右对齐 —— 这是「这一轮」的
               属性，跟着这一轮走，不该混进文案里变成「工作完成 · 共耗时
               19 分 57 秒」那样一个长词组。
@@ -387,42 +392,37 @@ export function ProcessTimeline({
             // 旁白不进正文：模型的旁白是「我接下来去做什么」，收尾段才是答复。
             // 判据见 `lastTextStepIndex` —— 位置，不是长度。
             const isNarration = i !== lastTextIndex;
-            if (isNarration && settled && !expanded) return null;
+            if (isNarration && canFold && !expanded) return null;
             const parsed = parseContent(step.content);
-            if (!parsed.body) return null;
-            // 2026-11-17：过程旁白接进 ReasoningBlock 的折叠壳（label="过程"），
-            // 不再裸渲染成正文色文字。此前流式时旁白恒平铺、定稿后才随整轮
-            // 折叠 —— 用户实机看到的就是「总结前面堆一长串没折叠的思考」。
-            // 复用同一折叠组件后：流式默认收起、原位保持发生顺序、点击可展开。
-            if (isNarration) {
-              return (
-                <ReasoningBlock
-                  key={`narr-${i}`}
-                  content={parsed.body}
-                  label="过程"
-                />
-              );
-            }
             return (
-              <div key={`text-${i}`} className="tl-iteration tl-text-step">
-                <div className="tl-text-inner">
-                  <MarkdownBody
-                    content={parsed.body}
-                    /* 最终答复正文：唯一带文件类型图标的位置（soft 形态）。
-                       思考块 / 工具结果 / 更新日志复用同一个 MarkdownBody，
-                       默认不画图标（见 MarkdownBodyProps.pathIcons）。 */
-                    pathIcons
-                    /* 小节交互（复制本节 / 折叠）只在正文定型后挂。
-                       流式期间每个 chunk 都会重组小节树 → 展开态反复
-                       重建、按钮反复挂载，产生可见跳变
-                       （MarkdownBodyProps.interactive 的契约）。
-                       ProcessTimeline 同时服务流式与定稿两条路径，
-                       所以按 isStreaming 区分。 */
-                    interactive={!isStreaming}
-                    streaming={isStreaming}
-                    onPathClick={onPathClick ?? (() => {})}
-                  />
-                </div>
+              <div
+                key={`text-${i}`}
+                className={
+                  isNarration
+                    ? "tl-iteration tl-text-step tl-text-step--narration"
+                    : "tl-iteration tl-text-step"
+                }
+              >
+                {parsed.body && (
+                  <div className="tl-text-inner">
+                    <MarkdownBody
+                      content={parsed.body}
+                      /* 最终答复正文：唯一带文件类型图标的位置（soft 形态）。
+                         思考块 / 工具结果 / 更新日志复用同一个 MarkdownBody，
+                         默认不画图标（见 MarkdownBodyProps.pathIcons）。 */
+                      pathIcons
+                      /* 小节交互（复制本节 / 折叠）只在正文定型后挂。
+                         流式期间每个 chunk 都会重组小节树 → 展开态反复
+                         重建、按钮反复挂载，产生可见跳变
+                         （MarkdownBodyProps.interactive 的契约）。
+                         ProcessTimeline 同时服务流式与定稿两条路径，
+                         所以按 isStreaming 区分。 */
+                      interactive={!isStreaming}
+                      streaming={isStreaming}
+                      onPathClick={onPathClick ?? (() => {})}
+                    />
+                  </div>
+                )}
               </div>
             );
           }
@@ -430,9 +430,9 @@ export function ProcessTimeline({
           // blocks would otherwise dominate the message body. Tool
           // calls render regardless of fold state (see below).
           if (step.kind === "reasoning") {
-            // 轮次结束且总折叠头收起 → 整轮过程都不渲染。
-            // 运行中永远渲染（那时没有总折叠头）；每段自己管自己的开合。
-            if (settled && !expanded) return null;
+            // 正文已开写/轮次结束且折叠头收起 → 整段过程都不渲染。
+            // 正文未出时平铺可见；每段自己管自己的开合。
+            if (canFold && !expanded) return null;
             // 「正在想」= 本段是最后一个 step（轮次尾巴）且仍在流。
             // 下一段思考或工具一追加，active 就变 false → 自动收起。
             const isTail = i === steps.length - 1;
@@ -449,8 +449,8 @@ export function ProcessTimeline({
           if (step.kind === "tools" && stepGroups[i]) {
             const groups = stepGroups[i]!;
             if (groups.length === 0) return null;
-            // 运行中平铺可见（用户要看着 agent 干活）；结束后随整轮收进折叠头。
-            if (settled && !expanded) return null;
+            // 正文未出时平铺可见（用户要看着 agent 干活）；正文一开写就随整轮收进折叠头。
+            if (canFold && !expanded) return null;
             return (
               <div key={`ps-${i}`} className="tl-tool-step">
                 <ToolTimelineSection

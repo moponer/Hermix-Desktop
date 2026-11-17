@@ -1,16 +1,20 @@
 /**
- * ReasoningBlock 折叠行为测试。
+ * 过程折叠契约测试（2026-11-17 用户实机反馈）。
  *
- * 落笔背景（2026-11-17）：用户实机反馈"思考过程的总结没按顺序折叠，
- * 和总结正文一起出现，很乱"。根因是模型把规划旁白写进 content（text
- * step），过去只有 reasoning step 有折叠 UI、text step 裸渲染。修复把
- * 过程旁白也接到同一个 ReasoningBlock 上，因此这里锁定它的折叠契约：
- * 默认收起、active 才自动展开、用户点过之后以用户为准、label 可定制、
- * 空内容不渲染。
+ * 用户要的是：思考/执行过程（工具、推理、旁白）**按原来的顺序整体折成
+ * 一个块**，正文一开始输出就直接显示在块外。截图里的毛病是运行中正文
+ * 和一大串过程糊在一起。
+ *
+ * 这里锁两件事：
+ * 1. `canFoldProcess` —— "正文开写即折"的判据（本次修复核心）；
+ * 2. ReasoningBlock 自身的折叠契约（默认收起、active 展开、点击切换、
+ *    空内容不渲染）—— 过程块展开后里面的每段思考仍按此规则呈现。
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ReasoningBlock } from "./ThinkingBubble";
+import { canFoldProcess } from "./messageParser";
+import type { TimelineStep } from "../types";
 
 // satteri 的 NAPI 在 jsdom 下会撞 DataView 视图转换错误（见
 // MarkdownBody.test.tsx 的文件头注释）。这里测的是折叠壳，不是 markdown
@@ -19,7 +23,40 @@ vi.mock("./MarkdownBody", () => ({
   MarkdownBody: ({ content }: { content: string }) => <div>{content}</div>,
 }));
 
-describe("ReasoningBlock", () => {
+const text = (content: string): TimelineStep => ({ kind: "text", content });
+const reasoning = (content: string): TimelineStep => ({ kind: "reasoning", content, startedAt: "" });
+const tools = (): TimelineStep => ({
+  kind: "tools",
+  events: [{ type: "tool_start", tool: "ls", arguments: "", created_at: "" }] as never,
+});
+
+describe("canFoldProcess（正文开写即折）", () => {
+  it("轮次已 settled 时可折", () => {
+    expect(canFoldProcess([reasoning("想"), text("答复")], true)).toBe(true);
+  });
+
+  it("运行中：正文尚未出现时不折（还在想/调工具，过程平铺）", () => {
+    expect(canFoldProcess([reasoning("想"), tools()], false)).toBe(false);
+    expect(canFoldProcess([reasoning("想"), text("  ")], false)).toBe(false);
+  });
+
+  it("运行中：收尾正文一开写就可折", () => {
+    const steps = [reasoning("想"), tools(), text("先解决 go.sum 的问题")];
+    expect(canFoldProcess(steps, false)).toBe(true);
+  });
+
+  it("旁白 causes 不误折：最后一段文字是空白时仍视为未开写", () => {
+    const steps = [tools(), text("先看上次 tidy"), text("\n  \t")];
+    expect(canFoldProcess(steps, false)).toBe(false);
+  });
+
+  it("没有 text step 的运行中不折", () => {
+    expect(canFoldProcess([], false)).toBe(false);
+    expect(canFoldProcess([reasoning("想")], false)).toBe(false);
+  });
+});
+
+describe("ReasoningBlock 折叠契约", () => {
   it("默认收起：只渲染标题行，不渲染正文", () => {
     const { container } = render(<ReasoningBlock content="先解决 go.sum 写入被拦的问题" />);
     expect(screen.getByRole("button", { name: "思考" })).toBeInTheDocument();
@@ -40,11 +77,6 @@ describe("ReasoningBlock", () => {
     expect(container.querySelector(".tl-reasoning-row")).not.toBeNull();
     fireEvent.click(head);
     expect(container.querySelector(".tl-reasoning-row")).toBeNull();
-  });
-
-  it("自定义 label 用于过程旁白（与思考同一折叠语言）", () => {
-    render(<ReasoningBlock content="先并行核对 x/sys 的符号" label="过程" />);
-    expect(screen.getByRole("button", { name: "过程" })).toBeInTheDocument();
   });
 
   it("空内容（含 think 标签残留）不渲染", () => {
