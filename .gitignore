@@ -156,3 +156,4 @@ __pycache__/
 # html5ever vendor 修复的中间产物（只入库 -patched 副本，见 Cargo.toml [patch.crates-io]）
 patches/html5ever-0.39.0/
 patches/html5ever-0.39.0.crate
+.cargo/config.toml

@@ -101,8 +101,11 @@ pub fn register_all(
     seams: Option<hermix_context::BootSeams>,
 ) {
     //P1.2 per-tool migration (completed ):
-    disk_cleanup::register(registry);
-    storage_analyzer::register(registry);
+    // C2（2026-11-17，用户指令）：禁用分发——storage_analyzer 每次倾向
+    // 全盘/盘符扫描（60s 超时浪费轮次），disk_cleanup 会在用户做磁盘文件
+    // 处理项目时被误触发。代码保留，恢复分发只需取消注释。
+    // disk_cleanup::register(registry);
+    // storage_analyzer::register(registry);
     storage_clean::register(registry);
     security_guidance::register(registry);
     platforms::register(registry);
