@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "capturedAt": null,
+  "note": "基线数据由 score.mjs 从 usage JSONL 重算后写入本文件（禁止手工填数字）。任一指标退化 >5% 不允许合入优化提交。",
+  "metrics": {
+    "tasks_total": null,
+    "first_run_success_rate": null,
+    "error_exit_ratio": null,
+    "rework_rounds_avg": null,
+    "tokens_per_task_avg": null,
+    "tokens_total": null,
+    "cache_hit_ratio": null,
+    "sub_agent_reject_ratio": null,
+    "sandbox_violation_count": null
+  },
+  "per_task": {}
+}

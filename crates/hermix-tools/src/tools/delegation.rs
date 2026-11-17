@@ -10,6 +10,63 @@ use crate::ToolRegistry;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
+// B4-3（docs/optimization-plan.md H4）：失败重派落盘
+// ---------------------------------------------------------------------------
+
+/// 同一任务（按内容哈希键控）失败重派的上限。lynn 01 复盘实测：
+/// 同一张单最多被跑 6 次，43% 的消耗浪费在重复执行上。
+const MAX_DELEGATION_ATTEMPTS: u32 = 3;
+
+fn attempts_path() -> std::path::PathBuf {
+    hermix_config::paths::hermix_home().join("delegation_attempts.jsonl")
+}
+
+/// 任务内容哈希——重派同任务（即使措辞微调）共享同一计数。
+fn attempt_key(task: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    task.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+/// 读取该任务已失败的次数（jsonl 逐行解析，坏行跳过）。
+fn load_failed_attempts(key: &str) -> u32 {
+    let Ok(raw) = std::fs::read_to_string(attempts_path()) else {
+        return 0;
+    };
+    raw.lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v.get("hash").and_then(|h| h.as_str()) == Some(key))
+        .filter_map(|v| v.get("n").and_then(|n| n.as_u64()))
+        .max()
+        .unwrap_or(0) as u32
+}
+
+/// 追加一次失败记录（append，崩溃最多丢最后一行）。
+fn record_failed_attempt(key: &str, reason: &str) {
+    use std::io::Write;
+    let n = load_failed_attempts(key) + 1;
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = serde_json::json!({
+        "hash": key,
+        "n": n,
+        "last_reason": reason.chars().take(200).collect::<String>(),
+        "at": at,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(attempts_path())
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -152,7 +209,20 @@ impl ToolHandler for DelegateTaskHandler {
             .get("parent_budget_remaining_usd")
             .and_then(|v| v.as_f64());
 
-        self.backend
+        // B4-3：失败重派落盘——同一任务失败 ≥3 次即拒绝，并如实携带
+        // 失败原因（换方法/换角色/关单），不再无限原样重跑。
+        let attempt_key = attempt_key(task);
+        let failed_n = load_failed_attempts(&attempt_key);
+        if failed_n >= MAX_DELEGATION_ATTEMPTS {
+            return Err(ToolError::ExecutionFailed(format!(
+                "This task already failed {failed_n} times (per content history). \
+                 Change the approach, delegate to a different role, or close the \
+                 task — do not re-dispatch it as-is."
+            )));
+        }
+
+        let result = self
+            .backend
             .delegate(
                 task,
                 context,
@@ -162,7 +232,11 @@ impl ToolHandler for DelegateTaskHandler {
                 max_depth,
                 parent_budget_remaining_usd,
             )
-            .await
+            .await;
+        if let Err(ref e) = result {
+            record_failed_attempt(&attempt_key, &e.to_string());
+        }
+        result
     }
 
     fn schema(&self) -> ToolSchema {

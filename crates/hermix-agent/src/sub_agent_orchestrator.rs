@@ -166,6 +166,42 @@ pub enum SubAgentStatus {
 /// Default max iterations for sub-agent delegation (Hermes Agent parity).
 pub const DEFAULT_DELEGATION_MAX_ITERATIONS: u32 = 50;
 
+/// B4-2（docs/optimization-plan.md H4）：交付验证回路——进程 cwd 是
+/// Rust 项目（Cargo.toml 存在）时自动跑 `cargo check --quiet`，返回
+/// `(status, detail)`。失败是客观信号：父代理据此决定验收或重派，
+/// 而不是只信子代理的"我做好了"。package.json 场景（npm test 的时长
+/// 与交互风险）第一版不自动跑，调用方如实省略 verification 字段。
+async fn verify_cargo_project() -> Option<(String, String)> {
+    let cwd = std::env::current_dir().ok()?;
+    if !cwd.join("Cargo.toml").is_file() {
+        return None;
+    }
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        hermix_core::proc::cmd_tokio("cargo")
+            .args(["check", "--quiet"])
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    // 只留尾部 20 行——编译错误的 actionable 部分几乎都在尾部。
+    let text = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<&str> = text.lines().collect();
+    let n = lines.len();
+    let detail = lines
+        .into_iter()
+        .skip(n.saturating_sub(20))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let status = if output.status.success() {
+        "passed"
+    } else {
+        "failed"
+    };
+    Some((status.to_string(), detail))
+}
+
 /// Role for a sub-agent. Determines the toolset and system prompt.
 ///
 /// - **General** — full toolset, general-purpose task execution.
@@ -822,6 +858,15 @@ impl SubAgentOrchestrator {
         // Build and run the child.
         let outcome = self.run_child(&req, &sub_agent_id, recent_steps.clone()).await;
 
+        // B4-2：交付验证回路（仅 General 角色自动化；explore/plan 是只读
+        // 或产出计划，无构建可验证）。结果注入终态 envelope 的
+        // `verification` 字段——失败即客观信号，父代理可据此重派。
+        let verification = if req.role == SubAgentRole::General {
+            verify_cargo_project().await
+        } else {
+            None
+        };
+
         // Persist the terminal state (updates lineage fields + writes file).
         self.persist_terminal_lineage(&lineage, &outcome).await;
 
@@ -884,6 +929,9 @@ impl SubAgentOrchestrator {
                     "sub_agent_id": sub_agent_id,
                     "status": "completed",
                     "reason": "reported",
+                    "verification": verification.as_ref().map(|(s, d)| {
+                        json!({"status": s, "detail": d.trim()})
+                    }),
                     "task": req.task,
                     "total_turns": result.total_turns,
                     "finished_naturally": result.finished_naturally,
