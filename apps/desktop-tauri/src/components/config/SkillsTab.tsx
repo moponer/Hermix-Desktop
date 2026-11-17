@@ -1,12 +1,14 @@
 // SkillsTab.tsx —— 技能 Tab：GET /api/skills + 启停（R2-4 拆分第七步）。
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Sparkles, Upload } from "lucide-react";
+import { AlertTriangle, RefreshCw, Sparkles, Upload } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import * as api from "../../api";
 import type { SkillInfo } from "../../api";
 import { CATEGORY_LABELS } from "./toolTabsData";
 import { SkillCard } from "./SkillCard";
 import { SearchBar, EmptyHint, SkeletonGrid, SummaryBar, ToolGroupTitle, ToolHint } from "./toolTabsShared";
+import { ConfirmDialog } from "../ui";
+import { toastError, toastSuccess } from "../../hooks/useToast";
 import { ALL, ENABLED, failure } from "../strings";
 
 // ── Skills tab: GET /api/skills + toggle ────────────────────────────
@@ -17,6 +19,8 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
   const [error, setError] = useState<string | null>(null);
   /** 分类 chip 筛选。null = 全部。搜索框管关键词，这个管分组。 */
   const [catFilter, setCatFilter] = useState<string | null>(null);
+  /** S2-1：同名技能覆盖确认（in-app，取代原生 window.confirm）。 */
+  const [overwriteAsk, setOverwriteAsk] = useState<{ sourcePath: string; reason: string } | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -87,27 +91,27 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
   const enabledCount = useMemo(() => skills.filter((s) => s.enabled).length, [skills]);
 
   // S2-1：技能导入——选源目录（含 SKILL.md）→ import_skill 命令；
-  // 同名已存在时询问是否覆盖（overwrite=true 重试一次）。
-  const handleImport = useCallback(async () => {
-    const dir = await invoke<string | null>("pick_directory");
-    if (!dir) return;
+  // 同名已存在时弹 in-app 确认，覆盖（overwrite=true）重试一次。
+  const doImport = useCallback(async (sourcePath: string, overwrite: boolean) => {
     try {
-      await invoke("import_skill", { sourcePath: dir, overwrite: false });
+      await invoke("import_skill", { sourcePath, overwrite });
+      toastSuccess(overwrite ? "已覆盖导入技能。" : "已导入技能。");
       void refresh();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("已存在") && window.confirm(`${msg}\n\n覆盖导入？`)) {
-        try {
-          await invoke("import_skill", { sourcePath: dir, overwrite: true });
-          void refresh();
-        } catch (e2) {
-          window.alert(String(e2));
-        }
+      if (!overwrite && msg.includes("已存在")) {
+        setOverwriteAsk({ sourcePath, reason: msg });
       } else {
-        window.alert(msg);
+        toastError(msg);
       }
     }
   }, [refresh]);
+
+  const handleImport = useCallback(async () => {
+    const dir = await invoke<string | null>("pick_directory");
+    if (!dir) return;
+    await doImport(dir, false);
+  }, [doImport]);
 
   // S2-1：技能导出——选目标目录 → export_skill 命令。
   const handleExport = useCallback(async (name: string) => {
@@ -115,9 +119,9 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
     if (!dir) return;
     try {
       const out = await invoke<string>("export_skill", { name, outDir: dir });
-      window.alert(`已导出：${out}`);
+      toastSuccess(`已导出：${out}`);
     } catch (e) {
-      window.alert(String(e));
+      toastError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
@@ -215,6 +219,21 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
       )}
 
       <ToolHint>禁用会从文件系统中删除该技能。</ToolHint>
+
+      <ConfirmDialog
+        open={overwriteAsk !== null}
+        title="同名技能已存在"
+        body={overwriteAsk?.reason ?? ""}
+        icon={<AlertTriangle />}
+        confirmLabel="覆盖导入"
+        confirmVariant="danger"
+        onCancel={() => setOverwriteAsk(null)}
+        onConfirm={() => {
+          const ask = overwriteAsk;
+          setOverwriteAsk(null);
+          if (ask) void doImport(ask.sourcePath, true);
+        }}
+      />
     </div>
   );
 }

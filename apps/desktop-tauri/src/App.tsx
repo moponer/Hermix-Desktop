@@ -4,7 +4,7 @@ import { getCurrentWindow, LogicalSize, currentMonitor } from "@tauri-apps/api/w
 import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/Sidebar";
 import { currentZoom, computeMainMinWidth, computeLeftMin } from "./app/viewport";
-import { SidebarRevealRow } from "./components/SidebarRevealRow";
+import { SidebarRevealSlot } from "./components/SidebarRevealRow";
 import { ChatView } from "./components/ChatView";
 import { ImageLightbox } from "./components/ImageLightbox";
 import { GlobalContextMenu } from "./components/GlobalContextMenu";
@@ -62,6 +62,7 @@ import {
 import { updateSession } from "./lib/sessionUpdates";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastContainer } from "./components/ToastContainer";
+import { DenialBanner } from "./components/DenialBanner";
 import { toastError, toastInfo } from "./hooks/useToast";
 import { useAcuiState, type AcuiDecisionBus } from "./acui";
 import type { Artifact } from "./utils/artifacts";
@@ -86,7 +87,6 @@ import type {
 import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
 import { sendNotification, setKeepAwake, KEEP_AWAKE_CHANGED_EVENT, setTrayTaskCount } from "./desktopBridge";
 import { applyScale, readScale, UI_SCALE_EVENT } from "./utils/uiScale";
-import { CLOSE } from "./components/strings";
 import { reportError } from "./lib/reportError";
 import { cleanSessionTitle } from "./lib/sessionTitle";
 
@@ -3913,37 +3913,7 @@ return {
         onClose={() => setSettingsOpen(false)}
         initialCategory={configCategory}
       />
-      {denialBanner && (() => {
-        const sub =
-          denialBanner.kind === "user_denied"
-            ? "你明确拒绝了该操作，未执行。"
-            : denialBanner.kind === "timed_out"
-              ? "确认超时（你在限定时间内没有做出决定），未执行。"
-              : denialBanner.kind === "channel_closed"
-                ? "连接中断（WS 断开 / 服务端重启 / 会话重载），请求丢失。"
-                : "未执行。";
-        return (
-          <div
-            className="denial-banner"
-            role="status"
-            aria-live="polite"
-            onClick={dismissDenialBanner}
-          >
-            <span className="denial-banner__icon">!</span>
-            <div className="denial-banner__body">
-              <div className="denial-banner__title">
-                工具 <code>{denialBanner.tool}</code> 的调用被拒绝
-              </div>
-              <div className="denial-banner__sub">{sub}</div>
-            </div>
-            <button
-              className="denial-banner__close"
-              aria-label={CLOSE}
-              onClick={(e) => { e.stopPropagation(); dismissDenialBanner(); }}
-            >×</button>
-          </div>
-        );
-      })()}
+      <DenialBanner denial={denialBanner} onDismiss={dismissDenialBanner} />
       <div
         className="app-body"
       >
@@ -3997,12 +3967,12 @@ return {
                 不与「专家」「自动化」等页头重叠。
               main 因此改为 flex column：路由内容包在弹性容器里占剩余高度，
               动作行出现时页面整体下移，不会把内容顶出可视区。 */}
-          {!sidebarVisible && page !== "chat" && (
-            <SidebarRevealRow
-              onExpand={() => setSidebarOpen(true)}
-              onOpenSearch={() => setSearchOpen(true)}
-            />
-          )}
+          <SidebarRevealSlot
+            sidebarVisible={sidebarVisible}
+            page={page}
+            onExpand={() => setSidebarOpen(true)}
+            onOpenSearch={() => setSearchOpen(true)}
+          />
           {/* 必须是 flex column：chat-surface/AutomationView 靠 flex-1 撑满，
               AgentsView/AnalyticsView 靠 h-full —— 两者都要求本容器高度确定
               且为 flex 上下文，缺 flex 会让对话区塌成内容高（输入框被顶上去）。 */}

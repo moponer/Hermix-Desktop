@@ -11,6 +11,27 @@ import { PanelLeftOpen, Search } from "lucide-react";
  * 用真实行而不是绝对定位浮层：各页面顶部都有自己的左上内容（对话标题、
  * 「专家」「自动化」等页头），浮层必然压住其中之一。
  */
+/**
+ * 侧栏折叠入口的"是否出现"判定槽（H7 从 App.tsx 抽出）。
+ * 对话页由 ChatView 的 ModelStatusBar 承接同一入口，这里不渲染；
+ * 其余页面仅在侧栏收起时渲染真实动作行。把条件收进组件后，
+ * 三种显示组合可被组件测试穷举，不再埋在 App 的 4000 行里。
+ */
+export function SidebarRevealSlot({
+  sidebarVisible,
+  page,
+  onExpand,
+  onOpenSearch,
+}: {
+  sidebarVisible: boolean;
+  page: string;
+  onExpand: () => void;
+  onOpenSearch: () => void;
+}) {
+  if (sidebarVisible || page === "chat") return null;
+  return <SidebarRevealRow onExpand={onExpand} onOpenSearch={onOpenSearch} />;
+}
+
 export function SidebarRevealRow({
   onExpand,
   onOpenSearch,
