@@ -389,35 +389,40 @@ export function ProcessTimeline({
             const isNarration = i !== lastTextIndex;
             if (isNarration && settled && !expanded) return null;
             const parsed = parseContent(step.content);
+            if (!parsed.body) return null;
+            // 2026-11-17：过程旁白接进 ReasoningBlock 的折叠壳（label="过程"），
+            // 不再裸渲染成正文色文字。此前流式时旁白恒平铺、定稿后才随整轮
+            // 折叠 —— 用户实机看到的就是「总结前面堆一长串没折叠的思考」。
+            // 复用同一折叠组件后：流式默认收起、原位保持发生顺序、点击可展开。
+            if (isNarration) {
+              return (
+                <ReasoningBlock
+                  key={`narr-${i}`}
+                  content={parsed.body}
+                  label="过程"
+                />
+              );
+            }
             return (
-              <div
-                key={`text-${i}`}
-                className={
-                  isNarration
-                    ? "tl-iteration tl-text-step tl-text-step--narration"
-                    : "tl-iteration tl-text-step"
-                }
-              >
-                {parsed.body && (
-                  <div className="tl-text-inner">
-                    <MarkdownBody
-                      content={parsed.body}
-                      /* 最终答复正文：唯一带文件类型图标的位置（soft 形态）。
-                         思考块 / 工具结果 / 更新日志复用同一个 MarkdownBody，
-                         默认不画图标（见 MarkdownBodyProps.pathIcons）。 */
-                      pathIcons
-                      /* 小节交互（复制本节 / 折叠）只在正文定型后挂。
-                         流式期间每个 chunk 都会重组小节树 → 展开态反复
-                         重建、按钮反复挂载，产生可见跳变
-                         （MarkdownBodyProps.interactive 的契约）。
-                         ProcessTimeline 同时服务流式与定稿两条路径，
-                         所以按 isStreaming 区分。 */
-                      interactive={!isStreaming}
-                      streaming={isStreaming}
-                      onPathClick={onPathClick ?? (() => {})}
-                    />
-                  </div>
-                )}
+              <div key={`text-${i}`} className="tl-iteration tl-text-step">
+                <div className="tl-text-inner">
+                  <MarkdownBody
+                    content={parsed.body}
+                    /* 最终答复正文：唯一带文件类型图标的位置（soft 形态）。
+                       思考块 / 工具结果 / 更新日志复用同一个 MarkdownBody，
+                       默认不画图标（见 MarkdownBodyProps.pathIcons）。 */
+                    pathIcons
+                    /* 小节交互（复制本节 / 折叠）只在正文定型后挂。
+                       流式期间每个 chunk 都会重组小节树 → 展开态反复
+                       重建、按钮反复挂载，产生可见跳变
+                       （MarkdownBodyProps.interactive 的契约）。
+                       ProcessTimeline 同时服务流式与定稿两条路径，
+                       所以按 isStreaming 区分。 */
+                    interactive={!isStreaming}
+                    streaming={isStreaming}
+                    onPathClick={onPathClick ?? (() => {})}
+                  />
+                </div>
               </div>
             );
           }
