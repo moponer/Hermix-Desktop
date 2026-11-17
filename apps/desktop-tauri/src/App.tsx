@@ -3,6 +3,7 @@ import { flushSync } from "react-dom";
 import { getCurrentWindow, LogicalSize, currentMonitor } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/Sidebar";
+import { currentZoom, computeMainMinWidth, computeLeftMin } from "./app/viewport";
 import { SidebarRevealRow } from "./components/SidebarRevealRow";
 import { ChatView } from "./components/ChatView";
 import { ImageLightbox } from "./components/ImageLightbox";
@@ -132,39 +133,7 @@ const RIGHT_DEFAULT = 640;
 // 时右侧真的没有空间，才退回挤压/自动关闭的旧行为。
 // setSize 失败也仍打开：宁可挤压，也不能让用户点了没反应。
 // 默认视口 1920 时: 左 200 + 主 1080 + 右 640 = 1920.
-/* 自适应 MAIN_MIN_WIDTH — 按**等效视口**动态缩小主列最小宽，避免窄窗口下
-   左列 + 主列合计最小宽度超过视口：
-   - 等效视口 ≥ 1400px: MAIN_MIN_WIDTH = 580（舒适宽）
-   - 等效视口 1000~1399px: MAIN_MIN_WIDTH = 480（中等）
-   - 等效视口 800~999px: MAIN_MIN_WIDTH = 400（紧凑）
-   - 等效视口 < 800px: MAIN_MIN_WIDTH = 360（最小可读）
-   同时 LEFT_MIN 也随视口降低。对应的三列共存阈值随之降到 920。
-
-   注意「等效」二字：zoom 会改变真实可用宽度但不改变 window.innerWidth，
-   所以分档前必须除以 zoom，见下方 currentZoom()。 */
-function currentZoom(): number {
-  const z = Number(document.documentElement.style.zoom);
-  return z > 0 ? z : 1;
-}
-
-function computeMainMinWidth(vw: number): number {
-  const eff = vw / currentZoom();
-  if (eff >= 1400) return 580;
-  if (eff >= 1000) return 480;
-  if (eff >= 800) return 400;
-  return 360;
-}
-function computeLeftMin(vw: number): number {
-  const eff = vw / currentZoom();
-  if (eff >= 1200) return 200;
-  if (eff >= 900) return 160;
-  return 120;
-}
-
-// 分辨率自适应 — 用 state + resize listener 而非常量；在 App 组件内初始化，
-// 这样 setup 时窗口已确定，能拿到实际视口宽度。
-// eslint-disable-next-line prefer-const
-// (上面保留 computeMainMinWidth / computeLeftMin 供 typing 引用)
+// 视口缩放计算已提取到 ./app/viewport（B6-2，含分档注释与测试）。
 
 /**
  * 「不是工具的工具名」。`tool_call` 是 stream_collect 在模型没给出工具名时
