@@ -1751,7 +1751,7 @@
 .apv-capability-row,
 .approval-drawer__cap,
 .approval-cap-line {
-  font-size: 12px;
+  font-size: var(--text-meta);
   opacity: 0.85;
   margin: 2px 0;
 }

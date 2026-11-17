@@ -299,10 +299,17 @@
 
 .prose hr { border: 0; border-top: 1px solid var(--color-bg-tertiary); margin: 1.1em 0; }
 
-/* 表格：去网格。全边框 + 表头底色是 Excel 观感，正文表格只需要行分隔。 */
+/* 表格（2026-11-18）：淡灰圆角卡包住整表 —— 对标参考图的"一层卡 + 白底表"。
+   此前"去网格"把 th/td 全设 border:0、wrap 无底色，表头那条 border-bottom-color
+   也因 border:0 不生效，表格成了纯白板。现在整表有一层淡底卡片作边界，
+   卡内表格保持白底、表头只靠字重与墨色区分、行靠发丝分隔线分开 —— 只两层
+   灰度，不叠斑马纹，避免三层灰糊成一片（用户实机反馈"灰底叠灰底更脏"）。 */
 .prose .md-table-wrap {
-  margin: 0.8em 0;
+  margin: 0.9em 0;
   overflow-x: auto;
+  background: var(--color-bg-code);
+  border-radius: var(--radius-md);
+  padding: 4px;
 }
 /* 宽表按内容撑开、外层横向滚动；窄表仍然铺满可用宽度。 */
 .prose .md-table-wrap table { min-width: max-content; }
@@ -311,24 +318,28 @@
   margin: 0;
   font-size: var(--text-ui);
   width: 100%;
+  /* 卡内表格保留纸白 —— 卡片底与表格底一道差，就是"卡里有张表"的层次。 */
+  background: var(--color-bg-primary);
+  border-radius: var(--radius-sm);
 }
 .prose th,
 .prose td {
-  padding: 0.5em 0.7em;
+  padding: 0.5em 0.85em;
   border: 0;
   vertical-align: top;
+  /* 行分隔用背景渐变画在单元格底部，1px 发丝（G11 禁中性 border，故用
+     background），不是 Excel 全网格；只横线、无竖线，符合"无描边"纪律。 */
+  background-image: linear-gradient(to bottom, transparent calc(100% - 1px), var(--color-border-subtle) calc(100% - 1px));
 }
-.prose th {
-  background: transparent;
-  /* 表头与表体同档（--text-ui）：此前 th 是 --text-meta(12px) 而 td 是
-     0.95em(13.3px) —— 表头比表体小，层级倒置。 */
+.prose thead th {
+  background-image: none;
   font-size: var(--text-ui);
   font-weight: 600;
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   text-align: left;
-  border-bottom-color: var(--color-border-secondary);
 }
-.prose tbody tr:hover { background: var(--color-bg-hover); }
+.prose tbody tr:last-child td { background-image: none; }
+.prose tbody tr:hover td { background-color: var(--color-bg-hover); }
 .prose td[data-align="right"], .prose th[data-align="right"] { text-align: right; }
 .prose td[data-align="center"], .prose th[data-align="center"] { text-align: center; }
 /* 行内代码芯片（2026-10-01）。
@@ -857,14 +868,15 @@
   border-radius: 2px;
   transform: translateY(2px);
 }
-/* Relative paths keep the warning amber so the user can tell at a
-   glance "this won't resolve unless I'm in the right workspace". */
+/* 2026-11-18：相对路径不再染 warning 橙。用户实机反馈"对话流那些橙色
+   颜色和图标太脏"——每条相对路径都亮琥珀，与出错无关，且违反"状态色
+   只给状态用"的令牌纪律。改成与裸文件名一致的中性正文色；"相对路径"
+   语义仍由 MarkdownBody 的 title 属性与文件类型图标承载，去色不丢信息。 */
 .md-path-link--rel {
-  color: var(--color-warning);
+  color: var(--color-text-primary);
 }
 .md-path-link--rel:hover {
-  color: var(--color-warning);
-  filter: brightness(1.15);
+  color: var(--color-link-hover);
 }
 
 /* ── Markdown task list marker (LLM output `- [ ]` / `- [x]`)

@@ -122,7 +122,17 @@
   flex-shrink: 0;
   width: 100%;       /* fill parent wrapper (the wrapper controls the actual width) */
 }
-.pane-left { background: var(--theme-bg-sidebar, var(--color-bg-secondary)); }
+.pane-left {
+  background: var(--theme-bg-sidebar, var(--color-bg-secondary));
+  /* 2026-11-18：正文 ui/body 升到 14px，但左栏会话列表保持原档——
+     用户明确"除左侧菜单栏外其他字号大一号"。局部重声明令牌即可让整棵
+     侧栏子树消费旧值（CSS 层 font-size 仍只写 var(--text-*)，过门禁）。
+     tiny/meta 本来就是 12 未变，这里只需钉回 ui/body 与两个镜像档。 */
+  --text-ui: 13px;
+  --text-body: 13px;
+  --text-sm: 13px;
+  --text-base: 13px;
+}
 /* .pane-main 的 min-width 故意不再写 — 由 .app-body 的 grid-template-columns
    里 minmax(var(--pane-main-min), 1fr) 声明性保证, 避免与 grid track 的 min
    双重约束造成溢出 (同时给 track 和 item 设 min-width 会让列在窄视口被压扁)。 */

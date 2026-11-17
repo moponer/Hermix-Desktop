@@ -36,8 +36,12 @@
      新代码请直接用 --text-meta，tiny 仅作过渡别名保留。 */
   --text-tiny: 12px;     /* 元信息：时间、计数、路径、参数预览 */
   --text-meta: 12px;     /* 工具名、chip、命令输出、区块标题 */
-  --text-ui: 13px;       /* 界面文本：按钮、列表项、表单标签、思考正文 */
-  --text-body: 13px;     /* 对话正文（全局唯一正文字号，与 --text-ui 同值） */
+  /* 2026-11-18：ui/body 13→14，对齐 DeepSeek Harness 桌面端正文默认 14px。
+     用户实测 13px 看着累。次级文本 tiny/meta 维持 12（=正文−2，与 dsh 的
+     secondary 派生同思路）；左栏会话列表由 .pane-left 局部覆盖钉回原档，
+     不随正文升档。 */
+  --text-ui: 14px;       /* 界面文本：按钮、列表项、表单标签、思考正文 */
+  --text-body: 14px;     /* 对话正文（全局唯一正文字号，与 --text-ui 同值） */
   --text-title: 16px;    /* 小标题：区块标题、弹窗标题 */
   --text-display: 20px;  /* 页面标题 / 空态（一次性使用） */
   /* hero 28px（2026-10-18 裁决：40px 曾在两套规范间冲突——tokens 注释
@@ -54,8 +58,8 @@
      面板标题 18px（本该 16）都从这条缝里长出来。
      这里把原生刻度钉到七档值上 —— 无论写令牌还是写刻度，落点同一档。 */
   --text-xs: 12px;      /* = meta */
-  --text-sm: 13px;      /* = ui（Tailwind 默认 14） */
-  --text-base: 13px;    /* = body（默认 16，统一为 13） */
+  --text-sm: 14px;      /* = ui（2026-11-18 随 ui 升档；Tailwind 默认 14） */
+  --text-base: 14px;    /* = body（默认 16；2026-11-18 随 body 升档） */
   --text-lg: 16px;      /* = title（默认 18） */
   --text-xl: 20px;      /* = display */
 

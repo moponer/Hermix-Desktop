@@ -813,12 +813,13 @@ export function MemoryUpdateBlock({ updates }: { updates: MemoryUpdateEntry[] })
       case "snapshot": return "记忆快照";
     }
   };
-  // Action tint (text color). Kept within the gray/zinc/amber/green/red
-  // palette — never blue/purple.
+  // Action tint (text color). 2026-11-18：update 的 amber 去掉——用户反馈
+  // 对话流橙色噪音多；"更新"不是警告，用中性 zinc 即可。写入/删除的
+  // 绿/红是合法状态语义，保留。
   const tintFor = (action: MemoryUpdateEntry["action"]) => {
     switch (action) {
       case "write": return "text-emerald-400";
-      case "update": return "text-amber-400";
+      case "update": return "text-zinc-400";
       case "delete": return "text-red-400";
       case "summarize": return "text-zinc-300";
       case "cleanup": return "text-red-400";
