@@ -1130,11 +1130,20 @@ export function createMessageHandler(
         // Terminal outcome classification from the server.
         const outcome: string | undefined =
           data?.outcome || data?.event?.outcome;
-        const isFailedOutcome =
-          outcome === "failed" || outcome === "interrupted";
-        const rawError: string | undefined =
+        const rawErrorBase: string | undefined =
           data?.error || data?.event?.error;
-        if (isFailedOutcome || reason === "error" || !!rawError) {
+        // C3-2：用户主动停止（interrupted 且无错误痕迹）是**正常收尾**，
+        // 不是后端错误——之前被误分类进错误分支，停止后报"对话因后端错误
+        // 中断"。后端错误场景（Error event 已先行）的 Done 带 rawError 且
+        // finish_reason=error，据此与用户中断区分。
+        const isUserInterrupt =
+          outcome === "interrupted" && reason !== "error" && !rawErrorBase;
+        const isFailedOutcome =
+          outcome === "failed" || (reason === "error" && !isUserInterrupt);
+        const rawError: string | undefined = isUserInterrupt
+          ? undefined
+          : rawErrorBase;
+        if (isFailedOutcome || (reason === "error" && !isUserInterrupt) || (!!rawError && !isUserInterrupt)) {
           const errMsg = rawError ?? "对话因后端错误中断（已保留已生成的部分内容，请稍后重试）";
           const errKind =
             (typeof data?.code === "string" && data.code) ||

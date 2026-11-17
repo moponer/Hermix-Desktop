@@ -31,22 +31,32 @@ fn attempt_key(task: &str) -> String {
 }
 
 /// 读取该任务已失败的次数（jsonl 逐行解析，坏行跳过）。
-fn load_failed_attempts(key: &str) -> u32 {
+/// 读取该任务已失败的次数与最近失败原因（jsonl 逐行解析，坏行跳过）。
+/// 返回 (次数, 最近原因)——次数用于 3 次封顶闸，原因用于 V-2 教训注入。
+fn load_failed_attempts(key: &str) -> (u32, Option<String>) {
     let Ok(raw) = std::fs::read_to_string(attempts_path()) else {
-        return 0;
+        return (0, None);
     };
+    let mut max_n = 0u32;
+    let mut last_reason = None;
     raw.lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
         .filter(|v| v.get("hash").and_then(|h| h.as_str()) == Some(key))
-        .filter_map(|v| v.get("n").and_then(|n| n.as_u64()))
-        .max()
-        .unwrap_or(0) as u32
+        .for_each(|v| {
+            let n = v.get("n").and_then(|n| n.as_u64()).unwrap_or(0) as u32;
+            if n >= max_n {
+                max_n = n;
+                last_reason =
+                    v.get("last_reason").and_then(|r| r.as_str()).map(String::from);
+            }
+        });
+    (max_n, last_reason)
 }
 
 /// 追加一次失败记录（append，崩溃最多丢最后一行）。
 fn record_failed_attempt(key: &str, reason: &str) {
     use std::io::Write;
-    let n = load_failed_attempts(key) + 1;
+    let (n, _) = load_failed_attempts(key);
     let at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -212,7 +222,7 @@ impl ToolHandler for DelegateTaskHandler {
         // B4-3：失败重派落盘——同一任务失败 ≥3 次即拒绝，并如实携带
         // 失败原因（换方法/换角色/关单），不再无限原样重跑。
         let attempt_key = attempt_key(task);
-        let failed_n = load_failed_attempts(&attempt_key);
+        let (failed_n, last_reason) = load_failed_attempts(&attempt_key);
         if failed_n >= MAX_DELEGATION_ATTEMPTS {
             return Err(ToolError::ExecutionFailed(format!(
                 "This task already failed {failed_n} times (per content history). \
@@ -221,12 +231,22 @@ impl ToolHandler for DelegateTaskHandler {
             )));
         }
 
+        // V-2（docs/optimization-plan.md H3 遗留）：失败教训注入——同任务
+        // 此前失败过（未达封顶）时，把失败原因注入 context，让子代理
+        // 避免重蹈覆辙（lynn 08：教训跨会话留存，同域派发时注入）。
+        let context = match (failed_n, last_reason.as_deref()) {
+            (n, Some(reason)) if n > 0 => Some(format!(
+                "{}\n\n[失败教训] 此前该任务已有 {n} 次尝试失败，最近原因：{reason}。请调整方法避免重蹈覆辙。",
+                context.unwrap_or_default()
+            )),
+            _ => context.map(String::from),
+        };
+
         let result = self
             .backend
             .delegate(
                 task,
-                context,
-                toolset,
+                context.as_deref(),toolset,
                 model,
                 child_depth,
                 max_depth,
