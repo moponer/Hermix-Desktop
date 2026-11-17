@@ -367,6 +367,55 @@ pub(crate) async fn call_llm_with_retry(
                         return Err(AgentError::LlmApi(err_str));
                     }
                     ErrorClass::RateLimit | ErrorClass::Retryable => {
+                        // C1-3（docs/optimization-plan.md H4）：MiniMax 免费端点
+                        // 的 529 整点高峰（provider 自述"1-5 分钟内恢复"）——
+                        // 秒级退避对不上分钟级恢复窗口，重试穷尽必然报错
+                        //（agent.log 实证：2026-11-16/17 两次 529 mid-stream）。
+                        // overloaded 且配了 fallback：首次重试失败即切 fallback
+                        //（换模型不等恢复）；无 fallback：退避拉长 ≥30s 对齐
+                        // 恢复窗口，穷尽照旧报错。
+                        let is_overloaded = {
+                            let lower = err_str.to_lowercase();
+                            lower.contains("529")
+                                || lower.contains("overloaded")
+                                || lower.contains("负载较高")
+                        };
+                        if is_overloaded && attempt >= 1 {
+                            if let Some(ref fallback) = retry.fallback_model {
+                                if request_model != fallback.as_str() {
+                                    let (fallback_provider_name, fallback_model_only) =
+                                        extract_provider_and_model(config, fallback);
+                                    tracing::warn!(
+                                        "Provider overloaded on {} (attempt {}). Switching to fallback: {}",
+                                        model, attempt + 1, fallback
+                                    );
+                                    let fallback_result = match build_runtime_provider(
+                                        config, oauth,
+                                        &fallback_provider_name, &fallback_model_only,
+                                        None, None, None, None, None,
+                                    ) {
+                                        Ok(fb_provider) => {
+                                            execute_llm_call(
+                                                &fb_provider,
+                                                &api_messages, tool_schemas, config,
+                                                &fallback_model_only,
+                                                extra_body_for_api_mode(config, &config.api_mode).as_ref(),
+                                            ).await
+                                        }
+                                        Err(_) => {
+                                            execute_llm_call(
+                                                llm_provider,
+                                                &api_messages, tool_schemas, config,
+                                                &fallback_model_only,
+                                                extra_body_for_api_mode(config, &config.api_mode).as_ref(),
+                                            ).await
+                                        }
+                                    };
+                                    return fallback_result
+                                        .map_err(|e| AgentError::LlmApi(e.to_string()));
+                                }
+                            }
+                        }
                         if attempt >= effective_max_retries {
                             if let Some(ref fallback) = retry.fallback_model {
                                 if request_model != fallback.as_str() {
@@ -415,11 +464,18 @@ pub(crate) async fn call_llm_with_retry(
                         let delay = parse_retry_after_ms(&err_str)
                             .map(Duration::from_millis)
                             .unwrap_or_else(|| {
-                                jittered_backoff(
+                                let base = jittered_backoff(
                                     attempt,
                                     effective_base_delay_ms,
                                     retry.max_delay_ms,
-                                )
+                                );
+                                // C1-3：overloaded 恢复窗口是分钟级（provider
+                                // 自述 1-5 分钟），秒级退避不够——拉长 ≥30s。
+                                if is_overloaded {
+                                    base.max(Duration::from_secs(30))
+                                } else {
+                                    base
+                                }
                             });
                         tracing::info!(
                             "Retrying in {}ms (attempt {}/{})",
