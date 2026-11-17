@@ -77,6 +77,29 @@ pub fn register(
         /* override_existing = */ false,
     );
     registry.register_with_risk(
+        "read_files",
+        "file",
+        ReadFilesHandler::new(Arc::new(ReadFileHandler::new(
+            terminal_backend.clone(),
+            fs.clone(),
+        )))
+        .schema(),
+        Arc::new(ReadFilesHandler::new(Arc::new(ReadFileHandler::new(
+            terminal_backend.clone(),
+            fs.clone(),
+        )))),
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Batch-read 1-5 files in one call (same budget/paging as read_file per file; \
+         per-file errors inlined). Prefer over several read_file calls when \
+         inspecting a small set of files.",
+        "📖",
+        None,
+        RiskLevel::Safe,
+        /* override_existing = */ false,
+    );
+    registry.register_with_risk(
         "write_file",
         "file",
         WriteFileHandler::new(terminal_backend.clone(), fs.clone()).schema(),
@@ -217,6 +240,17 @@ fn count_lines(text: &str) -> u64 {
 /// Why line-aware: the previous char-loop cut mid-line (a resumed read began
 /// mid-record) and reported `next_offset` as the *total* line count of the
 /// slice — pointing past the end of what the model had just read.
+/// B2-3（docs/optimization-plan.md）：search_files 大结果外置——超预算部分
+/// 写盘（SpillSink），正文留预览 + 行寻址指针（read_file(path, offset=N)
+/// 可回读），与 terminal 的 spill_or_truncate 同款。
+fn spill_search_result(raw: String) -> String {
+    let inline = crate::result_budget::model_visible_cap("search_files")
+        .min(crate::spill::SPILL_INLINE_CHARS);
+    crate::spill::SpillSink::default_dir()
+        .try_spill_by_content(&raw, inline)
+        .unwrap_or(raw)
+}
+
 fn paginate_read_body(content: &str, start_line: u64, budget: usize) -> (String, bool) {
     // `budget` is in **characters** (the registry/`read_file` contract), so the
     // accumulator must count chars too — `String::len()` is bytes, and with CJK
@@ -470,6 +504,83 @@ impl ToolHandler for ReadFileHandler {
                files to find a string.\n\
              - Rewriting a file → use `write_file`; for a partial edit use `patch`.",
             JsonSchema::object(props, vec!["path".into()]),
+        )
+    }
+}
+
+/// B2-4（docs/optimization-plan.md）：批量读取——一次调用读多个文件，
+/// 合并返回，省掉每文件一整轮的往返（lynn 04 §5：轮次 -25%）。
+/// 每文件独立走 [`ReadFileHandler`]（预算/分页/凭据闸/遍历检查全继承），
+/// 单文件失败不中断批量（错误内联在该文件分节里）。
+pub struct ReadFilesHandler {
+    inner: Arc<ReadFileHandler>,
+}
+
+impl ReadFilesHandler {
+    pub fn new(inner: Arc<ReadFileHandler>) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for ReadFilesHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        const MAX_FILES: usize = 5;
+        let paths = params
+            .get("paths")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                ToolError::InvalidParams(
+                    "Missing 'paths' parameter (array of file paths)".into(),
+                )
+            })?;
+        if paths.is_empty() {
+            return Err(ToolError::InvalidParams("'paths' is empty".into()));
+        }
+        if paths.len() > MAX_FILES {
+            return Err(ToolError::InvalidParams(format!(
+                "'paths' has {} entries — batch read is capped at {MAX_FILES} per call; \
+                 split into multiple calls",
+                paths.len()
+            )));
+        }
+
+        let mut out = String::new();
+        for (i, p) in paths.iter().enumerate() {
+            let path = p
+                .as_str()
+                .ok_or_else(|| ToolError::InvalidParams("paths[] must be strings".into()))?;
+            let sub = json!({ "path": path });
+            let section = match self.inner.execute(sub).await {
+                Ok(body) => body,
+                Err(e) => format!("ERROR: {e}"),
+            };
+            out.push_str(&format!("\n\n## [{i}] {path}\n{section}"));
+        }
+
+        let mut result = format!("batch read: {} file(s)", paths.len());
+        result.push_str(&out);
+        Ok(result)
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "paths".into(),
+            json!({
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "File paths to read (1-5 per call)"
+            }),
+        );
+
+        tool_schema(
+            "read_files",
+            "Batch-read multiple files in ONE call (1-5 paths). Each file gets the same \
+             budget/paging as read_file; per-file errors are inlined instead of aborting \
+             the batch. Use this instead of several read_file calls when inspecting a \
+             small set of files (saves a round trip per file).",
+            JsonSchema::object(props, vec!["paths".into()]),
         )
     }
 }
@@ -895,9 +1006,14 @@ impl ToolHandler for SearchFilesHandler {
 
         match target {
             "content" => {
-                self.backend
+                let raw = self
+                    .backend
                     .search_content(pattern, path, file_glob, max_results, context)
-                    .await
+                    .await?;
+                // B2-3（docs/optimization-plan.md）：大结果外置——溢出部分
+                // 写盘，正文留预览 + 行寻址指针（read_file(path, offset=N)
+                // 可回读），terminal 的 spill_or_truncate 同款。
+                Ok(spill_search_result(raw))
             }
             "files" => self.backend.search_files(pattern, path).await,
             other => Err(ToolError::InvalidParams(format!(
