@@ -36,30 +36,30 @@ function render(text: string, icons = false): string {
 
 describe("行内路径链接（PathLink）", () => {
   it("只显示文件名，完整路径留给 title", () => {
-    const html = render("改完了 F:\\<workspace>\\hermix\\db1.py 这个文件");
+    const html = render("改完了 F:\\users\\test\\hermix\\db1.py 这个文件");
 
     // 可见文本 = 文件名
     expect(html).toContain(">db1.py<");
     // 完整路径仍在 title 里（悬停可见 + 点击按它解析）
-    expect(html).toContain('title="打开 F:\\<workspace>\\hermix\\db1.py"');
+    expect(html).toContain('title="打开 F:\\users\\test\\hermix\\db1.py"');
   });
 
   it("默认不画图标（思考块 / 工具结果共用同一渲染器）", () => {
-    const html = render("改完了 F:\\<workspace>\\hermix\\db1.py 这个文件");
+    const html = render("改完了 F:\\users\\test\\hermix\\db1.py 这个文件");
     expect(html).not.toContain("md-path-link__icon");
     // 路径本身仍然是可点的链接，只是不带图标
     expect(html).toContain("md-path-link--abs");
   });
 
   it("最终答复正文开图标，尺寸 16px（13px 时扩展名字母认不出）", () => {
-    const html = render("改完了 F:\\<workspace>\\hermix\\db1.py 这个文件", true);
+    const html = render("改完了 F:\\users\\test\\hermix\\db1.py 这个文件", true);
     expect(html).toContain('width="16"');
     expect(html).toContain("md-path-link__icon");
     expect(html).not.toContain('width="13"');
   });
 
   it("正文图标是 soft 形态（淡染底 + 文字色字形，不是实色方块）", () => {
-    const html = render("改完了 F:\\<workspace>\\hermix\\db1.py 这个文件", true);
+    const html = render("改完了 F:\\users\\test\\hermix\\db1.py 这个文件", true);
     // 淡染：底色不透明度 0.22 → 0.14（实色形态是 1 → 0.86）
     expect(html).toContain('stop-opacity="0.22"');
     expect(html).toContain('stop-opacity="0.14"');

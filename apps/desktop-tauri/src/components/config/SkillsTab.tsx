@@ -1,6 +1,7 @@
 // SkillsTab.tsx —— 技能 Tab：GET /api/skills + 启停（R2-4 拆分第七步）。
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Sparkles } from "lucide-react";
+import { RefreshCw, Sparkles, Upload } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import * as api from "../../api";
 import type { SkillInfo } from "../../api";
 import { CATEGORY_LABELS } from "./toolTabsData";
@@ -85,6 +86,41 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
 
   const enabledCount = useMemo(() => skills.filter((s) => s.enabled).length, [skills]);
 
+  // S2-1：技能导入——选源目录（含 SKILL.md）→ import_skill 命令；
+  // 同名已存在时询问是否覆盖（overwrite=true 重试一次）。
+  const handleImport = useCallback(async () => {
+    const dir = await invoke<string | null>("pick_directory");
+    if (!dir) return;
+    try {
+      await invoke("import_skill", { sourcePath: dir, overwrite: false });
+      void refresh();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("已存在") && window.confirm(`${msg}\n\n覆盖导入？`)) {
+        try {
+          await invoke("import_skill", { sourcePath: dir, overwrite: true });
+          void refresh();
+        } catch (e2) {
+          window.alert(String(e2));
+        }
+      } else {
+        window.alert(msg);
+      }
+    }
+  }, [refresh]);
+
+  // S2-1：技能导出——选目标目录 → export_skill 命令。
+  const handleExport = useCallback(async (name: string) => {
+    const dir = await invoke<string | null>("pick_directory");
+    if (!dir) return;
+    try {
+      const out = await invoke<string>("export_skill", { name, outDir: dir });
+      window.alert(`已导出：${out}`);
+    } catch (e) {
+      window.alert(String(e));
+    }
+  }, []);
+
   return (
     /* 统一骨架：工具栏 → 筛选 chips → 统计 → 分类分组；间距交给 space-y-5。 */
     <div className="space-y-5">
@@ -92,6 +128,13 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         <div className="flex-1">
           <SearchBar query={query} onQuery={onQuery} />
         </div>
+        <button
+          onClick={() => void handleImport()}
+          className="btn-secondary btn-sm flex-shrink-0"
+          title="从目录导入技能（须含 SKILL.md）"
+          aria-label="导入技能">
+          <Upload className="icon-md" />
+        </button>
         <button
           onClick={refresh}
           disabled={loading}
@@ -162,7 +205,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
                 强行放三列，卡片被压到 240px。 */}
             <div className="grid grid-cols-1 gap-2 @2xl:grid-cols-2 @5xl:grid-cols-3">
               {grouped[cat].map((s) => (
-                <SkillCard key={s.name} skill={s} catLabel={catLabel} onToggle={(name) => {
+                <SkillCard key={s.name} skill={s} catLabel={catLabel} onExport={handleExport} onToggle={(name) => {
                   setSkills((prev) => prev.map((p) => p.name === name ? { ...p, enabled: !p.enabled } : p));
                 }} />
               ))}

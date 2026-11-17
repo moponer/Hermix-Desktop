@@ -1,5 +1,6 @@
 // SkillCard.tsx —— 技能卡 + 内容阅读弹窗（R2-4 拆分第三步，从 ToolTabs 抽出）。
 import { useState, useCallback } from "react";
+import { Download } from "lucide-react";
 import { InitialIcon } from "../ui/InitialIcon";
 import * as api from "../../api";
 import type { SkillInfo } from "../../api";
@@ -8,10 +9,12 @@ import { ConfirmDialog, Modal, SkeletonCard } from "../ui";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { MarkdownBody } from "../MarkdownBody";
 
-export function SkillCard({ skill, catLabel, onToggle }: {
+export function SkillCard({ skill, catLabel, onToggle, onExport }: {
   skill: SkillInfo;
   catLabel: (key: string) => string;
   onToggle?: (name: string) => void;
+  /** S2-1：导出技能（父组件弹目录选择后调 export_skill 命令）。 */
+  onExport?: (name: string) => void;
 }) {
   const [showModal, setShowModal] = useState(false);
   const [content, setContent] = useState<string | null>(null);
@@ -70,13 +73,24 @@ export function SkillCard({ skill, catLabel, onToggle }: {
         meta={catLabel(skill.category) || "skill"}
         description={skill.description || "（无描述）"}
         action={
-          <ToggleSwitch
-            enabled={skill.enabled}
-            onToggle={requestToggle}
-            disabled={toggling}
-            offLabel={`停用 ${skill.name}`}
-            onLabel={`启用 ${skill.name}`}
-          />
+          <div className="flex items-center gap-1.5">
+            {onExport && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onExport(skill.name); }}
+                className="btn-secondary btn-sm flex-shrink-0"
+                title={`导出技能 ${skill.name}`}
+                aria-label={`导出技能 ${skill.name}`}>
+                <Download className="icon-sm" />
+              </button>
+            )}
+            <ToggleSwitch
+              enabled={skill.enabled}
+              onToggle={requestToggle}
+              disabled={toggling}
+              offLabel={`停用 ${skill.name}`}
+              onLabel={`启用 ${skill.name}`}
+            />
+          </div>
         }
       />
 
