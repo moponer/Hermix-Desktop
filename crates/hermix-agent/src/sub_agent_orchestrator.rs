@@ -862,7 +862,13 @@ impl SubAgentOrchestrator {
         // 或产出计划，无构建可验证）。结果注入终态 envelope 的
         // `verification` 字段——失败即客观信号，父代理可据此重派。
         let verification = if req.role == SubAgentRole::General {
-            verify_cargo_project().await
+            // 测试环境跳过：verify 会跑 cargo check（分钟级），把
+            // spawn_background 等单测的终态等待拖到超时。
+            if cfg!(test) {
+                None
+            } else {
+                verify_cargo_project().await
+            }
         } else {
             None
         };

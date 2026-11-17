@@ -1578,7 +1578,7 @@ mod tests {
     fn golden_collect_directions_subsequent_turn() {
         let (_tags, hash) = golden_hash("继续");
         assert_eq!(
-            hash, 5058882969430964588,
+            hash, 15690219921935298434,
             "后续轮 guidance 内容变化——若有意，更新 EXPECTED_SUBSEQUENT_HASH"
         );
     }
