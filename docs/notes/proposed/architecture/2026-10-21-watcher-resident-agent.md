@@ -353,7 +353,7 @@ L0-L4 是能力，L5 是留存。**L5 做不好，前五层没人用；L0-L4 做
 - `MessageRole::Watcher` / `injected_by`（失败模式 #9）：这是 P2 的前置条件，动的是 `hermix-core` 的消息类型 + 持久化 + provider 映射 + 前端渲染四处，成本不低。**在它落地前，P2 的派活只能做成"人确认后由人代发"**。
 - 会话级写锁：`steer` 与用户并发写同一会话需要互斥，现有代码是否已有需核。
 - 未读/已读信号：前端目前没有"守望者消息已读"的上报，P1 的降频依赖它。
-- 观测盲区：`SessionStalled` 的阈值定多少、等待审批算不算 stalled，需要用真实日志校（参考 `<USERPROFILE>\.hermix\logs\agent.log`）。
+- 观测盲区：`SessionStalled` 的阈值定多少、等待审批算不算 stalled，需要用真实日志校（参考 `C:\Users\<user>\.hermix\logs\agent.log`）。
 
 **仍不确定（后续调研清单）**
 

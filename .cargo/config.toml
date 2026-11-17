@@ -4,15 +4,15 @@
 #   跳过编译; 删了 target 重编也能秒回, 多 worktree / 多 profile 共享同一套
 #   依赖编译产物, 根治 "target 持续增大" 的痛点.
 #   sccache.exe 在 PATH, 这里用绝对路径更稳 (不受 shell PATH 影响).
-rustc-wrapper = "<USERPROFILE>/.cargo/bin/sccache.exe"
+rustc-wrapper = "sccache"
 
 # 编译产物位置（2026-08-10 定案，最终形态）:
 # 这里**不配置 target-dir**. 原因:
-#   1. 绝对路径 (如 "<repo>/release/target") 锁死仓库位置,
+#   1. 绝对路径 (如 "<workspace>/hermix-desktop/release/target") 锁死仓库位置,
 #      换机器/clone 全炸 —— 绝不允许.
 #   2. 相对路径 (如 "release/target") 会被 cargo 按**运行时的 cwd** 解析:
 #      纯 cargo 在仓库根跑 → 仓库内, 但 tauri build 的 cargo 子进程相对
-#      src-tauri manifest 解析 → 上溯 4 级跑到仓库外 (<repo-parent>\release),
+#      src-tauri manifest 解析 → 上溯 4 级跑到仓库外 (F:\<workspace>\release),
 #      产物分裂两处, 用户找不到 —— 同样废弃.
 #   3. 不写 target-dir 时 cargo 用默认位置: 纯 cargo → <仓库根>/target/,
 #      src-tauri 内 → src-tauri/target/. 都在仓库内, .gitignore 已盖,

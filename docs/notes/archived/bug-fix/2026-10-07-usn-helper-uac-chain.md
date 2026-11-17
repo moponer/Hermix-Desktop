@@ -23,7 +23,7 @@ Archived: 2026-10-13 — 所属子系统（本地文件搜索 / usn-indexer）�
 ## Alternatives considered
 
 - **强杀提权进程**（`taskkill /F`）：非提权进程无权杀提权进程（已实测 ACCESS_DENIED）；任务管理器手工杀则要求用户操作，不如 idle 自杀零接触。
-- **helper 内嵌 manifest 自动提权 + 应用整体 requireAdministrator**：一劳永逸解决 UAC 时机，但改变整个应用的启动体验（每次开应用都弹 UAC），影响面远大于本 bug。
+- **helper 内嵌 manifest 自动提权 + 应用整体 require<user>**：一劳永逸解决 UAC 时机，但改变整个应用的启动体验（每次开应用都弹 UAC），影响面远大于本 bug。
 - **放弃提权 helper、全走 jwalk**：无授权依赖但全盘分钟级（正是本次"扫描半天"的兜底路径本身），性能倒退不可接受。
 - **版本号嵌入 helper 文件名做兼容选择**：增加构建脚本复杂度；mtime 择新在 dev 场景等价且零构建改动。注意其局限：若未来出现"故意部署旧 helper"的需求需回改。
 

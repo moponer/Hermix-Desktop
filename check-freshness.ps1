@@ -1,4 +1,4 @@
-$repo = '<repo>'
+$repo = '<workspace>/hermix-desktop'
 $sidecar = Join-Path $repo 'apps/desktop-tauri/src-tauri/binaries/hermix-x86_64-pc-windows-msvc.exe'
 if (-not (Test-Path $sidecar)) {
     Write-Host "SKIP: sidecar not present"

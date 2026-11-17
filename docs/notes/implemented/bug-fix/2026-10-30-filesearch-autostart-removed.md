@@ -18,7 +18,7 @@ Status: implemented — 2026-10-30 移除 `HermixFileSearch` 计划任务的注�
 用户报告"每次关闭主程序总有残留进程，导致下次启动或安装失败"。实测这台机器上的计划任务：
 
 ```
-Task To Run   : <repo>/target/debug/hermix-filesearch.exe --serve --data-dir ...
+Task To Run   : <workspace>/hermix-desktop/target/debug/hermix-filesearch.exe --serve --data-dir ...
 Schedule Type : At logon time        Run As: Alex        RunLevel: Highest
 ```
 
@@ -42,7 +42,7 @@ Schedule Type : At logon time        Run As: Alex        RunLevel: Highest
 | 计划任务保留但去掉 `AtLogOn` 触发器，主程序用 `schtasks /run` 按需拉起 | 能免 UAC，但**任务本身必须常驻存在**，而它占的正是"用户不可见的提权入口"这个位置；`-Force` 抢注问题依旧（dev 构建照样能把它指到 target/debug）。多一个需要维护的系统级状态，换来的只是省一次 UAC |
 | 只修"退出时等待"，不动自启 | 等待只覆盖"用户主动退出"这一条路径。任务管理器结束、注销、关机、崩溃都不走 `cleanup`，而计划任务会在下次登录把 helper 重新拉起来——残留是**设计产生**的，不是漏杀 |
 | 给 helper 加 `TerminateProcess` 兜底 | 提权进程，普通权限拒绝访问；宿主即使提权也不该去杀别的提权进程（安全边界） |
-| 把 filesearch 并入主进程（不再拆 exe） | 主程序会被迫 `requireAdministrator`，与"便携、双击即用"的产品前提冲突（2026-10-14 笔记 §5 的原始取舍） |
+| 把 filesearch 并入主进程（不再拆 exe） | 主程序会被迫 `require<user>`，与"便携、双击即用"的产品前提冲突（2026-10-14 笔记 §5 的原始取舍） |
 
 ## Consequences
 

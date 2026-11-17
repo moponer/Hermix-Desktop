@@ -597,7 +597,7 @@ pub fn write_yaml_atomic(path: &Path, yaml: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// 把配置文件 ACL 收紧到「当前用户 + Administrators + SYSTEM」。
+/// 把配置文件 ACL 收紧到「当前用户 + <user>s + SYSTEM」。
 ///
 /// `config.yaml` 里有各 provider 的 `api_key` 明文，而默认继承的 ACL 往往把
 /// 文件开放给 `Users`（共享机 / 多用户 RDP 上任何账户可读）。这不是加密 ——
@@ -606,7 +606,7 @@ pub fn write_yaml_atomic(path: &Path, yaml: &str) -> Result<(), ConfigError> {
 ///
 /// 失败只 warn：ACL 收紧是纵深防御，不能因为它在某些账户/文件系统上不可用
 /// 就让「保存设置」直接失败。用 SID（`*S-1-5-32-544`）而不是本地化组名，
-/// 中文系统上 `Administrators` 这个名字并不成立。
+/// 中文系统上 `<user>s` 这个名字并不成立。
 #[cfg(windows)]
 fn restrict_owner_only(path: &Path) {
     use std::os::windows::process::CommandExt;

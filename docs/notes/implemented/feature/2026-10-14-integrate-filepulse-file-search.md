@@ -59,7 +59,7 @@ FilePulse **完全没有过滤机制**（$RECYCLE.BIN、System Volume Informatio
 
 ### 5. 进程形态：独立 exe（关键决策）
 
-MFT 枚举与 USN 读取都要求管理员权限（`\\.\C:` 卷句柄 + backup privilege，windows_ntfs.rs:389-410）。FilePulse 的解法是让**整个应用**以管理员启动（manifest `requireAdministrator`）——它作为独立 app 可以这么要求，hermix 不能。
+MFT 枚举与 USN 读取都要求管理员权限（`\\.\C:` 卷句柄 + backup privilege，windows_ntfs.rs:389-410）。FilePulse 的解法是让**整个应用**以管理员启动（manifest `require<user>`）——它作为独立 app 可以这么要求，hermix 不能。
 
 因此 FilePulse core 装进一个**独立 exe：`hermix-filesearch.exe`**：
 

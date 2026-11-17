@@ -129,7 +129,7 @@ function PathLink({ path, icons, onClick }: PathLinkProps) {
       {showIcon && (
         <FileTypeIcon name={name} size={16} variant="soft" className="md-path-link__icon" />
       )}
-      {/* 只显示文件名：正文里写的是一整串 `<repo-parent>\...\db1.py`，铺满整行
+      {/* 只显示文件名：正文里写的是一整串 `F:\<workspace>\...\db1.py`，铺满整行
           把句子撕成两段，读者真正要找的是 `db1.py`。目录信息不丢 —— title
           属性仍是完整路径，悬停即见。 */}
       <span className="truncate">{name}</span>
@@ -849,8 +849,8 @@ function useThrottledValue<T>(value: T, intervalMs: number): T {
  * 归一化 markdown 图片目的地里的 Windows 绝对路径（反斜杠 → 正斜杠）。
  *
  * 必须在 satteri 解析**之前**做：CommonMark 把 `\U` `\.` 等反斜杠当转义/
- * 字面量处理，satteri 会把 `<USERPROFILE>\.hermix\x.png` 搞成
- * `C:%5CUsers%5CAdministrator.hermix%5C...`——反斜杠被编码、`\.` 的反斜杠
+ * 字面量处理，satteri 会把 `C:\Users\<user>\.hermix\x.png` 搞成
+ * `C:%5CUsers%5C<user>.hermix%5C...`——反斜杠被编码、`\.` 的反斜杠
  * 被吞，路径信息不可逆丢失，下游 convertFileSrc 无力回天（2026-10-17
  * 对话内截图破图根因）。跳过 fence 内的行，避免改写代码示例。
  */

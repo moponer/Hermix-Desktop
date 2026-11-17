@@ -1,6 +1,6 @@
 // R2：把 ToolTabs 的共享 UI 件（SearchBar…SkeletonGrid）抽到 toolTabsShared.tsx
 import { readFileSync, writeFileSync } from "node:fs";
-const p = "<repo>/apps/desktop-tauri/src/components/config/ToolTabs.tsx";
+const p = "f:/<workspace>/hermix-desktop/apps/desktop-tauri/src/components/config/ToolTabs.tsx";
 const raw = readFileSync(p, "utf8");
 const eol = raw.includes("\r\n") ? "\r\n" : "\n";
 const lines = raw.split(eol);
@@ -24,7 +24,7 @@ const shared = [
   "",
   ...block,
 ].join(eol);
-writeFileSync("<repo>/apps/desktop-tauri/src/components/config/toolTabsShared.tsx", shared, "utf8");
+writeFileSync("f:/<workspace>/hermix-desktop/apps/desktop-tauri/src/components/config/toolTabsShared.tsx", shared, "utf8");
 
 // ToolTabs：删除块 + 补导入
 lines.splice(1040, 1176 - 1040);

@@ -47,7 +47,7 @@ viewer 是 `windows_subsystem = "windows"`，无控制台、stderr 全丢，界�
 原因链条（两次都白编才定位出来）：
 
 1. `tauri::generate_context!()` 是**宏**，它在**宏展开期**读 `tauri.conf.json`。
-2. 本仓库的 `.cargo/config.toml` 设了 `rustc-wrapper = "<USERPROFILE>/.cargo/bin/sccache.exe"`（见 AGENTS.md 的 sccache 运维条目）。**sccache 的缓存键 = 源码 + 编译参数 + build script 输出**，**不含宏展开期读取的外部文件**。`tauri-build` 发的 `rerun-if-changed=tauri.conf.json` 只让 build script 重跑，build script 输出没变 → sccache 判定 **HIT** → 把第一次编译（嵌着旧 CSP）的 rlib 原样吐回来。
+2. 本仓库的 `.cargo/config.toml` 设了 `rustc-wrapper = "C:/Users/<user>/.cargo/bin/sccache.exe"`（见 AGENTS.md 的 sccache 运维条目）。**sccache 的缓存键 = 源码 + 编译参数 + build script 输出**，**不含宏展开期读取的外部文件**。`tauri-build` 发的 `rerun-if-changed=tauri.conf.json` 只让 build script 重跑，build script 输出没变 → sccache 判定 **HIT** → 把第一次编译（嵌着旧 CSP）的 rlib 原样吐回来。
 3. 所以 **"cargo 确实重编了 crate"（输出 `Compiling hermix-viewer`）并不代表配置生效**——sccache 命中时，rustc 根本没跑。
 
 **坑上加坑：`cargo clean -p` 也没用。** 试过 `cargo clean -p hermix-viewer`（移除 1055 个文件、1.3GiB）后重新编译，**编出来的 exe 里还是旧 CSP**——因为对象还在 sccache 缓存里，源码哈希没变照样 HIT。

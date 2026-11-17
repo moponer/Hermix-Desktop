@@ -13,11 +13,11 @@ use hermix_mcp::{McpClient, McpServerConfig};
 const SERVERS: [(&str, &str); 2] = [
     (
         "bing-cn-mcp-enhanced",
-        "C:\\Users\\Administrator\\AppData\\Roaming\\npm\\node_modules\\bing-cn-mcp-enhanced\\build\\index.js",
+        "C:\\Users\\<user>\\AppData\\Roaming\\npm\\node_modules\\bing-cn-mcp-enhanced\\build\\index.js",
     ),
     (
         "i18n-mcp-server",
-        "C:\\Users\\Administrator\\AppData\\Roaming\\npm\\node_modules\\i18n-mcp-server\\dist\\index.js",
+        "C:\\Users\\<user>\\AppData\\Roaming\\npm\\node_modules\\i18n-mcp-server\\dist\\index.js",
     ),
 ];
 

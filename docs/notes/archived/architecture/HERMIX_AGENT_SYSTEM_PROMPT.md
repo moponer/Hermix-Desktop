@@ -164,7 +164,7 @@ Markdown 用于**结构**而非强调。短技术 token（标签 / 路径 / 命�
 3. `directions.rs` 新增 `load_project_conventions(workspace: &str) -> Option<String>`：读 `<workspace>/AGENTS.md`，抽取标题含 `项目约定` / `project conventions` / `conventions`（不区分大小写、`#`/`##` 级）的段落到下一个同级/上级标题为止。无工作区 / 无 AGENTS.md / 无约定段 → `None`，核心 prompt 不变。
 4. `prompt_assembly.rs`：`build_system_prompt` 调用处用 `config.workspace.as_deref().and_then(load_project_conventions)` 取约定，传给 `collect_directions`。
 
-**效果**：核心（Part A）永远不变；产品方的铁律只在该工作区（`<repo>` 的 `AGENTS.md` 的 `## Conventions` 段）生效；换工作区 / 换用户 → 自动不加载。纯代码/CSS 铁律（无蓝紫、sidecar cp、WAL、dedup）本就不进 prompt，留代码与 AGENTS.md。
+**效果**：核心（Part A）永远不变；产品方的铁律只在该工作区（`F:\<workspace>\hermix-desktop` 的 `AGENTS.md` 的 `## Conventions` 段）生效；换工作区 / 换用户 → 自动不加载。纯代码/CSS 铁律（无蓝紫、sidecar cp、WAL、dedup）本就不进 prompt，留代码与 AGENTS.md。
 
 ## C3 落地状态（已实施）
 

@@ -6,7 +6,7 @@
     "frontendDist": "../../../release/frontend",
     "devUrl": "http://127.0.0.1:1420",
     "beforeDevCommand": "npm run dev:vite",
-    "beforeBuildCommand": "node <repo>/apps/desktop-tauri/scripts/prepare-build.mjs"
+    "beforeBuildCommand": "node ../desktop-tauri/scripts/prepare-build.mjs"
   },
   "app": {
     "windows": [

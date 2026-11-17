@@ -1034,8 +1034,8 @@ mod tests {
 
     #[test]
     fn sid_derivation_is_deterministic() {
-        let a = workspace_write_sid(r"C:\spiker\hermix-desktop");
-        let b = workspace_write_sid(r"C:\spiker\hermix-desktop");
+        let a = workspace_write_sid(r"C:\<workspace>\hermix-desktop");
+        let b = workspace_write_sid(r"C:\<workspace>\hermix-desktop");
         assert_eq!(a, b);
         assert!(a.starts_with("S-1-4-"));
         let parts: Vec<&str> = a.split('-').collect();

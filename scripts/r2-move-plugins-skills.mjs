@@ -1,6 +1,6 @@
 // R2 第四步之三/四：PluginsTab(+PluginCard) 与 SkillsTab 出走，ToolTabs 变 barrel
 import { readFileSync, writeFileSync } from "node:fs";
-const p = "<repo>/apps/desktop-tauri/src/components/config/ToolTabs.tsx";
+const p = "f:/<workspace>/hermix-desktop/apps/desktop-tauri/src/components/config/ToolTabs.tsx";
 const raw = readFileSync(p, "utf8");
 const eol = raw.includes("\r\n") ? "\r\n" : "\n";
 const lines = raw.split(eol);
@@ -34,7 +34,7 @@ const pluginsFile = [
   "",
   ...pluginsBlock,
 ].join(eol);
-writeFileSync("<repo>/apps/desktop-tauri/src/components/config/PluginsTab.tsx", pluginsFile, "utf8");
+writeFileSync("f:/<workspace>/hermix-desktop/apps/desktop-tauri/src/components/config/PluginsTab.tsx", pluginsFile, "utf8");
 
 const skillsFile = [
   "// SkillsTab.tsx —— 技能 Tab：GET /api/skills + 启停（R2-4 拆分第七步）。",
@@ -48,7 +48,7 @@ const skillsFile = [
   "",
   ...skillsBlock,
 ].join(eol);
-writeFileSync("<repo>/apps/desktop-tauri/src/components/config/SkillsTab.tsx", skillsFile, "utf8");
+writeFileSync("f:/<workspace>/hermix-desktop/apps/desktop-tauri/src/components/config/SkillsTab.tsx", skillsFile, "utf8");
 
 // ToolTabs 变 barrel：保留头部注释 + 四个 re-export
 const barrel = [

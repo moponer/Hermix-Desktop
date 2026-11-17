@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appDir = path.resolve(__dirname, ".."); // apps/desktop-tauri
-const repoRoot = path.resolve(appDir, "..", ".."); // <repo>
+const repoRoot = path.resolve(appDir, "..", ".."); // F:\<workspace>\hermix-desktop
 const targetDir = path.join(repoRoot, "target"); // 单 workspace 唯一产物目录
 
 const mode = process.argv[2] || "dev";

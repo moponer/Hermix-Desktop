@@ -50,5 +50,5 @@ Status: implemented — 2026-11-07 落地
   `dsh-engine` 199 MB、`runtime` 195 MB、`data` 125 MB），属功能必需，不属可回收项。
 - 2026-11-07 追加：按用户要求把 `~/.hermix` 清空到只留模型配置（`config.yaml` / `.env` /
   `auth.json`，共 12 KB），用于从零观察新行为；其余内容（会话、记忆、技能、自动化任务、MCP 配置、
-  引擎与全部缓存）已备份到 `<USERPROFILE>\hermix-home-backup-20261107`（150 MB），
+  引擎与全部缓存）已备份到 `C:\Users\<user>\hermix-home-backup-20261107`（150 MB），
   需要时可单个恢复。

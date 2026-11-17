@@ -2026,7 +2026,7 @@ mod tests {
         let out = to_absolute_path("D:\\qcc\\Cargo.toml");
         assert_eq!(out, "D:\\qcc\\Cargo.toml");
         // The junction target prefix must NOT appear.
-        assert!(!out.contains("F:\\spiker\\hemix-desktop"));
+        assert!(!out.contains("F:\\<workspace>\\hemix-desktop"));
         assert!(!out.starts_with("\\\\?\\"));
     }
 

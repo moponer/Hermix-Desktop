@@ -2,7 +2,7 @@
 
 Archived: 2026-09-30
 
-> 日期：2026-08-15 ~ 2026-08-17 | 项目：Hermix Desktop（<repo>）
+> 日期：2026-08-15 ~ 2026-08-17 | 项目：Hermix Desktop（F:\<workspace>\hermix-desktop）
 > 依据：`docs/code-analysis-report-2026-08-15.md`（23 个 ≥1800 行上帝文件定位）
 > 状态：**全部完成（25 个提交，含 23 个上帝文件拆分）**
 

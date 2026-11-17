@@ -9,11 +9,11 @@ use std::time::Duration;
 
 use hermix_plugin::PluginManager;
 
-const SHELL: &str = r"<repo>\apps\desktop-tauri\src-tauri\resources\loader\hx-shell.exe";
-const LOADER_DLL: &str = r"<repo>\apps\desktop-tauri\src-tauri\resources\loader\WebView2Loader.dll";
-const ESBUILD: &str = r"<repo>\apps\desktop-tauri\src-tauri\resources\loader\esbuild.exe";
-const REACT_UMD: &str = r"<repo>\apps\desktop-tauri\src-tauri\resources\loader\react\react.production.min.js";
-const REACT_DOM_UMD: &str = r"<repo>\apps\desktop-tauri\src-tauri\resources\loader\react\react-dom.production.min.js";
+const SHELL: &str = r"F:\<workspace>\hermix-desktop\apps\desktop-tauri\src-tauri\resources\loader\hx-shell.exe";
+const LOADER_DLL: &str = r"F:\<workspace>\hermix-desktop\apps\desktop-tauri\src-tauri\resources\loader\WebView2Loader.dll";
+const ESBUILD: &str = r"F:\<workspace>\hermix-desktop\apps\desktop-tauri\src-tauri\resources\loader\esbuild.exe";
+const REACT_UMD: &str = r"F:\<workspace>\hermix-desktop\apps\desktop-tauri\src-tauri\resources\loader\react\react.production.min.js";
+const REACT_DOM_UMD: &str = r"F:\<workspace>\hermix-desktop\apps\desktop-tauri\src-tauri\resources\loader\react\react-dom.production.min.js";
 
 #[tokio::test]
 async fn end_to_end_create_package_run() {

@@ -553,7 +553,7 @@ export function stdoutFallback(toolLower: string, stdout?: string): string | nul
 /**
  * WorkBuddy-style tool row:
  *
- *   [icon] 已读取 <repo-parent>\...  ✅
+ *   [icon] 已读取 F:\<workspace>\...  ✅
  *   [icon] 已搜索 .tsx · "query"  ✅
  *   [icon] 已执行命令 cargo build  🔄
  *

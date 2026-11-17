@@ -1,7 +1,7 @@
 // R2 第四步之二：ToolsetsTab + ToolsetCard → ToolsetsTab.tsx
 import { readFileSync, writeFileSync } from "node:fs";
-const p = "<repo>/apps/desktop-tauri/src/components/config/ToolTabs.tsx";
-const out = "<repo>/apps/desktop-tauri/src/components/config/ToolsetsTab.tsx";
+const p = "f:/<workspace>/hermix-desktop/apps/desktop-tauri/src/components/config/ToolTabs.tsx";
+const out = "f:/<workspace>/hermix-desktop/apps/desktop-tauri/src/components/config/ToolsetsTab.tsx";
 const raw = readFileSync(p, "utf8");
 const eol = raw.includes("\r\n") ? "\r\n" : "\n";
 const lines = raw.split(eol);

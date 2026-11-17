@@ -79,11 +79,11 @@ $ hx-packager list
 
 • local-music  [本地音乐]
     entry: ?  icon: music
-    path: <USERPROFILE>\.hermix\custom-apps\local-music
+    path: C:\Users\<user>\.hermix\custom-apps\local-music
 • playground  [Playground · Todo]
     entry: index.html  icon: bookmark
     installed_at: 1787334718 (unix)
-    path: <USERPROFILE>\.hermix\custom-apps\playground
+    path: C:\Users\<user>\.hermix\custom-apps\playground
 
 共 2 个已安装 app
 ```
@@ -97,7 +97,7 @@ $ hx-packager list
 ```bash
 $ hx-packager uninstall playground
 
-✓ 已卸载: <USERPROFILE>\.hermix\custom-apps\playground 
+✓ 已卸载: C:\Users\<user>\.hermix\custom-apps\playground 
         → C:\Users\ADMINI~1\AppData\Local\Temp\hermix-uninstall-trash\playground-1787362942
 ```
 
@@ -113,10 +113,10 @@ $ hx-packager install apps/playground playground
 [hx_packager] build_final_payload result: html=14064B, icon=17252B, archive=Some(719694)
 2026-08-22T01:42:25.776784Z  INFO 未配置 HERMIX_CODESIGN_PFX，跳过代码签名
 ✓ 已打包: playground\dist\playground.exe
-✓ 已安装: <USERPROFILE>\.hermix\custom-apps\playground
-    manifest: <USERPROFILE>\.hermix\custom-apps\playground\manifest.json
-    exe:      <USERPROFILE>\.hermix\custom-apps\playground\dist\playground.exe
-    metadata: <USERPROFILE>\.hermix\custom-apps\playground\installed.json
+✓ 已安装: C:\Users\<user>\.hermix\custom-apps\playground
+    manifest: C:\Users\<user>\.hermix\custom-apps\playground\manifest.json
+    exe:      C:\Users\<user>\.hermix\custom-apps\playground\dist\playground.exe
+    metadata: C:\Users\<user>\.hermix\custom-apps\playground\installed.json
 ```
 
 **installed.json** 内容：
@@ -143,7 +143,7 @@ $ hx-packager install apps/playground playground
 • playground  [Playground · Todo]
     entry: index.html  icon: bookmark
     installed_at: 1787362945 (unix)
-    path: <USERPROFILE>\.hermix\custom-apps\playground
+    path: C:\Users\<user>\.hermix\custom-apps\playground
 
 共 2 个已安装 app
 ```
@@ -155,7 +155,7 @@ $ hx-packager install apps/playground playground
 ## Step 7 — spawn installed exe + sqlite WASM 落盘
 
 ```bash
-$ "<USERPROFILE>\.hermix\custom-apps\playground\dist\playground.exe" &
+$ "C:\Users\<user>\.hermix\custom-apps\playground\dist\playground.exe" &
 ```
 
 **hx-shell.log 关键事件序列**：
@@ -199,7 +199,7 @@ IPC: {"id":"hx3","m":"win_setTitle","a":["Playground · Todo"]}        ← UI IP
 ```bash
 $ hx-packager uninstall playground
 
-✓ 已卸载: <USERPROFILE>\.hermix\custom-apps\playground 
+✓ 已卸载: C:\Users\<user>\.hermix\custom-apps\playground 
         → C:\Users\ADMINI~1\AppData\Local\Temp\hermix-uninstall-trash\playground-<ts>
 ```
 

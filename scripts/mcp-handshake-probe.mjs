@@ -5,11 +5,11 @@ import { spawn } from "node:child_process";
 const ENTRIES = [
   {
     name: "bing-cn-mcp-enhanced",
-    entry: "C:\\Users\\Administrator\\AppData\\Roaming\\npm\\node_modules\\bing-cn-mcp-enhanced\\build\\index.js",
+    entry: "C:\\Users\\<user>\\AppData\\Roaming\\npm\\node_modules\\bing-cn-mcp-enhanced\\build\\index.js",
   },
   {
     name: "i18n-mcp-server",
-    entry: "C:\\Users\\Administrator\\AppData\\Roaming\\npm\\node_modules\\i18n-mcp-server\\dist\\index.js",
+    entry: "C:\\Users\\<user>\\AppData\\Roaming\\npm\\node_modules\\i18n-mcp-server\\dist\\index.js",
   },
 ];
 

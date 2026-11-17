@@ -1,6 +1,6 @@
 # Decision Note: 对齐分析报告：hermix 全量能力 vs ZCode 参照系
 
-Status: proposed — 审计报告与处置计划（2026-10-18）。**批次 1（P0）与批次 2 部分项已于 2026-10-18 交付，见文末执行记录**；机制级写法对标另见 `2026-10-18-mechanism-level-alignment.md`。参照系：ZCode 源码（<repo-parent>/zcode-ref，同形态产品：桌面/CLI agent + 工具 + 技能 + 插件）；辅助参照 DeepSeek harness（文档技能包/裁剪引擎路线，已另行落地 dsh 引擎）。
+Status: proposed — 审计报告与处置计划（2026-10-18）。**批次 1（P0）与批次 2 部分项已于 2026-10-18 交付，见文末执行记录**；机制级写法对标另见 `2026-10-18-mechanism-level-alignment.md`。参照系：ZCode 源码（f:\<workspace>\zcode-ref，同形态产品：桌面/CLI agent + 工具 + 技能 + 插件）；辅助参照 DeepSeek harness（文档技能包/裁剪引擎路线，已另行落地 dsh 引擎）。
 
 ## Decision
 

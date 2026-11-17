@@ -6,7 +6,7 @@ Date: 2026-10-11
 
 ## Decision
 
-把 relay 从「一个 548 行的 server.js 什么都管」重构为**三条硬边界 + 一张路由注册表 + 一套原子发布流程**。核心原则：**每个产品自带自己的目录，路由从目录结构推导，发布 = 换目录 + 换符号链接**。以后任何产品（desktop/spiker/bbs/未来的）上线，都是「放目录、登记一行」，不再改 server.js 逻辑。
+把 relay 从「一个 548 行的 server.js 什么都管」重构为**三条硬边界 + 一张路由注册表 + 一套原子发布流程**。核心原则：**每个产品自带自己的目录，路由从目录结构推导，发布 = 换目录 + 换符号链接**。以后任何产品（desktop/<workspace>/bbs/未来的）上线，都是「放目录、登记一行」，不再改 server.js 逻辑。
 
 ### 1. 目录边界：产品自治（products/ 为唯一发布面）
 
@@ -18,7 +18,7 @@ apps/relay/
     auth.js proto.js audit.js relayctl.js   # 现状保留（连接层，本就不乱）
     products/
       desktop.js       # /desktop/* 路由处理：manifest + latest.zip（读 DEPLOY_DIR）
-      spiker.js        # /spiker/* 同构
+      <workspace>.js        # /<workspace>/* 同构
       pages.js         # 官网页面路由（/、/static-mascot.png、apk 下载）
   public/              # 静态站点（现状保留，express.static 兜底）
   deploy/              # ★ 新增：远程部署面的本地镜像（gitignore）
@@ -27,7 +27,7 @@ apps/relay/
         latest.zip
         manifest.json
       current -> 1     # 符号链接，serve 只认 current
-    spiker/
+    <workspace>/
       1/ current -> 1
 ```
 
@@ -40,7 +40,7 @@ apps/relay/
 ```js
 export const PRODUCTS = [
   { name: 'desktop', mount: '/desktop', deployDir: 'deploy/desktop/current' },
-  { name: 'spiker',  mount: '/spiker',  deployDir: 'deploy/spiker/current'  },
+  { name: '<workspace>',  mount: '/<workspace>',  deployDir: 'deploy/<workspace>/current'  },
 ];
 ```
 
@@ -52,7 +52,7 @@ server.js 遍历注册表挂路由，每个 product 模块导出同一个形状�
 | --------------------------------------------- | ----------------------------------------------- |
 | `app.get('/desktop/manifest.json')` 专属函数 ×2 组 | products/ 下同构模块，注册表驱动                           |
 | `/bbs` 反代一行 `app.use` 混在中间件区                  | registry 加 `{ type: 'proxy', target: 3901 }` 一行 |
-| `/spiker/` 路由（并行会话维护的 250 行起）                 | products/spiker.js，边界不变、可继续独立改                  |
+| `/<workspace>/` 路由（并行会话维护的 250 行起）                 | products/<workspace>.js，边界不变、可继续独立改                  |
 
 ### 3. 原子发布：版本目录 + current 链接 + upload-then-swap
 
@@ -78,7 +78,7 @@ server.js 遍历注册表挂路由，每个 product 模块导出同一个形状�
 ┌─ 静态层 public/        官网页面、mascot、apk 引导（改动少，独立）
 ├─ 产品层 products/      各产品的 manifest/zip/页面路由（每产品一个文件）
 ├─ 连接层 auth/proto     手机端⇄桌面端 WebSocket 配对与转发（不动）
-└─ 反代层 registry:proxy /bbs → 3901、/spiker-app → 独立进程（一行登记）
+└─ 反代层 registry:proxy /bbs → 3901、/<workspace>-app → 独立进程（一行登记）
 ```
 
 排错路径唯一化：网页错 → public/；下载/更新错 → deploy/<产品>/；连接错 → auth/proto；bbs 错 → bbs 进程。**不再需要在 548 行里找哪一段管这个 URL**。
@@ -126,7 +126,7 @@ deploy/desktop/releases.json        # 唯一真相源，随版本目录一起原
 
 ## Alternatives considered
 
-1. **拆成多个 Node 进程/端口**（desktop-relay、spiker-relay 各一个，Nginx 分流）——否决：违反「不新开域名/端口」的既定约束（见摘要 constraints），运维面从 1 个进程变 N 个，跨产品共享的 auth/proto 还得抽包，复杂度净增。
+1. **拆成多个 Node 进程/端口**（desktop-relay、<workspace>-relay 各一个，Nginx 分流）——否决：违反「不新开域名/端口」的既定约束（见摘要 constraints），运维面从 1 个进程变 N 个，跨产品共享的 auth/proto 还得抽包，复杂度净增。
 2. **纯路径约定不写注册表**（`/x/manifest.json` 永远映射 `deploy/x/current/`，零代码登记）——部分采纳：registry 本质就是这个约定 + proxy 例外。但纯约定无法表达 bbs 反代、apk 下载这类非载荷路由，留 registry 一处收敛比散在 server.js 各处好。
 3. **保持现状 + 只写发布脚本文档化**（checklist 化「manifest 最后传」）——否决：文档能记住步骤，防不住 scp 手滑和传输窗口期的不一致；错误类别应该由结构消灭而不是靠细心。
 4. **引入框架**（Fastify 插件化 / Nest 模块化）——否决：2334 行的代码库引框架是过度工程，两条硬边界（目录 + 注册表）用原生 express 三十行就能立住。
@@ -138,7 +138,7 @@ deploy/desktop/releases.json        # 唯一真相源，随版本目录一起原
 - **风险与对策**：
   - *符号链接在远端主机（宝塔/Nginx 静态托管）可能不跟随* → 对策：确认 express.static/读文件都走 Node 进程内路径（现状就是 Node serve，不经过 Nginx 静态），链接在 Node 侧解析，无此风险；迁移前在服务器上 `ln -s` 实测一发。
   - *迁移瞬间远端新旧目录并存* → 对策：发布脚本首跑时自动把 `/public/desktop/latest.zip` 迁入 deploy/desktop/1/ 再建链接，客户端 URL（`/desktop/latest.zip`）不变，无感切换。
-  - *并行会话正在维护 /spiker/ 路由* → 对策：重构 PR 不动 <u>spiker</u> 的内部逻辑，只把它包进 products/spiker.js 的接口壳里，搬移与改写不同时做。
+  - *并行会话正在维护 /<workspace>/ 路由* → 对策：重构 PR 不动 <u><workspace></u> 的内部逻辑，只把它包进 products/<workspace>.js 的接口壳里，搬移与改写不同时做。
 
 ## Reintroduction conditions
 

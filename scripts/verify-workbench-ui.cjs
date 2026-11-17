@@ -49,7 +49,7 @@ module.exports = async (page) => {
             // 指向真实存在的文件：不存在的路径只会让画布走降级分支
             // （显示 "工作台入口未就绪"），那验不到画布真的渲染。
             return Promise.resolve(
-              "<repo>/apps/desktop-tauri/public/demo-render.html",
+              "<workspace>/hermix-desktop/apps/desktop-tauri/public/demo-render.html",
             );
           }
           if (cmd === "workbench_ensure_session") return Promise.resolve(args.sessionId);
@@ -130,7 +130,7 @@ module.exports = async (page) => {
     };
   });
 
-  const shot = `<repo>/outputs/wb-${scenario}.png`;
+  const shot = `<workspace>/hermix-desktop/outputs/wb-${scenario}.png`;
   await page.screenshot({ path: shot });
   return JSON.stringify({ scenario, ...probe, errors: logs, shot }, null, 2);
 };
@@ -141,7 +141,7 @@ module.exports = async (page) => {
 if (require.main === module) {
   (async () => {
     const PW = process.env.PLAYWRIGHT_MODULE
-      || "<USERPROFILE>/AppData/Roaming/npm/node_modules/playwright";
+      || "C:/Users/<user>/AppData/Roaming/npm/node_modules/playwright";
     let chromium;
     try {
       ({ chromium } = require(PW));

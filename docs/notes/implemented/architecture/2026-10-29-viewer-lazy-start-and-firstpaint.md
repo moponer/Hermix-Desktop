@@ -10,14 +10,14 @@ renderer 那 300MB。先按宿主父进程链把全机 `msedgewebview2.exe` 归�
 
 | 归属 | 进程数 | 实时 CPU | 工作集 |
 |---|---|---|---|
-| spiker-tauri | 6 | **83%** | 177MB |
+| <workspace>-tauri | 6 | **83%** | 177MB |
 | GameViewer | 7 | **70%** | 80MB |
 | wb-switch-rust | 7 | 1.6% | 227MB |
 | prevhost（Explorer 预览窗格） | 10 | 0% | 286MB |
 | **hermix-desktop（主窗）** | 6 | 0.3% | 110MB |
 | **hermix-viewer（查看器）** | 6 | 0.3% | 97MB |
 
-25% 那笔账是 spiker-tauri + GameViewer；700MB 是**提交（commit）**口径下
+25% 那笔账是 <workspace>-tauri + GameViewer；700MB 是**提交（commit）**口径下
 hermix 两棵树的合计（主窗 223MB + 查看器 491MB = 714MB），不是常驻。Rust 侧本身只有
 `hermix-desktop` 17MB + `hermix.exe --stdio` 28.5MB。
 

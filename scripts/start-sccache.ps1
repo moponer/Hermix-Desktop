@@ -11,4 +11,4 @@
 $ErrorActionPreference = "Stop"
 $env:SCCACHE_DIR = "H:/sccache-cache"
 $env:SCCACHE_CACHE_SIZE = "50G"
-& "<USERPROFILE>/.cargo/bin/sccache.exe" --start-server
+& "C:/Users/<user>/.cargo/bin/sccache.exe" --start-server

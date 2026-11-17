@@ -510,7 +510,7 @@ OSWorld 上最好的 agent（Agent S2.5，56%）**距人类仍有约 40 个百�
 
 ### 5.2 Windows 边界四层（无 Docker 依赖）
 
-1. **受限令牌** `CreateRestrictedToken`：去 Administrators SID、加 deny-only SID、去 `SeDebugPrivilege`
+1. **受限令牌** `CreateRestrictedToken`：去 <user>s SID、加 deny-only SID、去 `SeDebugPrivilege`
 2. **Job Object**：`LIMIT_KILL_ON_JOB_CLOSE` + 内存/CPU/进程数上限（项目已有手写实现，见 sidecar 清理）
 3. **低完整性级别 / AppContainer**：写只允许指定目录
 4. **可选 WSL2 后端**：真正的 Linux 边界，等价于 Pi 的 Gondolin；`TerminalBackendType` 已有扩展点

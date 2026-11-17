@@ -1,6 +1,6 @@
 # Decision Note: 机制级写法逻辑对标：hermix vs ZCode vs Codex（vs DeepSeek harness）
 
-Status: proposed — 三方源码级机制对比与抄写清单（2026-10-18）。源码位置：hermix（仓库内）、ZCode（<repo-parent>/zcode-ref）、Codex（<refs>/ref-codex）、dsh-libreoffice-kit（<refs>\dsh-spike\kit，已另有笔记）。每项给出：各方写法 → 判定 → hermix 应抄的具体机制（文件+符号）。
+Status: proposed — 三方源码级机制对比与抄写清单（2026-10-18）。源码位置：hermix（仓库内）、ZCode（f:\<workspace>\zcode-ref）、Codex（<refs>/ref-codex）、dsh-libreoffice-kit（<refs>\dsh-spike\kit，已另有笔记）。每项给出：各方写法 → 判定 → hermix 应抄的具体机制（文件+符号）。
 
 ## Decision
 
