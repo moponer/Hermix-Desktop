@@ -22,7 +22,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronUp, Send, ShieldCheck } from "lucide-react";
-import { APPROVAL_RISK_LABEL } from "./approvalRisk";
+import { APPROVAL_RISK_LABEL, toolCapability } from "./approvalRisk";
 import type { ApprovalBatchMessageMeta, ApprovalMessageMeta } from "../types";
 import { describeToolArgs, toolVerb } from "./bubbleUtils";
 
@@ -226,6 +226,10 @@ export function ApprovalDrawer({
       </div>
 
       {/* 状态 + 原因（后端附带 reason 时展示） */}
+      {/* B8-1：名称项混淆修复——明确该工具的权限范围 */}
+      {single && toolCapability(single.tool) && (
+        <div className="approval-drawer__cap">权限范围：{toolCapability(single.tool)}</div>
+      )}
       <div className="approval-drawer__statusline">
         <span className="approval-drawer__status">⏳ 等待确认</span>
         {single?.reason && <span className="approval-drawer__desc">{single.reason}</span>}

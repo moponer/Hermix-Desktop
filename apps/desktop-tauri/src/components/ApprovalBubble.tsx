@@ -15,7 +15,7 @@
 // 风险 chip 用后端 `meta.riskLevel`; batch 卡改用 `items[].risk`(服务端工具注册表判定),
 // 不再按工具名猜测.
 import { useEffect, useState } from "react";
-import { APPROVAL_RISK_LABEL } from "./approvalRisk";
+import { APPROVAL_RISK_LABEL, toolCapability } from "./approvalRisk";
 import {
   AlertCircle,
   Check,
@@ -117,6 +117,8 @@ export function ApprovalRequestView({
   // 默认 caution(中风险) 比 dangerous(高风险) 更贴合「能弹卡的最轻等级」,
   // 避免 legacy 数据 / wire 缺字段时误标为高风险.
   const riskKey = (meta.riskLevel ?? "caution").toLowerCase();
+  // B8-1：权限范围一句话（名称项混淆修复）
+  const capability = toolCapability(meta.tool);
   const riskNorm: Risk =
     riskKey === "dangerous" ? "dangerous"
     : riskKey === "caution" ? "caution"
@@ -174,6 +176,12 @@ export function ApprovalRequestView({
             {fileName && <span className="apv-target">{fileName}</span>}
             {!fileName && intent && <span className="apv-target">{intent}</span>}
           </div>
+          {/* ②b Capability row（B8-1）：名称项混淆修复——明确该工具的权限范围 */}
+          {capability && (
+            <div className="apv-capability-row">
+              <span className="apv-capability">权限范围：{capability}</span>
+            </div>
+          )}
           {/* ③ File block (when path is known) */}
           {filePath && (
             <div className="apv-file-block">

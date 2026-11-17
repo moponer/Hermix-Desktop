@@ -1746,3 +1746,12 @@
 .tw-msg-row[data-state="err"] .tw-msg-icon { color: var(--color-error); }
 
 .tw-msg-icon-svg { color: inherit; }
+
+/* B8-1：审批卡权限范围行——名称项混淆修复（工具能做什么，一句话说清） */
+.apv-capability-row,
+.approval-drawer__cap,
+.approval-cap-line {
+  font-size: 12px;
+  opacity: 0.85;
+  margin: 2px 0;
+}

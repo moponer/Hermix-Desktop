@@ -2,7 +2,7 @@ import { ShieldAlert, Check, X, Terminal, Globe, Wrench, Clock } from "lucide-re
 import type { ApprovalDecision } from "../types";
 import type { ApprovalMessageMeta } from "../types";
 import { describeShellCommand } from "../lib/commandDescribe";
-import { APPROVAL_RISK_LABEL } from "./approvalRisk";
+import { APPROVAL_RISK_LABEL, toolCapability } from "./approvalRisk";
 
 export type ApprovalRequestShape = ApprovalMessageMeta;
 
@@ -157,6 +157,10 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
           data-pending-approval-id={isPending ? request.requestId : undefined}
         >
           {/* Line 1: Tool pill + Risk badge + Status */}
+          {/* B8-1：名称项混淆修复——明确该工具的权限范围 */}
+          {toolCapability(request.tool) && (
+            <div className="approval-cap-line">权限范围：{toolCapability(request.tool)}</div>
+          )}
           <div className="approval-pills">
             <span className="approval-tool-pill">
               <Icon className="icon-sm shrink-0" />
