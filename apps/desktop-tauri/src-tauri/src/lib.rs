@@ -1134,6 +1134,8 @@ pub fn run() {
             keep_awake::set_keep_awake,
             commands::get_data_dir,
             commands::pick_directory,
+            commands::export_skill,
+            commands::import_skill,
             commands::open_external_url,
             commands::restart_app,
             commands::list_backend_log_files,

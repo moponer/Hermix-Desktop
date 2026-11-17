@@ -1760,3 +1760,112 @@ pub fn open_in_viewer(path: Option<String>) -> Result<(), String> {
     cmd.spawn().map_err(|e| format!("启动查看器失败: {e}"))?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// 技能导入/导出（S1-2，docs/optimization-plan.md 技能生态互通）
+// ---------------------------------------------------------------------------
+
+/// 递归复制目录（返回复制的文件数）。技能目录 = SKILL.md + 可选脚本/资源。
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<u64, String> {
+    std::fs::create_dir_all(dst).map_err(|e| format!("创建目录失败 {}: {e}", dst.display()))?;
+    let mut count = 0u64;
+    for entry in
+        std::fs::read_dir(src).map_err(|e| format!("读取目录失败 {}: {e}", src.display()))?
+    {
+        let entry = entry.map_err(|e| format!("读取目录项失败: {e}"))?;
+        let target = dst.join(entry.file_name());
+        if entry.file_type().map_err(|e| format!("读取类型失败: {e}"))?.is_dir() {
+            count += copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)
+                .map_err(|e| format!("复制文件失败 {}: {e}", entry.path().display()))?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// 校验技能名：仅字母数字/连字符/下划线（≤64 字符）——name 会拼进路径，
+/// 必须防路径穿越。
+fn validate_skill_name(name: &str) -> Result<(), String> {
+    let ok = !name.trim().is_empty()
+        && name.len() <= 64
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "技能名非法（仅允许字母数字/连字符/下划线，≤64 字符）：{name}"
+        ))
+    }
+}
+
+/// 在 skills_dir 的各组目录下查找技能目录：`<skills_dir>/<group>/<name>/`。
+fn find_skill_dir(name: &str) -> Option<PathBuf> {
+    let root = hermix_config::paths::skills_dir();
+    for g in std::fs::read_dir(&root).ok()?.flatten() {
+        if g.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            let candidate = g.path().join(name);
+            if candidate.join("SKILL.md").is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// 导出技能：把 `<skills_dir>/<group>/<name>/` 复制到 `<out_dir>/<name>/`。
+/// 返回导出目标路径；out_dir 不存在会自动创建。
+#[tauri::command]
+pub fn export_skill(name: String, out_dir: String) -> Result<String, String> {
+    validate_skill_name(&name)?;
+    let src = find_skill_dir(&name)
+        .ok_or_else(|| format!("技能「{name}」不存在（在 skills_dir 各组中未找到）"))?;
+    let dst = Path::new(&out_dir).join(&name);
+    let files = copy_dir_recursive(&src, &dst)?;
+    Ok(format!("{}（{files} 个文件）", dst.display()))
+}
+
+/// 导入技能：从目录读取（须含 SKILL.md，frontmatter 的 name 行优先，
+/// 缺省用目录名），落到 `<skills_dir>/<group>/<name>/`。
+/// `overwrite=false` 且同名已存在时报错；true 则覆盖。
+#[tauri::command]
+pub fn import_skill(
+    source_path: String,
+    group: Option<String>,
+    overwrite: bool,
+) -> Result<String, String> {
+    let src = PathBuf::from(&source_path);
+    let skill_md = src.join("SKILL.md");
+    if !skill_md.is_file() {
+        return Err(format!("导入源缺少 SKILL.md：{}", src.display()));
+    }
+    let raw = std::fs::read_to_string(&skill_md)
+        .map_err(|e| format!("读取 SKILL.md 失败: {e}"))?;
+    let mut name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    for line in raw.lines().take(20) {
+        if let Some(v) = line.strip_prefix("name:") {
+            name = v.trim().trim_matches('"').trim_matches('\'').to_string();
+            break;
+        }
+    }
+    validate_skill_name(&name)?;
+    let group = group
+        .filter(|g| !g.trim().is_empty())
+        .unwrap_or_else(|| "hermix".to_string());
+    validate_skill_name(&group)?;
+    let dst = hermix_config::paths::skills_dir().join(&group).join(&name);
+    if dst.exists() && !overwrite {
+        return Err(format!(
+            "技能「{name}」已存在（{group}/{name}）。传 overwrite=true 覆盖，或改名后导入。"
+        ));
+    }
+    let files = copy_dir_recursive(&src, &dst)?;
+    Ok(format!(
+        "{}（{files} 个文件）——重启或新会话后生效",
+        dst.display()
+    ))
+}
