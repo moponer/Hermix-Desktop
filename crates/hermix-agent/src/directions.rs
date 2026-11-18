@@ -681,7 +681,7 @@ The `todo` tool lets you track a multi-step plan and show the user live progress
 - `create` — create a task (`title`, `priority`)
 - `depend` — mark a task as depending on another
 - `list` / `get_next` — see pending tasks
-- `update` — change status to `completed` or `failed`
+- `update` — change status to `in_progress`, `completed`, or `failed`
 - `record_execution` — log what you learned
 
 ## Notes
@@ -694,7 +694,43 @@ The `todo` tool lets you track a multi-step plan and show the user live progress
   auto-joins them into one group (they render as a single card). Only start a NEW plan
   (fresh `group_title`) in a *later* reply when the topic genuinely changes; never
   spawn a new plan per step of the same batch — that floods the UI with one card per step.
-- One plan per topic.";
+- One plan per topic.
+
+## When you MUST open a todo list
+
+Open one **before** starting any task that will take more than ~4 tool calls,
+or that has more than one deliverable. Not a formality: the list is the only
+objective record of what remains. Your own end-of-turn summary cannot serve
+that purpose (it is the thing being judged), and the loop reads this list to
+decide whether you are actually done — while items are open, a summary does
+not end the task.
+
+- Write the whole plan in ONE reply (all `create` calls in the same message).
+
+## Keep the status current — it is what the user watches
+
+Every item carries a `status` the UI renders live: **待执行** (`pending`),
+**执行中** (`in_progress`), **已完成** (`completed`), **已失败** (`failed`).
+The user is looking at this panel while you work; a list that jumps straight
+from all-pending to all-done tells them nothing about what you are doing.
+
+- The moment you start working on an item, `update` it to `in_progress`.
+  Exactly one item should be `in_progress` at a time — that is the whole point
+  of showing it. Working on two things genuinely in parallel? Still mark the
+  one you are actively blocked on.
+- Flip to `completed` only when it is genuinely done — the same evidence
+  standard as any other completion claim (file written, command run, test
+  passed). Never batch-complete at the end.
+- If an attempt failed and you are retrying, leave it `in_progress`; mark
+  `failed` only when you are giving up on that item.
+- **The status is yours to report, not to optimise.** Do not mark something
+  `completed` to make the panel look finished, and do not leave everything
+  `pending` until the end. A wrong status is worse than no list: the user
+  reads it as fact.
+- If you discover new work mid-task, `create` it. If an item is no longer
+  needed, `update` it rather than silently dropping it.
+- The list is also what the user sees as live progress. A stale list is worse
+  than no list.";
 
 const TASK_TRACKER_GUIDANCE: &str = "\
 # Orchestration Engine — Task Tracker (`task_create` / `task_update` / `task_list` / `task_get`)

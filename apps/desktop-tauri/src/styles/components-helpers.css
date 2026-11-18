@@ -1007,6 +1007,45 @@
 }
 .todo-row-busy { opacity: 0.6; }
 
+/* 标题 + 状态标签同一行：标题可换行，标签不换行不压缩。 */
+.todo-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+/* 状态标签。模型写什么就显示什么，前端不做推断。
+ * 只用语义四色的「文字安全档」（--color-text-*），12px 下均 ≥4.5:1。 */
+.todo-status {
+  font-size: var(--text-tiny);
+  line-height: 1.4;
+  flex-shrink: 0;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+.todo-status-pending { color: var(--color-text-faint); }
+.todo-status-done { color: var(--color-text-success); }
+.todo-status-failed { color: var(--color-text-error); }
+
+/* 「执行中」是唯一有动效的状态：它是唯一需要用户等待的状态。
+ * 已完成/待执行是静态事实，动效只会分心。
+ * 用 opacity 呼吸而不是缩放 —— 缩放会抖动行高。 */
+.todo-status-running {
+  color: var(--color-text-warning);
+  animation: todo-status-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes todo-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* 尊重系统的「减少动态效果」偏好：关掉呼吸，保留文字与颜色。 */
+@media (prefers-reduced-motion: reduce) {
+  .todo-status-running { animation: none; }
+}
+
 .todo-row-check {
   display: flex;
   align-items: center;

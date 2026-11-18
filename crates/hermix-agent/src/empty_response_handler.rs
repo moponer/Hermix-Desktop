@@ -189,6 +189,9 @@ pub struct EmptyResponseInput<'a> {
     pub max_turns: u32,
     pub max_autonomous_nudges: u32,
     pub assistant_has_visible_text: fn(&Message) -> bool,
+    /// Session whose todo list is consulted when deciding whether the task is
+    /// actually finished. `None` disables the todo signal.
+    pub session_id: Option<&'a str>,
 }
 
 /// The decision, plus counter increments.
@@ -265,25 +268,44 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
         && input.has_tool_schemas
         && (has_visible || !input.history_includes_tool)
         && (input.max_turns == 0 || input.total_turns < input.max_turns)
-        && input.autonomous_nudge_count < input.max_autonomous_nudges
+        && (input.autonomous_nudge_count < input.max_autonomous_nudges
+            // 未完成的 todo 越过 nudge 预算：预算用尽不等于活干完了。
+            // 见 `todo_probe` —— 清单是动手之前写的，比这段总结可信。
+            || !crate::todo_probe::unfinished(input.session_id).0.is_empty())
     {
         let turns_info = if input.max_turns > 0 {
             format!("{} of {} used", input.total_turns, input.max_turns)
         } else {
             format!("{} turns used", input.total_turns)
         };
+        // 未完成 todo 直接写进 nudge：模型需要知道「还剩哪几条」，而不是被
+        // 泛泛地告知「可能还没做完」。它自己写的清单是唯一不会被它当下这段
+        // 总结污染的判据。
+        let (pending_todos, _total) =
+            crate::todo_probe::unfinished(input.session_id.as_deref());
+        let todo_block = if pending_todos.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\n你自己的 todo 清单里还有 {} 条未完成，这是你自己动手之前列的，\
+                 不会因为你写了一段总结就变成已完成：\n- {}\n\
+                 逐条做完并 update 成 completed，才算真的完成。",
+                pending_todos.len(),
+                pending_todos.join("\n- "),
+            )
+        };
         let nudge = if has_visible {
             format!(
                 "{} \
                  收尾之前先自检：用户交办的**整个目标**是否已经全部达成（不是这一阶段，\
                  是整个任务）。判定依据只能是实据——文件已写入、命令已执行、测试已通过、\
-                 界面已回到预期状态；计划、待办清单、「应该没问题」都不算数。\
+                 界面已回到预期状态；计划、「应该没问题」都不算数。\
                  未达成 → 直接继续执行下一步（缺信息就用工具去取，不要问用户），\
                  不要用「下一步我会…」的预告代替执行。\
                  已达成 → 给出最终结论（做成了什么、证据是什么、还剩什么风险），\
                  并且不要用「要不要继续 / 这轮先到这 / 需要我接着做吗」这类问句收尾。\
-                 （{}）",
-                AUTONOMOUS_NUDGE_VISIBLE_PREFIX, turns_info
+                 （{}）{}",
+                AUTONOMOUS_NUDGE_VISIBLE_PREFIX, turns_info, todo_block
             )
         } else {
             format!(
@@ -433,6 +455,7 @@ mod tests {
             max_turns: 30,
             max_autonomous_nudges: 8,
             assistant_has_visible_text: visible_text_fn,
+            session_id: None,
         }
     }
 

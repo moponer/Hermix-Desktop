@@ -48,6 +48,24 @@ function statusGlyph(s: string) {
   return <Circle className="icon-sm text-text-faint" />;
 }
 
+// 状态标签：图标只说「大概」，文字说「确切」。模型自己写 status，
+// 前端只负责如实呈现 —— 不推断、不改写、不猜测进度。
+//
+// 「执行中」是唯一有动效的状态（见 CSS 的 pulse），因为它是唯一
+// 需要用户「等一等」的状态；已完成/待执行是静态事实，动效只会分心。
+const STATUS_LABEL: Record<string, { text: string; className: string }> = {
+  in_progress: { text: "执行中", className: "todo-status todo-status-running" },
+  completed: { text: "已完成", className: "todo-status todo-status-done" },
+  failed: { text: "已失败", className: "todo-status todo-status-failed" },
+  pending: { text: "待执行", className: "todo-status todo-status-pending" },
+};
+
+function statusLabel(s: string) {
+  const meta = STATUS_LABEL[s];
+  if (!meta) return null;
+  return <span className={meta.className}>{meta.text}</span>;
+}
+
 export interface TodoListCardProps {
   groupId: string;
   groupTitle?: string | null;
@@ -204,7 +222,10 @@ function TodoRow({
           : <span className="todo-row-glyph">{statusGlyph(item.status)}</span>}
       </button>
       <div className="todo-row-body">
-        <div className="todo-row-title">{item.title}</div>
+        <div className="todo-row-head">
+          <span className="todo-row-title">{item.title}</span>
+          {statusLabel(item.status)}
+        </div>
         {(item.description || dependsOnLabels.length > 0) && (
           <div className="todo-row-meta">
             {item.description && (

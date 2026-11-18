@@ -98,6 +98,12 @@ pub mod convergence_detector;
 /// 进展账本（L2）：以「世界状态有没有推进」为唯一判据的防空转机制。
 /// 状态签名由工具执行层写进 `ToolResult::state`（见 `hermix_tools::tool_state`）。
 pub mod progress_ledger;
+/// 未完成 todo 探测：为「任务是否真的做完」提供客观判据。
+/// 模型自己的总结不能当判据（那正是被判断的对象），轮次也不能
+/// （一个任务可能 3 轮也可能 300 轮）；写下来的 todo 清单可以。
+pub mod todo_probe;
+/// 识图插件开关（会话级）：开启走插件免费视觉链，关闭走原生多模态。
+pub mod vision_plugin;
 pub mod turn_report;
 pub mod terminal_filter;
 pub mod tool_dispatch;

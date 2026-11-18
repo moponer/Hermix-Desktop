@@ -266,6 +266,21 @@ impl AgentLoop {
         if tool_schemas_empty {
             return Some("no_tool_schemas");
         }
+        // 未完成的 todo 覆盖 nudge 预算。
+        //
+        // 这一条解决的是「干一段 → 写总结 → 停 → 用户打继续」的循环：模型
+        // 自己写的总结不能当「做完了」的判据（那正是被判断的对象），而轮次也
+        // 不能（任务可能 3 轮也可能 300 轮）。写下来的 todo 清单可以——它是
+        // 动手之前写的，条目只有在模型自己声称完成时才翻成 completed。
+        //
+        // 实测：nudge 历史触发 184 次，`nudge_budget_exhausted` 挡住 8 次，
+        // 每次都是「预算用完了但活还没干完」，于是交回用户。todo 未清空时继续，
+        // 让预算不再是唯一出口。
+        let (pending_todos, _total) =
+            crate::todo_probe::unfinished(self.config.session_id.as_deref());
+        if !pending_todos.is_empty() {
+            return None;
+        }
         if autonomous_nudge_count >= default_max_autonomous_nudges() {
             return Some("nudge_budget_exhausted");
         }
@@ -1036,6 +1051,7 @@ let outcome = crate::empty_response_handler::decide_empty_response(
                         max_autonomous_nudges: default_max_autonomous_nudges(),
                         assistant_has_visible_text:
                             Self::assistant_visible_text_after_think_blocks,
+                        session_id: self.config.session_id.as_deref(),
                     },
                 );
                 codex_ack_continuations = outcome.new_codex_ack_continuations;
@@ -1657,6 +1673,7 @@ let outcome = crate::empty_response_handler::decide_empty_response(
                         max_autonomous_nudges: default_max_autonomous_nudges(),
                         assistant_has_visible_text:
                             Self::assistant_visible_text_after_think_blocks,
+                        session_id: self.config.session_id.as_deref(),
                     },
                 );
                 codex_ack_continuations = outcome.new_codex_ack_continuations;
