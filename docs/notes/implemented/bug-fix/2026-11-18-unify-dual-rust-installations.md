@@ -47,7 +47,7 @@ hover    -> pub struct Vec<T, A = Global> { buf: RawVec<T, A>, len: usize }
 
 ### 顺手修掉的两个历史问题
 
-**`target` 目录 ACL 损坏**：`<repo>\target` 的 ACL 里授权的是三个陌生 SID，
+**`target` 目录 ACL 损坏**：`<repo>/target` 的 ACL 里授权的是三个陌生 SID，
 当前用户只能靠 `Authenticated Users` 的 Modify 权限工作，缺 `DeleteSubdirectoriesAndFiles`，
 导致 cargo 创建/删除临时目录时报 `os error 5 拒绝访问`。用 `takeown /R` + `icacls /grant /T`
 处理了 539 个文件后，旧 target 可正常删除重建。

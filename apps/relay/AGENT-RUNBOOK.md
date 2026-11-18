@@ -10,7 +10,7 @@
 - 主机：`hermix.cssso.com`（用户以实际发放的密钥/用户名为准，常用 `root`）
 - agent 通过 `ssh -i <密钥> root@hermix.cssso.com` 执行命令，`scp -i` 传文件
 - **只允许发布目录内的写操作**（见 §6 禁区）；首次登录先跑一遍 §1 事前检查
-- 本地仓库根：`<repo>`（下文相对路径都基于它）
+- 本地仓库根：`<repo>`（下文相对路径都基于它；`<repo>` 指你 clone 下来的仓库目录）
 
 ## 1. 事前检查（每次作业前必跑，全部只读）
 
@@ -101,7 +101,7 @@ ssh root@hermix.cssso.com 'systemctl restart hermix-relay && sleep 2 && systemct
 
 ## 4. APK 发布（手机端）
 
-APK 由主人本地编译，落在 `<repo>\apps\hm\dist\`（文件名
+APK 由主人本地编译，落在 `<repo>/apps/hm/dist/`（文件名
 以 dist 实际为准）。上传两步：
 
 ```bash
