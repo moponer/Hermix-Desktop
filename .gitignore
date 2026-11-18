@@ -157,3 +157,10 @@ __pycache__/
 patches/html5ever-0.39.0/
 patches/html5ever-0.39.0.crate
 .cargo/config.toml
+
+# 本机临时脚本与一次性同步工具（含本机绝对路径，不入库）
+_*.ps1
+_*.py
+_*.txt
+.gitee-snapshot-sync.mjs
+gitee-sync-result.txt
