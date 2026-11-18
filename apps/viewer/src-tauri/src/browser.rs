@@ -103,31 +103,47 @@ fn profile_root() -> PathBuf {
 // 浏览器定位与启动
 // ---------------------------------------------------------------------------
 
-/// 找系统浏览器：环境变量优先，其次 Edge，最后 Chrome。
-fn browser_exe() -> Option<PathBuf> {
+/// All browser executables worth trying, in preference order.
+///
+/// **Edge first, then Chrome.** Not because Edge is better in the abstract,
+/// but because it is the one this app can rely on: it ships with Windows and
+/// is kept updated by the OS. A stale Chrome install breaks CDP launch
+/// outright — measured on this machine (2026-11-18): Chrome 147 started,
+/// wrote 3 files, produced a `.dmp` and exited before `DevToolsActivePort`
+/// existed, while Edge 156 on the same args came up in ~1 s. The old order
+/// (Chrome before Edge under `ProgramFiles`) picked the broken one and
+/// `browser_open` failed 100% of the time with a misleading
+/// "被安全软件拦截" message.
+///
+/// `HERMIX_BROWSER_PATH` still wins outright — an explicit choice is never
+/// second-guessed, even if the file turns out not to work.
+fn browser_candidates() -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(custom) = std::env::var("HERMIX_BROWSER_PATH") {
         let p = PathBuf::from(custom);
         if p.is_file() {
-            return Some(p);
+            candidates.push(p);
         }
     }
     let local = std::env::var("LOCALAPPDATA").ok().map(PathBuf::from);
     let pf = std::env::var("ProgramFiles").ok().map(PathBuf::from);
     let pf86 = std::env::var("ProgramFiles(x86)").ok().map(PathBuf::from);
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(local) = local.as_ref() {
-        candidates.push(local.join("Microsoft/Edge/Application/msedge.exe"));
-        candidates.push(local.join("Google/Chrome/Application/chrome.exe"));
+    // Edge across all install roots, then Chrome across all install roots.
+    // Grouping by product (rather than by root) is what makes the fallback
+    // meaningful: we want "any Edge" before "any Chrome".
+    let roots: Vec<&PathBuf> = [local.as_ref(), pf.as_ref(), pf86.as_ref()]
+        .into_iter()
+        .flatten()
+        .collect();
+    for rel in ["Microsoft/Edge/Application/msedge.exe", "Google/Chrome/Application/chrome.exe"] {
+        for root in &roots {
+            let p = root.join(rel);
+            if p.is_file() && !candidates.contains(&p) {
+                candidates.push(p);
+            }
+        }
     }
-    if let Some(pf) = pf.as_ref() {
-        candidates.push(pf.join("Microsoft/Edge/Application/msedge.exe"));
-        candidates.push(pf.join("Google/Chrome/Application/chrome.exe"));
-    }
-    if let Some(pf86) = pf86.as_ref() {
-        candidates.push(pf86.join("Microsoft/Edge/Application/msedge.exe"));
-        candidates.push(pf86.join("Google/Chrome/Application/chrome.exe"));
-    }
-    candidates.into_iter().find(|p| p.is_file())
+    candidates
 }
 
 /// 启动浏览器，返回 pid。
@@ -213,6 +229,12 @@ fn launch_browser(_exe: &PathBuf, _args: &str) -> Result<u32, String> {
 fn wait_for_port(profile: &PathBuf) -> Result<(u16, String), String> {
     let file = profile.join("DevToolsActivePort");
     let deadline = Instant::now() + LAUNCH_TIMEOUT;
+    // Track what the browser actually did, so the timeout message can say
+    // *why* it failed instead of the old catch-all. A profile that stays empty
+    // means the process never started; one that fills up but has a `.dmp` means
+    // it started and crashed; a populated profile with no dump means it started
+    // and is still initialising (the timeout was simply too short).
+    let mut peak_entries = 0usize;
     while Instant::now() < deadline {
         if let Ok(text) = std::fs::read_to_string(&file) {
             let mut lines = text.lines();
@@ -224,9 +246,26 @@ fn wait_for_port(profile: &PathBuf) -> Result<(u16, String), String> {
                 }
             }
         }
+        if let Ok(rd) = std::fs::read_dir(profile) {
+            let n = rd.count();
+            if n > peak_entries {
+                peak_entries = n;
+            }
+        }
         std::thread::sleep(Duration::from_millis(120));
     }
-    Err("等待浏览器调试端口超时（浏览器可能启动失败或被安全软件拦截）".to_string())
+    let dumps = std::fs::read_dir(profile.join("Crashpad").join("reports"))
+        .map(|rd| rd.filter_map(|e| e.ok()).count())
+        .unwrap_or(0);
+    Err(format!(
+        "等待浏览器调试端口超时（profile={}，期间最多 {} 个条目，崩溃转储 {} 个）。\
+         条目为 0 → 浏览器进程没起来（检查浏览器路径/权限）；\
+         有转储 → 浏览器启动后崩溃；\
+         条目很多但无转储 → 浏览器仍在初始化，超时太短",
+        profile.display(),
+        peak_entries,
+        dumps
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -275,10 +314,13 @@ pub fn open_with_profile(
         let _ = close(&id);
     }
 
-    let exe = browser_exe().ok_or_else(|| {
-        "找不到系统浏览器（Edge / Chrome）。可用环境变量 HERMIX_BROWSER_PATH 指定可执行文件。"
-            .to_string()
-    })?;
+    let candidates = browser_candidates();
+    if candidates.is_empty() {
+        return Err(
+            "找不到系统浏览器（Edge / Chrome）。可用环境变量 HERMIX_BROWSER_PATH 指定可执行文件。"
+                .to_string(),
+        );
+    }
 
     // P5：命名持久 profile 与一次性会话 profile 分目录；持久的不删
     // （登录态要活），一次性的维持「全新 profile」隐私语义 + 规避失效的
@@ -308,15 +350,91 @@ pub fn open_with_profile(
     // （登录态数据不动）。
     let _ = std::fs::remove_file(profile.join("DevToolsActivePort"));
 
-    let args = format!(
-        "--remote-debugging-port=0 --user-data-dir=\"{}\" --no-first-run \
-         --no-default-browser-check --disable-background-networking --window-size=1440,900 \
-         {} about:blank",
-        profile.display(),
-        if headed { "" } else { "--headless=new" }
-    );
-    let pid = launch_browser(&exe, &args)?;
-    let (port, ws_path) = wait_for_port(&profile)?;
+    // Try each candidate until one actually comes up. A stale Chrome install
+    // passes the `is_file()` check but crashes before writing
+    // `DevToolsActivePort`, so existence is not enough — the only honest test
+    // is launching it. Each attempt gets a clean profile: a half-written
+    // profile from the failed browser would confuse the next one.
+    let mut last_err: Option<String> = None;
+    let mut launched: Option<(PathBuf, u16, String, u32)> = None;
+    for exe in &candidates {
+        if !persistent {
+            let _ = std::fs::remove_dir_all(&profile);
+            std::fs::create_dir_all(&profile)
+                .map_err(|e| format!("创建浏览器 profile 失败：{e}"))?;
+        }
+        let _ = std::fs::remove_file(profile.join("DevToolsActivePort"));
+        // `--no-sandbox` is REQUIRED for the CDP endpoint to answer on this
+        // platform. Measured 2026-11-18 on Edge 156: without it the port is
+        // bound (Get-NetTCPConnection shows msedge listening) and TCP connects,
+        // but every HTTP/WebSocket request returns zero bytes — the classic
+        // "TCP ok, HTTP timeout" shape. With it, `/json/version` returns
+        // `Edg/156...` and `Browser.getVersion` answers over WebSocket.
+        // The renderer sandbox is what breaks, most likely because a security
+        // suite (360 / Tencent PC Manager are both registered on this machine)
+        // hooks the sandboxed child processes. The browser here only ever loads
+        // throwaway profiles for automation, so losing the renderer sandbox is
+        // an acceptable trade — and it is the difference between working and
+        // not working at all.
+        let args = format!(
+            "--remote-debugging-port=0 --user-data-dir=\"{}\" --no-first-run \
+             --no-default-browser-check --disable-background-networking --window-size=1440,900 \
+             --no-sandbox \
+             {} about:blank",
+            profile.display(),
+            if headed { "" } else { "--headless=new" }
+        );
+        let pid = match launch_browser(exe, &args) {
+            Ok(pid) => pid,
+            Err(e) => {
+                eprintln!("[browser] spawn failed for {}: {e}", exe.display());
+                last_err = Some(e);
+                continue;
+            }
+        };
+        eprintln!(
+            "[browser] launched {} pid={} profile={} headless={}",
+            exe.display(),
+            pid,
+            profile.display(),
+            !headed
+        );
+        match wait_for_port(&profile) {
+            Ok((port, ws_path)) => {
+                launched = Some((exe.clone(), port, ws_path, pid));
+                break;
+            }
+            Err(e) => {
+                eprintln!("[browser] {} did not come up: {e}", exe.display());
+                last_err = Some(format!("{}: {e}", exe.display()));
+                // Kill the half-started browser so the next attempt is clean.
+                if pid != 0 {
+                    #[cfg(windows)]
+                    unsafe {
+                        use windows_sys::Win32::Foundation::CloseHandle;
+                        use windows_sys::Win32::System::Threading::{
+                            OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+                        };
+                        let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+                        // windows-sys returns HANDLE as isize; 0 == failure.
+                        if h != 0 {
+                            TerminateProcess(h, 1);
+                            CloseHandle(h);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let (exe, port, ws_path, pid) = launched.ok_or_else(|| {
+        format!(
+            "所有浏览器都无法启动 CDP。逐个尝试结果：{}。\
+             若某个浏览器版本过旧（如 Chrome 147 与当前 Windows 不兼容）会启动即崩溃；\
+             用 HERMIX_BROWSER_PATH 指定一个可用的浏览器可绕过自动选择。",
+            last_err.unwrap_or_else(|| "无".to_string())
+        )
+    })?;
+    eprintln!("[browser] using {} on port {}", exe.display(), port);
 
     // 建一个页面 target（后续所有操作都挂在它上面）。
     // 注意：**不能**带 width/height —— CDP 报 "Target position can only be
