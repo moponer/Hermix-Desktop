@@ -787,7 +787,7 @@ impl Default for CompressorConfig {
     fn default() -> Self {
         Self {
             context_length: 200_000,
-            // B2-2（docs/optimization-plan.md）：0.90 → 0.70，提前触发
+            // B2-2（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md）：0.90 → 0.70，提前触发
             // 压缩——上下文更早收敛，长会话 total 显著下降；配合已有的
             // 平滑滚动折叠（不 spike）与防抖（anti-thrashing），等效于
             // lynn 方案的"延迟封存：窗口 70% 触发"。

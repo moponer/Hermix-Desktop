@@ -6,7 +6,7 @@ Status: implemented — 2026-10-24
 
 **移除浏览器小窗（`browser-view` 子窗）及其整条 screencast 推流链路；浏览器自动化的人眼观看面收敛到内置浏览器面板（`browser-panel`，WebView2 窗口 + CDP 附着）。**
 
-小窗是 [2026-10-14 P0](../../archived/feature/2026-10-14-browser-virtual-window-p0.md) 的方案：无头 Edge 恒开 screencast，JPEG 帧流经 sidecar stdout（`browser-frame` 通道）推到桌面端独立子窗，人看监控流、agent 走 CDP 合成输入。内置浏览器面板（`browser_panel_open`）落地后，agent 工具直接附着到用户眼前的可见 WebView2 窗口上驱动——「人在应用里看真实浏览器」取代了「人在小窗里看有损监控流」，小窗失去存在理由。
+小窗是 [2026-10-14 P0](../../archived/feature/浏览器虚拟窗口 P0（已删除）.md) 的方案：无头 Edge 恒开 screencast，JPEG 帧流经 sidecar stdout（`browser-frame` 通道）推到桌面端独立子窗，人看监控流、agent 走 CDP 合成输入。内置浏览器面板（`browser_panel_open`）落地后，agent 工具直接附着到用户眼前的可见 WebView2 窗口上驱动——「人在应用里看真实浏览器」取代了「人在小窗里看有损监控流」，小窗失去存在理由。
 
 移除清单（桌面 ↔ sidecar 全链路）：
 

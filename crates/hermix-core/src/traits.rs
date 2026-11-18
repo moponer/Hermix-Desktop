@@ -469,7 +469,7 @@ pub struct AgentOverrides {
     /// `Some` makes the agent inject the `workbench.context` direction and
     /// pin the `workbench` skill into the system prompt every turn —
     /// ordinary chats (None) never see either. See
-    /// WORKBENCH_CHAT_REDESIGN_PLAN B / MODULE_DESIGN §13 layer 3.
+    /// Workbench design note B / module design §13 layer 3.
     #[serde(default)]
     pub workbench_id: Option<String>,
     /// L1 domain-mode pin (`code|research|write|operate|chat` or `"auto"`).

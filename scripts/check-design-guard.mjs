@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // DesignGuard — impeccable / typography 硬约束的 grep 门禁（硬门禁）。
 //
-// 背景：设计规范（impeccable-design.md、docs/notes/archived/architecture/TYPOGRAPHY_SYSTEM.md、tokens.css）
+// 背景：设计规范（impeccable-design.md、tokens.css）
 // 此前只存在于文档与评审里，CSS 层与既有组件的违规从未被机械检出——
 // check-theme-tokens.mjs 只扫 tsx、且「行内含 var(--color- 即整行豁免」
 // 的规则放过了一批 `var(--x, #hex)` 式违规。本脚本补上 TSX 侧的

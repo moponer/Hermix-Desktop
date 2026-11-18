@@ -288,10 +288,10 @@ font-family: "JetBrains Mono", "JetBrainsMono NF", "Cascadia Mono", "Cascadia Co
 
 **问题 17（中）**：**四条阅读行高并存**——`1.75`（`--leading-reading`）、`1.72`（`.msg-bubble-user`，`components-prose.css:392`）、
 `1.65`（`.tl-text-inner`，`components-helpers.css:406`）、`1.35`（标题）。
-而 `docs/TYPOGRAPHY_SYSTEM.md:160` 角色表写的是 **1.68** ——**文档与代码已三方不一致**。
+而 `docs/字体规范（已并入 tokens.css）.md:160` 角色表写的是 **1.68** ——**文档与代码已三方不一致**。
 `.msg-bubble-user:391` 还用了已废弃的 `var(--font-size-body)`（`tokens.css:54` 明写「禁止新代码使用」）。
 **规范建议**：`.msg-bubble-user` 与 `.tl-text-inner` 的行高统一到 `var(--leading-reading)`，
-同步修 `TYPOGRAPHY_SYSTEM.md` 的角色表（文档只描述现状）。
+同步修 `字体规范（已并入 tokens.css）.md` 的角色表（文档只描述现状）。
 
 **对比度（实测，WCAG 相对亮度公式，解析三套主题令牌）**
 

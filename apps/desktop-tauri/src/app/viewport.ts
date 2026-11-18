@@ -1,4 +1,4 @@
-// B6-2（docs/optimization-plan.md H7）：视口缩放计算——从 App.tsx 提取的
+// B6-2（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md H7）：视口缩放计算——从 App.tsx 提取的
 // 纯函数（可独立测试）。zoom 由 documentElement.style.zoom 驱动（桌面端
 // 自适应缩放），min-width 断点决定主栏/左栏的最小宽度。
 

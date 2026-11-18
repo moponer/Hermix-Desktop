@@ -175,7 +175,7 @@ function walkTsx(d) {
 }
 
 // CSS 层同规。2026-10-18 扩围：此前只扫 tsx/ts，styles/** 约 370 处字面色值
-// 与 130+ 处 px 字号永远报绿——docs/notes/archived/architecture/TYPOGRAPHY_SYSTEM.md「已全部归到 token」的
+// 与 130+ 处 px 字号永远报绿——「已全部归到 token」的
 // 结论与代码事实不符。存量较大，先 WARN 统计（见文件末汇总），逐文件迁移
 // 收敛到零后改阻断。
 const CSS_SCAN = cssFiles.filter((f) => !f.includes(`${sep}themes${sep}`));

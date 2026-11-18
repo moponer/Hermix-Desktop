@@ -68,7 +68,7 @@ HighestAvailable，索引开机即就绪免手动）。注册实现三连踩坑�
 历史否决（必须遵守的边界）：群聊式多 agent（聊天室 + rank/勋章经济 + 总管
 调度）已于 2026-09-21 下线删除，见
 `docs/notes/rejected/architecture/2026-07-02-groupchat-task-engine.md` 与
-`docs/notes/archived/architecture/2026-06-18-groupchat-collaborative-design.md`。
+`docs/notes/archived/architecture/群聊协作设计（已删除）.md`。
 教训：**成员互聊 = 每条消息 ×N 成员的 token 爆炸**。本方案必须是星型
 （hub-and-spoke）：阿黎是唯一编排者，成员之间不通信。
 

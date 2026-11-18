@@ -121,7 +121,7 @@ pub struct CronJob {
     /// Workbench this job operates on. When set, the runner injects the
     /// `workbench.context` direction and pins the `workbench` skill, so a
     /// scheduled task (e.g. daily summary) executes with full workbench
-    /// knowledge (WORKBENCH_CHAT_REDESIGN_PLAN 方案 D.4).
+    /// knowledge (workbench design note, plan D.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workbench_id: Option<String>,
     /// Skills to load for the agent (by name).

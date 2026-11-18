@@ -157,7 +157,7 @@ Rust `classify()` 的白名单与共享预览层分派表**逐项对齐**——�
 
 **主程序 → 查看器 的端到端链路**（用户反馈「运行主程序找不到文件查看器」后专门验证）：
 
-主程序的「在查看器中打开」（`commands.rs::open_in_viewer` → `viewer_exe_path()` 取主程序 exe 同目录的 `hermix-viewer.exe`）在真机上完整走通：主程序右栏「工作区」→ 右键 `docs/DEEPSEEK_HARNESS_BORROWINGS.md` →「在查看器中打开」→ **从零拉起新的 viewer 进程**（不是投递到已有实例），打开的正是本次的新界面——纯净模式的细工具条「系统打开 / 重量模式 / 关闭」是本轮新增，旧产物根本没有，切「重量模式」后三栏、md 渲染、目录大纲、「编辑」入口全部就位。
+主程序的「在查看器中打开」（`commands.rs::open_in_viewer` → `viewer_exe_path()` 取主程序 exe 同目录的 `hermix-viewer.exe`）在真机上完整走通：主程序右栏「工作区」→ 右键 `docs/deepseek-harness 借鉴笔记（已删除）.md` →「在查看器中打开」→ **从零拉起新的 viewer 进程**（不是投递到已有实例），打开的正是本次的新界面——纯净模式的细工具条「系统打开 / 重量模式 / 关闭」是本轮新增，旧产物根本没有，切「重量模式」后三栏、md 渲染、目录大纲、「编辑」入口全部就位。
 
 用户此前看到旧界面的根因链是三条叠加，缺一不可：**① dev 模式从不构建 viewer**（`dev.mjs` 只构建 hermix sidecar，exe 停在 cargo 随手留下的旧产物）；**② sccache 的缓存键不含宏展开期读取的文件**（`generate_context!` 读的 dist 变了，crate 指纹却没变 → 旧 rlib 被原样复用）；**③ 运行中的 exe 被 Windows 锁住**（cargo 覆盖失败，旧二进制原地留下）。三条分别由 `dev.mjs` 补构建、补前端指纹双写（`OUT_DIR` 的 .rs + `cargo:rustc-env`）、构建前结束同名进程收口，详见 [前端内容指纹纳入编译指纹](../bug-fix/2026-10-20-frontend-fingerprint-in-build.md)。
 

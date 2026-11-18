@@ -20,7 +20,7 @@ Status: implemented — 2026-10-09 · 本篇是**交接索引**，细节在末�
 |---|---|---|---|
 | 1 | 手机端启动故障修复 + 界面重构 | 完成 | `2026-10-09-mobile-ui-refactor.md` |
 | 2 | 桌面端连接渠道改主从布局 | 完成 | `2026-10-09-desktop-connect-channels-layout.md` |
-| 3 | 手机配对改局域网直连 | 完成 | `2026-10-09-mobile-direct-pairing.md` |
+| 3 | 手机配对改局域网直连 | 完成 | `手机直连配对方案（已删除）.md` |
 | 4 | relay 出站接线 + 撤销贯通 | 完成（两篇） | `2026-10-09-relay-client-wiring.md`、`2026-10-09-relay-revocation.md` |
 
 ### 改了什么（按目录）

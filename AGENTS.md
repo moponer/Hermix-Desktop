@@ -65,7 +65,7 @@ Key crates:
 - **Parity fixtures** — `hermix-parity-tests/fixtures/` has golden JSON; `pending/` is excluded from test runs
 - **读 token 用量先认口径（2026-10-21 实测）** — `sessions.db` 的 `token_usage` 表**一行 = 一个 agent turn**（`accumulated_usage`，该轮所有 API 调用的累加），不是「一次 API 调用」。而 kilo/free 代理报的 `prompt_tokens` 是**累计计数**、不是单次请求大小（会话第 7 分钟的记录就报 2.8M，而 `prompt_cache` 组装出来的真实 prompt 恒为 ~17K）→ **别拿它当真实上下文长度看**；真实单次请求大小看 `server.log` 的 `prompt_cache: assembled prompt ... total=Nt`，活上下文看其中的 `context=` 那一项。**且 `total=Nt` 本身是 `chars÷4` 的估算**（`prompt_assembly.rs` 的 `*_est`）——中文 1 字 ≈ 1 token 不是 1/4，本仓库的系统提示中文占比约 20~25%，所以真实值比日志大 ~1.8 倍（2026-10-21 实测：日志 17.2K ↔ 实际 6.9 万字符 ↔ 真实约 28~32K）。**另外那 17.2K 只算系统提示**，不含 109 个工具的 JSON schema（31,381 字符 ≈ 10K token）和 messages 数组。
 - **Desktop app frontend** — `apps/desktop-tauri/src/`, uses `@` alias for `src/`
-- **界面改动必读内置设计 skill** — `crates/hermix-server/src/dashboard/skills/impeccable-design.md`（仓库里唯一的界面设计规范）。改完 UI 必跑 `npx -y impeccable@4.1.0 detect <路径>`，退出码 0 才算干净；报告「已修好」之前检测结果就是证据。令牌层规范另见 `docs/notes/archived/architecture/TYPOGRAPHY_SYSTEM.md` + `npm run check:tokens`。注意 detect 对**解析不了的文件会静默返回 0**，所以先跑 `tsc --noEmit` 再信它的绿灯。
+- **界面改动必读内置设计 skill** — `crates/hermix-server/src/dashboard/skills/impeccable-design.md`（仓库里唯一的界面设计规范）。改完 UI 必跑 `npx -y impeccable@4.1.0 detect <路径>`，退出码 0 才算干净；报告「已修好」之前检测结果就是证据。令牌层规范见 `apps/desktop-tauri/src/styles/tokens.css` + `npm run check:tokens`。注意 detect 对**解析不了的文件会静默返回 0**，所以先跑 `tsc --noEmit` 再信它的绿灯。
 - **界面审查先做减法（2026-10-26，前端审查常设）** — 审查或改动任何界面，第一步是删文字而不是加文字：**标语/宣传口号**、**说明文字**（标题下一段"这块能干什么"）、**次要标签**（副标题、单位后缀、重复的字段名、面包屑式路径、"点击这里"式引导）一律删。判据两条：这段文字是**内容本身**（用户数据、名称、数值）还是**操作标签**（按钮/字段名）？都不是就删。
   - **删完看不懂 = 布局有问题，重排而不是把字加回来**：拿掉那行解释后用户就看不出「这是什么 / 能做什么 / 当前什么状态」，说明信息本该由**结构**承载 —— 用层级、位置、分组、图标、状态色、placeholder、空状态承接。重排后仍讲不清，是这块功能本身没想清楚。
 - **三端体验同进（2026-10-26，每次改动都适用）** — 任何修改同时结算三笔账，**三边都不许变差**，且不得破坏现有功能：用户体验（可读性、可发现性、操作步数）；开发体验（复用既有原语/令牌/组件，不新增第二份同类实现）；AI agent 体验（`aria-label`、语义标签、稳定类名、无歧义状态文案 —— 让模型选得中、读得对）。三赢做不到就换方案，禁止「牺牲一端换另一端」。
@@ -113,7 +113,7 @@ Key crates:
    
    Mechanism: sub-agent isolation — sub-agent pays the read cost once, returns concise conclusion, parent context stays clean. See `directions.rs::TOOL_USAGE_GUIDANCE` (Context-bloat prevention — absolute rules) and `sub_agent_orchestrator.rs::sub_agent_guidance` (Context-bloat self-defense) for the operational rules.
 
-4. **delegate_task is the universal fan-out tool** — it is NOT image-specific. The `attachments` field is just one (image) data path; `task` + `context` paths + sub-agent reading files itself cover everything else. Architecture: see `docs/ARCHITECTURE_REFACTOR_PLAN.md §7` for L1/L2/L3 batch scaling plan.
+4. **delegate_task is the universal fan-out tool** — it is NOT image-specific. The `attachments` field is just one (image) data path; `task` + `context` paths + sub-agent reading files itself cover everything else. Architecture: L1/L2/L3 batch scaling is implemented in `sub_agent_orchestrator.rs`.
 
 ## Code simplification discipline (六步决策阶梯, 2026-08-15 起常设)
 
@@ -164,7 +164,7 @@ Key crates:
 - PR禁区: no multi-platform distribution, no external resource sensing, no cross-platform targets
 - **Agent Loop 正常流程**: LLM 思考 → `<think>` 进折叠块；LLM 输出可见文本 → Markdown 渲染给用户；LLM 调工具 → 结果写入 ctx → 下轮 LLM 自然总结。系统提示含 `THINKING_DISCIPLINE_GUIDANCE` + `REPORT_SECTIONING`（单一真相源，think.full 与 format.short 运行时拼接）+ `TOOL_FAILURE_GUIDANCE` 等（directions.rs）。`TOOL_EXECUTION_SUMMARY_GUIDANCE` / `STOPPING_SUMMARY_GUIDANCE` 已删除（曾导致 filler 压力），勿再引用。
 - **Finalize 路径 (简化 2026-07-09)**: `process_post_response` 返回 `Finalize` 时，有可见文本 → 直接结束；无可见文本（thinking-only）→ 落入 `decide_empty_response` 处理边缘情况（Codex ack / 自治模式预工具 nudge）。**不再有多轮 nudge，不再有 PatchLastAssistant** — 信任 LLM + 系统提示自然工作，不伪造 LLM 输出。**例外（2026-09-29）**：自治模式下可见文本 + 尚未用过任何工具 + nudge 额度在（`nudge_eligible`）时仍会发**一次**预工具 nudge——该豁免位于 run_loop.rs 空名过滤 finalize 处，勿删。
-- **架构改进计划**: 见 `docs/ARCHITECTURE_REFACTOR_PLAN.md` §6 — Agent Loop 核心引擎修复进度跟踪
+- **架构改进计划**: 见 `docs/notes/` 三态决策记录 — Agent Loop 核心引擎修复进度
 - **显式状态机 (AL-6)**: `LoopPhase` 枚举在 `agent_loop/types.rs` 中定义 9 个阶段，通过 `tracing::debug!` 在 `run()` / `run_stream()` 每个阶段边界发射
 - **统一工具验证 (AL-7)**: `tool_call_validator.rs` 模块集中了无效名称 + 无效 JSON 验证逻辑，返回 `ValidationOutcome` + `ApplyResult` 枚举
 - **收敛检测 (AL-8)**: `convergence_detector.rs` — 双阈值：`NoProgressWithTools` 15 轮 / `SimilarContent` 5 轮先 **advisory WARN**，到 25 轮 / 10 轮升级 **hard stop**（曾短暂改纯 advisory，但 LLM 倾向固守当前策略，commit d4d7bc9f 回退升级）；`ErrorLoop`（连续 3 轮全错）hard stop。阈值见 `convergence_detector.rs:95-121`。

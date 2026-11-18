@@ -1,7 +1,7 @@
 // 工作台对话栏 chrome。
 //
 // 右侧对话栏与主对话共用同一个 ChatView 实例（chatNode），本组件不改
-// 消息流逻辑，只在外层加工作台专属 chrome（WORKBENCH_CHAT_REDESIGN_PLAN
+// 消息流逻辑，只在外层加工作台专属 chrome（工作台对话重设计方案
 // 方案 A）。原顶部 chip 已删：悬浮浮窗的标题栏已显示工作台名，chip
 // 只会叠出双层标题。保留底部状态条：最近代码改动时间（workbench://changed）。
 //

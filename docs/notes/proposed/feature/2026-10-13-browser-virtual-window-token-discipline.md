@@ -1,7 +1,7 @@
 # Decision Note: 浏览器自动化升级——Token 纪律 + 交互补全 + 清理
 
 Status: proposed — 2026-10-13 提案；**P0 已于 2026-10-14 拆出实现**，见
-[implemented: browser-virtual-window-p0](../implemented/feature/2026-10-14-browser-virtual-window-p0.md)
+[implemented: browser-virtual-window-p0](../implemented/feature/浏览器虚拟窗口 P0（已删除）.md)
 （其"评审修正"一节记录了 P0 实现对本篇的三处偏离与裁决：逃生门已裁决废弃、
 "不看不推"未兑现待实测、现状列高估）。本篇剩余范围：P1 Token 纪律 /
 P2 交互补全 / P3 清理。承接 [native-os-automation](../implemented/feature/2026-10-13-native-os-automation.md)，

@@ -3,7 +3,7 @@
 Status: implemented — 内核方向已定（四件套 + AgentLoop 插件化 + 插件为一等扩展机制）；F0-F6 迁移未整体执行，边界模型切换排在 F5
 
 > 基线：Rust 侧 112,337 行（含 tests）／24 crate；前端 44.5K 行。
-> 取代 `FOUNDATION_REWRITE_DESIGN.md` 的架构部分（其网络安全章节继续有效）。
+> 取代 `基础重写设计（已删除，见 git 历史）.md` 的架构部分（其网络安全章节继续有效）。
 > 参考 DeepSeek Harness + Pi。
 
 ## Decision
@@ -354,7 +354,7 @@ pub enum StepDirective {
 
 **③ `codex-core` 是 library，UI 只是消费者**：`tui` / `exec` / `app-server`（JSON-RPC，供 IDE 与桌面 app 集成）/ `cli` 四个前端，**共用同一个 core**。另有 `state` crate 专门做 **SQLite -backed session/thread 持久化**。
 
-→ 这条正是我们"内核 + 多展示端（桌面/手机）"的同构范式，且**它的 `app-server` 走 Unix domain socket**——而我们要求走 TLS + 配对（见 `FOUNDATION_REWRITE_DESIGN.md §网络安全`），这是我们要比它更严的地方。
+→ 这条正是我们"内核 + 多展示端（桌面/手机）"的同构范式，且**它的 `app-server` 走 Unix domain socket**——而我们要求走 TLS + 配对（见 `基础重写设计（已删除，见 git 历史）.md §网络安全`），这是我们要比它更严的地方。
 
 #### 3.2.3 分层结论：底层不抄，上层照抄
 
@@ -490,7 +490,7 @@ OSWorld 上最好的 agent（Agent S2.5，56%）**距人类仍有约 40 个百�
 
 ## 4. 前端契约冻结
 
-沿用 `FOUNDATION_REWRITE_DESIGN.md §6`：35 出站帧 + 5 入站帧 + 全部 REST 端点 + `WsEnvelope` 形状全保，适配层在服务端边界做投影。
+沿用 `基础重写设计（已删除，见 git 历史）.md §6`：35 出站帧 + 5 入站帧 + 全部 REST 端点 + `WsEnvelope` 形状全保，适配层在服务端边界做投影。
 
 **唯一新增**：cua 若外置，`ToolCallBubble.tsx:1108-1138` 的 8 个 `cua_*` 预览组件需改为通用预览兜底（约 40 行）。
 

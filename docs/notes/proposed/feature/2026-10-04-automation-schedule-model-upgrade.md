@@ -1,6 +1,6 @@
 # Decision Note: 自动化调度模型升级（结构化 scheduleRule + 派发重试状态机）
 
-Status: implemented — 对齐 ZCode 调度权威与派发韧性两处：cron 字符串降为展示格式、编辑权威改为结构化 scheduleRule（含 endAt）；run 派发引入状态机与 transient/permanent 分类退避重试。2026-10-04 采纳为调度幂等的最终方案（**取代**已归档的 `../../archived/architecture/2026-10-04-automation-schedule-idempotency.md`，其五项实施要点已移植入本篇下节）。**实施要点 1-6 与 Decision 2/3 已全部落地**；**Decision 1（结构化 scheduleRule 表单）未做**，是独立的 UI 工作量。实施中修正了本篇 4 处与实际代码不符的前提，并发现两处既有缺陷（执行层失败被记成成功、手动触发 runId 恒定），见「实施时的方案偏差更正」与「实施过程中发现的更大问题」。
+Status: implemented — 对齐 ZCode 调度权威与派发韧性两处：cron 字符串降为展示格式、编辑权威改为结构化 scheduleRule（含 endAt）；run 派发引入状态机与 transient/permanent 分类退避重试。2026-10-04 采纳为调度幂等的最终方案（**取代**已归档的 `../../archived/architecture/自动化调度幂等性（已删除）.md`，其五项实施要点已移植入本篇下节）。**实施要点 1-6 与 Decision 2/3 已全部落地**；**Decision 1（结构化 scheduleRule 表单）未做**，是独立的 UI 工作量。实施中修正了本篇 4 处与实际代码不符的前提，并发现两处既有缺陷（执行层失败被记成成功、手动触发 runId 恒定），见「实施时的方案偏差更正」与「实施过程中发现的更大问题」。
 
 ## 背景事实（读源码所得）
 

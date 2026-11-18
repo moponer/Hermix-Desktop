@@ -89,7 +89,7 @@ pub(crate) fn tool_allowed_by_active_skill(
 /// A free function so both the inline (interactive) path and the
 /// spawned (state-mutating) path share one body — the two used to be
 /// copy-pasted, and only one copy had a timeout.
-/// B5-2（docs/optimization-plan.md H6）：工具结果统一标记为不可信数据
+/// B5-2（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md H6）：工具结果统一标记为不可信数据
 /// （lynn 14「提示词注入隔离」）。标记只加一次；命中可疑注入模式时落
 /// agent 类目审计行（injection_suspected），供事后追溯。
 fn mark_untrusted(tool_name: &str, content: &str) -> String {
@@ -148,7 +148,7 @@ fn run_tool_handler(
             let state = explicit
                 .or_else(|| hermix_tools::tool_state::signature(tool_name, raw_args, &content));
 
-            // B5-2（docs/optimization-plan.md H6）：注入隔离——工具结果统一
+            // B5-2（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md H6）：注入隔离——工具结果统一
             // 标记为不可信数据；命中可疑模式落 injection_suspected 审计。
             let content = mark_untrusted(tool_name, &content);
 

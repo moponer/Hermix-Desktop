@@ -33,7 +33,7 @@ use crate::plugins::{HookType, PluginManager};
 use crate::prompt_assembly::{extract_provider_and_model, messages_for_api_call};
 use crate::runtime_provider::{build_runtime_provider, credential_pool_for_route};
 
-/// H1 观测（docs/optimization-plan.md）：上次请求的 prefix 指纹。
+/// H1 观测（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md）：上次请求的 prefix 指纹。
 /// hash 不变 = 前缀稳定（缓存友好）；变化即记 `cache_break`——这是唯一能
 /// **证明**"没在破坏缓存"的手段（lynn 17 §4）。进程级即可：重启必然
 /// 是新前缀，记 `first` 没有诊断价值。
@@ -201,7 +201,7 @@ pub(crate) async fn call_llm_with_retry(
 
     // Track whether we've already tried an OAuth refresh during this call.
     let mut oauth_refreshed = false;
-    // H1 观测（docs/optimization-plan.md）：429/额度类错误计数——
+    // H1 观测（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md）：429/额度类错误计数——
     // 第 1 次退避重试，第 2 次即切 fallback_model（不再等重试穷尽）。
     let mut quota_hits = 0u32;
 
@@ -367,7 +367,7 @@ pub(crate) async fn call_llm_with_retry(
                         return Err(AgentError::LlmApi(err_str));
                     }
                     ErrorClass::RateLimit | ErrorClass::Retryable => {
-                        // C1-3（docs/optimization-plan.md H4）：MiniMax 免费端点
+                        // C1-3（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md H4）：MiniMax 免费端点
                         // 的 529 整点高峰（provider 自述"1-5 分钟内恢复"）——
                         // 秒级退避对不上分钟级恢复窗口，重试穷尽必然报错
                         //（agent.log 实证：2026-11-16/17 两次 529 mid-stream）。

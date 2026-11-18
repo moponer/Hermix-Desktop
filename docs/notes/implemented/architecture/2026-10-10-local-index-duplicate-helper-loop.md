@@ -56,7 +56,7 @@ helper 上时（`resident=true` 且 `done.json` 不新鲜），会立刻发
 | 把 `helper_resident()` 窗口从 60s 调大到 300s | 只把阈值推高，没有消除"枚举期静默"这个事实。枚举真要超过 300s 时同样复发，且窗口一大，helper 真死之后要等更久才被复用。 |
 | 为心跳单开一个线程 | 能修好，但看门狗线程本来就在跑，预算检查与心跳合并成一个循环是同一件事，不多一个线程、不多一次调度。 |
 | 用 PID 存活探测（OpenProcess）替代 mtime | 主进程非提权，对提权进程 `OpenProcess` 会 ACCESS_DENIED——代码里已经因这个原因不能 `TerminateProcess` helper。 |
-| 把 F: 从 `search_roots()` 里静态剔掉 | 治不了根：卡死是偶发的（同机 F: 后续又能扫完 1.84M 条），静态剔除把偶发故障变成永久缺失。见 [MFT 卡死那篇](2026-10-09-local-index-f-drive-mft-hang.md)。 |
+| 把 F: 从 `search_roots()` 里静态剔掉 | 治不了根：卡死是偶发的（同机 F: 后续又能扫完 1.84M 条），静态剔除把偶发故障变成永久缺失。见 [MFT 卡死那篇](本地索引 MFT 卡死记录（已删除）.md)。 |
 | 消费失败时保留 snapshot 供下次复用 | 会引入"读到半截 snapshot"的正确性风险。交接文件一次性消费、读完即删是更小的表面积。 |
 
 ## Consequences

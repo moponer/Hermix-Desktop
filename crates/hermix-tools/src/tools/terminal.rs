@@ -740,7 +740,7 @@ async fn execute_inner(
                 // 就输出 `ShellError::instruction()`（"换做法"），未命中
                 // 退回 `format_command_output`（保留既有 8 个测试的形状）。
                 //
-                // SEAMS_DESIGN §3 决策 C 的实际落地：Windows 同一类失败
+                // 决策 C 的实际落地：Windows 同一类失败
                 // 有 N 种面，归一后才能阻止模型盲试循环。
                 if output.exit_code != 0 {
                     if let Some(shell) = this.shell.as_ref() {
@@ -1684,7 +1684,7 @@ mod tests {
         assert!(formatted.contains("exit code: 1"));
     }
 
-    // -- 渐进迁移：终端失败输出接到 `Shell` seam（SEAMS_DESIGN §3 C）--
+    // -- 渐进迁移：终端失败输出接到 `Shell` seam --
     // 验证 exit_code != 0 且提供 shell 时，stderr 输出走
     // `Shell::classify` + `ShellError::instruction()`，给模型可执行指令
     // 而不是裸 stderr + "原样重试"。同时也验证未提供 shell 时退化为

@@ -1,7 +1,7 @@
 /* impeccable-disable cramped-padding: .shot/.shot-bar 是 role=img 的拟真窗口预览，
    标题栏与窗体贴边是拟真形态，不是真实内容容器。 */
 /* impeccable-disable undersized-ui-text: 预览内文字均为 11px 起的演示文案。 */
-/* Hermix 官网样式。唯一事实源是同目录 DESIGN.md —— 改风格先改那边。
+/* Hermix 官网样式。风格事实源是 tokens.css —— 改风格先改那边。
  *
  * 深色科技风：冷灰黑底 + 单一 teal 重音。首屏一处品牌色辉光、导航一处玻璃拟态，
  * 除此之外无渐变。层次靠暗底明度阶梯与发丝边框，不靠色相跳跃。 */

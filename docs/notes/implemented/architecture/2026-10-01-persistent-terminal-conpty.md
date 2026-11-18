@@ -5,7 +5,7 @@ Status: implemented — 2026-10-02 交付；cd/venv/REPL 状态跨调用存活�
 ## Decision
 
 H3 持久终端**用 `portable-pty` 0.9（wezterm 出品）原生实现**，取代
-[archived 的"Windows 无 PTY"否决](../../archived/architecture/2026-10-01-h3-persistent-terminal-rejected.md)
+[archived 的"Windows 无 PTY"否决](../../archived/architecture/H3 持久终端否决记录（已删除）.md)
 （该否决的事实基础有误：`pty: true` 报错是 hermix 未接 ConPTY，
 Windows 自 Win10 1809 起内置 ConPTY）。纯 Rust 集成，无需自写
 ConPTY FFI、无需 Node 侧车。

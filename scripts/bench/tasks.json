@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "hermix 桌面代理基准任务集（对照 docs/optimization-plan.md H5，lynn 19 裁剪版）。每个任务给出 id、领域、评测目标与自动评分信号；执行方式：在运行的 hermix 会话里手工/脚本投递任务，然后把该会话的 usage/日志喂给 score.mjs。",
+  "description": "hermix 桌面代理基准任务集（对照 docs/notes/proposed/architecture/2026-11-16-optimization-plan.md H5，lynn 19 裁剪版）。每个任务给出 id、领域、评测目标与自动评分信号；执行方式：在运行的 hermix 会话里手工/脚本投递任务，然后把该会话的 usage/日志喂给 score.mjs。",
   "tasks": [
     { "id": "B1", "domain": "coding", "goal": "改一个真实 bug 并跑测试", "score": "测试退出码 0 + diff 命中目标文件" },
     { "id": "B2", "domain": "research", "goal": "3 个开源方案对比并收敛成一页结论", "score": "有结论 + 来源 + 轮次 ≤12" },

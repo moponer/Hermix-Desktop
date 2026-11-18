@@ -14,7 +14,7 @@
 #   5. Advisory report: std::thread::sleep in non-test src (potential
 #      async-runtime blocking — each hit needs human review)
 #   6. Theme token static guard: no hardcoded #hex / rgb() in .tsx/.ts
-#      outside the registered EXCEPTIONS list (see docs/design/THEME_SYSTEM.md)
+#      outside the registered EXCEPTIONS list (see docs/notes/ + tokens.css)
 #   7. Advisory: source files > 2500 lines (god-file drift)
 #   8. No `TODO: pre-existing` / `FIXME: pre-existing` debt markers
 #      (see AGENTS.md "Conventions" — don't introduce them)
@@ -235,7 +235,7 @@ echo ""
 # 6. Theme token static guard (HARD gate)
 #    Scans .tsx/.ts for hardcoded color literals outside the
 #    registered exceptions (see apps/desktop-tauri/src/styles/themes/EXCEPTIONS.md).
-#    Enforced by docs/design/THEME_SYSTEM.md §5.
+#    Enforced by check-theme-tokens.mjs (see AGENTS.md contrast rule).
 #
 #    Need: node >= 18. The script uses no external deps.
 #-----------------------------------------------------------------------

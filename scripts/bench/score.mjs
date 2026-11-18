@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// B4-4（docs/optimization-plan.md H5）：基准评分脚本骨架。
+// B4-4（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md H5）：基准评分脚本骨架。
 //
 // 输入契约：JSONL，每行一条 LLM 调用记录，至少包含：
 //   { prompt_tokens, completion_tokens, cache_read_tokens?, task?, role?, status? }

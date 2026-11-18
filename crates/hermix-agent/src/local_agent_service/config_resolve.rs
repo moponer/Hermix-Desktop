@@ -65,7 +65,7 @@ pub(super) fn apply_overrides(
         config.memory_dir = Some(md.clone());
     }
     // Workbench binding: gates the `workbench.context` direction and
-    // pins the `workbench` skill every turn (MODULE_DESIGN §13 layer 3 —
+    // pins the `workbench` skill every turn (module design §13 layer 3 —
     // the session exists only to serve this workbench, so the skill is
     // resident with zero intent detection). Ordinary chats: both None.
     config.workbench_id = overrides.workbench_id.clone();

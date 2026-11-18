@@ -33,9 +33,9 @@ server 后端（hermix-server 及其下 20 个 crate）与该模块零耦合，�
 
 本笔记取代以下对该模块内部机制的记录（机制随代码一起消失，笔记冻结归档）：
 
-- `docs/notes/implemented/bug-fix/2026-10-07-usn-helper-uac-chain.md`
-- `docs/notes/implemented/architecture/2026-10-09-local-index-f-drive-mft-hang.md`
-- `docs/notes/implemented/simplification/2026-10-02-remove-dead-usn-index-helpers.md`
+- `docs/notes/implemented/bug-fix/USN helper UAC 链（已删除）.md`
+- `docs/notes/implemented/architecture/本地索引 MFT 卡死记录（已删除）.md`
+- `docs/notes/implemented/simplification/USN 索引 helper 移除记录（已删除）.md`
 - `docs/notes/proposed/bug-fix/2026-10-05-local-index-uac-chain.md`（proposed 件
   不归档，Status 行加指向本笔记的说明）
 

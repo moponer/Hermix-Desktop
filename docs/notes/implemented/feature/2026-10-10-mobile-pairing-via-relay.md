@@ -2,7 +2,7 @@
 
 Status: implemented — 2026-10-10
 
-取代 `2026-10-09-mobile-direct-pairing.md`（已归档）。
+取代 `手机直连配对方案（已删除）.md`（已归档）。
 
 ## Decision
 

@@ -6,7 +6,7 @@
 //! The port-binding model broke two things at once: (1) running two
 //! Hermix sessions on the same host fought over port 3000, (2) dev mode
 //! alongside another Tauri app on port 1420 needed special-casing.
-//! Migrated to stdio JSON Lines (see `docs/transport-stdio-migration.md`).
+//! Migrated to stdio JSON Lines.
 //! The transport negotiation is one-shot at spawn: the child is launched
 //! with `--stdio`, its stdin/stdout are handed to the bridge, and the
 //! HTTP/WebSocket surface is dead from the desktop sidecar's point of

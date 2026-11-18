@@ -141,7 +141,7 @@ pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchema
         "skill_view".to_string(),
         "skills_list".to_string(),
         // workbench_manager must be always-forwarded so workbench-bound
-        // sessions (skill pinned every turn, MODULE_DESIGN §13 layer 3)
+        // sessions (skill pinned every turn, module design §13 layer 3)
         // can actually call it. KeywordRouter scores it ≈ 0 on
         // CJK-heavy queries (its name tokens never appear in Chinese
         // requests like "给工作台加个图表"), so top-N truncation drops

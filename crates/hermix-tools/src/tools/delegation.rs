@@ -10,7 +10,7 @@ use crate::ToolRegistry;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
-// B4-3（docs/optimization-plan.md H4）：失败重派落盘
+// B4-3（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md H4）：失败重派落盘
 // ---------------------------------------------------------------------------
 
 /// 同一任务（按内容哈希键控）失败重派的上限。lynn 01 复盘实测：
@@ -231,7 +231,7 @@ impl ToolHandler for DelegateTaskHandler {
             )));
         }
 
-        // V-2（docs/optimization-plan.md H3 遗留）：失败教训注入——同任务
+        // V-2（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md H3 遗留）：失败教训注入——同任务
         // 此前失败过（未达封顶）时，把失败原因注入 context，让子代理
         // 避免重蹈覆辙（lynn 08：教训跨会话留存，同域派发时注入）。
         let context = match (failed_n, last_reason.as_deref()) {

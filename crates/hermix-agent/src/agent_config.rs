@@ -460,7 +460,7 @@ pub struct AgentConfig {
     /// Workbench bound to this session. `Some` gates the `workbench.context`
     /// direction (module index / vendor / manifest injected per-turn) —
     /// ordinary chats never see workbench context. Wired from
-    /// `SendMessageRequest.workbench_id`; see WORKBENCH_CHAT_REDESIGN_PLAN B.
+    /// `SendMessageRequest.workbench_id`; see the workbench design note (plan B).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workbench_id: Option<String>,
 

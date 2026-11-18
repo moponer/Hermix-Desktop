@@ -1011,7 +1011,7 @@ pub struct RouteContext<'a> {
     pub domain_mode: Option<DomainMode>,
     /// Workbench bound to this session (`SendMessageRequest.workbench_id`).
     /// `Some` gates the `workbench.context` direction — ordinary chats never
-    /// see workbench context (anti-leak, WORKBENCH_CHAT_REDESIGN_PLAN B.1/R5).
+    /// see workbench context (anti-leak, workbench design note B.1/R5).
     pub workbench_id: Option<&'a str>,
 }
 

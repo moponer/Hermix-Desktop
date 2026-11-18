@@ -2,7 +2,7 @@
 
 Status: proposed — 「IM 隐喻 → 工作台隐喻」的架构重设计，覆盖入口体系、任务归属机制与人性化交互；效果稿 `apps/desktop-tauri/design-previews/2026-10-15-workspace-cockpit.html`
 
-Supersedes: `docs/notes/proposed/feature/2026-10-15-app-layout-redesign.md`（增量式优化，已被推翻）
+Supersedes: `docs/notes/proposed/feature/应用布局重设计（已删除）.md`（增量式优化，已被推翻）
 
 ## Decision
 

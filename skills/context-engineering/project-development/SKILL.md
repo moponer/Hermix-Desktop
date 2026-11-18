@@ -134,8 +134,8 @@ Render: Display answer with clickable references
 
 ## References
 
-- Hermix architecture: `docs/ARCHITECTURE_REFACTOR_PLAN.md`
-- Hermix optimization plan: `docs/OPTIMIZATION_PLAN.md`
+- Hermix architecture: `docs/notes/implemented/architecture/`
+- Hermix optimization plan: `docs/notes/proposed/architecture/2026-11-16-optimization-plan.md`
 - Hermix context model: `crates/hermix-agent/src/context.rs`
 - Hermix cost guard: `crates/hermix-agent/src/cost_guard.rs`
 - Hermix model routing: `crates/hermix-agent/src/smart_model_routing.rs`

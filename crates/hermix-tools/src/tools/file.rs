@@ -240,7 +240,7 @@ fn count_lines(text: &str) -> u64 {
 /// Why line-aware: the previous char-loop cut mid-line (a resumed read began
 /// mid-record) and reported `next_offset` as the *total* line count of the
 /// slice — pointing past the end of what the model had just read.
-/// B2-3（docs/optimization-plan.md）：search_files 大结果外置——超预算部分
+/// B2-3（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md）：search_files 大结果外置——超预算部分
 /// 写盘（SpillSink），正文留预览 + 行寻址指针（read_file(path, offset=N)
 /// 可回读），与 terminal 的 spill_or_truncate 同款。
 fn spill_search_result(raw: String) -> String {
@@ -508,7 +508,7 @@ impl ToolHandler for ReadFileHandler {
     }
 }
 
-/// B2-4（docs/optimization-plan.md）：批量读取——一次调用读多个文件，
+/// B2-4（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md）：批量读取——一次调用读多个文件，
 /// 合并返回，省掉每文件一整轮的往返（lynn 04 §5：轮次 -25%）。
 /// 每文件独立走 [`ReadFileHandler`]（预算/分页/凭据闸/遍历检查全继承），
 /// 单文件失败不中断批量（错误内联在该文件分节里）。
@@ -1010,7 +1010,7 @@ impl ToolHandler for SearchFilesHandler {
                     .backend
                     .search_content(pattern, path, file_glob, max_results, context)
                     .await?;
-                // B2-3（docs/optimization-plan.md）：大结果外置——溢出部分
+                // B2-3（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md）：大结果外置——溢出部分
                 // 写盘，正文留预览 + 行寻址指针（read_file(path, offset=N)
                 // 可回读），terminal 的 spill_or_truncate 同款。
                 Ok(spill_search_result(raw))

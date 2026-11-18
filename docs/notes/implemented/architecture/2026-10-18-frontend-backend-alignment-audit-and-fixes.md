@@ -12,7 +12,7 @@ Status: implemented — 2026-10-18 当日完成审查、用户拍板、修复、
 2. **编排总线 7 类事件：补前端**。真缺口在后端——`OrchestrationEventBus` 无任何生产订阅者，事件死在总线上。`ws.rs` 补 orchestration→WS 桥（仿既有 todo 桥，`LoopPhaseChanged` 按 session 过滤防串扰）；前端 `useStreamParser` 补分支：自动化触发弹 toast、LoopPhase 显示中文状态 chip、计划确认渲染只读 `PlanConfirmCard`（后端无确认回传通道，不做假交互按钮）。
 3. **图片生成设置页：删除**（后端无能力，纯 localStorage 摆设）。
 4. **消息赞/踩：保留**为本地功能，`hermix.messageVotes` 登记进 `STORAGE_KEYS`（此前未注册违反 canonical source 约定）。
-5. **hero 字号：40px→28px**（`--text-hero`，字重服从 600 上限），消除 tokens.css 与 TYPOGRAPHY_SYSTEM.md 的规范冲突——按文件来，tokens 为准并更新注释。
+5. **hero 字号：40px→28px**（`--text-hero`，字重服从 600 上限），消除 tokens.css 与 字体规范（已并入 tokens.css）.md 的规范冲突——按文件来，tokens 为准并更新注释。
 
 ### 契约修复（P0）
 

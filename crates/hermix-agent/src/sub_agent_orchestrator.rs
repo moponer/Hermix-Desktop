@@ -183,7 +183,7 @@ pub enum SubAgentStatus {
 /// Default max iterations for sub-agent delegation (Hermes Agent parity).
 pub const DEFAULT_DELEGATION_MAX_ITERATIONS: u32 = 50;
 
-/// B4-2（docs/optimization-plan.md H4）：交付验证回路——进程 cwd 是
+/// B4-2（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md H4）：交付验证回路——进程 cwd 是
 /// Rust 项目（Cargo.toml 存在）时自动跑 `cargo check --quiet`，返回
 /// `(status, detail)`。失败是客观信号：父代理据此决定验收或重派，
 /// 而不是只信子代理的"我做好了"。package.json 场景（npm test 的时长
@@ -278,7 +278,7 @@ impl SubAgentRole {
     /// whitelist: the child is told what its final answer must look like.
     pub fn return_contract(&self) -> &'static str {
         match self {
-            // B3-2（docs/optimization-plan.md）：General 补轻量回报契约——
+            // B3-2（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md）：General 补轻量回报契约——
             // 四字段 Report 对齐 lynn 交接协议（status/scope/evidence/open），
             // 让 General 子代理的报告可验收，而不是一锅散文。
             Self::General => {
@@ -907,7 +907,7 @@ impl SubAgentOrchestrator {
         // execute_async delegates to execute_inner, the emit must live
         // here so both code paths share the same lifecycle events.
         //
-        // H1 观测（docs/optimization-plan.md）：终态带 reason 枚举落
+        // H1 观测（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md）：终态带 reason 枚举落
         // agent 类目结构化日志，淘汰自由文本 error 归因。
         let (phase, reason, turns, cost_usd, err) = match &outcome {
             Ok(result) => (

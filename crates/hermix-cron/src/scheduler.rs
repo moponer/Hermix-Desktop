@@ -549,7 +549,7 @@ impl CronScheduler {
 
     /// Remove every job bound to a workbench (`CronJob.workbench_id`).
     /// Called when a workbench is deleted so its scheduled tasks don't
-    /// outlive it (WORKBENCH_CHAT_REDESIGN_PLAN 方案 D.4 对抗性审查).
+    /// outlive it (workbench design note, plan D.4 adversarial review).
     /// Idempotent: a workbench with no jobs returns an empty Vec.
     pub async fn remove_jobs_for_workbench(&self, workbench_id: &str) -> Result<Vec<String>, CronError> {
         let ids: Vec<String> = {

@@ -1074,7 +1074,7 @@ Always close `</think>` before visible text. The think block is for reasoning, n
             DirRoute::Subsequent,
             "## Plan format\nWhen planning, put one short user-facing sentence of visible text ahead of your tool calls; keep the analysis in the reasoning flow. Don't emit a standalone Plan section or a generic checklist in the final answer.",
         ));
-        // B5-2（docs/optimization-plan.md H6）：注入隔离——数据与指令分离。
+        // B5-2（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md H6）：注入隔离——数据与指令分离。
         dirs.push(SystemDir::new(
             "injection.guard",
             DirRoute::Subsequent,
@@ -1299,7 +1299,7 @@ Always close `</think>` before visible text. The think block is for reasoning, n
     // Project conventions — non-generic, deployment-specific tuning.
     // Injected only when the active workspace's AGENTS.md exposes a
     // conventions section. Keeps the universal core free of any single
-    // user's preferences (see docs/notes/archived/architecture/HERMIX_AGENT_SYSTEM_PROMPT.md v2).
+    // user's preferences (v2 of the original system prompt design).
     if let Some(conv) = project_conventions {
         if !conv.trim().is_empty() {
             dirs.push(SystemDir::new(
@@ -1340,7 +1340,7 @@ Always close `</think>` before visible text. The think block is for reasoning, n
 /// `项目约定` / `project conventions` / `conventions` (case-insensitive),
 /// at `#` or `##` level. Everything up to the next heading is returned.
 /// This is the data-injection hook that keeps the agent's *universal*
-/// behaviour (see `docs/notes/archived/architecture/HERMIX_AGENT_SYSTEM_PROMPT.md`) separate from
+/// behaviour (the original system prompt design) separate from
 /// any single deployment's tuning. A different user / workspace simply
 /// gets a different `AGENTS.md` — the core never changes.
 pub fn load_project_conventions(workspace: &str) -> Option<String> {
@@ -1571,7 +1571,7 @@ mod tests {
         );
     }
 
-    /// B3-3（docs/optimization-plan.md）：提示词 golden 快照——固定输入下
+    /// B3-3（docs/notes/proposed/architecture/2026-11-16-optimization-plan.md）：提示词 golden 快照——固定输入下
     /// collect_directions 的 tag 序列与内容 hash 必须稳定。改任何 guidance
     /// 文本都会改 hash：若差异是**有意**的，更新 EXPECTED_* 并在提交信息里
     /// 说明影响面；若是**无意**的（改 A 动了 B），先查清楚再合。

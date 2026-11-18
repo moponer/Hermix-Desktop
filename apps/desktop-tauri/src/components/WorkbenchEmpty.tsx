@@ -1,6 +1,6 @@
 // 工作台空态。
 //
-// 一个工作台都没有时的起步界面（WORKBENCH_CHAT_REDESIGN_PLAN 方案 C 定案版）：
+// 一个工作台都没有时的起步界面（工作台对话重设计方案 C 定案版）：
 // 一个 input + 一个 button，Enter 即建，零教学。契约细节由 agent 侧的
 // workbench skill 负责，宿主不再堆"复制提示词"的教程块。
 // 错误走 input 下方 inline（不堆在页面底部堆一坨），与 toast 双通道。
