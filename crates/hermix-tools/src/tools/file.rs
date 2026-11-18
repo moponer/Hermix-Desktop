@@ -188,7 +188,7 @@ pub fn register(
 /// configured is the path we report. We deliberately do NOT canonicalize.
 /// Why no canonicalize: on Windows, `std::fs::canonicalize` follows
 /// junctions / symlinks AND prepends the `\\?\` long-path prefix. So if the
-/// user is in `D:\data` (a junction) and the LLM calls `read_file("D:\\qcc\\foo")`,
+/// user is in `D:\data` (a junction) and the LLM calls `read_file("D:\\data\\foo")`,
 /// the OS opens the file fine, but `canonicalize` would surface
 /// `\\?\F:\...` instead of `D:\data\foo` — the junction target, not what
 /// the user typed. The LLM would then echo the wrong path back into

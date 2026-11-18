@@ -319,7 +319,7 @@ spill 原来告诉模型「以上为前 20000 字符」，但唯一的取回通�
 
 - `tasks` 表在 `<hermix_home>/data/sessions.db`（**所有会话、所有工作区共用一个文件**），表里有 `workspace_path` 列，但 **`TaskRepository::list()` 既不过滤会话也不过滤工作区**（`hermix-task/src/repository.rs`）。
 - 服务端的 `TaskTrackerBackendImpl::list()` 直接透传，adapter 连 session id 都不持有。
-- 实测本机数据：**73 个任务，3 个工作区**（`.` 50 个、`F:\<workspace>\hermix-desktop` 12 个、`D:\data` 11 个），58 pending / 4 in_progress，标题是用户的个人学习与工作条目。
+- 实测本机数据：**73 个任务，3 个工作区**（`.` 50 个、`<repo>` 12 个、`D:\data` 11 个），58 pending / 4 in_progress，标题是用户的个人学习与工作条目。
 
 **后果**：模型调一次 `task_list` 就看到 73 个任务、4 个来自 3 个无关上下文的 in_progress —— 它分不清哪个是「自己的计划」，于是 B2 的不变量（「同一计划内恰好一个 in_progress」）在数据层面根本无法执行。
 

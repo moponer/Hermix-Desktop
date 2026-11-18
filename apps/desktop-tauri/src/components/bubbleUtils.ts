@@ -333,7 +333,7 @@ export function toolResultPeek(output?: string, argsJson?: string): string | nul
     return "已完成";
   }
 
-  // "Wrote 823 bytes to D:\data\发票汇总.csv"
+  // "Wrote 823 bytes to D:\data\report.csv"
   const wroteBytes = trimmed.match(/^(?:Wrote|Written|Saved|Created|Generated)\s+(\d+)\s+bytes?\s+(?:to\s+)?/i);
   if (wroteBytes) return `已写入 ${wroteBytes[1]} bytes`;
 
@@ -369,7 +369,7 @@ export function toolResultPeek(output?: string, argsJson?: string): string | nul
  * `stdoutHint` is the tool's accumulated output. When `args` is empty
  * or has no recognisable command field (the python-pptx case in the
  * "毕业纪念.pptx" screenshot, where args was `{}` and stdout began
- * with `OK -> D:\data\毕业纪念.pptx`), we pull a friendly hint from
+ * with `OK -> D:\data\slides.pptx`), we pull a friendly hint from
  * stdout so the row doesn't read as "已执行命令" + blank.
  */
 export function toolPrimaryArg(tool: string, argsJson?: string, stdoutHint?: string): string | null {
@@ -528,7 +528,7 @@ export function stdoutFallback(toolLower: string, stdout?: string): string | nul
   // Wrote / Saved / Created / Generated <filepath>
   const verbArrow = trimmed.match(/^(?:Wrote|Saved|Created|Generated|Written)\s+(?:to\s+)?[`"']?(\S+?)[`"']?\s*(?:\||$)/i);
   if (verbArrow && verbArrow[1]) return verbArrow[1];
-  // "saved: D:\data\发票汇总.xls 5632 bytes"  — the python-runner
+  // "saved: D:\data\report.xls 5632 bytes"  — the python-runner
   // wrapper used by the qcc/invoice-aggregation flow. Lift the path.
   const saved = trimmed.match(/^saved:\s*(\S+?\.xlsx?)\b/i);
   if (saved && saved[1]) return saved[1];
