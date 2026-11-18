@@ -285,7 +285,7 @@ impl OfficeExportHandler {
 
     /// DOCX export: heading/paragraph/bullet blocks → real Word document.
     fn export_docx(&self, params: &Value, abs: &str) -> Result<String, ToolError> {
-        use docx_rs::{AbstractNumbering, Docx, Level, LevelJc, LevelText, NumberFormat, Numbering, NumberingId, IndentLevel, Paragraph, Run, Start};
+        use docx_rs::{AbstractNumbering, Docx, Level, LevelJc, LevelText, NumberFormat, Numbering, NumberingId, IndentLevel, Paragraph, Run, Start, Style};
 
         let blocks = params
             .get("blocks")
@@ -319,6 +319,14 @@ impl OfficeExportHandler {
         }
 
         // One bullet numbering definition shared by all bullet blocks.
+        //
+        // Heading styles MUST be declared explicitly. `Paragraph::style("Heading1")`
+        // only *references* a style id; `docx-rs` does not ship the definition.
+        // Without the `add_style` calls below, `styles.xml` contains nothing but
+        // `Normal`, every heading renders as body text, and Word's navigation
+        // pane / table of contents see a flat document. Verified by reading the
+        // generated file back with python-docx: `len(doc.styles) == 1` before
+        // this fix.
         let mut docx = Docx::new()
             .add_abstract_numbering(
                 AbstractNumbering::new(1).add_level(Level::new(
@@ -329,7 +337,22 @@ impl OfficeExportHandler {
                     LevelJc::new("left"),
                 )),
             )
-            .add_numbering(Numbering::new(1, 1));
+            .add_numbering(Numbering::new(1, 1))
+            .add_style(
+                Style::new("Heading1", docx_rs::StyleType::Paragraph)
+                    .name("Heading 1")
+                    .outline_lvl(0),
+            )
+            .add_style(
+                Style::new("Heading2", docx_rs::StyleType::Paragraph)
+                    .name("Heading 2")
+                    .outline_lvl(1),
+            )
+            .add_style(
+                Style::new("Heading3", docx_rs::StyleType::Paragraph)
+                    .name("Heading 3")
+                    .outline_lvl(2),
+            );
 
         for b in blocks {
             let text = b.get("text").and_then(|v| v.as_str()).unwrap_or_default();
@@ -730,5 +753,276 @@ mod tests {
         }
         let meta = std::fs::metadata(&p).unwrap();
         assert!(meta.len() > 0);
+    }
+
+    /// End-to-end: produce all three Office formats and assert the bytes are
+    /// real OOXML (ZIP with the expected parts), not a renamed text file.
+    ///
+    /// The stronger cross-check lives in the shell script that reads these
+    /// files back with Python openpyxl / python-docx / python-pptx — an
+    /// *independent* implementation. A writer that only agrees with its own
+    /// reader can be confidently wrong; this test only guarantees structure.
+    #[tokio::test]
+    async fn e2e_writes_all_three_formats() {
+        let tmp = tempfile::tempdir().unwrap();
+        let handler = OfficeExportHandler;
+
+        // ---- xlsx: two sheets, mixed cell types ----
+        let xlsx = tmp.path().join("report.xlsx");
+        let out = handler
+            .execute(json!({
+                "path": xlsx.to_string_lossy(),
+                "format": "xlsx",
+                "sheets": [
+                    {
+                        "name": "Sales",
+                        "rows": [
+                            ["Region", "Q1", "Q2", "Active"],
+                            ["North", 1200, 1450.5, true],
+                            ["South", 980, 1100, false],
+                            ["East", 0, 0, null]
+                        ]
+                    },
+                    {
+                        "name": "汇总",
+                        "rows": [
+                            ["指标", "数值"],
+                            ["总销售额", 4730.5],
+                            ["区域数", 3]
+                        ]
+                    }
+                ]
+            }))
+            .await
+            .expect("xlsx export should succeed");
+        eprintln!("xlsx: {out}");
+        assert!(xlsx.exists());
+        assert_ooxml(&xlsx, "xl/workbook.xml");
+
+        // ---- docx: headings, paragraphs, bullets ----
+        let docx = tmp.path().join("report.docx");
+        let out = handler
+            .execute(json!({
+                "path": docx.to_string_lossy(),
+                "format": "docx",
+                "blocks": [
+                    {"type": "heading1", "text": "季度报告"},
+                    {"type": "heading2", "text": "销售概况"},
+                    {"type": "paragraph", "text": "本季度总销售额 4730.5，环比增长 12%。"},
+                    {"type": "bullet", "text": "北区领先，贡献 1450.5"},
+                    {"type": "bullet", "text": "南区稳定，贡献 1100"},
+                    {"type": "heading3", "text": "风险"},
+                    {"type": "paragraph", "text": "东区两个季度均为零，需要排查。"}
+                ]
+            }))
+            .await
+            .expect("docx export should succeed");
+        eprintln!("docx: {out}");
+        assert!(docx.exists());
+        assert_ooxml(&docx, "word/document.xml");
+
+        // ---- pptx: title slide + content slides ----
+        let pptx = tmp.path().join("deck.pptx");
+        let out = handler
+            .execute(json!({
+                "path": pptx.to_string_lossy(),
+                "format": "pptx",
+                "title": "季度回顾",
+                "slides": [
+                    {"title": "销售概况", "bullets": ["总销售额 4730.5", "环比 +12%"]},
+                    {"title": "风险", "bullets": ["东区连续两季为零", "需要排查渠道"]}
+                ]
+            }))
+            .await
+            .expect("pptx export should succeed");
+        eprintln!("pptx: {out}");
+        assert!(pptx.exists());
+        assert_ooxml(&pptx, "ppt/presentation.xml");
+    }
+
+    /// Assert `path` looks like real OOXML: a ZIP archive (PK\x03\x04 magic)
+    /// whose central directory mentions `member`.
+    ///
+    /// Deliberately does not pull in the `zip` crate: the point of this
+    /// assertion is to catch "a text file renamed to .xlsx", and the magic
+    /// plus a substring scan over the central directory does that. The
+    /// *content* correctness check is done by an independent reader
+    /// (openpyxl / python-docx / python-pptx) — a writer that only agrees with
+    /// its own reader can be confidently wrong.
+    fn assert_ooxml(path: &std::path::Path, member: &str) {
+        let bytes = std::fs::read(path).expect("file must exist");
+        assert!(
+            bytes.starts_with(b"PK\x03\x04"),
+            "{} must be a ZIP archive (OOXML), first bytes: {:?}",
+            path.display(),
+            &bytes[..bytes.len().min(8)]
+        );
+        // ZIP stores entry names in the central directory as plain UTF-8.
+        let haystack = String::from_utf8_lossy(&bytes);
+        assert!(
+            haystack.contains(member),
+            "{} must contain the OOXML part {member}",
+            path.display()
+        );
+        // A real document has more than a stub; 1 KB is far below any valid
+        // workbook/document/presentation.
+        assert!(
+            bytes.len() > 1024,
+            "{} is suspiciously small ({} bytes)",
+            path.display(),
+            bytes.len()
+        );
+    }
+
+    /// Emit the three sample files to `$OFFICE_VERIFY_DIR` for out-of-process
+    /// verification with an independent reader (openpyxl / python-docx /
+    /// python-pptx). Ignored by default: it is a fixture generator, not an
+    /// assertion.
+    ///
+    ///   OFFICE_VERIFY_DIR=<refs>/office cargo test -p hermix-tools \
+    ///     --lib office_verify_emit -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "fixture generator for independent verification"]
+    async fn office_verify_emit() {
+        let dir = std::env::var("OFFICE_VERIFY_DIR")
+            .expect("set OFFICE_VERIFY_DIR to an existing directory");
+        let dir = std::path::PathBuf::from(dir);
+        let handler = OfficeExportHandler;
+
+        handler.execute(json!({
+            "path": dir.join("report.xlsx").to_string_lossy(),
+            "format": "xlsx",
+            "sheets": [
+                {"name": "Sales", "rows": [
+                    ["Region", "Q1", "Q2", "Active"],
+                    ["North", 1200, 1450.5, true],
+                    ["South", 980, 1100, false],
+                    ["East", 0, 0, null]
+                ]},
+                {"name": "汇总", "rows": [
+                    ["指标", "数值"],
+                    ["总销售额", 4730.5],
+                    ["区域数", 3]
+                ]}
+            ]
+        })).await.expect("xlsx");
+
+        handler.execute(json!({
+            "path": dir.join("report.docx").to_string_lossy(),
+            "format": "docx",
+            "blocks": [
+                {"type": "heading1", "text": "季度报告"},
+                {"type": "heading2", "text": "销售概况"},
+                {"type": "paragraph", "text": "本季度总销售额 4730.5，环比增长 12%。"},
+                {"type": "bullet", "text": "北区领先，贡献 1450.5"},
+                {"type": "bullet", "text": "南区稳定，贡献 1100"},
+                {"type": "heading3", "text": "风险"},
+                {"type": "paragraph", "text": "东区两个季度均为零，需要排查。"}
+            ]
+        })).await.expect("docx");
+
+        handler.execute(json!({
+            "path": dir.join("deck.pptx").to_string_lossy(),
+            "format": "pptx",
+            "title": "季度回顾",
+            "slides": [
+                {"title": "销售概况", "bullets": ["总销售额 4730.5", "环比 +12%"]},
+                {"title": "风险", "bullets": ["东区连续两季为零", "需要排查渠道"]}
+            ]
+        })).await.expect("pptx");
+
+        eprintln!("emitted to {}", dir.display());
+    }
+
+    /// Regression guard for the bug found on 2026-11-18: `Paragraph::style("Heading1")`
+    /// only *references* a style id, and `docx-rs` ships no heading definitions.
+    /// The generated `styles.xml` therefore contained nothing but `Normal`, so
+    /// every heading rendered as body text and Word's navigation pane / TOC
+    /// saw a flat document. Verified externally with python-docx, which
+    /// reported `len(doc.styles) == 1` before the fix and 4 after.
+    ///
+    /// This asserts on the raw `styles.xml` bytes so it stays in-process: the
+    /// heading style ids must appear in the document's style table.
+    #[tokio::test]
+    async fn docx_declares_heading_styles() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("h.docx");
+        OfficeExportHandler
+            .execute(json!({
+                "path": path.to_string_lossy(),
+                "format": "docx",
+                "blocks": [
+                    {"type": "heading1", "text": "One"},
+                    {"type": "heading2", "text": "Two"},
+                    {"type": "heading3", "text": "Three"},
+                    {"type": "paragraph", "text": "body"}
+                ]
+            }))
+            .await
+            .expect("docx export");
+
+        // ZIP entry names are stored uncompressed in the central directory,
+        // so a raw byte scan finds `word/styles.xml`. Pull the local header
+        // offset and inflate that entry by hand — small and dependency-free.
+        let bytes = std::fs::read(&path).unwrap();
+        let styles = extract_zip_entry(&bytes, "word/styles.xml")
+            .expect("docx must contain word/styles.xml");
+        let xml = String::from_utf8_lossy(&styles);
+        for id in ["Heading1", "Heading2", "Heading3"] {
+            assert!(
+                xml.contains(id),
+                "styles.xml must define {id}; got: {} chars of styles",
+                xml.len()
+            );
+        }
+        // A style id alone is not enough — the paragraph must also point at it.
+        let doc = extract_zip_entry(&bytes, "word/document.xml")
+            .expect("docx must contain word/document.xml");
+        let doc_xml = String::from_utf8_lossy(&doc);
+        assert!(doc_xml.contains("Heading1"), "a paragraph must reference Heading1");
+    }
+
+    /// Minimal ZIP entry reader for tests only.
+    ///
+    /// Avoids adding the `zip` crate as a dev-dependency just to read back
+    /// what we wrote. `docx-rs` stores entries uncompressed (method 0), so the
+    /// stored branch is the one that matters; deflate is handled by returning
+    /// `None` rather than silently producing garbage.
+    fn extract_zip_entry(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
+        let mut i = 0usize;
+        while i + 30 <= bytes.len() {
+            if &bytes[i..i + 4] != b"PK\x03\x04" {
+                i += 1;
+                continue;
+            }
+            let method = u16::from_le_bytes([bytes[i + 8], bytes[i + 9]]);
+            let comp_size = u32::from_le_bytes([
+                bytes[i + 18], bytes[i + 19], bytes[i + 20], bytes[i + 21],
+            ]) as usize;
+            let name_len = u16::from_le_bytes([bytes[i + 26], bytes[i + 27]]) as usize;
+            let extra_len = u16::from_le_bytes([bytes[i + 28], bytes[i + 29]]) as usize;
+            let name_start = i + 30;
+            if name_start + name_len > bytes.len() {
+                return None;
+            }
+            let entry_name = String::from_utf8_lossy(&bytes[name_start..name_start + name_len]);
+            let data_start = name_start + name_len + extra_len;
+            if entry_name == name {
+                let end = data_start.checked_add(comp_size)?;
+                if end > bytes.len() {
+                    return None;
+                }
+                let raw = &bytes[data_start..end];
+                return match method {
+                    0 => Some(raw.to_vec()),
+                    // docx-rs writes stored entries; a deflated one would mean
+                    // the writer changed, which is worth noticing rather than
+                    // silently decoding.
+                    _ => None,
+                };
+            }
+            i = data_start.saturating_add(comp_size.max(1));
+        }
+        None
     }
 }
