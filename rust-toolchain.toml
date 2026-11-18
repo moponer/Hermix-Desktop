@@ -1,0 +1,14 @@
+# 固定工具链，保证「rustc / rust-analyzer / rust-src」三者同版本。
+#
+# 背景（2026-11-18 实测）：本机曾同时存在两套 Rust ——
+#   1. C:\Program Files\Rust stable MSVC 1.92  （MSI 独立安装，PATH 优先）
+#   2. ~\.rustup\toolchains\...                 （rustup 管理）
+# 独立安装那套**没有 rust-src**，而 rust-analyzer 去它的 sysroot 找，
+# 于是标准库符号（Vec/String/Option）全部跳转失败。
+#
+# 这个文件让 cargo / rustc / rust-analyzer 一律走 rustup 的 1.92 工具链
+# （已装 rust-src），无论 shell 的 PATH 顺序如何。版本与项目原有版本一致。
+[toolchain]
+channel = "1.92.0"
+components = ["rust-src", "rust-analyzer", "clippy", "rustfmt"]
+profile = "default"

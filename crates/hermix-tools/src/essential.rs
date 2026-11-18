@@ -156,6 +156,12 @@ pub const HARD_ESSENTIAL_TOOLSETS: &[&str] = &[
     // `MEMBER_ORCHESTRATION_GUIDANCE` 的注入条件是 `tool_names.contains
     // ("dispatch_member")`，于是分轨纪律也一并不出现。两个静默后果叠加。
     "member",
+    // code：同一个坑的第五例（2026-11-18）。`lsp` 注册在 `code` toolset 上，
+    // 而 `code` 此前不在硬地板 —— 旧白名单快照（用户在设置里点过一次时写下）
+    // 里不可能有它，启动后置过滤会把整个 toolset 关掉，LSP 工具对模型不可见，
+    // 而"读写比 5.7:1"这个正在被修的病症会原样保留、且无任何报错。
+    // `code` 下只有只读的代码智能查询（RiskLevel::Safe），进硬地板无安全代价。
+    "code",
 ];
 
 /// Toolsets registered by **another crate** at server-build time, not by
@@ -218,6 +224,7 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "get_subagent_result",
     "workflow",
     "member",
+    "code",
     // soft
     "document",
     "storage",
@@ -285,6 +292,7 @@ mod tests {
                 "get_subagent_result",
                 "workflow",
                 "member",
+                "code",
             ],
             "HARD_ESSENTIAL_TOOLSETS changed — update the floor and any UI copy."
         );

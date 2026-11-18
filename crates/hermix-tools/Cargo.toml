@@ -45,6 +45,13 @@ fs4 = "0.13"
 # `image` provides the codec APIs used by read_image / file_converter
 # (`PngEncoder`, `ExtendedColorType`, JPEG/WebP writers).
 image = { workspace = true }
+# LSP client (2026-11-18). See workspace Cargo.toml for why async-lsp over
+# tower-lsp. `tokio` feature is what enables the stdio transport we use.
+async-lsp = { workspace = true, features = ["tokio"] }
+lsp-types = { workspace = true }
+tower = { workspace = true }
+tokio-util = { workspace = true }
+
 # Native OS automation (2026-10-13 decision note): browser line drives the
 # system Edge over CDP via chromiumoxide; desktop line drives UI Automation
 # COM through the `windows` crate. Both are opt-in toolsets — see

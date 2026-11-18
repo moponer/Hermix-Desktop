@@ -109,6 +109,21 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 futures = "0.3"
 
+# LSP client (2026-11-18). async-lsp is the maintained *client-capable* LSP
+# framework (2.1M downloads, 0.2.4 released 2026-04). tower-lsp was rejected:
+# it is server-only in practice, and its notification handling is asynchronous,
+# which its own maintainers document as semantically incorrect (tower-lsp#284).
+# async-lsp runs notifications synchronously and exposes MainLoop::new_client
+# plus the LanguageServer trait — exactly the side we need. tower is required
+# by the builder pattern its examples use.
+async-lsp = { version = "0.2", default-features = false, features = ["omni-trait", "tracing", "client-monitor"] }
+lsp-types = "0.95"
+tower = { version = "0.5", features = ["util"] }
+# Bridges tokio::process pipes (tokio::io) to the futures::AsyncRead/Write
+# that async-lsp requires. Already in the tree via axum; declared explicitly
+# because we call it directly.
+tokio-util = { version = "0.7", features = ["compat"] }
+
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
