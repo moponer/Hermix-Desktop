@@ -1635,6 +1635,7 @@ pub(crate) async fn send_message(
         images: convert_wire_images(&req.images),
         image: None,
         image_mime_type: None,
+        supports_vision: req.supports_vision,
         skills: req.skills.clone(),
         workbench_id: req.workbench_id.clone(),
         domain_override: req.domain_override.clone(),

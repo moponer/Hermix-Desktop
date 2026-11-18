@@ -355,6 +355,10 @@ pub struct SendMessageRequest {
     pub image: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_mime_type: Option<String>,
+    /// 当前选中模型是否声明支持看图。识图插件关闭时图片走原生多模态，
+    /// 只有明确 `false` 才会被拒绝（`None` = 上游没说，不等于不支持）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_vision: Option<bool>,
     /// Names of skills to enable for this turn (ephemeral override of
     /// the server-side skill_store enabled-set). Backend feeds these into
     /// `skills_system_prompt` on top of any server-enabled skills.

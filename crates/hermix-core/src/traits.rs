@@ -450,6 +450,13 @@ pub struct AgentOverrides {
     /// MIME type for the legacy single-image field.
     #[serde(default)]
     pub image_mime_type: Option<String>,
+    /// 当前选中模型是否声明支持看图（`supports_vision`）。
+    ///
+    /// `None` = 上游没说，**不等于不支持**（很多网关省略该字段）。识图插件
+    /// 关闭时图片走原生多模态，只有明确 `Some(false)` 才会被拒绝——否则会
+    /// 挡掉本来能用的配置。
+    #[serde(default)]
+    pub supports_vision: Option<bool>,
     /// Ephemeral per-turn skill set. Names of skills to surface in the
     /// system prompt on top of the server-side enabled set. The agent
     /// loop reads them via `agent_loop::skills_system_prompt` and renders

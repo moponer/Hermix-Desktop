@@ -270,6 +270,149 @@ impl LocalAgentService {
         self
     }
 
+    /// 识图插件：把图片转成文字描述，供纯文本模型消费。
+    ///
+    /// 走的是「免费视觉链」——用**当前选中的模型**发起一次多模态请求，让它
+    /// 描述图片，再把描述拼进正文。这样即使后续推理用的是纯文本模型，
+    /// 它也能拿到图里的信息。
+    ///
+    /// 为什么复用当前模型而不是另配一个视觉模型：免费渠道里已经有能看图的
+    /// 模型（`minimax/minimax-m3.1-flash:free` 实测 `supports_vision: true`），
+    /// 再要求用户单独配一个视觉 provider 等于把「开箱可用」变成「先去配 key」。
+    /// 当前模型看不了图时，这条链会明确失败并告诉用户原因。
+    ///
+    /// 返回的文本直接追加到用户消息尾部，带清晰的边界标记——模型需要知道
+    /// 这段是「别人替它看的结果」，不是用户自己写的。
+    async fn describe_images_for_text_model(&self, images: &[(&str, &str)]) -> String {
+        let prompt = "请仔细描述这张图片的内容，供一个看不到图片的助手使用。\
+                     要求：1) 先说明这是什么（截图/照片/图表/文档等）；\
+                     2) 逐项列出图中所有可见文字，原样转写，不要概括；\
+                     3) 如果是界面截图，说明有哪些控件、按钮文字、以及明显的状态（报错/成功/加载中）；\
+                     4) 如果是图表，说明坐标轴、数值范围和关键趋势；\
+                     5) 不要评价，只客观描述。"
+            .to_string();
+
+        let model = self
+            .config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .model
+            .clone()
+            // 免费渠道里已有能看图的模型（`minimax/minimax-m3.1-flash:free`
+            // 实测 supports_vision: true），复用它可以免掉「先配一个视觉
+            // provider」这一步；配置里没有模型时兜底到它。
+            .unwrap_or_else(|| "minimax/minimax-m3.1-flash:free".to_string());
+        let provider = match self.resolve_provider(&model) {
+            Ok(p) => p,
+            Err(e) => {
+                return format!(
+                    "\n\n[识图失败：无法初始化视觉后端（{e}）。请关闭「识图」插件改用多模态模型。]"
+                );
+            }
+        };
+
+        let mut out = String::from("\n\n[以下是识图插件对该图片的转述——你看不到原图，请以此为依据]");
+        for (idx, (mime, b64)) in images.iter().enumerate() {
+            let msg = hermix_core::Message::user_with_images(&prompt, &[(*mime, *b64)]);
+            match provider
+                .chat_completion(&[msg], &[], Some(1500), Some(0.1), Some(&model), None)
+                .await
+            {
+                Ok(resp) => {
+                    let desc = resp.message.content.clone().unwrap_or_default();
+                    if desc.trim().is_empty() {
+                        out.push_str(&format!("\n\n（第 {} 张图：视觉模型返回了空描述）", idx + 1));
+                    } else {
+                        out.push_str(&format!("\n\n（第 {} 张图）{}", idx + 1, desc.trim()));
+                    }
+                }
+                Err(e) => {
+                    out.push_str(&format!(
+                        "\n\n（第 {} 张图：识图失败——{}。可以关闭「识图」插件并换一个多模态模型。）",
+                        idx + 1,
+                        e
+                    ));
+                }
+            }
+        }
+        out
+    }
+    /// 应用识图插件开关：返回「本轮最终要发给模型的正文 + 是否还带图」。
+    ///
+    /// - 插件开：图片经 [`describe_images_for_text_model`] 转成文字并拼进正文，
+    ///   返回空图片列表——纯文本模型也能消费。
+    /// - 插件关：图片原样返回，走原生多模态。此时若模型**明确**不支持看图，
+    ///   直接报错：静默丢图会让用户以为图发出去了，然后对着空气等一个看不懂的回答。
+    ///
+    /// 放在 async 上下文里由调用方执行（`prepare_turn` 是同步的，识图要 await）。
+    /// 就地修正 `prepare_turn` 已经拼好的最后一条 user 消息。
+    ///
+    /// `prepare_turn` 是同步的，而识图要 await 一次视觉调用，所以开关的
+    /// 实际效果在这里落地：开启时把「带图的消息」换成「带文字描述的消息」。
+    async fn apply_vision_plugin(
+        &self,
+        session_id: &str,
+        messages: &mut [Message],
+        supports_vision: Option<bool>,
+    ) -> Result<(), AgentError> {
+        // 只处理本轮新追加的那条 user 消息——历史里的旧图不动。
+        let Some(last) = messages.last_mut() else {
+            return Ok(());
+        };
+        if last.role != MessageRole::User {
+            return Ok(());
+        }
+        let parts = last.content_parts.as_deref().unwrap_or(&[]);
+        let images: Vec<(String, String)> = parts
+            .iter()
+            .filter_map(|p| match p {
+                hermix_core::types::ContentPart::ImageUrl { image_url } => {
+                    // data URL: `data:image/png;base64,....`
+                    let url = &image_url.url;
+                    let (meta, b64) = url.split_once(",")?;
+                    let mime = meta
+                        .strip_prefix("data:")
+                        .and_then(|m| m.split_once(";"))
+                        .map(|(m, _)| m.to_string())
+                        .unwrap_or_else(|| "image/png".to_string());
+                    Some((mime, b64.to_string()))
+                }
+                _ => None,
+            })
+            .collect();
+        if images.is_empty() {
+            return Ok(());
+        }
+
+        let on = crate::vision_plugin::is_enabled(Some(session_id));
+        if !on {
+            if !crate::vision_plugin::model_accepts_images(supports_vision) {
+                return Err(AgentError::Config(
+                    "当前模型不支持识图：请开启输入框上方的「识图」开关（图片会先转成文字），\
+                     或换一个支持视觉的模型。"
+                        .to_string(),
+                ));
+            }
+            return Ok(());
+        }
+
+        let refs: Vec<(&str, &str)> = images
+            .iter()
+            .map(|(m, b)| (m.as_str(), b.as_str()))
+            .collect();
+        let described = self.describe_images_for_text_model(&refs).await;
+
+        // 换掉带图消息：保留原正文，去掉 ImageUrl，追加转述。
+        let original_text = parts
+            .iter()
+            .find_map(|p| match p {
+                hermix_core::types::ContentPart::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        *last = Message::user(&format!("{original_text}{described}"));
+        Ok(())
+    }
     fn resolve_provider(&self, effective_model: &str) -> Result<Arc<dyn LlmProvider>, AgentError> {
         // Snapshot the config under the lock so we don't hold the
         // mutex across the (potentially slow) provider factory call.
@@ -616,6 +759,9 @@ impl LocalAgentService {
             vec![]
         };
         let text = with_attached_files_note(text, overrides.attached_file_paths.as_deref()).into_owned();
+
+        // 识图插件开关由调用方处理（见 `apply_vision_plugin`）：识图要 await
+        // 一次视觉模型调用，而本函数是同步的。
         if !images.is_empty() {
             messages.push(Message::user_with_images(&text, &images));
         } else {
@@ -826,6 +972,11 @@ impl AgentService for LocalAgentService {
             provider,
             ..
         } = self.prepare_turn(session_id, text, &overrides, true)?;
+
+        // 识图插件开关：开则把本轮图片转成文字描述（纯文本模型也能用），
+        // 关则原样保留图片走原生多模态；关着且模型明确不支持看图时在这里报错。
+        self.apply_vision_plugin(session_id, &mut messages, overrides.supports_vision)
+            .await?;
 
         // An externally-triggered turn (an automation run) must not leave
         // a fabricated "user asked this" line behind. Both the prompt we
@@ -1132,6 +1283,10 @@ impl AgentService for LocalAgentService {
             agent_tool_registry,
             provider,
         } = self.prepare_turn(session_id, text, &overrides, false)?;
+
+        // 同 send_message：识图开关在这里落地（prepare_turn 是同步的）。
+        self.apply_vision_plugin(session_id, &mut messages, overrides.supports_vision)
+            .await?;
 
         // early persist — save the user message BEFORE
         // running the streaming agent. Without this, an abort (WS
@@ -2963,6 +3118,7 @@ mod override_tests {
             images: None,
             image: None,
             image_mime_type: None,
+            supports_vision: None,
             approval_requester: None,
             on_event: None,
             pre_approval_checker: None,
@@ -3002,6 +3158,7 @@ mod override_tests {
             images: None,
             image: None,
             image_mime_type: None,
+            supports_vision: None,
             approval_requester: None,
             on_event: None,
             pre_approval_checker: None,

@@ -14,6 +14,7 @@ mod automation_trigger;
 mod orchestration_bus;
 mod resource_patrol;
 mod member_api;
+mod vision_api;
 mod request_id;
 mod storage_janitor;
 mod ttl_cache;
@@ -346,6 +347,11 @@ pub fn router(state: HttpServerState) -> Router {
         .route("/api/agent-roles", get(member_api::list_roles))
         .route("/api/member-stats", get(member_api::member_stats))
         .route("/api/resource/caches", get(member_api::scan_caches))
+        // 识图插件开关（会话级）：输入框上方眼睛图标的读写端点。
+        .route(
+            "/api/vision-plugin",
+            get(vision_api::get_vision_plugin).post(vision_api::set_vision_plugin),
+        )
         // 手机面（P4.5）：relay 配对设备的成员工单访问。
         .route("/v1/members", get(member_api::mobile_list_members))
         .route("/v1/members/{member_id}/stop", post(member_api::mobile_stop_member))

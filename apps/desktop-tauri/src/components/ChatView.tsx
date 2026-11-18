@@ -610,6 +610,18 @@ export const ChatView = memo(function ChatView({
     return () => { cancelled = true; };
   }, [selectedModel]);
 
+  // 当前模型能不能直接看像素——识图开关关掉时图片走原生多模态，纯文本模型收不了。
+  // 读法和 supportsReasoning 一致：/api/model/info 的能力位。
+  const [supportsVision, setSupportsVision] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (!selectedModel) { setSupportsVision(undefined); return; }
+    let cancelled = false;
+    getModelInfo().then((info) => {
+      if (!cancelled) setSupportsVision(info?.capabilities.supports_vision);
+    }).catch(() => { if (!cancelled) setSupportsVision(undefined); });
+    return () => { cancelled = true; };
+  }, [selectedModel]);
+
   const handleFilesAttach = useCallback(
     async (files: File[]) => {
       setIsProcessingFiles(true);
@@ -1140,6 +1152,8 @@ export const ChatView = memo(function ChatView({
               defaultModel={defaultModel}
               contextWindows={contextWindows}
               supportsReasoning={supportsReasoning}
+              visionSessionId={session?.id}
+              supportsVision={supportsVision}
               enableThinking={currentEnableThinking}
               onEnableThinkingChange={handleEnableThinkingChange}
               expert={expert} setExpert={setExpertWithCutoff}
@@ -1314,6 +1328,8 @@ export const ChatView = memo(function ChatView({
             defaultModel={defaultModel}
             contextWindows={contextWindows}
             supportsReasoning={supportsReasoning}
+            visionSessionId={session?.id}
+            supportsVision={supportsVision}
             enableThinking={currentEnableThinking}
             onEnableThinkingChange={handleEnableThinkingChange}
             expert={expert} setExpert={setExpertWithCutoff}

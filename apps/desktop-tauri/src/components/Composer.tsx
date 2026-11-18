@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { VisionToggle } from "./VisionToggle";
 import { Send, Square, FolderOpen, ChevronDown, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText, Settings } from "lucide-react";
 import type { DomainModeChoice } from "../hooks/useExpert";
 import { usePopover } from "../hooks/usePopover";
@@ -101,6 +102,10 @@ export interface ComposerProps {
    *  `undefined` = 跟随 provider 默认。切换后随下一条消息的 overrides 下发。 */
   enableThinking?: boolean;
   onEnableThinkingChange?: (v: boolean) => void;
+  /** 当前会话 id（识图开关是会话级的）。 */
+  visionSessionId?: string;
+  /** 当前模型的 supports_vision。undefined = 上游没说，按可能支持处理。 */
+  supportsVision?: boolean;
 }
 
 export function Composer(p: ComposerProps) {
@@ -730,6 +735,11 @@ export function Composer(p: ComposerProps) {
               </PopoverShell>
             )}
           </div>
+          <VisionToggle
+            sessionId={p.visionSessionId ?? ""}
+            supportsVision={p.supportsVision}
+            compact={toolbarCompact}
+          />
           <VisionButton onFilesAttach={(files) => p.onFilesAttach?.(files)} />
           <VoiceButton onTranscribe={(text) => injectIntoComposer({ source: "voice", text, mode: "at-caret" })} />
           <EnhanceButton
