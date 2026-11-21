@@ -19,7 +19,7 @@
         "minHeight": 680,
         "decorations": false,
         "center": true,
-        "incognito": true,
+        "incognito": false,
         "dragDropEnabled": false,
         "visible": false
       }
