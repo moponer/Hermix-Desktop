@@ -20,12 +20,12 @@ export function AppearanceTab() {
   const { mode, resolved, setMode, accent, setAccent } = useTheme();
 
   /* 明暗三选的选中态必须按**主题 id** 判断，不能写死 "light"/"dark"：
-     `mode` 存的是 registry 里的主题 id（"notion" / "notion-dark"），
+     `mode` 存的是 registry 里的主题 id（"light" / "dark"），
      旧代码 `mode === "light"` 恒为 false，导致「浅色」永远不显示选中
      （2026-10-28 用户报「主题色没有默认的选择（浅色）」）。
      这里从 registry 取各自的 id，避免硬编码。 */
-  const lightThemeId = THEMES.find((t) => !isDarkTheme(t.id))?.id ?? "notion";
-  const darkThemeId = THEMES.find((t) => isDarkTheme(t.id))?.id ?? "notion-dark";
+  const lightThemeId = THEMES.find((t) => !isDarkTheme(t.id))?.id ?? "light";
+  const darkThemeId = THEMES.find((t) => isDarkTheme(t.id))?.id ?? "dark";
   const isSystem = mode === SYSTEM_THEME;
 
   return (

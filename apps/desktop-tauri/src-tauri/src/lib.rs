@@ -39,10 +39,6 @@ use tauri::Manager;
 /// To add a built-in skill: drop its `SKILL.md` under
 /// `builtin-skills/<group>/<name>/` and add one line to `BUILTIN_SKILLS`
 /// below. Nothing else to wire up.
-const STORAGE_ANALYZER_SKILL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/builtin-skills/hermix/storage-analyzer/SKILL.md"
-));
 const CUSTOM_APP_SKILL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/builtin-skills/hermix/custom-app-development/SKILL.md"
@@ -119,7 +115,6 @@ const BUILTIN_AGENT_PROFILES: &[(&str, &str)] = &[
 ];
 
 const BUILTIN_SKILLS: &[(&str, &str)] = &[
-    ("hermix/storage-analyzer", STORAGE_ANALYZER_SKILL),
     ("hermix/custom-app-development", CUSTOM_APP_SKILL),
     ("hermix/workflow-tdd", WORKFLOW_TDD_SKILL),
     ("hermix/workflow-debugging", WORKFLOW_DEBUGGING_SKILL),

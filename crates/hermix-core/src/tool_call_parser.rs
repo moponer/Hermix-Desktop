@@ -415,7 +415,10 @@ impl ToolCallParser for HermesToolCallParser {
             }
         }
 
-        Ok(calls)
+        Ok({
+            normalize_envelope_calls(&mut calls);
+            calls
+        })
     }
 
     fn clone_box(&self) -> Box<dyn ToolCallParser> {
@@ -426,6 +429,36 @@ impl ToolCallParser for HermesToolCallParser {
 // ---------------------------------------------------------------------------
 // Public parsing functions
 // ---------------------------------------------------------------------------
+
+/// 2026-11-20（会话库实测）：模型按 Qwen/Hermes 风格输出工具调用时，上面的
+/// 格式分支会把标签名当成**工具名**、把整个 {name, arguments} 信封当成**入参**
+/// ——库里因此积累了 165 次这样的伪造调用，全部超时/失败。在解析出口做信封
+/// 归一化：改写回真实工具名与入参。
+fn normalize_envelope_calls(calls: &mut Vec<ToolCall>) {
+    for call in calls {
+        if call.function.name != "tool_call" {
+            continue;
+        }
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+        else {
+            continue;
+        };
+        let Some(real_name) = parsed.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let arguments = match parsed.get("arguments") {
+            Some(v @ serde_json::Value::Object(_)) => v.clone(),
+            Some(serde_json::Value::String(s)) => {
+                serde_json::from_str(s).unwrap_or(serde_json::Value::Object(
+                    serde_json::Map::new(),
+                ))
+            }
+            _ => serde_json::Value::Object(serde_json::Map::new()),
+        };
+        call.function.name = real_name.to_string();
+        call.function.arguments = arguments.to_string();
+    }
+}
 
 /// Parse all tool calls from LLM text content using the default Hermes parser.
 pub fn parse_tool_calls(content: &str) -> Result<Vec<ToolCall>, AgentError> {
@@ -723,7 +756,7 @@ Let me run that.
     }
 
     #[test]
-    fn test_invalid_json_in_tool_call_tags() {
+        fn test_invalid_json_in_tool_call_tags() {
         let content = r#"
 ```tool_call
 {bad json!!!}

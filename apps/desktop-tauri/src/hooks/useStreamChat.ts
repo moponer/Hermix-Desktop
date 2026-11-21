@@ -181,6 +181,9 @@ export interface StreamCallbacks {
     filePath: string;
     changeType: "created" | "modified" | "deleted" | "renamed";
     fileSummary?: string;
+    /** 权威增删行数（terminal 差分路径）；缺失时前端回落估算。 */
+    added?: number;
+    removed?: number;
   }) => void;
   onMemoryUpdate?: (info: {
     action: "write" | "update" | "delete" | "summarize" | "cleanup" | "snapshot";

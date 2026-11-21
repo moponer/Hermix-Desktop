@@ -96,9 +96,14 @@ export function ProcessLine({
   vm: ProcessLineVM;
   onPathClick?: (path: string, e: ReactMouseEvent) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  // 2026-11-20 用户反馈：工具执行时要**直接看到**终端输出（在哪一步），
+  // 跑完自动收起 —— 不再是「一个旋转图标 + 手动点开」。用户手动开合
+  // （userOpen 非 null）时以用户为准，自动行为让位。
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
 
   const isRunning = vm.status === "running";
+  // 展开态 = 用户决定 ?? 自动（运行中展开看实时输出，跑完自动收起）。
+  const open = userOpen ?? isRunning;
   const isError = vm.status === "error";
   const isSkipped = vm.status === "skipped";
   // 调用方可以直接传解析结果；没传就自己兜一层，省得两条路径各写一遍。
@@ -166,7 +171,7 @@ export function ProcessLine({
       onPathClick!(p, e);
       return;
     }
-    if (hasOutput) setOpen((v) => !v);
+    if (hasOutput) setUserOpen(!open);
   };
 
   const stateKey: ProcessStatus | "awaiting" =
@@ -185,7 +190,7 @@ export function ProcessLine({
     >
       <button
         type="button"
-        onClick={hasOutput ? () => setOpen((v) => !v) : undefined}
+        onClick={hasOutput ? () => setUserOpen(!open) : undefined}
         className="process-line-row"
         aria-expanded={hasOutput ? open : undefined}
         aria-label={`${verb}${primary ? ` ${primary}` : ""} — ${stateText}`}

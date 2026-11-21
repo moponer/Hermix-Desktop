@@ -211,7 +211,9 @@ pub struct WindowRect {
 #[cfg(windows)]
 pub fn window_rect_at(cursor: (i32, i32), exclude: &[isize]) -> Option<WindowRect> {
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
-    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::Graphics::Dwm::{
+        DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowRect, IsIconic,
         IsWindowVisible,
@@ -237,7 +239,22 @@ pub fn window_rect_at(cursor: (i32, i32), exclude: &[isize]) -> Option<WindowRec
             return true.into();
         }
         let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err() {
+        // 2026-11-19 用户实拍：GetWindowRect 返回**含不可见缩放贴边**的矩形
+        // （Win10/11 左右下各 ~7px 物理像素）—— 吸附框右边和底部多出一截
+        // 不贴边，截图也把左边贴边带进来。DWMWA_EXTENDED_FRAME_BOUNDS 给
+        // 的是可见边框（与 DWM 阴影内沿对齐），才是用户眼中的"窗口边"。
+        let ok = unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                &mut rect as *mut RECT as *mut _,
+                std::mem::size_of::<RECT>() as u32,
+            )
+        }
+        .is_ok()
+            && rect.right > rect.left
+            && rect.bottom > rect.top;
+        if !ok && GetWindowRect(hwnd, &mut rect).is_err() {
             return true.into();
         }
         let (l, t, r, b) = (rect.left, rect.top, rect.right, rect.bottom);

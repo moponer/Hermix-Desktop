@@ -386,6 +386,7 @@ pub mod memory;
 pub mod runtime;
 #[cfg(test)]
 mod tests;
+pub(crate) mod workspace_diff;
 #[cfg(test)]
 mod stub_provider;
 #[cfg(test)]
@@ -435,7 +436,11 @@ pub(crate) fn extract_file_change(
 ) -> Option<FileChangeInfo> {
     let args: serde_json::Value = serde_json::from_str(arguments).ok()?;
     let path = match tool_name {
-        "write_file" | "patch" => args.get("path")?.as_str()?.to_string(),
+        // `edit_file` 是 `patch` 的别名（hermix-tools aliases.rs）——模型用
+        // 哪个名字调用，`ToolCall.function.name` 里就是哪个，这里必须两个
+        // 都认，否则 edit_file 流的文件变更事件整个缺失，聊天尾部的
+        // 「已编辑 N 个文件」卡片就不出现。
+        "write_file" | "patch" | "edit_file" => args.get("path")?.as_str()?.to_string(),
         "search_files" => return None, // read-only
         _ => return None,
     };
@@ -463,6 +468,29 @@ pub(crate) fn extract_file_change(
         change_type,
         summary,
     })
+}
+
+#[cfg(test)]
+mod file_change_tests {
+    use super::*;
+
+    #[test]
+    fn edit_file_alias_produces_file_change() {
+        // `edit_file` 是 patch 的别名——漏认会导致该流的文件变更事件缺失，
+        // 聊天尾部的「已编辑 N 个文件」卡片不出现（2026-11-20 用户实测）。
+        let args = r#"{"path":"src/main/inspection.ts","old_string":"a\n","new_string":"b\n"}"#;
+        let info = extract_file_change("edit_file", args, "ok")
+            .expect("edit_file must surface a file change");
+        assert_eq!(info.path, "src/main/inspection.ts");
+        assert_eq!(info.change_type, "modified");
+    }
+
+    #[test]
+    fn write_file_still_surfaces() {
+        let args = r#"{"path":"out.txt","content":"x"}"#;
+        let info = extract_file_change("write_file", args, "ok").expect("write_file");
+        assert_eq!(info.path, "out.txt");
+    }
 }
 
 /// Extract the last user and assistant content from a message slice for memory sync.

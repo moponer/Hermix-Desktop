@@ -499,11 +499,16 @@ export function createMessageHandler(
         const toolCallId =
           ev?.tool_call_id ?? ev?.toolCallId ?? `file_change::${filePath}`;
         const fileSummary = ev?.file_summary ?? ev?.fileSummary ?? undefined;
+        // 权威增删行数（terminal 差分路径给真 diff）；缺失时前端回落估算。
+        const added = typeof ev?.added === "number" ? ev.added : undefined;
+        const removed = typeof ev?.removed === "number" ? ev.removed : undefined;
         ctx.callbacks.onFileChange?.({
           toolCallId,
           filePath,
           changeType,
           fileSummary,
+          ...(added != null ? { added } : {}),
+          ...(removed != null ? { removed } : {}),
         });
         return;
       }
@@ -796,8 +801,8 @@ export function createMessageHandler(
               // placeholder here too (same dead-air rationale as above).
               ctx.streamingSessionIdRef.current = ctx.sessionId;
               ctx.setStreamingSessionId(ctx.sessionId);
-              const liveUnlisten = ctx.wsRef.current;
-              if (!liveUnlisten) return;
+              // No `wsRef.current` gate：backend_channel_send 打的是后端通道注册表，
+              // 与前端订阅无关；闸门会静默丢用户决定。
               try {
                 void invoke<void>(IPC.backendChannelSend, {
                   channel: streamChannelName(ctx.sessionId),
@@ -855,13 +860,8 @@ export function createMessageHandler(
                 ctx.streamingSessionIdRef.current = ctx.sessionId;
                 ctx.setStreamingSessionId(ctx.sessionId);
               }
-              const liveUnlisten = ctx.wsRef.current;
-              if (!liveUnlisten) {
-                console.warn(
-                  `[approval-batch] no active stream subscription — click for ${batchId} dropped; user must retry`,
-                );
-                return;
-              }
+              // No `wsRef.current` gate（与单条路径同因）：backend_channel_send
+              // 打的是后端通道注册表，与前端订阅无关；闸门会静默丢用户决定。
               try {
                 const decision =
                   resp.remember === true
@@ -891,8 +891,8 @@ export function createMessageHandler(
               ctx.armTimeouts();
               ctx.streamingSessionIdRef.current = ctx.sessionId;
               ctx.setStreamingSessionId(ctx.sessionId);
-              const liveUnlisten = ctx.wsRef.current;
-              if (!liveUnlisten) return;
+              // No `wsRef.current` gate：backend_channel_send 打的是后端通道注册表，
+              // 与前端订阅无关；闸门会静默丢用户决定。
               try {
                 void invoke<void>(IPC.backendChannelSend, {
                   channel: streamChannelName(ctx.sessionId),

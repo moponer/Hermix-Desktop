@@ -1,18 +1,18 @@
 /* ════════════════════════════════════════════════════════════════════
-   Notion Dark — 「Notion 稿纸 · 夜」
+   深色 — 稿纸 · 夜
    ──────────────────────────────────────────────────────────────────
-   Notion 暗色取值：页面 #191919、侧栏 #202020、浮层 #252525、
-   悬停 #2C2C2C；正文 #D4D4D4；蓝 #5C9BFF（Notion 的 #2383E2 在白字下
+   深色取值：页面 #191919、侧栏 #202020、浮层 #252525、
+   悬停 #2C2C2C；正文 #D4D4D4；蓝 #5C9BFF（#2383E2 在白字下
    只有 3.9:1，压一档提亮后白/深墨都过 AA）。
 
    与亮色版共用一套排版（字号 16 / 行高 1.65 / 列宽 708 / 小圆角），
-   排版规则住在 notion-prose.css 与 notion-app.css 的
-   `[data-theme^="notion"]` 作用域里，本文件只负责取值。
+   排版规则住在 theme-prose.css 与 theme-app.css 的
+   `[data-theme="light"],[data-theme="dark"]` 作用域里，本文件只负责取值。
 
    完整覆盖 CONTRACT 全部 119 个色彩/阴影令牌。
    ════════════════════════════════════════════════════════════════════ */
-:root[data-theme="notion-dark"]:root {
-  /* ── 面阶：画布最深，外壳反提一档（与 Notion 暗色同向）── */
+:root[data-theme="dark"]:root {
+  /* ── 面阶：画布最深，外壳反提一档（与 深色同向）── */
   --color-bg-app: #101010;
   --color-bg-primary: #191919;      /* 纸 */
   --color-bg-card: #1f1f1f;         /* 卡片 */
@@ -56,7 +56,7 @@
   --color-text-thinking: #9b9b9b;
   --color-text-hero: #ffffff;
 
-  /* ── 蓝：Notion 暗色的强调色，按 AA 提亮一档 ── */
+  /* ── 蓝：深色的强调色，按 AA 提亮一档 ── */
   --color-accent: #6ba6ff;
   --color-on-accent: #0d1520;
   --color-accent-soft: color-mix(in srgb, var(--color-accent) 14%, var(--color-bg-input));

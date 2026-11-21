@@ -300,6 +300,15 @@ pub struct ExecutionTimelineEvent {
     pub change_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_summary: Option<String>,
+    /// file_change-only：权威增删行数（2026-11-20）。
+    ///
+    /// 结构化写工具走 `extractLineStats`（按入参估算，是下界）；terminal
+    /// 差分路径有命令前后的真实内容，给的是真 diff。前端优先用这两个
+    /// 字段，缺失时才回落到旧估算——老会话照旧能渲染。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed: Option<u32>,
     /// Single source of truth for whether a `tool_complete` event
     /// represents a failure (`ToolResult::is_error`). Persisted so a
     /// reloaded session marks failed tool cards from this flag instead

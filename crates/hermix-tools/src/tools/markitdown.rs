@@ -165,7 +165,7 @@ impl ToolHandler for MarkitdownHandler {
 
         match self
             .backend
-            .execute_command(&command_str, Some(timeout), None, false, false)
+            .execute_command(&command_str, Some(timeout), None, false, false, None)
             .await
         {
             Ok(output) => {

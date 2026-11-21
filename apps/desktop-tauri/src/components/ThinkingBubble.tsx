@@ -1,5 +1,5 @@
 // Thinking/processing indicators previously colocated in MessageBubble.tsx.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Brain, ChevronRight, ChevronDown } from "lucide-react";
 import { MarkdownBody } from "./MarkdownBody";
 import { formatDuration } from "./bubbleUtils";
@@ -70,7 +70,31 @@ export function ReasoningBlock({
   useEffect(() => setPinned(null), []);
   const expanded = pinned ?? active;
 
-  const elapsed = spanMs(startedAt, endedAt);
+  // 耗时必须在**这一段结束的那一刻定格**，不能每次渲染重算。
+  //
+  // 机制：spanMs 在没有 endedAt 时把「此刻」当终点（见上面注释），而
+  // endedAt 由生产端补（streamEvents.closeOpenReasoning）。流式路径上它漏
+  // 补过 —— 实测 sessions.db（2026-11-18 21:10 那条，12 段思考）只有第 1
+  // 段有 endedAt，其余 11 段是 null。于是**已经想完的段**每收到一个新
+  // chunk 就重算一次：用户看到「思考 12s」在后面的思考继续推进时一路涨到
+  // 40s、90s，而这个数字本身是无意义的（那段早就结束了）。
+  //
+  // 定格时机 = active 由 true 变 false 的那一刻。挂载时就非 active 的段
+  // （重载历史）没有可靠终点 → 不显示，绝不编一个「从开始想到现在」的数字。
+  const [frozenMs, setFrozenMs] = useState<number | null>(null);
+  const wasActive = useRef(false);
+  if (active) wasActive.current = true;
+  useEffect(() => {
+    if (active || !wasActive.current || frozenMs != null) return;
+    const t0 = startedAt ? new Date(startedAt).getTime() : NaN;
+    if (!Number.isNaN(t0)) setFrozenMs(Math.max(0, Date.now() - t0));
+  }, [active, startedAt, frozenMs]);
+
+  const elapsed = endedAt
+    ? spanMs(startedAt, endedAt)
+    : active
+      ? undefined
+      : (frozenMs ?? undefined);
   // 主标签只说「这是什么」；时长挂在右侧。标签里再带一次秒数会和
   // 右侧重复，且收起的行会变得比展开的还长。
   const label = active ? "思考中…" : "思考";
@@ -92,6 +116,10 @@ export function ReasoningBlock({
             左对齐说的是「这一行贴着正文列起排」，不是「文字顶到 x=0」。 */}
         <Brain className="tl-reasoning-icon" aria-hidden="true" />
         <span className="tl-reasoning-label">{label}</span>
+        {/* 单行内联预览（2026-11-19 用户定调，对齐 CodeBuddy）：收起态下
+            正文**就在头行里**，单行省略截断 —— 不点开也知道想了什么。
+            展开态隐藏预览（正文已经在下面完整渲染，重复显示是噪音）。 */}
+        {!expanded && clean && <span className="tl-reasoning-preview">{clean}</span>}
         {/* 右侧是**秒数**，不是段数 —— 段数是整轮的属性，同一轮里每段
             都重复「共 5 段」既冗余又答错了问题（用户要看的是「这段想了
             多久」）。段数归折叠头。 */}

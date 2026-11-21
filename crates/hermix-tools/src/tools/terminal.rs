@@ -28,15 +28,14 @@ const TERMINAL_HARD_TIMEOUT_SECS: u64 = 600;
 
 /// 未显式传 `timeout` 时的默认超时 (秒)。
 ///
-/// 2026-11-05 实机事故：模型为"找超星相关文件"发了一条
-/// `Get-ChildItem -Path $env:USERPROFILE -Recurse -Depth 3 -Include ...`，
-/// 没传 timeout → 拿到 600s 预算 → 整盘扫描跑到 139s 仍在跑：
-/// 同一轮的工具串行段被它独占，前端全站请求排队、`/health` 2s 探测超时，
-/// 用户看到的是"助手阿黎一直加载、整个窗口卡死"。
+/// 2026-11-20 语义升级（用户要求「完成率高，不要总是出错」）：这个值现在是
+/// **空闲窗口**而非硬总时长——命令每产出一段输出就重置计时；持续产出的
+/// 合法任务（构建/安装/长测试）可以跑到 600s 硬上限才结束，而真挂死
+/// （120s 无任何输出）120 秒即杀。
 ///
-/// 默认值回到 120s：合理的同步等待（构建、装依赖、长测试）多数在 2 分钟内；
-/// 真要更久，模型必须**显式**传 `timeout`（最多 600）或 `background: true`
-/// —— 让"这台机器可能被一条命令占住 10 分钟"变成一个有意识的决定。
+/// 历史背景：2026-11-05 实机事故（整盘扫描独占串行段 139s，前端全站排队）
+/// 曾把默认值压回 120s 硬总时长；现在的空闲语义兼顾两端——挂死的 120s
+/// 就杀，产出的不再被掐。
 const TERMINAL_DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 // ---------------------------------------------------------------------------
@@ -307,7 +306,7 @@ impl ToolHandler for TerminalHandler {
             .unwrap_or_default();
         // 默认 Local：非 HTTP / 无 Origin 上下文路径（tests + headless）
         // 走老路径，零回归。
-        execute_inner(self, params, workspace, &approval_ctx, &Origin::Local, None).await
+        execute_inner(self, params, workspace, &approval_ctx, &Origin::Local, None, None).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -342,7 +341,7 @@ impl ToolHandler for TerminalHandler {
             "timeout".into(),
             json!({
                 "type": "integer",
-                "description": "Timeout in seconds. Default: 120 (omit it for ordinary commands). Hard cap: 600 — long builds/tests that need more must pass an explicit timeout or (better) run with background: true and be polled. A recursive scan of a broad root ($env:USERPROFILE, C:\\Users, /) is refused outright: use search_files / list_files / list_dir instead."
+                "description": "Timeout in seconds of output silence. Default: 120 (omit it for ordinary commands). The timer resets whenever the command produces output, so long-running builds keep going while they stream. Hard cap: 600 — long builds/tests that need more must pass an explicit timeout or (better) run with background: true and be polled. A recursive scan of a broad root ($env:USERPROFILE, C:\\Users, /) is refused outright: use search_files / list_files / list_dir instead."
             }),
         );
         props.insert(
@@ -399,7 +398,7 @@ impl ToolHandler for TerminalHandler {
              ## When to reach for this tool\n\
              `terminal` is the right tool whenever the user wants to **see, list, count, search, or inspect** something on the system: directory listings (`dir` / `ls`), file contents (`type` / `cat` / `head`), running processes (`tasklist` / `ps`), system info, or any one-off shell pipeline. \
              It is also the right tool for **doing** things on the system: running a build, installing a package, invoking a CLI the user names. \
-             Prefer this over `computer_use.screenshot` whenever a shell command can answer the question — `screenshot` is a 50× bigger payload for 1/50th the precision, and shell output is searchable, copy-pasteable, and diffable.\n\
+             Prefer this over screenshots whenever a shell command can answer the question — shell output is far smaller, and searchable, copy-pasteable, and diffable.\n\
              \n\
              ## Persistent sessions (REPL / venv / cd across calls)\n\
              One-off calls forget all state — `cd x && cmd` chaining and re-sourcing venv on every call is the smell. When a workflow needs state to survive (interactive `python`/`node` REPL, an activated venv, gdb, repeated commands in one directory), pass `persistent: true` once and then `session_id` on every follow-up. Full-screen TUI programs (vim/htop) are NOT supported in sessions — their redraw output is unreadable.",
@@ -419,6 +418,7 @@ async fn execute_inner(
     approval_ctx: &TerminalApprovalContext,
     origin: &Origin,
     device_scopes: Option<&std::collections::HashSet<Capability>>,
+    stdout_cb: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
 ) -> Result<String, ToolError> {
         let command = params
             .get("command")
@@ -729,9 +729,19 @@ async fn execute_inner(
             .await;
         }
 
+        // 流式输出（2026-11-20）：把上下文的 stdout 回调传给后端——沙箱路径
+        // 的读取线程每读到一行就调它，UI 在命令执行期间就能看到实时输出，
+        // 而不是等退出后一次性拿到。
         match this
             .backend
-            .execute_command(command, timeout, workdir.as_deref(), background, pty)
+            .execute_command(
+                command,
+                timeout,
+                workdir.as_deref(),
+                background,
+                pty,
+                stdout_cb.clone(),
+            )
             .await
         {
             Ok(output) => {
@@ -801,7 +811,7 @@ impl TerminalHandler {
         // execute_for_origin 是 HTTP dispatcher 的来源感知入口，
         // 能力位集维度走 execute_with_context（带 ToolCallContext）。
         // 此路径只传 origin，device_scopes = None（纯矩阵判定）。
-        execute_inner(self, params, workspace, &approval_ctx, origin, None).await
+        execute_inner(self, params, workspace, &approval_ctx, origin, None, None).await
     }
 
     // The `forbidden_path_prefix` private helper used to live here;
@@ -832,6 +842,9 @@ impl ContextAware for TerminalHandler {
         //   device_scopes = None（无设备维度）；
         // - HTTP 路径由 request_guard → Extension → handler 覆盖填入；
         // - 测试 / 头less 走 ctx default = Local + None。
+        // 流式输出：把上下文的 stdout 回调传给执行层——命令执行期间 UI
+        // 就能看到实时输出（terminal 的 file_change/估算之外的真实进度）。
+        let stdout_cb = ctx.stdout_cb.lock().ok().and_then(|g| g.clone());
         execute_inner(
             self,
             params,
@@ -839,6 +852,7 @@ impl ContextAware for TerminalHandler {
             &ctx.approval_ctx,
             &ctx.origin,
             ctx.device_scopes.as_ref(),
+            stdout_cb,
         )
         .await
     }
@@ -1177,6 +1191,7 @@ mod tests {
             workdir: Option<&str>,
             _bg: bool,
             _pty: bool,
+        _on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
         ) -> Result<CommandOutput, AgentError> {
             *self.captured_workdir.lock().unwrap() = workdir.map(str::to_string);
             Ok(CommandOutput {
@@ -1297,6 +1312,7 @@ mod tests {
                 _w: Option<&str>,
                 _bg: bool,
                 _pty: bool,
+            _on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
             ) -> Result<CommandOutput, AgentError> {
                 panic!("forbidden_prefix_rejected_without_running: backend was reached — gate failed");
             }
@@ -1704,6 +1720,7 @@ mod tests {
             _workdir: Option<&str>,
             _bg: bool,
             _pty: bool,
+        _on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
         ) -> Result<CommandOutput, AgentError> {
             let mut g = self.seq.lock().unwrap();
             let (code, out, err) = g.remove(0);
@@ -2028,6 +2045,7 @@ mod tests {
             _workdir: Option<&str>,
             _bg: bool,
             _pty: bool,
+        _on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
         ) -> Result<CommandOutput, AgentError> {
             unreachable!("session mode must not reach execute_command")
         }

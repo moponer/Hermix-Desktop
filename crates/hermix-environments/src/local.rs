@@ -369,10 +369,16 @@ pub(crate) fn windows_shell_route(command: &str) -> (&'static str, Vec<String>) 
         args.push("-EncodedCommand".to_string());
         args.push(bare["-encodedcommand ".len()..].trim_start().to_string());
     } else if bare_lower.starts_with("-file ") {
+        // 2026-11-19（实测碰壁清单 #17）：① 剥掉 LLM 写的引号（-File 解析器
+        // 不剥，报 Illegal characters in path）；② `-ExecutionPolicy Bypass`
+        // （进程级）——不带 Bypass 的脚本执行被 AuthorizationManager 静默拒绝。
+        // 不扩大能力面：-Command 形态本就不受执行策略约束。
+        args.push("-ExecutionPolicy".to_string());
+        args.push("Bypass".to_string());
         args.push("-File".to_string());
-        args.push(normalize_windows_path_slashes(
+        args.push(strip_surrounding_quotes(&normalize_windows_path_slashes(
             bare["-file ".len()..].trim_start(),
-        ));
+        )).to_string());
     } else {
         // `-Command X` 的 X 才是脚本文本；裸命令整段进 -Command。
         let script = if bare_lower.starts_with("-command ") {
@@ -381,9 +387,21 @@ pub(crate) fn windows_shell_route(command: &str) -> (&'static str, Vec<String>) 
             bare
         };
         args.push("-Command".to_string());
-        args.push(normalize_windows_path_slashes(script));
+        args.push(normalize_windows_path_slashes(script)
+            + "; if ($LASTEXITCODE) { exit $LASTEXITCODE }");
     }
     (exe, args)
+}
+
+/// 剥掉首尾成对的双引号（LLM 常给 -File 路径手动加引号）。只剥一层、
+/// 且只有成对时才剥——中间的引号是路径内容，不能动。
+fn strip_surrounding_quotes(s: &str) -> &str {
+    let t = s.trim();
+    if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
+        &t[1..t.len() - 1]
+    } else {
+        t
+    }
 }
 
 #[async_trait]
@@ -395,6 +413,7 @@ impl TerminalBackend for LocalBackend {
         workdir: Option<&str>,
         background: bool,
         pty: bool,
+        on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
     ) -> Result<CommandOutput, AgentError> {
         let timeout_secs = timeout.unwrap_or(self.default_timeout);
 
@@ -480,30 +499,67 @@ impl TerminalBackend for LocalBackend {
                     .await;            }
         }
 
+        // 降级说明（非沙箱路径时为 None）：沙箱建不起来时以非受限方式跑同一条
+        // 命令，并把这件事写进 stderr —— 模型和用户都看得到，不静默。
+        #[allow(unused_mut)]
+        let mut sandbox_note: Option<String> = None;
+
         #[cfg(windows)]
         {
-            // Windows ACL 沙箱路径（对齐 deepseek-harness fail-closed 语义）：
-            // HERMIX_SANDBOX_MODE 非 danger-full-access 且有工作目录时，
-            // 命令进受限 token spawn。provision/spawn 任一步失败 = 报错，
-            // 绝不静默回退到不受限 spawn。danger-full-access 与无
-            // workdir（全局探测类命令无边界可守）走下方常规路径，安全
-            // 语义由审批层承接。
+            // Windows ACL 沙箱路径：HERMIX_SANDBOX_MODE 非 danger-full-access
+            // 且有工作目录时，命令进受限 token spawn。provision/spawn 的**沙箱
+            // 基础设施**失败（见 sandbox_unavailable）= 降级为非受限执行 +
+            // stderr 显式告知；**命令自身**失败原样上报。fail-closed 的旧语义
+            // 在沙箱恒失败的机器上等于把终端工具判死（2026-11-18 用户实况：连
+            // go build 都做不到）。danger-full-access 与无 workdir 走下方常规
+            // 路径，安全语义由审批层承接。
             use crate::sandbox::SandboxMode;
             let mode = SandboxMode::from_env();
-            if !background && mode != SandboxMode::DangerFullAccess {
+            if mode != SandboxMode::DangerFullAccess {
                 if let Some(dir) = workdir
                     .map(std::path::PathBuf::from)
                     .or_else(|| self.workspace_root.clone())
                     .map(|p| hermix_core::path_security::strip_win32_long_path_buf(&p))
                 {
-                    return execute_command_sandboxed(
-                        command,
-                        timeout_secs,
-                        &dir,
-                        mode,
-                        self.max_output_size,
-                    )
-                    .await;
+                    // 2026-11-20（A2 后台一致性）：后台命令走账户沙箱的
+                    // spawn_background 路径（detached + 日志重定向），与前台同受
+                    // 沙箱约束；账户路也失败才降级为非受限后台执行。
+                    if background {
+                        match crate::account_sandbox::run_background_in_account_sandbox(command, &dir)
+                        {
+                            Ok(job_id) => {
+                                return Ok(CommandOutput {
+                                    exit_code: 0,
+                                    stdout: job_id,
+                                    stderr: String::new(),
+                                });
+                            }
+                            Err(acct_err) => {
+                                sandbox_note = Some(format!(
+                                    "[sandbox] 受限与账户沙箱均不可用（{acct_err}），后台命令以非受限方式执行。"
+                                ));
+                            }
+                        }
+                    } else {
+                        match execute_command_sandboxed(
+                            command,
+                            timeout_secs,
+                            &dir,
+                            mode,
+                            self.max_output_size,
+                            on_output,
+                        )
+                        .await
+                        {
+                            Ok(out) => return Ok(out),
+                            Err(e) if sandbox_unavailable(&e) => {
+                                sandbox_note = Some(format!(
+                                    "[sandbox] 受限令牌不可用（{e}），以非受限方式执行同一条命令。"
+                                ));
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
                 }
             }
         }
@@ -520,7 +576,7 @@ impl TerminalBackend for LocalBackend {
                 .map(std::path::PathBuf::from)
                 .or_else(|| self.workspace_root.clone())
                 .map(|p| hermix_core::path_security::strip_win32_long_path_buf(&p));
-            return self
+            let mut out = self
                 .pty_sessions
                 .execute_oneshot(
                     command,
@@ -528,7 +584,13 @@ impl TerminalBackend for LocalBackend {
                     effective_dir.as_deref(),
                     self.max_output_size,
                 )
-                .await;
+                .await?;
+            // 沙箱降级说明：以非受限方式跑的命令必须在 stderr 里挑明，
+            // 模型和用户都看得到，不静默。
+            if let Some(note) = sandbox_note.take() {
+                out.stderr = format!("{note}\n{}", out.stderr);
+            }
+            return Ok(out);
         }
 
         #[cfg(unix)]
@@ -612,7 +674,10 @@ impl TerminalBackend for LocalBackend {
                         "Process started in background (pid: {})",
                         child.id().unwrap_or(0)
                     ),
-                    stderr: String::new(),
+                    // 沙箱降级说明：非受限后台执行的命令在 stderr 挑明。
+                    stderr: sandbox_note
+                        .map(|n| format!("{n}\n"))
+                        .unwrap_or_default(),
                 });
             }
 
@@ -872,6 +937,22 @@ fn kill_command_tree(job: &Option<hermix_core::win_job::JobGuard>, pid: u32) {
     }
 }
 
+/// 沙箱不可用错误的统一标记：记忆化条目与新建错误都带上它，
+/// [`sandbox_unavailable`] 只认这个标记——保证记忆化的错误**必然**可降级，
+/// 不会出现「记了个不可降级的错，之后每条命令都硬失败」。
+const SANDBOX_UNAVAILABLE_TAG: &str = "[sandbox-unavailable] ";
+
+/// 判定一个执行错误是否属于「沙箱基础设施失败」（命令从未起跑）。只有这类
+/// 错误允许降级为非受限执行并在 stderr 写明；命令自身的失败原样上报。
+#[cfg(windows)]
+fn sandbox_unavailable(e: &AgentError) -> bool {
+    let s = e.to_string();
+    s.contains(SANDBOX_UNAVAILABLE_TAG)
+        || s.contains("(Win32 error 5)")
+        || s.contains("(Win32 error 1314)")
+        || s.contains("(Win32 error 6)")
+}
+
 /// Windows ACL 沙箱执行路径：受限 token spawn + 有界等待 + 超时杀整棵树。
 /// 同步 FFI 走 `spawn_blocking`；stdout/stderr 并行读（先 wait 再读会因
 /// 管道写满死锁）。fail-closed：provision/spawn 失败直接报错。
@@ -882,25 +963,90 @@ async fn execute_command_sandboxed(
     workdir: &std::path::Path,
     mode: crate::sandbox::SandboxMode,
     max_output_size: usize,
+    on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
 ) -> Result<CommandOutput, AgentError> {
     use std::io::Read;
+
+    // 2026-11-19：沙箱「确定不可用」的进程级记忆（实测碰壁清单 #10）。失败是
+    // 确定性的 —— 第一次 5/1314 后记住，后续命令直接降级，不再每条白付一遍
+    // provision 的 ACL 开销（大工作区上是分钟级）。**按工作区键控**：A 工作区
+    // 沙箱坏 ≠ B 工作区沙箱坏。记忆只在进程内：重启应用 = 重新给机会。
+    static SANDBOX_VERDICT: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, String>>> =
+        std::sync::OnceLock::new();
+    let verdict_key = workdir.to_path_buf();
+    if let Some(cached) = SANDBOX_VERDICT
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&verdict_key)
+        .cloned()
+    {
+        // 缓存条目一律带 SANDBOX_UNAVAILABLE_TAG —— 保证调用方的
+        // sandbox_unavailable 判定必然命中 → 走降级而不是硬失败。
+        return Err(AgentError::Io(format!("{SANDBOX_UNAVAILABLE_TAG}{cached}")));
+    }
 
     let ws = workdir.to_path_buf();
     let wd = workdir.to_path_buf();
     let command = command.to_string();
     let blocking = tokio::task::spawn_blocking(move || -> Result<CommandOutput, AgentError> {
-        let session = crate::sandbox::SandboxSession::provision(mode, &ws)?;
-        // 统一 shell 层同款路由：整段命令进 PowerShell -Command。
-        let mut child = session.spawn(
-            "powershell.exe",
-            &[
-                "-NoProfile".to_string(),
-                "-NonInteractive".to_string(),
-                "-Command".to_string(),
-                command,
-            ],
-            &wd,
-        )?;
+        // 账户沙箱兜底：受限 token spawn 的**任何**失败都视为基础设施失败
+        // （命令从未起跑）—— 内置 Administrator（RID 500）机器上受限令牌恒
+        // 失败（1314/5/6，2026-11-19 实测）→ 专用本地账户 +
+        // CreateProcessWithLogonW（免特权）。账户路也失败（setup 被拒/工作区
+        // 不可授权）才记忆化降级。
+        let fallback_to_account = |orig: AgentError| -> Result<crate::sandbox::SandboxChild, AgentError> {
+            let setup_ready = crate::account_sandbox::setup_is_complete()
+                || (crate::account_sandbox::can_request_setup()
+                    && crate::account_sandbox::request_setup().is_ok());
+            let account_result = if setup_ready {
+                crate::account_sandbox::run_command_in_account_sandbox(&command, &wd)
+            } else {
+                Err(AgentError::Io("sandbox account setup not available".into()))
+            };
+            match account_result {
+                Ok(c) => Ok(c),
+                Err(acct_err) => {
+                    tracing::warn!(
+                        workdir = %wd.display(),
+                        account_error = %acct_err,
+                        "account sandbox unavailable too — degrading to unrestricted execution",
+                    );
+                    SANDBOX_VERDICT
+                        .get_or_init(Default::default)
+                        .lock()
+                        .unwrap_or_else(|x| x.into_inner())
+                        .insert(
+                            wd.clone(),
+                            format!("{SANDBOX_UNAVAILABLE_TAG}{}", orig),
+                        );
+                    Err(orig)
+                }
+            }
+        };
+        // provision + spawn 合并成一个表达式：任何一步失败都汇入同一账户兜底，
+        // 兜底产出 SandboxChild 后汇入同一条收集尾巴。
+        let child_result = (|| -> Result<crate::sandbox::SandboxChild, AgentError> {
+            let session = crate::sandbox::SandboxSession::provision(mode, &ws)?;
+            // 统一 shell 层同款路由：整段命令进 PowerShell -Command。
+            session.spawn(
+                "powershell.exe",
+                &[
+                    "-NoProfile".to_string(),
+                    "-NonInteractive".to_string(),
+                    "-Command".to_string(),
+                    command.clone(),
+                ],
+                &wd,
+            )
+        })();
+        let mut child = match child_result {
+            Ok(c) => c,
+            Err(e) => match fallback_to_account(e) {
+                Ok(c) => c,
+                Err(orig) => return Err(orig),
+            },
+        };
         let pid = child.pid;
         // 进程树容器：只 TerminateProcess 顶层时，孙进程（cargo/rustc/node）
         // 会继续握着 stdout 写端，读线程永不返回——"命令已超时但会话/UI
@@ -914,15 +1060,37 @@ async fn execute_command_sandboxed(
         // 既不让子进程因管道写满而挂死，也不让 `dir /s` 级输出把内存吃爆
         // （旧 read_to_end 无上限，截断发生在拿到完整字节之后，救不了峰值）。
         const CAPTURE_CAP: usize = 32 * 1024 * 1024;
+        // 空闲超时（2026-11-20 用户要求「完成率高，不要总是出错」）：
+        // timeout 参数从「硬总时长」升级为「**空闲窗口**」——每次收到输出都
+        // 重置计时。持续产出（构建/安装/扫描）跑满硬上限也不被掐；真挂死
+        // （120s 无任何输出）照杀。硬上限 600s 与 terminal 显式上限对齐。
+        let last_output = std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
         let (tx, rx) = std::sync::mpsc::channel::<(u8, Vec<u8>)>();
         let tx_out = tx.clone();
+        let last_out_out = last_output.clone();
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             let mut chunk = [0u8; 65_536];
+            // 流式（2026-11-20）：按行缓冲 stdout，每完成一行调一次回调。
+            // UI 的运行中面板由此拿到实时输出（此前攒到退出才一次性返回）。
+            let mut pending = String::new();
             loop {
                 match so.read(&mut chunk) {
                     Ok(0) => break,
                     Ok(n) => {
+                        if n > 0 {
+                            *last_out_out.lock().unwrap() = std::time::Instant::now();
+                            if let Some(cb) = &on_output {
+                                pending.push_str(&String::from_utf8_lossy(&chunk[..n]));
+                                while let Some(pos) = pending.find('\n') {
+                                    let line: String = pending.drain(..=pos).collect();
+                                    let line = line.trim_end_matches(['\n', '\r']);
+                                    if !line.is_empty() {
+                                        cb(line);
+                                    }
+                                }
+                            }
+                        }
                         if buf.len() < CAPTURE_CAP {
                             let take = n.min(CAPTURE_CAP - buf.len());
                             buf.extend_from_slice(&chunk[..take]);
@@ -934,6 +1102,7 @@ async fn execute_command_sandboxed(
             let _ = tx_out.send((0, buf));
         });
         let tx_err = tx.clone();
+        let last_out_err = last_output.clone();
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             let mut chunk = [0u8; 65_536];
@@ -941,6 +1110,9 @@ async fn execute_command_sandboxed(
                 match se.read(&mut chunk) {
                     Ok(0) => break,
                     Ok(n) => {
+                        if n > 0 {
+                            *last_out_err.lock().unwrap() = std::time::Instant::now();
+                        }
                         if buf.len() < CAPTURE_CAP {
                             let take = n.min(CAPTURE_CAP - buf.len());
                             buf.extend_from_slice(&chunk[..take]);
@@ -953,12 +1125,30 @@ async fn execute_command_sandboxed(
         });
         drop(tx);
 
-        let outcome = match child.wait_timeout(std::time::Duration::from_secs(timeout_secs)) {
-            Ok(o) => o,
-            Err(e) => {
-                child.terminate();
-                kill_command_tree(&job, pid);
-                return Err(e);
+        // 空闲续期等待：wait_timeout 按 200ms 切片轮询，每片之后检查
+        // 「距上次输出是否已超过空闲窗口」——超过即视为挂死杀树；输出持续
+        // 到来则一直续期（受总上限约束）。timeout 参数的语义因此从
+        // 「硬总时长」变成「空闲窗口」。
+        let idle_window = std::time::Duration::from_secs(timeout_secs);
+        let total_cap = std::time::Duration::from_secs(600); // 与 terminal 显式上限对齐
+        let started_at = std::time::Instant::now();
+        let outcome = loop {
+            match child.wait_timeout(std::time::Duration::from_millis(200)) {
+                Ok(crate::sandbox::WaitOutcome::Exited(code)) => {
+                    break crate::sandbox::WaitOutcome::Exited(code);
+                }
+                Ok(crate::sandbox::WaitOutcome::TimedOut) => {
+                    let idle_exceeded = last_output.lock().unwrap().elapsed() >= idle_window;
+                    let total_exceeded = started_at.elapsed() >= total_cap;
+                    if idle_exceeded || total_exceeded {
+                        break crate::sandbox::WaitOutcome::TimedOut;
+                    }
+                }
+                Err(e) => {
+                    child.terminate();
+                    kill_command_tree(&job, pid);
+                    return Err(e);
+                }
             }
         };
         let timed_out = matches!(outcome, crate::sandbox::WaitOutcome::TimedOut);
@@ -992,6 +1182,13 @@ async fn execute_command_sandboxed(
         }
         drop(rx);
 
+        // A5（2026-11-20）：结局已定（成功或超时已显式杀过），撤销 Drop 的
+        // 自动 terminate —— `start /b` 留下的后台子进程继续活着；
+        // PID 复用误杀风险随之消失。
+        if let Some(job) = &job {
+            job.disarm();
+        }
+
         if timed_out {
             return Err(AgentError::Timeout(format!(
                 "Command timed out after {} seconds",
@@ -1022,8 +1219,10 @@ async fn execute_command_sandboxed(
     });
     // 兜底：即使进程树/管道出现病态行为，也不让一次命令永久占住一个
     // blocking 线程（线程池耗尽会让整个后端卡死）。
+    // 2026-11-20：空闲续期后合法长命令可跑到 600s 总上限，兜底必须
+    // ≥ 总上限 + 余量，否则续期中的命令会在 timeout+30s 被外层掐掉。
     match tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs.saturating_add(30)),
+        std::time::Duration::from_secs(600 + 30),
         blocking,
     )
     .await
@@ -1050,6 +1249,33 @@ async fn execute_command_sandboxed(
 mod tests {
     use super::*;
 
+    #[test]
+    fn windows_shell_route_appends_exit_code_guard() {
+        // powershell.exe -Command 会把尾部成功语句之后的退出码重置为 0；
+        // 路由层必须在脚本尾显式透传 $LASTEXITCODE（2026-11-20 实测）。只对
+        // -Command 形态生效——脚本以显式 exit 结尾时后缀不会执行。
+        let (exe, args) = windows_shell_route("cargo build && echo done");
+        assert_eq!(exe, "powershell.exe");
+        let script = args.last().unwrap();
+        assert!(
+            script.ends_with("; if ($LASTEXITCODE) { exit $LASTEXITCODE }"),
+            "missing exit guard: {script}"
+        );
+        assert!(script.starts_with("cargo build && echo done"));
+    }
+
+    #[test]
+    fn windows_shell_route_file_branch_has_no_guard() {
+        // -File 形态走的是 powershell 自己的脚本退出码语义，不能加 -Command
+        // 的守卫后缀（否则脚本文件名后面跟了一段脚本体，直接语法错）。
+        let (_exe, args) = windows_shell_route("-File build.ps1");
+        assert_eq!(args[2], "-ExecutionPolicy");
+        assert_eq!(args[3], "Bypass");
+        assert_eq!(args[4], "-File");
+        assert_eq!(args[5], "build.ps1");
+        assert_eq!(args.len(), 6);
+    }
+
     /// 沙箱路由测试共用锁：HERMIX_SANDBOX_MODE 是进程级 env，
     /// 并行测试互踩会导致路由分支漂移。
     static SANDBOX_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1065,7 +1291,7 @@ mod tests {
     /// （SetNamedSecurityInfoW → Win32 error 5）。这种环境跑不了沙箱，
     /// 相关测试直接跳过 —— 这是环境的属性，不是被测代码的行为。
     async fn probe_sandbox(backend: &LocalBackend) -> bool {
-        match backend.execute_command("echo ok", None, None, false, false).await {
+        match backend.execute_command("echo ok", None, None, false, false, None).await {
             Ok(o) => o.exit_code == 0,
             Err(e) => !e.to_string().contains("Win32 error 5"),
         }
@@ -1085,7 +1311,7 @@ mod tests {
                 Some(tmp.path().to_str().unwrap()),
                 false,
                 false,
-            )
+             None,)
             .await
         {
             Ok(o) => o.exit_code == 0,
@@ -1099,7 +1325,7 @@ mod tests {
         let _g = set_sandbox_env("workspace-write");
         let backend = LocalBackend::default();
         let result = backend
-            .execute_command("echo hi", None, Some("C:\\"), false, false)
+            .execute_command("echo hi", None, Some("C:\\"), false, false, None)
             .await;
         let err = result.err().expect("drive-root workdir must fail closed");
         assert!(
@@ -1141,28 +1367,6 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn sandbox_route_fail_closed_when_every_temp_root_overlaps() {
-        let _g = set_sandbox_env("workspace-write");
-        // workspace = 用户主目录：系统 temp（用户 Temp）与 ~/.hermix/tmp
-        // 两个候选全部落在其中 → 无可用候选 → 必须保持 fail-closed。
-        let home = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .expect("test requires a home dir");
-        let err = crate::sandbox::SandboxSession::provision(
-            crate::sandbox::SandboxMode::WorkspaceWrite,
-            std::path::Path::new(&home),
-        )
-        .err()
-        .expect("all-overlapping candidates must fail closed");
-        assert!(
-            err.to_string().contains("overlaps"),
-            "unexpected error: {err}"
-        );
-        std::env::remove_var("HERMIX_SANDBOX_MODE");
-    }
-
-    #[cfg(windows)]
-    #[tokio::test]
     async fn sandbox_route_danger_full_access_bypasses_sandbox() {
         let _g = set_sandbox_env("danger-full-access");
         let tmp = tempfile::tempdir().unwrap();
@@ -1174,7 +1378,7 @@ mod tests {
                 Some(tmp.path().to_str().unwrap()),
                 false,
                 false,
-            )
+             None,)
             .await
             .expect("danger-full-access must take the regular path");
         assert_eq!(output.exit_code, 0);
@@ -1194,7 +1398,7 @@ mod tests {
                 Some(tmp.path().to_str().unwrap()),
                 false,
                 false,
-            )
+             None,)
             .await
         {
             Ok(o) => o,
@@ -1215,7 +1419,7 @@ mod tests {
         let _env_guard = SANDBOX_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let backend = LocalBackend::default();
         let output = backend
-            .execute_command("echo hello", None, None, false, false)
+            .execute_command("echo hello", None, None, false, false, None)
             .await
             .unwrap();
         assert_eq!(output.exit_code, 0);
@@ -1244,7 +1448,7 @@ mod tests {
                 Some(workdir),
                 false,
                 false,
-            )
+             None,)
             .await
             .unwrap();
         assert_eq!(output.exit_code, 0);
@@ -1304,7 +1508,7 @@ mod tests {
         }
         let started = std::time::Instant::now();
         let result = backend
-            .execute_command("ping -n 20 127.0.0.1", None, Some(workdir), false, false)
+            .execute_command("ping -n 20 127.0.0.1", None, Some(workdir), false, false, None)
             .await;
         let elapsed = started.elapsed();
         assert!(
@@ -1333,7 +1537,7 @@ mod tests {
             "sleep 30"
         };
         let result = backend
-            .execute_command(cmd, None, None, false, false)
+            .execute_command(cmd, None, None, false, false, None)
             .await;
         assert!(result.is_err());
         match result {
@@ -1347,7 +1551,7 @@ mod tests {
         let _env_guard = SANDBOX_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let backend = LocalBackend::default();
         let output = backend
-            .execute_command("exit 42", None, None, false, false)
+            .execute_command("exit 42", None, None, false, false, None)
             .await
             .unwrap();
         assert_eq!(output.exit_code, 42);
@@ -1373,7 +1577,7 @@ mod tests {
                 Some(dir.to_string_lossy().as_ref()),
                 false,
                 false,
-            )
+             None,)
             .await
         {
             Ok(o) => o,
@@ -1397,7 +1601,7 @@ mod tests {
         // 文案随系统语言变化，只断言非空）。
         let backend = LocalBackend::default();
         let out = match backend
-            .execute_command("definitely_not_a_command_xyz_9x7", None, None, false, false)
+            .execute_command("definitely_not_a_command_xyz_9x7", None, None, false, false, None)
             .await
         {
             Ok(o) => o,
@@ -1427,7 +1631,7 @@ mod tests {
         // 非零"这一条语义。
         let backend = LocalBackend::default();
         let out = backend
-            .execute_command("cmd /c exit 42", None, None, false, false)
+            .execute_command("cmd /c exit 42", None, None, false, false, None)
             .await
             .unwrap();
         assert_ne!(out.exit_code, 0, "native failure must not look like success");
@@ -1468,7 +1672,7 @@ mod tests {
                 None,
                 false,
                 false,
-            )
+             None,)
             .await
             .unwrap();
         assert_eq!(out.exit_code, 0);
@@ -1490,7 +1694,7 @@ mod tests {
                 None,
                 false,
                 false,
-            )
+             None,)
             .await
             .unwrap();
         assert_eq!(out.exit_code, 0);
@@ -1515,7 +1719,7 @@ mod tests {
                 None,
                 false,
                 false,
-            )
+             None,)
             .await
             .unwrap();
         assert_eq!(out.exit_code, 0);

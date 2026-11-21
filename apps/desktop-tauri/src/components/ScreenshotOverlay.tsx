@@ -16,7 +16,7 @@ import { IPC } from "../ipc/commands";
 import { useCallback, useEffect, useRef, useState } from "react";import { invoke } from "../ipc";
 import { listen } from "@tauri-apps/api/event";
 import { ScreenshotEditor } from "./ScreenshotEditor";
-import { CANCEL, CLOSE, CONFIRM } from "./strings";
+import { CANCEL, CLOSE } from "./strings";
 
 /** 会话信息：选区 UI 所需的全部数据，无像素。 */
 interface SessionInfo {
@@ -277,6 +277,12 @@ export function ScreenshotOverlay() {
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
+      onDoubleClick={() => {
+        // 双击 = 直接截取当前吸附的窗口（2026-11-19 用户反馈：绿框上双击无
+        // 反应）。单击已捕获，但手指轻微移动（>4px 判为拖拽、<4px 下限）时
+        // 单击会落空 —— 双击兜底，绿框上双击必定出图。
+        if (!sel && snap) void beginEdit(snap);
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         cancel();
@@ -326,11 +332,17 @@ export function ScreenshotOverlay() {
         </>
       )}
 
+      {/* 减法审查（2026-11-19）：操作提示条砍掉 —— 交互（吸附/拖拽/单击、
+           双击）都是即时反馈的，提示文字是常驻标语；ESC 取消由 ✕ 按钮承接
+           （带 aria-label，屏幕阅读器可及）。三个通道各得其所以后，文字就是
+           第三份重复。 */}
       <div className="so-toolbar">
-        <span className="so-hint">
-          移动鼠标自动吸附窗口 · 拖拽可框选 · Enter {CONFIRM} · ESC {CANCEL}
-        </span>
-        <button className="so-cancel" title={`${CANCEL}（ESC）`} onClick={cancel}>
+        <button
+          className="so-cancel"
+          title={`${CANCEL}（ESC）`}
+          aria-label={CANCEL}
+          onClick={cancel}
+        >
           ✕
         </button>
       </div>

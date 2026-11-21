@@ -88,7 +88,7 @@ impl TerminalBackend for SshBackend {
         timeout: Option<u64>,
         workdir: Option<&str>,
         background: bool,
-        pty: bool,
+        pty: bool,        _on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
     ) -> Result<CommandOutput, AgentError> {
         let timeout_secs = timeout.unwrap_or(self.default_timeout);
 

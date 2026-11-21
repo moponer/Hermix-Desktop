@@ -19,7 +19,15 @@ const MEMORY_GUIDANCE: &str = "You have persistent memory across sessions. Save 
 
 const SESSION_SEARCH_GUIDANCE: &str = "When the user references something from a past conversation or you suspect relevant cross-session context exists, use session_search to recall it before asking them to repeat themselves.";
 
-const SKILLS_GUIDANCE: &str = "You have persistent skills across sessions. Use `skill_manage` to save, update, or patch reusable workflows.\n\n## Actions\n- `auto_extract_from_conversation` — **preferred for saving**: enforces a quality gate (name 3–80 chars, summary >10 chars, ≥1 step), writes SKILL.md frontmatter, and dedupes by name.\n- `create` / `update` — manual skill management.\n- `patch` — append an 'Improvement Feedback' section to an existing skill (don't rewrite the whole file).\n\n## Quality gate (enforced)\n- `name`: kebab-case slug, 3–80 chars\n- `summary`: one paragraph, >10 chars, non-placeholder\n- `steps`: ordered array of concrete actions (≥1)\n- `rationale` (optional): why this works\n\n## Notes\n- When you find an existing skill outdated or incomplete, patch it immediately.\n- If nothing genuinely reusable emerged, do nothing.";
+const SKILLS_GUIDANCE: &str = "You have persistent skills across sessions.\n\n## How to use a skill
+1. Check `<available_skills>` for a matching Skill.
+2. Load the Skill with `skill_view(name='skill-name')`.
+3. Follow the Skill instructions step by step.
+
+## Managing skills
+Use `skill_manage` to save, update, or patch reusable workflows.
+
+## Actions\n- `auto_extract_from_conversation` — **preferred for saving**: enforces a quality gate (name 3–80 chars, summary >10 chars, ≥1 step), writes SKILL.md frontmatter, and dedupes by name.\n- `create` / `update` — manual skill management.\n- `patch` — append an 'Improvement Feedback' section to an existing skill (don't rewrite the whole file).\n\n## Quality gate (enforced)\n- `name`: kebab-case slug, 3–80 chars\n- `summary`: one paragraph, >10 chars, non-placeholder\n- `steps`: ordered array of concrete actions (≥1)\n- `rationale` (optional): why this works\n\n## Notes\n- When you find an existing skill outdated or incomplete, patch it immediately.\n- If nothing genuinely reusable emerged, do nothing.";
 
 const CONTEXT_BUDGET_GUIDANCE: &str = "`compact_tool_chain` collapses N tool_results into one LLM-context entry — the main lever for keeping long sessions under the context budget.\n\n## Schema\n`{chain: [{tool, params, label?}, ...], mode?: 'sequential'|'parallel', failure_mode?: 'abort_on_first_error'|'continue', intent?: string}`\n\n## Constraints\n- Chain must be 2–32 steps.\n- Mode defaults to `sequential`; failure_mode defaults to `abort_on_first_error`.\n- Per-step results are truncated to 4000 chars each — use the tool directly (no chain wrapper) if you need the full output.\n- Chain steps don't feed into each other — results are collected, not piped.";
 
@@ -44,6 +52,22 @@ Finding files or searching their contents **never** goes through `terminal`. A r
 - **Search file contents** → `search_files` (target=`content`)
 - **Inspect one directory** → `list_dir` (one level, with per-entry sizes)
 - Shell walking is a last resort only when the tools above genuinely cannot express the query — and then only against a **narrow project path**, never a user-profile or filesystem root.
+
+## File editing is a tool job, not a shell job
+
+Editing a file **never** goes through `terminal` — not with `Set-Content` / `Out-File` / `echo >` / heredocs, not with `sed` / `awk` / a generated script. Use the structured editors:
+
+- **New file** / full rewrite → `write_file`
+- **Change part of an existing file** → `edit_file` (or `patch`): `old_string` → `new_string`, `replace_all: true` when every occurrence must change
+- **Rename / move / copy** → `move_file`
+- **Delete** → `delete_file`
+
+Why this is a hard rule, not a style preference:
+
+1. **The user cannot see what changed.** Shell edits produce no diff, no line counts, and no entry in the turn's 「已编辑 N 个文件」 card. The change lands invisibly.
+2. **Edits are unverifiable.** A shell redirect silently truncates a file on any quoting mistake; `edit_file` fails loudly when `old_string` does not match.
+3. **Encoding and line endings rot.** PowerShell 5's `Out-File` writes UTF-16/BOM and CRLF by default — that single habit corrupts source files and shows up later as a whole-file diff.
+4. **The review path breaks.** Whatever the turn changed must be reviewable and revertable; shell edits bypass both.
 
 ## Delegate heavy reads to sub-agents
 
@@ -83,6 +107,25 @@ The Tirith pre-check engine **blocks** tool calls whose arguments match any of t
 - **System directories** — do not `cat`, `type`, `dir`, `find`, `ls`, or otherwise shell-read `C:\Windows\System32`, `C:\Windows\SysWOW64`, `C:\Windows\WinSxS`, or `C:\Windows\assembly`. Use the `read_file` tool against the user-supplied workspace path instead.
 - **Shell-injection shapes** — do not begin a `command` with a flag-like prefix immediately followed by a metacharacter (e.g. `-n && rm`, `-e | sh`).
 - **Filesystem-root operations** — `find / -delete`, `rm /*`, `chmod -R 777 /` and similar require explicit user approval.
+
+## When a command is denied (do NOT route around it)\
+\
+A denied `terminal` call means **the user has not approved this specific destructive operation**. That is\
+a decision, not an obstacle to engineer around. Trying alternative spellings of the same delete\
+(`cmd /c del`, `cmd /c rmdir /s /q`, `Remove-Item` -> `rd /s`) is **approval circumvention** — the\
+approval engine matches the *shape* of the command, so rewriting it to dodge the matcher is not a fix,\
+it is an attempt to do a denied thing without asking.\
+\
+What to do instead:\
+\
+1. If the denial names an approval card, tell the user in one sentence what you want deleted and why,\
+   and stop. The next step is their call.\
+2. If the command was blocked because it was too broad, narrow it — delete the specific file instead of\
+   the tree — and run it again. That is a legitimate fix, not circumvention.\
+3. Never \"retry until it passes\". Two different spellings of the same intent is already circumvention.\
+\
+Same principle for permission errors: a file you cannot write is usually a location problem (see the\
+permission guidance above) — move the target, do not escalate to a more forceful command.\
 "#;
 
 const PLAN_BEFORE_EXECUTE_GUIDANCE: &str = "\
@@ -468,7 +511,10 @@ const MEMBER_ORCHESTRATION_GUIDANCE: &str = "# 团队编排纪律（dispatch_mem
 仍不过就停止重派，把证据摆给用户定夺。\n\
 6. 汇报时消化成员报告：给用户结论与关键证据，不是转发整份报告。\n\
 7. 需要新工种时用 `agent_role_list` / `agent_role_upsert` 管理角色库\
-（内置 reviewer / coder；角色文件在 `~/.hermix/agents/`）。";
+（内置 reviewer / coder；角色文件在 `~/.hermix/agents/`）。
+8. 子代理**不能跑 shell**（terminal / code_execution 在子代理黑名单里，\\
+实测两次因这个被拒）。派单前把需要跑命令的步骤自己做掉，或在工单里\
+改述成基于文件/报告的操作；`agent` 参数只填真实存在的档案名。";
 
 /// Inform the model that context compression may occur.
 const COMPRESSION_AWARENESS_GUIDANCE: &str = "\
@@ -500,7 +546,14 @@ ask the user.
 or fix arguments, and continue making progress. Only stop when the task is complete \
 or you have genuinely exhausted every reasonable approach — and then clearly tell the \
 user what failed and what blocked you.
-5. **You MUST end with a visible summary — never with an empty reply.** Before you \
+5. **Never announce a next step and then stop.** If your reply says you are about to do \
+   something, that action MUST happen in the same turn — call the tool NOW. A turn that \
+   ends on an announcement is a failed turn: the user gets a plan instead of a result. \
+6. **sandbox / permission errors on terminal are tool infrastructure, not the user's job.** \
+   Retry the command once — the harness may run it unsandboxed and say so on stderr. \
+   If it still fails, say plainly that the tool is broken. Never hand the command back as \
+   \"run it yourself locally\" unless the user asked to run it themselves. \
+7. **You MUST end with a visible summary — never with an empty reply.** Before you \
 decide to stop (finish_reason=\"stop\"), you MUST emit a natural-language summary in \
 the visible channel (NOT inside a <think> block): what you did, what succeeded, what \
 failed, and — if the task is incomplete — what the user should do next. A turn that \
@@ -527,10 +580,36 @@ You are running on **Windows**. The `terminal` tool runs commands through a unif
 - **Quote handling**: quote paths with spaces; for inline scripts with `$` variables, use `-EncodedCommand <base64>` to avoid interpretation issues.
 - **Environment variables**: PowerShell-native `$env:TEMP`, `$env:PATH`, `$HOME` work. In bash-style `$x` form, use `powershell -EncodedCommand` for anything with `$` signs.
 
+## Sandbox degradation notice (not a failure)\
+If a `terminal` result carries a `[sandbox]` line on stderr, the command **did run** — the \
+harness just could not build the isolation sandbox on this machine, so it ran without one. \
+Read the exit code and stdout as usual: do not retry, do not treat it as blocked, and do not \
+tell the user to run the command themselves.\
+\
+## PowerShell traps (each one cost a real session)\
+1. **`$LASTEXITCODE` is not reset by cmdlets.** After `go build ... 2>&1 | Out-File log`, \
+   `$LASTEXITCODE` still holds go's exit code (Out-File is a cmdlet). But after ANY other \
+   native command it changes — capture the code immediately, or verify the artifact \
+   (`Test-Path` + `LastWriteTime`) instead of trusting an exit code you read late.\
+2. **Stale logs lie.** Before reading a log or old artifact as this run's result, check its \
+   `LastWriteTime`, or write each run to a UNIQUE file name. Reading yesterday's log and \
+   reporting success is worse than reporting failure.\
+3. **No bash `&&`** — use `;` or separate calls. `cd X && cmd` fails; use `Set-Location X; cmd`.\
+4. **`>` and `Out-File`** — `>` in PowerShell is `Out-File` with formatting; both are fine, \
+   but `cmd /c foo > file` from PowerShell does NOT get bash semantics. Prefer \
+   `foo *>&1 | Out-File $log -Encoding utf8` and then read the file.\
+5. **Do not thrash the terminal.** Trying the same intent with cosmetic variations
+   (`>` then `Out-File` then `-Encoding utf8`…) is not troubleshooting — each attempt is a
+   new process, a new approval prompt, and (on a desktop app) another window flashing.
+   After the **second** failure of the same intent, READ THE ERROR and change the
+   approach; do not try the third spelling. If the error names a missing capability
+   (command not on PATH, permission denied, no such file), fix that specific thing —
+   for \"not recognized\" use `Get-Command <name> -All` / `where.exe <name>` and the
+   standard install roots, do not re-run the same command.\
+   there with UNIQUE names and read them back; never assume a previous call's random \
+   temp name.\
 ## Structured tools bypass shell issues
-- `storage_analyzer` (Safe, read-only) — disk usage scanning.
 - `execute_code` (Python, read-only) — `os.scandir`, `os.stat`, `pathlib` pass `CodeExecutionGuard` (Approved, no confirmation). Deletion via Python is blocked; use `storage_clean`.
-- `disk_cleanup` (Caution, dry_run defaults true) — prune stale files under HERMIX_HOME.
 - `storage_clean` (Dangerous, requires approval) — delete/move-to-recycle specific paths.
 - `move_file` — native OS filesystem API for copy/move/rename. `copy: true` to copy, `overwrite: true` to replace. No shell involved.
 
@@ -663,14 +742,6 @@ When working with Git, follow these rules strictly:
 
 ## Why this matters
 Using --amend after a failed commit can modify an unrelated previous commit, causing code loss. Always create new commits to preserve history.";
-
-const SKILL_USAGE_GUIDANCE: &str = "\
-# Skills
-
-## How to use a Skill
-1. Check `<available_skills>` for a matching Skill.
-2. Load the Skill with `skill_view(name='skill-name')`.
-3. Follow the Skill instructions step by step.";
 
 const TODO_GUIDANCE: &str = "\
 # Task list (`todo` tool)
@@ -1168,7 +1239,9 @@ Always close `</think>` before visible text. The think block is for reasoning, n
             SESSION_SEARCH_GUIDANCE,
         ));
     }
-    if tool_names.contains("skill_manage") {
+    // 技能指导单一归属（2026-11-19 审计 M3）：使用与管理合入同一块，
+    // 任一技能工具存在即注入。
+    if tool_names.contains("skill_manage") || tool_names.contains("skill_view") {
         dirs.push(SystemDir::new(
             "skills.guide",
             DirRoute::HasSkillKeyword,
@@ -1222,18 +1295,6 @@ Always close `</think>` before visible text. The think block is for reasoning, n
     // environment/shell discipline, file lifecycle, git safety, URL
     // safety, web automation and parallel execution are unconditional
     // always-on blocks — they moved to the stable layer.
-    //
-    // Skill usage guidance: when and how to use Skills. This one stays
-    // per-turn because its *presence* depends on the active tool set
-    // (it is pointless to describe skills to a model that cannot call
-    // them) — unlike the blocks above, whose bodies never change.
-    if !tool_names.is_empty() {
-        dirs.push(SystemDir::new(
-            "skill_usage.always",
-            DirRoute::Always,
-            SKILL_USAGE_GUIDANCE,
-        ));
-    }
     // Progressive-disclosure bridge usage — **gated on actual visibility**.
     //
     // This block names `tool_search` → `tool_describe` → `tool_call`, and those
@@ -1615,8 +1676,8 @@ mod tests {
             "首轮 tag 序列变化——若有意，同步更新 EXPECTED_FIRST_TURN_HASH"
         );
         assert_eq!(
-            hash, 11188126300777542920,
-            "首轮 guidance 内容变化——若有意，更新 EXPECTED_FIRST_TURN_HASH"
+            hash, 8066945400426501422,
+            "首轮 guidance 内容变化——若有意，更新 EXPECTED_FIRST_TURN_HASH\n            （2026-11-19：prompt_assembly T1 重排——directions 挪到系统提示尾部；\n             2026-11-20：TOOL_USAGE_GUIDANCE 新增「文件编辑禁走 shell」纪律块）"
         );
     }
 
@@ -1854,7 +1915,9 @@ mod tests {
             .iter()
             .map(|d| d.tag)
             .collect();
-        for want in ["skill_usage.always", "todo.guide", "memory.guide"] {
+        // skill_usage.always 已并入 skills.guide（2026-11-19 M3：技能指导单一归属），
+        // 「依赖工具集、保持 per-turn」的不变量由 skills.guide 承接。
+        for want in ["skills.guide", "todo.guide", "memory.guide"] {
             assert!(tags.contains(&want), "{want} must stay per-turn");
         }
     }

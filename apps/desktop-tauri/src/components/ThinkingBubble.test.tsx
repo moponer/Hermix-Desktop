@@ -57,11 +57,13 @@ describe("canFoldProcess（正文开写即折）", () => {
 });
 
 describe("ReasoningBlock 折叠契约", () => {
-  it("默认收起：只渲染标题行，不渲染正文", () => {
+  it("默认收起：头行带单行预览，不渲染完整", () => {
     const { container } = render(<ReasoningBlock content="先解决 go.sum 写入被拦的问题" />);
     expect(screen.getByRole("button", { name: "思考" })).toBeInTheDocument();
     expect(container.querySelector(".tl-reasoning-row")).toBeNull();
-    expect(screen.queryByText(/先解决 go.sum/)).not.toBeInTheDocument();
+    const preview = container.querySelector(".tl-reasoning-preview");
+    expect(preview).not.toBeNull();
+    expect(preview!.textContent).toContain("先解决 go.sum");
   });
 
   it("active 时自动展开正文", () => {
@@ -88,5 +90,51 @@ describe("ReasoningBlock 折叠契约", () => {
     const { container } = render(<ReasoningBlock content="<think>先并行处理</think>" active />);
     expect(container.textContent).toContain("先并行处理");
     expect(container.textContent).not.toContain("<think>");
+  });
+});
+
+/**
+ * 耗时定格契约（2026-11-18 用户实拍反馈）。
+ *
+ * 症状：思考已经结束、后面的思考还在推进，但**已结束那段**的秒数一直涨。
+ * 根因是 spanMs 在没有 endedAt 时拿 Date.now() 当终点，而流式路径漏补
+ * endedAt（实测某条消息 12 段里 11 段为 null）→ 每次重渲染都重算。
+ * 这里钉住：段一结束就定格，之后再渲染也不变。
+ */
+describe("ReasoningBlock 耗时定格", () => {
+  const START = 1_700_000_000_000;
+
+  it("结束后定格，不随重渲染增长", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(START));
+    const startedAt = new Date(START - 4_000).toISOString();
+    const { container, rerender } = render(
+      <ReasoningBlock content="想完了" active startedAt={startedAt} />,
+    );
+    // 进行中不显示数字（那会是个一直在跳的值）
+    expect(container.querySelector(".tl-reasoning-count")).toBeNull();
+
+    rerender(<ReasoningBlock content="想完了" active={false} startedAt={startedAt} />);
+    expect(container.querySelector(".tl-reasoning-count")?.textContent).toBe("4s");
+
+    // 后续两分钟里又发生了别的思考 —— 这一段的数字必须还是 4s
+    vi.setSystemTime(new Date(START + 120_000));
+    rerender(<ReasoningBlock content="想完了" active={false} startedAt={startedAt} />);
+    expect(container.querySelector(".tl-reasoning-count")?.textContent).toBe("4s");
+    vi.useRealTimers();
+  });
+
+  it("有 endedAt 时按真实起止算（重载历史）", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(START));
+    const { container } = render(
+      <ReasoningBlock
+        content="历史段"
+        startedAt={new Date(START - 9_000).toISOString()}
+        endedAt={new Date(START - 2_000).toISOString()}
+      />,
+    );
+    expect(container.querySelector(".tl-reasoning-count")?.textContent).toBe("7s");
+    vi.useRealTimers();
   });
 });

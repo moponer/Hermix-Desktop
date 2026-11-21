@@ -135,6 +135,36 @@
   font-style: italic;
   font-family: var(--font-sans, system-ui);
 }
+/* 2026-11-20 运行态：左侧功能标记条（background 渐变画 2px 实心条，
+   不写 border —— G11 只管「结构框线」，功能标记用 background 与门禁共存，
+   依据 docs/notes/implemented/process/2026-10-26-css-border-gate-and-functional-rails.md）
+   + 末尾闪烁光标。跑完（data-running=false）两者都消失。 */
+/* 与 theme-app.css 的主题覆盖同构选择器（其特异性更高，直接写会被压掉） */
+:root[data-theme="light"] .tw-msg-output[data-running="true"],
+[data-theme="dark"] .tw-msg-output[data-running="true"] {
+  background: linear-gradient(
+      to right,
+      var(--color-tone-blue) 0 2px,
+      transparent 2px
+    )
+    padding-box,
+  var(--color-bg-code) padding-box;
+}
+.tw-msg-caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--color-text-on-code);
+  animation: tw-caret-blink 1s steps(1) infinite;
+}
+@keyframes tw-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
 /* Copy chip — floats top-right, hidden until the user hovers the
    panel. We keep it minimal (icon only) so it doesn't compete with
    the result text for attention. */
@@ -720,6 +750,20 @@
 }
 .approval-card.is-resolved {
   max-height: 48px;
+  /* 收成一行之后它就不是"卡片"了：灰底 + 卡片阴影留在这里，在纸面上只是
+     一条发脏的色带（2026-11-18 用户实拍反馈）。已决定的审批是**记录**，
+     读起来该和「工作完成」折叠头同一档 —— 透明、无阴影，层次交给状态图标。 */
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+/* 浅色基线在 .approval-card 上用 liquid glass（选择器权重更高，
+   见上方 :root[data-theme="light"] 规则），收合态必须显式抵掉。 */
+:root[data-theme="light"] .approval-card.is-resolved {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
 }
 .approval-card.is-done { opacity: 0.92; }
 
@@ -1564,7 +1608,7 @@
    胜出，288 个选择器被双定义。以下是仅存在于旧副本里的规则，随该文件
    一并删除。 */
 /* `.composer` 的 light 玻璃态覆盖已删除（2026-10-27）：light 主题已在
-   同日从 themes/registry 移除（只留 notion / notion-dark），这条
+   同日从 themes/registry 移除（只留 light / dark），这条
    `:root[data-theme="light"]` 规则永不命中，且一旦命中会用 rgba(251,251,251,.82)
    的玻璃底 + --glass-shadow 压掉输入区的实色面与聚焦反馈。输入区材质
    归 components-controls.css 单一归属。 */

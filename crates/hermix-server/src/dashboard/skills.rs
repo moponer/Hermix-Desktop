@@ -1039,7 +1039,8 @@ mod tests {
             _workdir: Option<&str>,
             _background: bool,
             _pty: bool,
-        ) -> Result<CommandOutput, hermix_core::AgentError> {
+        _on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
+        ) -> Result<CommandOutput, AgentError> {
             Err(hermix_core::AgentError::ToolExecution(
                 "NoopBackend::execute_command should never be called".into()
             ))

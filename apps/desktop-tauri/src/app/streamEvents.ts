@@ -260,6 +260,25 @@ export function closeOpenReasoning(steps: TimelineStep[]): TimelineStep[] {
 }
 
 /**
+ * 闭合**所有**还没闭合的思考段（不只是最后一段）。
+ *
+ * 落库前用它取代 closeOpenReasoning。原因：后者只补末尾那一段，而流式
+ * 路径上中间的段也可能漏补 —— 实测 sessions.db（2026-11-18 21:10 那条，
+ * 12 段思考）落库后只有第 1 段带 endedAt，剩下 11 段是 null；重载后这些
+ * 段拿不到耗时，实时渲染时又按 Date.now() 一直涨。
+ *
+ * 收尾时刻（Done）是这一轮唯一能"回溯补齐"的时点：那一刻整轮已经结束，
+ * 给所有未闭合段盖同一个时间戳是准确的（它们最迟都在这之前结束）。
+ */
+export function closeAllOpenReasoning(steps: TimelineStep[]): TimelineStep[] {
+  if (!steps.some((s) => s.kind === "reasoning" && !s.endedAt)) return steps;
+  const now = new Date().toISOString();
+  return steps.map((s) =>
+    s.kind === "reasoning" && !s.endedAt ? { ...s, endedAt: now } : s,
+  );
+}
+
+/**
  * 末尾的 text step 是不是**流开头**的无标签推理前缀？
  *
  * 2026-10-01 修一个内容丢失 bug：LLM「先说一段正文 → 又继续思考」时，

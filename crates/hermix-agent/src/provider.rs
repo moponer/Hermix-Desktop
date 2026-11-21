@@ -1471,11 +1471,18 @@ impl AnthropicProvider {
                 }
                 MessageRole::Tool => {
                     // Anthropic: tool results go as user messages with tool_result content blocks
-                    let content_blocks = vec![serde_json::json!({
+                    let mut content_blocks = vec![serde_json::json!({
                         "type": "tool_result",
                         "tool_use_id": msg.tool_call_id.as_deref().unwrap_or(""),
                         "content": msg.content.as_deref().unwrap_or(""),
                     })];
+                    // 尾部断点（2026-11-19 审计 T2）：marker 循环会把 Tool 结果
+                    // 计入缓存断点——透传到 tool_result 块上。
+                    if let Some(ref cc) = msg.cache_control {
+                        content_blocks[0]["cache_control"] = serde_json::json!({
+                            "type": format!("{:?}", cc.cache_type).to_lowercase()
+                        });
+                    }
                     anthropic_messages.push(serde_json::json!({
                         "role": "user",
                         "content": content_blocks,

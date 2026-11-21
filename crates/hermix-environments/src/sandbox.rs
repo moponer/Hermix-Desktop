@@ -58,11 +58,13 @@ use windows_sys::Win32::{
             SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
         },
         Threading::{
-            CreateProcessAsUserW, GetCurrentProcess, GetExitCodeProcess, OpenProcessToken,
+            CreateProcessAsUserW, CreateProcessWithTokenW, GetCurrentProcess, GetExitCodeProcess,
+            OpenProcessToken,
             TerminateProcess, WaitForSingleObject, CREATE_UNICODE_ENVIRONMENT,
-            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTF_USESHOWWINDOW, STARTUPINFOW,
         },
     },
+    UI::WindowsAndMessaging::SW_HIDE,
 };
 
 // ── 访问掩码（winnt.h 稳定值；对齐参考实现 win32-abi.ts）────────
@@ -163,6 +165,10 @@ fn sandbox_msg(msg: impl Into<String>) -> AgentError {
 }
 
 /// Windows 命令行参数引用（CommandLineToArgvW 语义）。
+pub(crate) fn quote_windows_arg_pub(s: &str) -> String {
+    quote_windows_arg(s)
+}
+
 fn quote_windows_arg(s: &str) -> String {
     if !s.is_empty() && !s.chars().any(|c| c == ' ' || c == '\t' || c == '"' || c == '\n' || c == '\r') {
         return s.to_string();
@@ -610,57 +616,90 @@ fn build_low_label_acl(low_sid: *mut c_void) -> Result<*mut ACL, AgentError> {
     Ok(acl)
 }
 
-/// 对 `path` 落一次写授权（merge 三编辑，单次 SetNamedSecurityInfoW）：
+/// 对 `path` 落一次写授权，返回「Low 强制标签是否生效」：
 /// ① 能力 SID 的 GRANT_MASK allow ACE（OI|CI）；
 /// ② world SID 的 FILE_DELETE_CHILD deny ACE（仅 CI——该位落到文件的
 /// 继承掩码里会挡掉 FILE_ALL_ACCESS 的打开）；
 /// ③ Low 强制标签。
 /// 幂等：三者精确全等时跳过 apply（否则 eager 继承会全树重传播，
 /// 大工作区分钟级）。已有显式 ACE 经 read-merge-write 保留。
+///
+/// **DACL 与标签分两次落盘，标签失败不致命。** 改 DACL 只需要 WRITE_DAC，
+/// 改强制标签还必须 WRITE_OWNER —— 而「所有者不是你、只授了 Modify」的
+/// 目录（常见：别人建的工程目录、解压/安装器释放的目录）前者有后者没有。
+/// 旧实现把两者合成一次 SetNamedSecurityInfoW，于是在这类目录上整步失败
+/// （Win32 error 5），provision 随之报错，整个 terminal 工具被废掉 ——
+/// 用户看到的是「连个 go build 都做不到」。分开之后只有 DACL 真的授不
+/// 进去才算致命（那种目录本来也写不了），标签失败降级为「不降完整性」
+/// 的 token（见 `provision_with_temp_root`）。
 fn grant_write(
     path: &str,
     cap_sid: *mut c_void,
     low_sid: *mut c_void,
     world_sid: *mut c_void,
-) -> Result<(), AgentError> {
+) -> Result<bool, AgentError> {
     let current = read_current_security(path)?;
-    if has_exact_entry(current.old_dacl, ACCESS_ALLOWED_ACE_TYPE, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE, GRANT_MASK, cap_sid)
-        && has_exact_entry(current.old_dacl, ACCESS_DENIED_ACE_TYPE, CONTAINER_INHERIT_ACE, FILE_DELETE_CHILD, world_sid)
-        && has_exact_entry(current.label_acl, SYSTEM_MANDATORY_LABEL_ACE_TYPE as u8, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, low_sid)
-    {
-        return Ok(());
+    let dacl_done = has_exact_entry(current.old_dacl, ACCESS_ALLOWED_ACE_TYPE, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE, GRANT_MASK, cap_sid)
+        && has_exact_entry(current.old_dacl, ACCESS_DENIED_ACE_TYPE, CONTAINER_INHERIT_ACE, FILE_DELETE_CHILD, world_sid);
+    let label_done = has_exact_entry(current.label_acl, SYSTEM_MANDATORY_LABEL_ACE_TYPE as u8, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, low_sid);
+
+    if !dacl_done {
+        let entries = [
+            build_explicit_access(cap_sid, GRANT_ACCESS, GRANT_MASK, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE),
+            build_explicit_access(world_sid, DENY_ACCESS, FILE_DELETE_CHILD, CONTAINER_INHERIT_ACE),
+        ];
+        let mut new_dacl: *mut ACL = std::ptr::null_mut();
+        let rc = unsafe { SetEntriesInAclW(entries.len() as u32, entries.as_ptr(), current.old_dacl, &mut new_dacl) };
+        if rc != 0 {
+            return Err(sandbox_msg(format!(
+                "SetEntriesInAclW failed (Win32 error {rc}) granting {path}"
+            )));
+        }
+        let apply_rc = unsafe {
+            SetNamedSecurityInfoW(
+                wide(path).as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                new_dacl,
+                std::ptr::null_mut(),
+            )
+        };
+        unsafe { LocalFree(new_dacl as *mut c_void) };
+        if apply_rc != 0 {
+            return Err(sandbox_msg(format!(
+                "SetNamedSecurityInfoW failed (Win32 error {apply_rc}) granting {path}"
+            )));
+        }
     }
-    let entries = [
-        build_explicit_access(cap_sid, GRANT_ACCESS, GRANT_MASK, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE),
-        build_explicit_access(world_sid, DENY_ACCESS, FILE_DELETE_CHILD, CONTAINER_INHERIT_ACE),
-    ];
-    let mut new_dacl: *mut ACL = std::ptr::null_mut();
-    let rc = unsafe { SetEntriesInAclW(entries.len() as u32, entries.as_ptr(), current.old_dacl, &mut new_dacl) };
-    if rc != 0 {
-        return Err(sandbox_msg(format!(
-            "SetEntriesInAclW failed (Win32 error {rc}) granting {path}"
-        )));
+    drop(current);
+    if label_done {
+        return Ok(true);
     }
     let label = build_low_label_acl(low_sid)?;
-    let apply_rc = unsafe {
+    let label_rc = unsafe {
         SetNamedSecurityInfoW(
             wide(path).as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
+            LABEL_SECURITY_INFORMATION,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            new_dacl,
+            std::ptr::null_mut(),
             label,
         )
     };
-    unsafe { LocalFree(new_dacl as *mut c_void) };
     unsafe { LocalFree(label as *mut c_void) };
-    if apply_rc != 0 {
-        return Err(sandbox_msg(format!(
-            "SetNamedSecurityInfoW failed (Win32 error {apply_rc}) granting {path}"
-        )));
+    if label_rc != 0 {
+        tracing::warn!(
+            path = %path,
+            win32 = label_rc,
+            "mandatory label not settable (需要 WRITE_OWNER，目录多半只给了 Modify) — \
+             本会话沙箱子进程不降完整性级别继续执行"
+        );
+        return Ok(false);
     }
-    Ok(())
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -733,6 +772,16 @@ pub struct SandboxChild {
 }
 
 impl SandboxChild {
+    /// 账户沙箱（account_sandbox.rs）用同一形状回装子进程。
+    pub(crate) fn from_raw(
+        process: HANDLE,
+        pid: u32,
+        stdout: std::fs::File,
+        stderr: std::fs::File,
+    ) -> Self {
+        Self { process, pid, stdout, stderr }
+    }
+
     /// 有界等待：每 200ms 醒一次检查 deadline，到期返回 `TimedOut`。
     ///
     /// 旧实现是 `WaitForSingleObject(INFINITE)` + 独立看门狗线程睡满 timeout
@@ -788,6 +837,63 @@ impl Drop for SandboxChild {
     }
 }
 
+
+/// 启用当前进程令牌上的特权（"以管理员身份"那类）。
+///
+/// 2026-11-19 实测更正：UAC 过滤后的内置管理员令牌里 SeAssignPrimaryToken
+/// 是 Disabled 状态且**启用无效**（特权启用不回也是 1314）——本函数保留给
+/// 「服务账户/未开 UAC」等令牌里特权可启用的场景；受限令牌在此类机器上的
+/// 正解是 account_sandbox（CreateProcessWithLogonW，免特权）。
+fn enable_privileges(names: &[&str]) -> bool {
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::Security::AdjustTokenPrivileges;
+    use windows_sys::Win32::Security::LookupPrivilegeValueW;
+    use windows_sys::Win32::Security::TOKEN_ADJUST_PRIVILEGES;
+    use windows_sys::Win32::Security::TOKEN_PRIVILEGES;
+    use windows_sys::Win32::Foundation::LUID;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    use windows_sys::Win32::System::Threading::OpenProcessToken;
+    use windows_sys::Win32::Foundation::CloseHandle;
+
+    unsafe {
+        let mut token: HANDLE = 0;
+        if OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut token,
+        ) == 0
+        {
+            return false;
+        }
+        let mut luid = LUID { LowPart: 0, HighPart: 0 };
+        let pname: Vec<u16> = names[0].encode_utf16().chain(std::iter::once(0)).collect();
+        if LookupPrivilegeValueW(std::ptr::null(), pname.as_ptr(), &mut luid) == 0 {
+            CloseHandle(token);
+            return false;
+        }
+        let mut tp: TOKEN_PRIVILEGES = std::mem::zeroed();
+        tp.PrivilegeCount = 1;
+        tp.Privileges[0].Luid = luid;
+        tp.Privileges[0].Attributes = 2; // SE_PRIVILEGE_ENABLED
+        let ok = AdjustTokenPrivileges(
+            token,
+            0,
+            &mut tp,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        let err = GetLastError();
+        CloseHandle(token);
+        // AdjustTokenPrivileges 成功时**不保证**改写 LastError，所以这里的
+        // err 可能是更早某次调用留下的陈值 —— 不能用它判定失败。判据只看
+        // 返回值：TRUE = 特权已启用（本机令牌里 SeAssignPrimaryTokenPrivilege
+        // 是 Disabled 状态，启用后 CreateProcessAsUserW 才不会再 1314）。
+        let _ = err;
+        ok != 0
+    }
+}
+
 /// 用受限 token 直接 CreateProcessAsUserW（进程内 runner，无外部
 /// 可执行件）。stdio：自建管道（子端可继承）+ NUL 设备作 stdin；
 /// 父端去继承位。cwd 直传（argv 语义里工作目录不参与解析）。
@@ -798,6 +904,11 @@ fn spawn_restricted(
     cwd: &str,
     temp_dir: &str,
 ) -> Result<SandboxChild, AgentError> {
+    // 2026-11-19：启用 SeAssignPrimaryTokenPrivilege —— 内置 Administrator 的
+    // 令牌里有它（默认禁用），启用后 CreateProcessAsUserW 不再报 1314。
+    // 不需要提权、不弹窗、没有任何管理员操作。普通用户令牌里没有这个特权
+    // 时本函数返回 false，此时走文档的「受限版本自助指派」豁免路径。
+    let _priv_enabled = enable_privileges(&["SeAssignPrimaryTokenPrivilege"]);
     let mut cmdline = quote_windows_arg(exe);
     for a in args {
         cmdline.push(' ');
@@ -836,18 +947,38 @@ fn spawn_restricted(
 
     let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
     si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-    // 不使用 STARTF_USESHOWWINDOW / wShowWindow=SW_HIDE：受限 token（Low
-    // 完整性）进程受桌面 ACL 限制本就无法创建可见窗口，但显式 SW_HIDE 会被
-    // 杀软「隐藏执行」规则命中（父进程是 Hermix 而非系统程序 + 隐藏窗口 +
-    // powershell）。去掉隐藏标志后进程在实践中仍不可见（无交互桌面可附着），
-    // 但不再触发误报。安全隔离（受限 token / Low IL）完整保留。
-    si.dwFlags = STARTF_USESTDHANDLES;
+    // 2026-11-19（用户明确要求：「我不想再看到 agent 不停地启动终端或命令行
+    // 窗口」）：父进程 hermix-desktop.exe 是 GUI 程序（windows_subsystem =
+    // "windows"），**没有自己的控制台** —— 这样的父进程 spawn 控制台程序时，
+    // Windows 会给子进程**新建一个可见控制台窗口**，每条命令闪一次。
+    // CREATE_NO_WINDOW 在受限创建下会 STATUS_DLL_INIT_FAILED（见模块头），
+    // 所以这里用 STARTF_USESHOWWINDOW + SW_HIDE：只隐藏窗口，不改创建语义。
+    //
+    // 旧注释认为「Low 完整性进程受桌面 ACL 限制本就无法创建可见窗口」——
+    // 实测不成立：控制台窗口由 conhost.exe（Medium）代为创建，Low 客户端拦不住。
+    // 沙箱降级路径早已用 CREATE_NO_WINDOW（同一类隐藏），这里只是让两条路
+    // 行为一致；杀软「隐藏执行」误报的风险两条路一样存在，不构成新增暴露。
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE as u16;
     si.hStdInput = stdin;
     si.hStdOutput = stdout_w;
     si.hStdError = stderr_w;
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
 
-    let ok = unsafe {
+    // 2026-11-19：CreateProcessAsUserW 需要 SeAssignPrimaryTokenPrivilege，
+    // 而 **UAC 过滤后的管理员令牌里没有这个特权**（AdjustTokenPrivileges 返回
+    // ERROR_NOT_ALL_ASSIGNED）→ 恒 1314。文档的「受限版本自助指派」豁免在
+    // 实测中不生效。
+    //
+    // 解法：改用 **CreateProcessWithTokenW** —— 它只需要 SeImpersonatePrivilege，
+    // 而这个特权**每个用户令牌默认就有**（过滤后仍保留）。Codex CLI 走的是同一条
+    // 思路（LogonUserW 取令牌 + CreateProcessAsUserW），但它依赖一次性提权
+    // setup 预置专用账户；我们不预置账户，直接用「调用者自己的受限令牌」，
+    // 免提权、免安装。
+    //
+    // 两条路都试：CreateProcessWithTokenW 优先，失败再退回 CreateProcessAsUserW
+    // （万一某台机器的令牌里恰好有 SeAssignPrimaryToken）。
+    let mut ok = unsafe {
         CreateProcessAsUserW(
             token,
             std::ptr::null(),
@@ -862,12 +993,34 @@ fn spawn_restricted(
             &mut pi,
         )
     };
+    if ok == 0 {
+        // 退回 CreateProcessWithTokenW：它只需要 SeImpersonatePrivilege（每个
+        // 用户令牌默认就有，过滤后仍保留），不依赖 SeAssignPrimaryToken。
+        ok = unsafe {
+            CreateProcessWithTokenW(
+                token,
+                0, // dwLogonFlags：不 LOGON32_LOGON_INTERACTIVE
+                std::ptr::null(),
+                cmdline_w.as_mut_ptr(),
+                CREATE_UNICODE_ENVIRONMENT,
+                env_block.as_ptr() as *const c_void,
+                cwd_w.as_ptr(),
+                &si,
+                &mut pi,
+            )
+        };
+    }
     // 子端/stdin/线程句柄无论成败都要收掉。
     unsafe { CloseHandle(stdout_w) };
     unsafe { CloseHandle(stderr_w) };
     unsafe { CloseHandle(stdin) };
     if ok == 0 {
-        let err = sandbox_err("CreateProcessAsUserW");
+        // 错误信息要能自解释：模型和用户看到它就知道这是**环境限制**（当前
+        // 账户的令牌无法自助指派子进程），不是命令写错了。
+        let err = sandbox_msg(format!(
+            "CreateProcessAsUserW failed (Win32 error {}): the current account token cannot self-assign a child process. Built-in Administrator (RID 500) after UAC filtering has no usable SeAssignPrimaryToken, and the restricted-token self-assignment exemption does not take effect here. Needs a one-time admin setup (dedicated sandbox account; see Codex CLI windows-sandbox-rs) or danger-full-access mode.",
+            unsafe { GetLastError() }
+        ));
         unsafe { CloseHandle(stdout_r) };
         unsafe { CloseHandle(stderr_r) };
         return Err(err);
@@ -947,8 +1100,18 @@ impl SandboxSession {
         ws: &Path,
         temp_root: &Path,
     ) -> Result<Self, AgentError> {
-        let temp_dir =
-            temp_root.join(format!("hermix-sbx-{}", uuid::Uuid::new_v4().simple()));
+        // 2026-11-19：temp 目录名按工作区**确定性**派生（不再是每次随机的
+        // uuid）——agent 跨调用往 %TEMP% 传文件（编译产物、日志）时目录必须
+        // 稳定。实测碰壁：随机名 + Drop 即删，上一条命令写的文件下一条就没了。
+        let ws_hash = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(ws.to_string_lossy().as_bytes());
+            h.update(temp_root.to_string_lossy().as_bytes());
+            let d = h.finalize();
+            d.iter().map(|b| format!("{b:02x}")).collect::<String>()[..16].to_string()
+        };
+        let temp_dir = temp_root.join(format!("hermix-sbx-{ws_hash}"));
         std::fs::create_dir_all(&temp_dir)
             .map_err(|e| sandbox_msg(format!("temp dir create failed: {e}")))?;
         let temp_canon = canonical_path(&temp_dir)?;
@@ -967,9 +1130,22 @@ impl SandboxSession {
         // temp 目录恒授（read-only 模式下 PowerShell 探针要写私有 temp
         // 才保得住 FullLanguage；这是 per-invocation 私有授权，不是对
         // 任意 temp 的放行）。
-        grant_write(&temp_str, temp_sid.as_ptr(), low.as_ptr(), world.as_ptr())?;
+        //
+        // 完整性级别由「标签是否真的落上了」决定，两者必须一致：Low 标签
+        // 目录 + Medium 子进程能写（no-write-up 只挡写「比进程更高」的对
+        // 象），而 Medium 目录 + Low 子进程写不进去。所以任一目录拿不到
+        // 标签就把子进程留在 Medium —— 边界仍由受限 token 的能力 SID 承担
+        // （restricting 列表只放行这两个目录），丢掉的只是「连自己都写不
+        // 了 Medium 对象」这层额外保险。
+        let mut labeled = grant_write(&temp_str, temp_sid.as_ptr(), low.as_ptr(), world.as_ptr())?;
         if mode == SandboxMode::WorkspaceWrite {
-            grant_write(&ws_str, ws_sid.as_ptr(), low.as_ptr(), world.as_ptr())?;
+            labeled &= grant_write(&ws_str, ws_sid.as_ptr(), low.as_ptr(), world.as_ptr())?;
+        }
+        if !labeled {
+            tracing::warn!(
+                workspace = %ws.display(),
+                "sandbox runs without the Low integrity label — 受限 token 边界不变，仅少一层写上升级防护"
+            );
         }
 
         let caps: Vec<&OwnedSid> = match mode {
@@ -978,15 +1154,18 @@ impl SandboxSession {
             SandboxMode::DangerFullAccess => unreachable!("checked above"),
         };
         let token = build_restricted_token(&caps)?;
+
         if let Err(e) = grant_token_default_dacl(token, temp_sid.as_ptr()) {
             unsafe { CloseHandle(token) };
             let _ = std::fs::remove_dir_all(&temp_dir);
             return Err(e);
         }
-        if let Err(e) = set_token_low_integrity(token, low.as_ptr()) {
-            unsafe { CloseHandle(token) };
-            let _ = std::fs::remove_dir_all(&temp_dir);
-            return Err(e);
+        if labeled {
+            if let Err(e) = set_token_low_integrity(token, low.as_ptr()) {
+                unsafe { CloseHandle(token) };
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Err(e);
+            }
         }
 
         Ok(Self {
@@ -1019,8 +1198,10 @@ impl Drop for SandboxSession {
         if self.token != 0 {
             unsafe { CloseHandle(self.token) };
         }
-        // best-effort：ACE 随目录销毁；失败仅留惰性垃圾。
-        let _ = std::fs::remove_dir_all(&self.temp_dir);
+        // 2026-11-19：**不再**随命令删除 temp 目录 —— 目录名已按工作区确定
+        // （见 provision_with_temp_root），跨调用必须保持：agent 往 %TEMP%
+        // 写的编译产物/日志要能被下一条命令读回（实测碰壁 #11）。残留由
+        // disk_cleanup / 应用启动清理，不在这里逐命令删。
     }
 }
 

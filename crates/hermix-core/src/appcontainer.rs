@@ -35,6 +35,10 @@ type Bool = i32;
 const PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES: usize = 0x0002_0009;
 const EXTENDED_STARTUPINFO_PRESENT: Dword = 0x0008_0000;
 const CREATE_UNICODE_ENVIRONMENT: Dword = 0x0000_0400;
+/// 不给控制台程序新建可见窗口（父进程是 GUI 应用时必需，否则弹黑窗）。
+const CREATE_NO_WINDOW: Dword = 0x0800_0000;
+/// WaitForSingleObject 超时返回值。
+const WAIT_TIMEOUT: Dword = 0x0000_0102;
 const STARTF_USESTDHANDLES: Dword = 0x0000_0100;
 const SE_FILE_OBJECT: Dword = 1;
 const DACL_SECURITY_INFORMATION: Dword = 0x0000_0004;
@@ -71,7 +75,9 @@ extern "system" {
         group: *mut (),
         dacl: *mut *mut (),
         sacl: *mut (),
-        security: *mut (),
+        // PSECURITY_DESCRIPTOR* —— 原声明成 `*mut ()` 少了一层指针：拿不到
+        // 描述符就无法正确释放（old_dacl 指向它内部，不是独立分配块）。
+        security: *mut *mut (),
     ) -> HResult;
     fn SetNamedSecurityInfoW(
         obj: *const u16,
@@ -116,6 +122,7 @@ extern "system" {
     fn CreatePipe(read: *mut Handle, write: *mut Handle, attrs: *const (), size: Dword) -> Bool;
     fn SetHandleInformation(h: Handle, mask: Dword, flags: Dword) -> Bool;
     fn LocalFree(h: isize) -> isize;
+    fn GetLengthSid(sid: *mut ()) -> u32;
 }
 
 /// AppContainer profile 名（固定）：SID 由它派生，同名同 SID。
@@ -163,17 +170,20 @@ pub fn ensure_profile() -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// 从系统分配的 PSID 拷贝出自有字节（SID 长度可由 GetSidLengthRequired
-/// 推导，但这里用 `GetSidSubAuthorityCount` 免声明更多 FFI —— AppContainer
-/// SID 是固定 68 字节（1 个 sub-authority），按 68 拷贝并截断到真实长度。
+/// 从系统分配的 PSID 拷贝出自有字节（长度用 `GetLengthSid` 取 —— 2026-11-19
+/// 修正：原先硬拷 68 字节是越界读，由名字派生的 AppContainer SID 只有 16 字节）。
 fn sid_bytes(_sid: *mut ()) -> Vec<u8> {
-    // AppContainer SID 固定布局：Revision 1 + 1 SubAuthority（64 字节上限内）。
-    // 按 SID 最大长度 68 拷贝即可（多余字节属于同一块 CoTaskMem 缓冲）。
+    // 2026-11-19：原来按「AppContainer SID 固定 68 字节」硬拷 —— **错的**。
+    // SID 长度 = 8 字节头 + SubAuthority 数×4；由名字派生的 AppContainer SID
+    // 只有 1 个 sub-authority（16 字节），系统分配的缓冲也正好是这么多。
+    // 硬拷 68 字节 = 越过分配尾部读 52 字节（堆越界读）。改用 GetLengthSid。
+    let len = unsafe { GetLengthSid(_sid) } as usize;
+    if len == 0 || len > 68 {
+        return Vec::new();
+    }
     unsafe {
-        let len = 68usize;
         let p = _sid as *const u8;
-        let slice = std::slice::from_raw_parts(p, len);
-        slice.to_vec()
+        std::slice::from_raw_parts(p, len).to_vec()
     }
 }
 
@@ -231,6 +241,12 @@ pub fn grant_dir_access(dir: &Path, read_only: bool) -> io::Result<()> {
     };
 
     let mut old_dacl: *mut () = std::ptr::null_mut();
+    // 2026-11-19：**堆损坏的根因**。GetNamedSecurityInfoW 返回的 DACL 是
+    // 「安全描述符内部」的指针 —— 它**不是**独立分配块，不能单独 LocalFree。
+    // 原代码 LocalFree(old_dacl) 释放了内部指针 → STATUS_HEAP_CORRUPTION，
+    // 进程级崩溃（2026-11-18/19 实测：AppContainer 通道一用就崩）。
+    // 正确做法：把描述符本身要出来，**只** LocalFree 描述符。
+    let mut descriptor: *mut () = std::ptr::null_mut();
     let hr = unsafe {
         GetNamedSecurityInfoW(
             dir_w.as_ptr(),
@@ -240,11 +256,14 @@ pub fn grant_dir_access(dir: &Path, read_only: bool) -> io::Result<()> {
             std::ptr::null_mut(),
             &mut old_dacl,
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            &mut descriptor,
         )
     };
     if hr != 0 {
         unsafe { local_free_ptr(sid_ptr) };
+        if !descriptor.is_null() {
+            unsafe { LocalFree(descriptor as isize) };
+        }
         return Err(io::Error::from_raw_os_error(hr));
     }
 
@@ -267,7 +286,10 @@ pub fn grant_dir_access(dir: &Path, read_only: bool) -> io::Result<()> {
     unsafe { local_free_ptr(sid_ptr) };
     unsafe {
         LocalFree(new_dacl as isize);
-        LocalFree(old_dacl as isize);
+        // 释放描述符（old_dacl 指向它内部，不能单独释放）
+        if !descriptor.is_null() {
+            LocalFree(descriptor as isize);
+        }
     }
     Ok(())
 }
@@ -297,7 +319,17 @@ struct StartupInfoW {
     y: u32,
     width: u32,
     height: u32,
+    // dwXCountChars / dwYCountChars / dwFillAttribute / dwFlags —— **四个** u32。
+    // 2026-11-19：原结构只写了三个（少 dwYCountChars），整个结构短 8 字节，
+    // 且 dwFlags 之后的每个字段全部错位 4 字节。后果：
+    //   - 内核读 dwFlags 时读到的是 dwFillAttribute（0）→ STARTF_USESTDHANDLES 失效；
+    //   - STARTUPINFOEX 的 lpAttributeList 实际落在偏移 96，而内核按
+    //     sizeof(STARTUPINFOEX)=112 去读 → 读到垃圾指针 → CreateProcessW 报
+    //     ERROR_INVALID_PARAMETER (87)。这就是 AppContainer 通道「永远建不起来」
+    //     的真正原因（2026-11-19 实测：普通 CreateProcessW 成功、带
+    //     EXTENDED_STARTUPINFO_PRESENT 必失败，二分即定位到这一层）。
     count_chars: u32,
+    count_chars_y: u32,
     fill: u32,
     flags: Dword,
     show_window: u16,
@@ -339,7 +371,13 @@ fn wstr_cmdline(exe: &Path, args: &[String]) -> Vec<u16> {
     wstr(&s)
 }
 
-/// 一对管道：child 端可继承（STARTF_USESTDHANDLES 用），父端清除继承位。
+/// 一对管道，返回 **(子进程端, 父进程端)**。继承位永远在子进程端（
+/// STARTF_USESTDHANDLES 要求），父进程端清掉（父侧句柄不进子进程句柄表）。
+///
+/// 2026-11-19：原实现返回 (r, w) 且只在「子读」时清 w 的继承位 —— 于是
+/// stdout/stderr 取到的是 (读端, 写端)：**父子两端都拿反了**。子进程拿读端
+/// 当 stdout 写不进去，父进程拿写端当 stdout 读不出来，而且父进程自己攥着
+/// 写端 → 永远等不到 EOF。这是 AppContainer 通道一直崩/挂的主因之一。
 fn make_pipe(child_is_read: bool) -> io::Result<(Handle, Handle)> {
     let (mut r, mut w): (Handle, Handle) = (-1, -1);
     let sa = SecurityAttributes {
@@ -350,13 +388,15 @@ fn make_pipe(child_is_read: bool) -> io::Result<(Handle, Handle)> {
     if unsafe { CreatePipe(&mut r, &mut w, &sa as *const _ as *const (), 0) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    // child 端保留继承；父端去掉（父侧句柄不进子进程句柄表）。
     if child_is_read {
+        // 子进程读 stdin：读端继承，写端（父进程写）不继承。
         unsafe { SetHandleInformation(w, HANDLE_FLAG_INHERIT, 0) };
+        Ok((r, w))
     } else {
+        // 子进程写 stdout/stderr：写端继承，读端（父进程读）不继承。
         unsafe { SetHandleInformation(r, HANDLE_FLAG_INHERIT, 0) };
+        Ok((w, r))
     }
-    Ok((r, w))
 }
 
 /// 在 AppContainer 内启动 `exe`，返回包装好的 [`std::process::Child`]。
@@ -369,7 +409,16 @@ pub struct CollectResult {
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
+    /// 是否因超时被终止（此时 exit_code 固定为 124）。
+    pub timed_out: bool,
 }
+
+
+
+
+
+
+
 
 /// 在 AppContainer 内启动 `exe` 并同步收集输出（调用方用 spawn_blocking
 /// 包装，不阻塞 tokio executor）。
@@ -382,6 +431,32 @@ pub fn spawn_and_collect(
     code: &str,
     workdir: &Path,
 ) -> io::Result<CollectResult> {
+    run_capture(exe, &[], Some(code), workdir, None)
+}
+
+/// 在 AppContainer 内跑一条命令并收集输出（可传 argv、可给超时）。
+///
+/// 与 [`spawn_and_collect`] 同一套启动原语，区别只有三点：能带 argv、能只在
+/// 需要时下发 stdin 脚本、能限时。`terminal` 的沙箱通道走这里 ——
+/// AppContainer 用 `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES` 启动，
+/// **普通用户不需要任何特权**；而 `CreateProcessAsUserW` 在缺
+/// SE_ASSIGNPRIMARYTOKEN / SE_INCREASE_QUOTA 的机器上恒报 1314，沙箱于是
+/// 永远建不起来（2026-11-18 实况：整台机器上 terminal 从未进过沙箱）。
+/// 低完整性 + 无 capability 让它连网络都出不去，隔离强度不低于受限 token。
+/// [KNOWN BUG 2026-11-19] On this machine (Medium IL parent too), the spawn path in
+/// this module corrupts the heap (STATUS_HEAP_CORRUPTION, process-level crash).
+/// Pre-existing FFI defect, root cause not yet located (suspect: hand-rolled
+/// StartupInfoExW / attribute-list layout). Do NOT wire this channel into any
+/// long-lived process until fixed: execute_code fallback cannot catch it -
+/// the crash is not an Err, the whole process dies.
+pub fn run_capture(
+    exe: &Path,
+    args: &[&str],
+    stdin_script: Option<&str>,
+    workdir: &Path,
+    timeout: Option<std::time::Duration>,
+) -> io::Result<CollectResult> {
+    let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     let sid = ensure_profile()?;
     let _ = grant_dir_access(workdir, false);
     if let Some(root) = exe.parent() {
@@ -399,20 +474,37 @@ pub fn spawn_and_collect(
         capability_count: 0,
     };
 
+    // 2026-11-19（三处 FFI 修正，合起来是「AppContainer 通道必崩」的根因）：
+    //
+    // ① 属性列表必须**指针对齐**。原实现用 `vec![0u8; attr_size]` —— u8 的
+    //    对齐是 1，而 PROC_THREAD_ATTRIBUTE_LIST 内部是指针数组，
+    //    InitializeProcThreadAttributeList 会按 8 字节偏移写指针 → 错位写 →
+    //    **堆损坏**（STATUS_HEAP_CORRUPTION）。改用 u64 数组（8 字节对齐）。
+    // ② InitializeProcThreadAttributeList / UpdateProcThreadAttribute 的返回值
+    //    原来全部丢弃 —— 失败时进程会**不带 AppContainer SID 启动**（等于没
+    //    沙箱），而调用方以为它沙箱了。现在失败即报错。
+    //
     let mut attr_size = 0usize;
     unsafe {
-        InitializeProcThreadAttributeList(
-            std::ptr::null_mut(),
-            1,
-            0,
-            &mut attr_size,
-        );
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
     }
-    let attr_buf = vec![0u8; attr_size];
-    let attr_list = attr_buf.as_ptr() as *mut ();
+    if attr_size == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("InitializeProcThreadAttributeList(size) failed: {}", io::Error::last_os_error()),
+        ));
+    }
+    let words = attr_size.div_ceil(8).max(1);
+    let mut attr_words = vec![0u64; words];
+    let attr_list = attr_words.as_mut_ptr() as *mut ();
     unsafe {
-        InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size);
-        UpdateProcThreadAttribute(
+        if InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("InitializeProcThreadAttributeList(init) failed: {}", io::Error::last_os_error()),
+            ));
+        }
+        if UpdateProcThreadAttribute(
             attr_list,
             0,
             PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
@@ -420,11 +512,19 @@ pub fn spawn_and_collect(
             std::mem::size_of::<SecurityCapabilities>(),
             std::ptr::null(),
             std::ptr::null(),
-        );
+        ) == 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("UpdateProcThreadAttribute failed: {}", io::Error::last_os_error()),
+            ));
+        }
     }
 
     let siex = StartupInfoExW {
         startup: StartupInfoW {
+            // 带 EXTENDED_STARTUPINFO_PRESENT 时 cb 必须是 STARTUPINFOEX 的
+            // 尺寸（内核按 cb 读整个扩展结构 + attribute list）。
             cb: std::mem::size_of::<StartupInfoExW>() as u32,
             reserved: std::ptr::null_mut(),
             desktop: std::ptr::null_mut(),
@@ -434,6 +534,7 @@ pub fn spawn_and_collect(
             width: 0,
             height: 0,
             count_chars: 0,
+            count_chars_y: 0,
             fill: 0,
             flags: STARTF_USESTDHANDLES,
             show_window: 0,
@@ -446,7 +547,7 @@ pub fn spawn_and_collect(
         attribute_list: attr_list,
     };
 
-    let mut cmdline = wstr_cmdline(exe, &[]);
+    let mut cmdline = wstr_cmdline(exe, &args);
     let workdir_w = wstr(&workdir.to_string_lossy());
     let mut pi = ProcessInformation {
         process: -1,
@@ -462,7 +563,12 @@ pub fn spawn_and_collect(
             std::ptr::null(),
             std::ptr::null(),
             1, // bInheritHandles：管道 child 端要进子进程
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+            // CREATE_NO_WINDOW：父进程是 GUI 应用（hermix-desktop.exe 是
+            // windows_subsystem="windows"），不带这个标志 spawn 控制台程序
+            // 会新建一个**可见**的控制台窗口 —— 用户看到的就是"每执行一条
+            // 命令弹一个黑窗"。AppContainer 内没有交互桌面可附着，但窗口
+            // 仍会在用户桌面上闪一下，必须显式压掉。
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
             std::ptr::null(),
             workdir_w.as_ptr(),
             &siex.startup as *const StartupInfoW as *const (),
@@ -493,35 +599,51 @@ pub fn spawn_and_collect(
         let mut stdin = std::fs::File::from(unsafe {
             OwnedHandle::from_raw_handle(stdin_parent as _)
         });
-        stdin.write_all(code.as_bytes())?;
+        if let Some(script) = stdin_script {
+            stdin.write_all(script.as_bytes())?;
+        }
+        // 无论有没有脚本，写端都要在这里关掉：留着 = 子进程永远等不到 EOF。
     }
 
-    // 有界收集 stdout/stderr（各 256KB 上限）——子进程退出后管道 EOF，
-    // 读自然结束。
-    let mut stdout_buf = Vec::new();
-    let mut stderr_buf = Vec::new();
-    {
-        use std::io::Read;
-        use std::os::windows::io::{FromRawHandle, OwnedHandle};
-        let out = std::fs::File::from(unsafe {
-            OwnedHandle::from_raw_handle(stdout_parent as _)
-        });
-        let _ = out.take(256 * 1024).read_to_end(&mut stdout_buf);
-        let err = std::fs::File::from(unsafe {
-            OwnedHandle::from_raw_handle(stderr_parent as _)
-        });
-        let _ = err.take(256 * 1024).read_to_end(&mut stderr_buf);
+    // 有界收集 stdout/stderr（各 256KB 上限），读线程与等待并行 ——
+    // 先阻塞读再等退出会被"孙进程握着写端"卡死（terminal 的 cargo/rustc
+    // 场景经常如此），先等再读则可能把超时判定拖成无限。
+    fn drain(h: Handle) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            use std::os::windows::io::{FromRawHandle, OwnedHandle};
+            let f = std::fs::File::from(unsafe { OwnedHandle::from_raw_handle(h as _) });
+            let mut buf = Vec::new();
+            let _ = f.take(256 * 1024).read_to_end(&mut buf);
+            buf
+        })
     }
+    let out_thread = drain(stdout_parent);
+    let err_thread = drain(stderr_parent);
 
-    unsafe { WaitForSingleObject(pi.process, 0xFFFF_FFFF) };
+    let wait_ms = timeout
+        .map(|t| t.as_millis().min(u32::MAX as u128) as Dword)
+        .unwrap_or(0xFFFF_FFFF);
+    let mut timed_out = false;
+    if unsafe { WaitForSingleObject(pi.process, wait_ms) } == WAIT_TIMEOUT {
+        timed_out = true;
+        // 超时先杀顶层，再让读线程随管道 EOF 自然收尾。
+        unsafe { TerminateProcess(pi.process, 124) };
+        unsafe { WaitForSingleObject(pi.process, 5_000) };
+    }
 
     let mut exit_code: Dword = 0;
     unsafe { GetExitCodeProcess(pi.process, &mut exit_code) };
+    unsafe { CloseHandle(pi.process) };
+
+    let stdout_buf = out_thread.join().unwrap_or_default();
+    let stderr_buf = err_thread.join().unwrap_or_default();
 
     Ok(CollectResult {
-        exit_code: exit_code as i32,
+        exit_code: if timed_out { 124 } else { exit_code as i32 },
         stdout: String::from_utf8_lossy(&stdout_buf).into_owned(),
         stderr: String::from_utf8_lossy(&stderr_buf).into_owned(),
+        timed_out,
     })
 }
 
@@ -530,5 +652,6 @@ extern "system" {
     fn CoTaskMemFree(pv: *mut ());
     // kernel32.dll —— 进程等待与退出码（同步收集）。
     fn WaitForSingleObject(h: Handle, ms: Dword) -> Dword;
+    fn TerminateProcess(h: Handle, code: u32) -> Bool;
     fn GetExitCodeProcess(h: Handle, code: *mut Dword) -> Bool;
 }

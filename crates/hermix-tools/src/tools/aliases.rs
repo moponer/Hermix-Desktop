@@ -91,7 +91,7 @@ impl ToolHandler for ListFilesHandler {
              \n\
              ## When to reach for this tool\n\
              `list_files` is the right tool whenever the user wants to **see what's in a folder** (\"看下 D:\\qcc 下有啥\" / \"list the project\" / \"show me the directory\"). \
-             It is cheaper, more precise, and copy-pasteable compared to `computer_use.screenshot` of File Explorer. \
+             It is cheaper, more precise, and copy-pasteable compared to opening File Explorer. \
              Pass `*` as the pattern to list every file. For content search, call `search_files`.",
             JsonSchema::object(props, vec!["pattern".into()]),
         )

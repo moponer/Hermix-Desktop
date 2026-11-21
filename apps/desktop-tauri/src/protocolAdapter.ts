@@ -106,7 +106,9 @@ function projectToolCalls(
       tc.name ??
       tc.function?.name ??
       "tool",
-    status: "done" as const,
+    // X3（2026-11-20）：透传后端持久化的真实 status——被中断/失败的
+    // 历史调用不再被改写成「完成」。缺省仍为 done（老行没有该字段）。
+    status: tc.status ?? ("done" as const),
     output: tc.arguments ?? tc.function?.arguments ?? tc.output,
   }));
   return projected.length > 0 ? projected : undefined;

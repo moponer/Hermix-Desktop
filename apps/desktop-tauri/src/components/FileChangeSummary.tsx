@@ -19,9 +19,13 @@
 //  - 增删行数用等宽数字，沿用过程行的 success / 灰两档。
 //  - 折叠是标准 disclosure（左端旋转 chevron），不靠文字说明能不能点。
 //
-// ⚠ 增删行数的诚实性：来自 `utils/lineStats`，按工具**入参**估算，不是对
-// 磁盘的真 diff（patch 替换多次时真实删除是 N 倍，估算值偏小）。tooltip 里
-// 写明了这一点。匹配不到写工具时**不显示这一列**，不显示假的 0。
+// ⚠ 增删行数的诚实性分两档（2026-11-20）：
+//   · 后端 workspace 差分路径（terminal 改文件）给的是**真 diff** —— 命令
+//     前后内容逐行比对；
+//   · 结构化写工具走 `utils/lineStats` 按**入参**估算，是下界（patch 替换
+//     多次时真实删除是 N 倍）。
+// tooltip 按来源说实话，不拿一句「这是估算」盖住真值。两档都拿不到时
+// **不显示这一列**，不显示假的 0。
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { ChevronRight, FilePlus2, FilePen, FileX2, FileDiff } from "lucide-react";
 import type { FileChangeEntry } from "./messageParser";
@@ -34,9 +38,12 @@ const KIND = {
   renamed: { icon: FileDiff, label: "重命名" },
 } as const;
 
-/** 增删行数的 tooltip —— 必须说清它不是真 diff。 */
-const STATS_TITLE =
+/** 增删行数的 tooltip —— 必须说清这个数是哪种精度。分两档：
+ *  真 diff（terminal 路径：命令前后内容逐行比对）与估算（结构化写工具：
+ *  按入参推，是下界）。混用一句话会把真值说成估算，也是误导。 */
+const STATS_TITLE_ESTIMATE =
   "按工具入参估算的增删行数，不是对磁盘做的真 diff（patch 一次替换多处时真实删除会更大）";
+const STATS_TITLE_EXACT = "命令前后内容逐行比对得出的真 diff";
 
 /**
  * 路径拆成「目录 / 文件名」两段：文件名是扫列表时真正要找的东西。
@@ -80,8 +87,10 @@ export function FileChangeSummary({
           // 增删都是 0（比如 patch 了个空串）时，显示一个空 chip + 一条
           // 悬停提示，比不显示更糟。
           known: acc.known || (c.added ?? 0) > 0 || (c.removed ?? 0) > 0,
+          // 合计里只要有一个文件是真 diff，就说清是混合口径。
+          anyExact: acc.anyExact || c.statsExact === true,
         }),
-        { added: 0, removed: 0, known: false },
+        { added: 0, removed: 0, known: false, anyExact: false },
       ),
     [changes],
   );
@@ -102,7 +111,10 @@ export function FileChangeSummary({
         <span className="fcx-head-text">
           <span className="fcx-title">{n} 个文件已更改</span>
           {total.known && (
-            <span className="fcx-stats" title={STATS_TITLE}>
+            <span
+              className="fcx-stats"
+              title={total.anyExact ? STATS_TITLE_EXACT : STATS_TITLE_ESTIMATE}
+            >
               {total.added > 0 && <span className="fcx-stat fcx-stat--add">+{total.added}</span>}
               {total.removed > 0 && <span className="fcx-stat fcx-stat--del">−{total.removed}</span>}
             </span>
@@ -132,7 +144,10 @@ export function FileChangeSummary({
                   <span className="fcx-name">{name}</span>
                   {dir && <span className="fcx-dir">{dir}</span>}
                   {hasStats && (
-                    <span className="fcx-stats" title={STATS_TITLE}>
+                    <span
+                      className="fcx-stats"
+                      title={c.statsExact ? STATS_TITLE_EXACT : STATS_TITLE_ESTIMATE}
+                    >
                       {c.added != null && c.added > 0 && (
                         <span className="fcx-stat fcx-stat--add">+{c.added}</span>
                       )}

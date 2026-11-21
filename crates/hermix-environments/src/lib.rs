@@ -22,6 +22,7 @@ pub mod local_isolation;
 pub mod pty_filter;
 pub mod pty_session;
 pub mod sandbox;
+pub mod account_sandbox;
 pub mod manager;
 
 #[cfg(feature = "ssh")]

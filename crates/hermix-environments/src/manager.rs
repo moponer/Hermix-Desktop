@@ -73,9 +73,10 @@ impl BackendManager {
         workdir: Option<&str>,
         background: bool,
         pty: bool,
+        on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
     ) -> Result<CommandOutput, AgentError> {
         self.current_backend
-            .execute_command(command, timeout, workdir, background, pty)
+            .execute_command(command, timeout, workdir, background, pty, on_output)
             .await
     }
 

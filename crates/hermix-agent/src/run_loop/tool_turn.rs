@@ -13,6 +13,13 @@ use crate::spill;
 use crate::tool_result_processor::push_tool_result;
 use hermix_core::{format_token_count, LlmResponse, ToolErrorRecord};
 
+/// shell 族工具：命令能改文件，且改法对 agent 不可见——这类调用需要用
+/// 工作区差分补出 file_change 事件。MCP 名前缀（`x__terminal`）只比最后一段。
+fn is_shell_tool(name: &str) -> bool {
+    let bare = name.rsplit("__").next().unwrap_or(name).to_ascii_lowercase();
+    matches!(bare.as_str(), "terminal" | "execute_command" | "run_command")
+}
+
 impl AgentLoop {
     /// O1.1: shared post-tool iteration block — was ~200 lines of
     /// duplication between run() and run_stream(). Handles: post-tool
@@ -570,6 +577,21 @@ impl AgentLoop {
             (keep, denied)
         };
 
+        // 终端命令的文件副作用（2026-11-20）：模型经 terminal（Set-Content /
+        // Out-File / 重定向 / 脚本生成）改文件时 `extract_file_change` 看不到
+        // 任何结构化入参，聊天尾部的「已编辑 N 个文件」卡片就整片缺失。命令
+        // 前后各扫一次工作区做 stat 差分，补发 file_change 事件。
+        // 只在本批真的含 shell 族调用时才付扫描成本（纯读工具不扫）。
+        let shell_root = self
+            .config
+            .workspace
+            .as_deref()
+            .filter(|_| scoped_calls.iter().any(|tc| is_shell_tool(&tc.function.name)))
+            .map(std::path::PathBuf::from);
+        let shell_snapshot = shell_root
+            .as_deref()
+            .map(crate::agent_loop::workspace_diff::WorkspaceSnapshot::take);
+
         let mut results = self
             .execute_tool_calls(
                 &scoped_calls,
@@ -584,6 +606,40 @@ impl AgentLoop {
         state
             .timings
             .record_tool(tool_start.elapsed().as_millis() as u64);
+
+        // 终端命名的文件变更 → 与结构化写工具同一条 file_change 线路。
+        // 本批已由 write_file/patch/edit_file 覆盖的文件跳过（同一文件不重复
+        // 报两条：模型常见做法是 terminal 生成 + patch 微调）。
+        if let (Some(root), Some(before)) = (shell_root.as_deref(), shell_snapshot.as_ref()) {
+            let structured: Vec<String> = scoped_calls
+                .iter()
+                .filter_map(|tc| {
+                    extract_file_change(&tc.function.name, &tc.function.arguments, "")
+                        .map(|c| c.path.replace('\\', "/"))
+                })
+                .collect();
+            for diff in crate::agent_loop::workspace_diff::diff_since(before, root) {
+                let norm = diff.path.replace('\\', "/");
+                if structured
+                    .iter()
+                    .any(|p| *p == norm || norm.ends_with(&format!("/{p}")) || p.ends_with(&format!("/{norm}")))
+                {
+                    continue;
+                }
+                if let Some(ref cb) = self.callbacks.on_tool_complete {
+                    let synth_name = format!("file_change::{}", diff.path);
+                    let payload = serde_json::json!({
+                        "change_type": diff.change_type,
+                        "file_path": diff.path,
+                        "file_summary": diff.summary,
+                        "added": diff.added,
+                        "removed": diff.removed,
+                    })
+                    .to_string();
+                    cb(&synth_name, &synth_name, &payload, "", false);
+                }
+            }
+        }
 
         // --- Rollback check ---
         let turn_error_count = results.iter().filter(|r| r.is_error).count() as u32;

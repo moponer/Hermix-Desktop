@@ -105,6 +105,8 @@ mod tests {
             file_path: None,
             change_type: None,
             file_summary: None,
+            added: None,
+            removed: None,
             is_error: None,
         }
     }

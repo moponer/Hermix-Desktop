@@ -17,7 +17,6 @@
 import { useEffect, useState } from "react";
 import { APPROVAL_RISK_LABEL, toolCapability } from "./approvalRisk";
 import {
-  AlertCircle,
   Check,
   ChevronDown,
   ChevronRight,
@@ -28,7 +27,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import type { ApprovalMessageMeta, ChatMessage } from "../types";
+import type { ApprovalMessageMeta } from "../types";
 import { describeToolArgs, toolVerb } from "./bubbleUtils";
 
 /**
@@ -267,34 +266,3 @@ export function ApprovalRequestView({
   );
 }
 
-/**
- * Legacy wrapper for the standalone `role: "approval"` chat message.
- * New approvals push an inline `kind: "approval_request"` step into
- * the assistant's `unified_steps` (rendered via `ApprovalRequestView`
- * inside `<ProcessTimeline>`), so this card is only seen for older
- * sessions persisted before that migration.
- */
-export function ApprovalCard({
-  message,
-  workspaceRoot: _workspaceRoot,
-  onApprove,
-  onDeny,
-}: {
-  message: ChatMessage;
-  workspaceRoot?: string | null;
-  onApprove?: (requestId: string, remember?: boolean) => void;
-  onDeny?: (requestId: string) => void;
-}) {
-  const meta = message.approval;
-  if (!meta) {
-    return (
-      <div className="h-enter flex items-center gap-2 text-meta text-text-faint italic px-2 py-1.5">
-        <AlertCircle className="icon-sm" />
-        <span>权限请求数据缺失</span>
-      </div>
-    );
-  }
-  return (
-    <ApprovalRequestView meta={meta} onApprove={onApprove} onDeny={onDeny} />
-  );
-}

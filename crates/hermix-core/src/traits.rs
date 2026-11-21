@@ -150,6 +150,10 @@ pub trait PlatformAdapter: Send + Sync {
 #[async_trait]
 pub trait TerminalBackend: Send + Sync {
     /// Execute a command in the terminal.
+    ///
+    /// `on_output`（2026-11-20）：可选的**逐行输出回调**——后端在读取子进程
+    /// stdout 时按行调用，让 UI 在命令执行期间就能看到实时进度（沙箱路径
+    /// 此前把输出攒到退出才一次性返回，运行中面板只能转圈）。`None` = 不流式。
     async fn execute_command(
         &self,
         command: &str,
@@ -157,6 +161,7 @@ pub trait TerminalBackend: Send + Sync {
         workdir: Option<&str>,
         background: bool,
         pty: bool,
+        on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
     ) -> Result<CommandOutput, AgentError>;
 
     /// Read a file's contents (with optional offset and line limit).

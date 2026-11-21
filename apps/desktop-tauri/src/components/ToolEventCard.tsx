@@ -1,8 +1,8 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   Terminal, Globe, Wrench, Loader2,
   ChevronDown, ChevronRight,
-  AlertTriangle, AlertCircle, SearchX, Copy, Check,
+  AlertTriangle, AlertCircle, SearchX, Check,
 } from "lucide-react";
 import { reportError } from "../lib/reportError";
 import { useNow } from "../hooks/useNow";
@@ -59,7 +59,8 @@ interface ToolGroup {
 // `Tool 'x' does not exist`，把失败渲染成「✓已完成」。抄两份注释维持的
 // 不是契约，是约定 —— 现在改成唯一入口。
 import { classifyToolOutcome } from "../utils/toolOutcome";
-import { COPIED, COPY_OUTPUT, EXECUTED_COMMAND, NO_OUTPUT } from "./strings";
+import { LiveTerminal } from "./LiveTerminal";
+import { EXECUTED_COMMAND } from "./strings";
 
 
 /**
@@ -474,24 +475,6 @@ function memoryArchiveChip(tool: string | undefined, output?: string): string | 
   return null;
 }
 
-/** Unwrap common JSON wrappers (`{"result":"…","exit_code":0}`) that
- *  some tools wrap their output in. Mirrors `unwrapToolOutput` in
- *  MessageBubble.tsx. */
-function unwrapToolOutput(raw: string): string {
-  if (!raw) return raw;
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith("{")) return raw;
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (typeof parsed.result === "string") return parsed.result;
-    if (typeof parsed.error === "string") return parsed.error;
-    if (typeof parsed.output === "string") return parsed.output;
-    return raw;
-  } catch {
-    return raw;
-  }
-}
-
 /**
  * Coalesce adjacent groups that share the same tool name AND status.
  *
@@ -564,7 +547,13 @@ function ToolRow({ group }: { group: ToolGroup }) {
   // keep the body tucked away until the user explicitly clicks the
   // row. Running tools still show a spinner + accent-tinted icon to
   // signal "actively working".
-  const [open, setOpen] = useState(false);
+  //
+  // 2026-11-20 用户再次要求「直观看到在哪一步、跑完自动收起」：恢复运行中
+  // 自动展开，但吸取 2026-08-29 的教训——**只在已有实际输出时**展开
+  // （毛坯房问题源于对零输出工具也弹空面板），且跑完自动收起；用户手动
+  // 开合（userOpen 非 null）永远优先于自动行为。信封 JSON 已在
+  // unwrapToolOutput 剥掉，不会再滚一屏原始 JSON。
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
   // 2026-08-29: prefer the Chinese verb over the raw tool name — the
   // row previously read "custom_app_manager patch 运行中" (user asked
   // for a Chinese explanation of what's actually running). The
@@ -614,6 +603,8 @@ function ToolRow({ group }: { group: ToolGroup }) {
     return ev?.content ?? "";
   }, [group.events]);
   const hasBody = stdout.length > 0 || (summary && summary !== stdout);
+  // 自动展开 = 运行中**且**已有可看的输出（避免空面板刷屏）；跑完自动收起。
+  const open = userOpen ?? (isRunning && hasBody);
 
   // Memory tool: lift the structured result so the row reads
   // `<动作> <记忆文件路径> <状态>` and the status shows "未查到对应内容"
@@ -661,7 +652,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
     >
       <button
         type="button"
-        onClick={() => hasBody && setOpen((v) => !v)}
+        onClick={() => hasBody && setUserOpen(!open)}
         className="tw-msg-row"
         data-tool-kind={toolKind(group.tool)}
         data-open={open ? "true" : undefined}
@@ -804,84 +795,3 @@ function ToolRow({ group }: { group: ToolGroup }) {
   );
 }
 
-/**
- * Collapsible result panel — same shape as MessageBubble's
- * LiveTerminal. No "运行中 / 输出 / 已中断" header, no green dot, no
- * line-number gutter. The parent tool row's icon + status badge
- * already carries the run state, so a duplicate indicator inside
- * the body is noise. The row's `peek` already shows the first line
- * of output, so the user has context before they click the chevron.
- *
- * Empty state stays subtle: "等待输出…" while the run is live,
- * "(无输出)" once it's done. A hover-only copy chip at the top-right
- * keeps the affordance without a permanent header row.
- */
-function LiveTerminal({ content, running }: { content: string; running: boolean }) {
-  const displayContent = useMemo(() => unwrapToolOutput(content), [content]);
-  // Copy-to-clipboard state. We hold a "copied" flag for ~1.4s
-  // after a successful copy so the button can flip its icon +
-  // tint green — the visual equivalent of "saved".
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef<number | null>(null);
-
-  // Cancel any pending "copied" reset on unmount so we don't
-  // call setState on a dead component.
-  useEffect(() => () => {
-    if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
-  }, []);
-
-  const handleCopy = async () => {
-    const text = displayContent || (running ? "" : NO_OUTPUT);
-    if (!text) return;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        // Tauri webview fallback: a hidden textarea + execCommand
-        // — keeps the affordance working even when the modern
-        // clipboard API is unavailable (e.g. http context).
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.left = "-9999px";
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-      }
-      setCopied(true);
-      if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = window.setTimeout(() => setCopied(false), 1400);
-    } catch {
-      // Silent failure — the user can still select the text manually.
-    }
-  };
-
-  const hasContent = displayContent.length > 0;
-
-  return (
-    <div
-      className="tw-msg-output"
-      data-running={running ? "true" : "false"}
-      data-empty={hasContent ? "false" : "true"}
-    >
-      <button
-        type="button"
-        className="tw-msg-output-copy"
-        onClick={(e) => { e.stopPropagation(); handleCopy(); }}
-        data-copied={copied ? "true" : "false"}
-        title={copied ? COPIED : COPY_OUTPUT}
-        aria-label={copied ? COPIED : COPY_OUTPUT}
-      >
-        {copied ? <Check className="icon-xs" /> : <Copy className="icon-xs" />}
-      </button>
-      {hasContent ? (
-        <pre className="tw-msg-output-text">{displayContent}</pre>
-      ) : (
-        <span className="tw-msg-output-empty">
-          {running ? "等待输出…" : NO_OUTPUT}
-        </span>
-      )}
-    </div>
-  );
-}

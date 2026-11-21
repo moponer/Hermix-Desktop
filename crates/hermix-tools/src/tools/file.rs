@@ -1077,7 +1077,7 @@ impl ToolHandler for SearchFilesHandler {
              ## When to reach for this tool\n\
              - **Find files by name** (e.g. \"where is the config?\" / \"show me the .toml files\") → use `target: \"files\"` or the `list_files` alias.\n\
              - **Search inside files** (e.g. \"where is the `effective_model` resolved?\" / \"grep TODO\") → use `target: \"content\"` (the default).\n\
-             Much cheaper and more precise than `computer_use.screenshot` of an editor with Find-open.\n\
+             Much cheaper and more precise than opening an editor with Find-open.\n\
              \n\
              ## When NOT to use it\n\
              - **You already know the file** → `read_file` it directly; searching for a known path is a wasted round trip.\n\
@@ -1739,6 +1739,7 @@ mod tests {
             _workdir: Option<&str>,
             _bg: bool,
             _pty: bool,
+        _on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
         ) -> Result<CommandOutput, AgentError> {
             Ok(CommandOutput {
                 exit_code: 0,

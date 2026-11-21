@@ -66,11 +66,18 @@ static BUILTIN_PATTERNS: LazyLock<Vec<RedactionPattern>> = LazyLock::new(|| {
             regex: Regex::new(r#"://[^:]+:([^@]+)@"#).unwrap(),
             replacement: "://[REDACTED_USER]:[REDACTED]@".into(),
         },
-        // Email addresses
+        // Email addresses.
+        // 2026-11-19：Go toolchain 路径 `...\toolchain@v0.9.1.windows-amd64`
+        // 会被宽松的 email 正则整个吞成 [REDACTED_EMAIL]（@ 后的
+        // "v0.9.1.windows" 恰好满足域名形状）——agent 拿到的是脱敏后的假路径，
+        // 后续所有按字面路径的操作全部落空（实况碰壁清单 #三）。修法：要求
+        // 候选 email 的**前一个字符**是行首/空白/常见标点（捕获组 1，替换时
+        // 原样发回）；路径分隔符 \ / 和普通单词字符前面的 @ 一律不判为 email。
+        // Rust regex 无 lookbehind，用前缀捕获组实现同等效果。
         RedactionPattern {
             name: "email".into(),
-            regex: Regex::new(r#"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"#).unwrap(),
-            replacement: "[REDACTED_EMAIL]".into(),
+            regex: Regex::new(r#"(^|[^\\/\w])([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})"#).unwrap(),
+            replacement: "${1}[REDACTED_EMAIL]".into(),
         },
         // Phone numbers (US-style and international)
         RedactionPattern {
@@ -237,6 +244,24 @@ mod tests {
         let result = redactor.redact(text);
         assert!(result.contains("[REDACTED_EMAIL]"));
         assert!(!result.contains("user@example.com"));
+    }
+
+    #[test]
+    fn test_redact_email_keeps_go_toolchain_path() {
+        // 2026-11-19 实况：Go toolchain 路径里的 @ 会被 email 正则吞掉，
+        // agent 拿到脱敏后的假路径，后续按字面路径的操作全部落空。
+        let redactor = Redactor::new();
+        let text = r"copying C:\Users\Administrator\go\pkg\mod\golang.org\toolchain@v0.9.1.windows-amd64\bin\go.exe";
+        let result = redactor.redact(text);
+        assert!(
+            result.contains("toolchain@v0.9.1.windows"),
+            "路径里的 @ 不得触发 email 脱敏: {result}"
+        );
+        assert!(!result.contains("[REDACTED_EMAIL]"));
+        // 行内的真 email 仍要脱敏
+        let mixed = "mail me at bob@mail.com about the build";
+        let r2 = redactor.redact(mixed);
+        assert!(r2.contains("[REDACTED_EMAIL]"), "{r2}");
     }
 
     #[test]

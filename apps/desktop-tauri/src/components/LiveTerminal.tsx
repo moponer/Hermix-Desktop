@@ -11,6 +11,14 @@ import { COPIED, COPY_OUTPUT, NO_OUTPUT } from "./strings";
 export function LiveTerminal({ content, running }: { content: string; running: boolean }) {
   // Unwrap JSON result wrappers so the user sees clean terminal output.
   const displayContent = useMemo(() => unwrapToolOutput(content), [content]);
+  // 2026-11-20：运行中跟随输出滚动到底部——「直观看到在哪一步」的一半；
+  // 另一半是 ProcessLine 的运行中自动展开。跑完停住，让用户回头翻。
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (running && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [displayContent, running]);
   // Copy-to-clipboard state. ~1.4s "已复制" flash so the affordance
   // gives clear feedback without nagging the user with a toast.
   const [copied, setCopied] = useState(false);
@@ -52,6 +60,7 @@ export function LiveTerminal({ content, running }: { content: string; running: b
 
   return (
     <div
+      ref={scrollRef}
       className="tw-msg-output"
       data-running={running ? "true" : "false"}
       data-empty={hasContent ? "false" : "true"}
@@ -67,7 +76,10 @@ export function LiveTerminal({ content, running }: { content: string; running: b
         {copied ? <Check className="icon-xs" /> : <Copy className="icon-xs" />}
       </button>
       {hasContent ? (
-        <pre className="tw-msg-output-text">{displayContent}</pre>
+        <pre className="tw-msg-output-text">
+          {displayContent}
+          {running && <span className="tw-msg-caret" aria-hidden="true" />}
+        </pre>
       ) : (
         <span className="tw-msg-output-empty">
           {running ? "等待输出…" : NO_OUTPUT}

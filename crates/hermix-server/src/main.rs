@@ -9,6 +9,13 @@ use hermix_telemetry::init_telemetry_from_env;
 
 #[tokio::main]
 async fn main() -> Result<(), AgentError> {
+    // 沙箱账户 setup 的提权入口（UAC runas 到自身）：处理 payload 后直接退出，
+    // 不进任何服务器逻辑（必须在其他初始化之前）。
+    #[cfg(windows)]
+    if let Some(code) = hermix_environments::account_sandbox::elevated_entry_from_args() {
+        std::process::exit(code);
+    }
+
     // --stdio 时 stdout 是 JSON Lines 协议通道，日志必须走 stderr，否则日志行
     // 会被桌面端当帧解析（unparseable frame 死循环 + 启动卡死）。
     let stdio = std::env::args().any(|a| a == "--stdio");

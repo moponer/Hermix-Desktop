@@ -5,7 +5,7 @@ import { markdownToHast } from "satteri";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { hardenSoftLineBreaks } from "@hermix/preview";
-import { autoCloseUnbalancedFences } from "../lib/markdownFence";
+import { autoCloseUnbalancedFences, labelBareFences } from "../lib/markdownFence";
 
 // 验证 MarkdownBody.tsx 替换后的核心 pipeline:
 //   autoCloseUnbalancedFences → hardenSoftLineBreaks → markdownToHast → toJsxRuntime
@@ -91,6 +91,15 @@ describe("MarkdownBody pipeline (satteri 替换后)", () => {
     expect(() =>
       toJsxRuntime(hast, { Fragment, jsx, jsxs }),
     ).not.toThrow();
+  });
+
+  it("裸围栏补 text lang —— 单行内容也进代码块外壳（2026-11-18 实拍）", () => {
+    // 用户报「项目结构这块没有底色、不在卡片里」：裸 ``` 的单行内容被当成
+    // 行内 code 渲染。补上 info string 后渲染器才认得出这是块。
+    expect(labelBareFences("```\nF:\\cleanking\\\n```")).toBe("```text\nF:\\cleanking\\\n```");
+    // 已带语言的围栏不动，收围栏不动。
+    const withLang = "```ts\nconst x = 1;\n```";
+    expect(labelBareFences(withLang)).toBe(withLang);
   });
 
   it("不平衡 fence 被前置修复", () => {

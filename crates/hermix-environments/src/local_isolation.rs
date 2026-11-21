@@ -119,6 +119,7 @@ impl TerminalBackend for LocalIsolationBackend {
         workdir: Option<&str>,
         background: bool,
         _pty: bool,
+    _on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
     ) -> Result<CommandOutput, AgentError> {
         let effective_timeout = timeout.unwrap_or(self.default_timeout);
         let cwd = match workdir {
@@ -329,7 +330,7 @@ mod tests {
         let backend = LocalIsolationBackend::with_path_inherited(30, 65536).unwrap();
 
         let output = backend
-            .execute_command("echo hello", None, None, false, false)
+            .execute_command("echo hello", None, None, false, false, None)
             .await
             .unwrap();
 
@@ -343,7 +344,7 @@ mod tests {
         let work_dir = backend.work_dir_path().to_path_buf();
 
         let output = backend
-            .execute_command("cd", None, None, false, false)
+            .execute_command("cd", None, None, false, false, None)
             .await
             .unwrap();
 
@@ -381,7 +382,7 @@ mod tests {
         let backend = LocalIsolationBackend::new(vec![], 30, 65536).unwrap();
 
         let output = backend
-            .execute_command("echo %PATH%", None, None, false, false)
+            .execute_command("echo %PATH%", None, None, false, false, None)
             .await
             .unwrap();
 

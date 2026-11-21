@@ -279,7 +279,7 @@ const LOOK: Record<string, { bg: string; label: string }> = {
   editorconfig: { bg: "#6b7280", label: "ECFG" },
 };
 
-function lookFor(name: string): { bg: string; label: string } | null {
+export function lookFor(name: string): { bg: string; label: string } | null {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (!ext || ext === name.toLowerCase()) return null;
   return LOOK[ext] ?? null;

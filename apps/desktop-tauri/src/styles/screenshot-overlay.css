@@ -168,15 +168,6 @@ html[data-theme="dark"] {
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
 }
 
-/* 操作提示（把「现在能做什么」写清楚，别让用户猜） */
-.so-hint {
-  color: rgba(255, 255, 255, 0.75);
-  font-size: var(--text-meta);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
 
 .so-toolbar button {
   flex: 0 0 auto;
@@ -193,15 +184,6 @@ html[data-theme="dark"] {
   background: rgba(255, 255, 255, 0.1);
 }
 
-.so-toolbar button.active {
-  background: var(--color-accent);
-  color: var(--color-on-accent);
-}
-
-.so-toolbar .so-confirm {
-  background: var(--color-accent);
-  color: var(--color-on-accent);
-}
 
 .so-toolbar .so-cancel:hover {
   background: rgba(232, 74, 74, 0.85);

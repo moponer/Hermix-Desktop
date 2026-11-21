@@ -28,7 +28,7 @@ use hermix_focus::MemoryRouter;
 
 use crate::agent_config::AgentConfig;
 use crate::agent_helpers::AgentCallbacks;
-use crate::context::{load_builtin_memory_snapshot, load_soul_md, resolve_personality, SystemPromptBuilder};
+use crate::context::{load_builtin_memory_snapshot, load_soul_md, resolve_personality, estimate_tokens, SystemPromptBuilder};
 use crate::context::DEFAULT_AGENT_IDENTITY;
 use crate::context_files::{load_hermes_context_files, load_workspace_context};
 use crate::ContextManager;
@@ -756,7 +756,13 @@ pub fn apply_prompt_cache_markers(config: &AgentConfig, messages: &mut [Message]
         if marked >= ephemeral_budget {
             break;
         }
-        if msg.role == MessageRole::User || msg.role == MessageRole::Assistant {
+        // Tool 结果计入断点（2026-11-19 审计 T2）：多工具轮次的尾部是一条
+        // tool_result 链，Anthropic 的惯例断点打在最后一个 tool_result 块上
+        // ——跳过 Tool 会让长工具链落在最后一个断点之后、逐次调用全价重付。
+        if msg.role == MessageRole::User
+            || msg.role == MessageRole::Assistant
+            || msg.role == MessageRole::Tool
+        {
             msg.cache_control = Some(CacheControl {
                 cache_type: CacheType::Ephemeral,
             });
@@ -931,18 +937,24 @@ pub fn build_system_prompt_with_tool_errors(
         b.build().to_string()
     };
 
+    // ★ 顺序即计费（2026-11-19 审计 T1）：provider 前缀缓存按位置计费，
+    // 可缓存层必须连成连续前缀。directions 每轮按 user_message/
+    // tool_call_count 变化，曾插在 stable 与 context 之间——任一 direction
+    // 触发变化都让其后的 context（35K+）+tools+历史全量重付。现在的顺序：
+    // stable → context → tools（三者会话内逐字节稳定，构成可缓存前缀）
+    // → directions → suffix → failures（每轮易变的尾巴）。
     let prompt = format!(
-        "{stable_text}{directions_text}{context_text}{suffix_text}{tools_text}{tool_failures_text}"
+        "{stable_text}{context_text}{tools_text}{directions_text}{suffix_text}{tool_failures_text}"
     );
     tracing::Span::current().record("out_chars", prompt.len());
 
     //★ Cache-effectiveness summary : one info event per
     // turn so operators can compare token usage before vs after the
     // three-tier cache was enabled.  Token estimates use chars ÷ 4.
-    let stable_est = stable_text.len() / 4;
-    let context_est = context_text.len() / 4;
-    let volatile_est = suffix_text.len() / 4;
-    let total_est = prompt.len() / 4;
+    let stable_est = estimate_tokens(&stable_text);
+    let context_est = estimate_tokens(&context_text);
+    let volatile_est = estimate_tokens(&suffix_text);
+    let total_est = estimate_tokens(&prompt);
     let (cached_stable_key, cached_stable_len, cached_context_key, cached_context_len) =
         prompt_cache
             .lock()
@@ -1085,18 +1097,19 @@ pub fn build_system_prompt(
         b.build().to_string()
     };
 
+    // 与主路径同款顺序（见其 T1 注释）：可缓存层连成前缀，易变尾巴殿后。
     let prompt = format!(
-        "{stable_text}{directions_text}{context_text}{suffix_text}{tools_text}"
+        "{stable_text}{context_text}{tools_text}{directions_text}{suffix_text}"
     );
     tracing::Span::current().record("out_chars", prompt.len());
 
     //★ Cache-effectiveness summary : one info event per
     // turn so operators can compare token usage before vs after the
     // three-tier cache was enabled.  Token estimates use chars ÷ 4.
-    let stable_est = stable_text.len() / 4;
-    let context_est = context_text.len() / 4;
-    let volatile_est = suffix_text.len() / 4;
-    let total_est = prompt.len() / 4;
+    let stable_est = estimate_tokens(&stable_text);
+    let context_est = estimate_tokens(&context_text);
+    let volatile_est = estimate_tokens(&suffix_text);
+    let total_est = estimate_tokens(&prompt);
     let (cached_stable_key, cached_stable_len, cached_context_key, cached_context_len) =
         prompt_cache
             .lock()
@@ -1118,9 +1131,9 @@ pub fn build_system_prompt(
         stable_chars = stable_text.len(),
         stable_est_tokens = stable_est,
         directions_chars = directions_text.len(),
-        directions_est_tokens = directions_text.len() / 4,
+        directions_est_tokens = estimate_tokens(&directions_text),
         tools_chars = tools_text.len(),
-        tools_est_tokens = tools_text.len() / 4,
+        tools_est_tokens = estimate_tokens(&tools_text),
         context_chars = context_text.len(),
         context_est_tokens = context_est,
         volatile_chars = suffix_text.len(),
@@ -1181,7 +1194,7 @@ fn build_stable_layer(
                     hit = true,
                     cached_stable_prompt_key = cache_key,
                     chars = text.len(),
-                    estimated_tokens = text.len() / 4,
+                    estimated_tokens = estimate_tokens(text),
                     "prompt_cache: stable layer hit"
                 );
                 return text.clone();
@@ -1385,7 +1398,7 @@ fn build_stable_layer(
         hit = false,
         cached_stable_prompt_key = cache_key,
         chars = rendered.len(),
-        estimated_tokens = rendered.len() / 4,
+        estimated_tokens = estimate_tokens(&rendered),
         "prompt_cache: stable layer miss — rendered"
     );
 
@@ -1428,7 +1441,7 @@ fn build_context_layer(
                     hit = true,
                     cached_context_prompt_key = cache_key,
                     chars = text.len(),
-                    estimated_tokens = text.len() / 4,
+                    estimated_tokens = estimate_tokens(text),
                     "prompt_cache: context layer hit"
                 );
                 return text.clone();
@@ -1498,7 +1511,7 @@ fn build_context_layer(
         hit = false,
         cached_context_prompt_key = cache_key,
         chars = rendered.len(),
-        estimated_tokens = rendered.len() / 4,
+        estimated_tokens = estimate_tokens(&rendered),
         "prompt_cache: context layer miss — rendered"
     );
 

@@ -14,7 +14,7 @@ use hermix_environments::LocalBackend;
 async fn local_execute_simple_echo() {
     let backend = LocalBackend::default();
     let output = backend
-        .execute_command("echo hello world", None, None, false, false)
+        .execute_command("echo hello world", None, None, false, false, None)
         .await
         .unwrap();
     assert_eq!(output.exit_code, 0);
@@ -25,7 +25,7 @@ async fn local_execute_simple_echo() {
 async fn local_execute_with_workdir() {
     let backend = LocalBackend::default();
     let output = backend
-        .execute_command("pwd", None, Some("/tmp"), false, false)
+        .execute_command("pwd", None, Some("/tmp"), false, false, None)
         .await
         .unwrap();
     assert_eq!(output.exit_code, 0);
@@ -41,7 +41,7 @@ async fn local_execute_with_workdir() {
 async fn local_execute_with_timeout() {
     let backend = LocalBackend::new(2, 1_048_576);
     let result = backend
-        .execute_command("sleep 30", Some(1), None, false, false)
+        .execute_command("sleep 30", Some(1), None, false, false, None)
         .await;
     assert!(result.is_err());
     match result {
@@ -54,7 +54,7 @@ async fn local_execute_with_timeout() {
 async fn local_execute_background() {
     let backend = LocalBackend::default();
     let output = backend
-        .execute_command("sleep 60", None, None, true, false)
+        .execute_command("sleep 60", None, None, true, false, None)
         .await
         .unwrap();
     // Background mode returns immediately with PID info
@@ -66,7 +66,7 @@ async fn local_execute_background() {
 async fn local_execute_nonzero_exit() {
     let backend = LocalBackend::default();
     let output = backend
-        .execute_command("exit 42", None, None, false, false)
+        .execute_command("exit 42", None, None, false, false, None)
         .await
         .unwrap();
     assert_eq!(output.exit_code, 42);
@@ -76,7 +76,7 @@ async fn local_execute_nonzero_exit() {
 async fn local_execute_stderr() {
     let backend = LocalBackend::default();
     let output = backend
-        .execute_command("echo error >&2", None, None, false, false)
+        .execute_command("echo error >&2", None, None, false, false, None)
         .await
         .unwrap();
     assert!(output.stderr.contains("error"));

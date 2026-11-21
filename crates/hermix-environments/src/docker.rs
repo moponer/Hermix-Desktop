@@ -111,6 +111,7 @@ impl TerminalBackend for DockerBackend {
         workdir: Option<&str>,
         background: bool,
         _pty: bool,
+    _on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
     ) -> Result<CommandOutput, AgentError> {
         let timeout = timeout.unwrap_or(self.default_timeout);
 

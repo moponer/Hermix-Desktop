@@ -26,9 +26,9 @@ import "katex/dist/katex.min.css";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
 import { useIsDarkTheme } from "../hooks/useTheme";
 import { highlightToReact, langLoadVersion, subscribeLangLoads } from "../lib/codeHighlight";
-import { autoCloseUnbalancedFences } from "../lib/markdownFence";
+import { autoCloseUnbalancedFences, labelBareFences } from "../lib/markdownFence";
 import { hardenSoftLineBreaks } from "@hermix/preview";
-import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
+import { FileTypeIcon, lookFor } from "@hermix/preview/FileTypeIcon";
 import { COPIED, COPY_FAILED } from "./strings";
 
 /**
@@ -104,7 +104,10 @@ function PathLink({ path, icons, onClick }: PathLinkProps) {
   // 且只在 `icons` 打开时配 —— 思考块里一段能蹦出十几个方块，正文被
   // 切成拼贴画，比没有图标更难读。
   const name = path.split(/[\\/]/).pop() ?? path;
-  const showIcon = icons && /\.[\p{L}\p{N}]{1,5}$/u.test(name);
+  // 2026-11-19 用户实拍定调：未知扩展名（`go.mod`、`go 1.26.0` 这类）的
+  // FileTypeIcon 会退化成灰色 "?" 问号方块 —— 一段里好几个，密密麻麻像坏
+  // 掉的占位符，比没图标更脏。图标只给**认识的**扩展名；不认识的不挂。
+  const showIcon = icons && /\.[\p{L}\p{N}]{1,5}$/u.test(name) && lookFor(name) !== null;
   // 裸文件名（`App.tsx`）没有目录上下文，不按"相对路径"处理 ——
   // 染成警告琥珀色是在说"这个路径可能解析不到"，但它本来就是正文里
   // 的中性引用（"改 App.tsx 的登录逻辑"），不是一条待解析的路径。
@@ -503,8 +506,9 @@ function replaceInlineMath(line: string): string {
   );
 }
 
-function transformMath(md: string): string {
-  const lines = md.split("\n");
+function transformMath(source: string): string {
+  // 裸围栏先补 lang：渲染器靠 language-xxx 类认「这是块」（见 lib/markdownFence）。
+  const lines = labelBareFences(source).split("\n");
   const out: string[] = [];
   let inFence = false;
   for (let i = 0; i < lines.length; i++) {
@@ -980,11 +984,15 @@ export const MarkdownBody = memo(function MarkdownBody({
           if ((match?.[1] ?? "").toLowerCase() === "math") {
             return <MathNode tex={codeString} display />;
           }
-          const inferred =
-            !match && codeString.includes("\n")
-              ? inferLangFromCode(codeString)
-              : null;
-          const lang = (match?.[1] ?? inferred ?? "").toLowerCase();
+          // 「围栏块」还是「行内 code」：hast 把两者都降成 <code>，只有
+          // 两件事能证明它是块 —— 带 language-xxx 类，或者内容含换行。
+          // 此前只在这两种情况下**推断语言**，推断失败就掉到下面的行内
+          // 分支：一个裸围栏（``` 后面不写语言）的整段文本于是变成
+          // <pre> 里的一颗行内药丸 —— 没有外壳底色、没有头部、没有复制
+          // 按钮，看着"不像 markdown 渲染"。兜底成 text 让 CodeBlock 接住。
+          const isBlock = Boolean(match) || codeString.includes("\n");
+          const inferred = !match && isBlock ? inferLangFromCode(codeString) : null;
+          const lang = (match?.[1] ?? inferred ?? (isBlock ? "text" : "")).toLowerCase();
           if (lang === "mermaid") {
             return <MermaidBlock code={codeString} isDark={isDark} />;
           }

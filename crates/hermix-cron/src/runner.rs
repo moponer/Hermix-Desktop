@@ -133,11 +133,25 @@ impl CronRunner {
         // Build initial messages
         let messages = self.build_messages(job);
 
-        // Run the agent loop
-        let result = agent_loop
-            .run(messages, Some(tools))
-            .await
-            .map_err(CronError::Agent)?;
+        // Run the agent loop. 硬超时护栏（2026-11-19 审计 B1）：此前裸跑，挂死的
+        // LLM 调用或死循环 agent 会永久占住该 cron 任务。超时 future 被 drop =
+        // LLM HTTP 调用与运行中工具一并取消（drop-based cancellation）。
+        const JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+        let result = match tokio::time::timeout(
+            JOB_TIMEOUT,
+            agent_loop.run(messages, Some(tools)),
+        )
+        .await
+        {
+            Ok(r) => r.map_err(CronError::Agent)?,
+            Err(_) => {
+                return Err(CronError::Agent(hermix_core::AgentError::Timeout(format!(
+                    "cron job '{}' exceeded the {} minutes hard limit",
+                    job.name.as_deref().unwrap_or(&job.id),
+                    15
+                ))));
+            }
+        };
 
         // Deliver results if configured
         if let Some(ref deliver) = job.deliver {

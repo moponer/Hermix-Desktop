@@ -10,7 +10,7 @@
  */
 import type { ThemeMode } from "../../hooks/useTheme";
 
-/* 主题只保留 Notion 亮/暗两套（2026-10-27 删除旧色系 light / dark）。
+/* 主题只保留 浅色/深色 两套（2026-11-19 由 notion/notion-dark 更名）。
    新增主题只需放 <id>.css + <id>.json，下面的 glob 会自动发现。 */
 
 const cssModules = import.meta.glob("./*.css", { eager: true }) as Record<string, unknown>;

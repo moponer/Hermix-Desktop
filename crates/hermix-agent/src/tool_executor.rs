@@ -499,11 +499,26 @@ impl AgentLoop {
                             }
                         }
                         None => {
+                            // 可自纠错误（2026-11-20 实测：模型虚构了 `explore` 档案）：
+                            // 错误里列出**实际存在**的档案名，模型下一次尝试即可自纠，
+                            // 而不是卡在「未知」上空转。
+                            let available: Vec<String> =
+                                crate::agent_profiles::load_profiles(&dir)
+                                    .iter()
+                                    .map(|p| p.name.clone())
+                                    .collect();
+                            let hint = if available.is_empty() {
+                                "当前没有任何子代理档案；省略 `agent` 参数走通用子代理。".to_string()
+                            } else {
+                                format!(
+                                    "可用档案：{}。或省略 `agent` 参数走通用子代理。",
+                                    available.join(", ")
+                                )
+                            };
                             orchestrated.push(ToolResult::err(
                                 &tc.id,
                                 format!(
-                                    "未知子代理档案 `{agent_name}`（在 {} 下未找到同名 .md）。\
-                                     用 agent_profiles 目录里的名字，或省略 `agent` 参数走通用子代理。",
+                                    "未知子代理档案 `{agent_name}`（在 {} 下未找到同名 .md）。{hint}",
                                     dir.display()
                                 ),
                             ));

@@ -117,13 +117,13 @@ static DENIED_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     ]
 });
 
-/// A built-in confirm rule: a semantic family name (used as the
-/// session-approval key) + the compiled regex. The name is the
-/// "命令类别" (command category) — e.g. `taskkill-force`, `del`,
-/// `net-service` — so that approving one command in a family covers
-/// other commands in the SAME family (different arguments) but NEVER
-/// grants immunity to a different family that happens to share the
-/// same shell prefix (`cmd /c ...`).
+/// A built-in confirm rule: a semantic family name (only used in logs
+/// and rule docs) + the compiled regex. The session-approval key is the
+/// **source pattern** (命令签名，见下方 run_prompt 的会话去重) — approving one
+/// command covers identical signatures only, NEVER other commands in
+/// the same family (different arguments, different blast radius).
+/// The family name exists so rules are readable in logs, not for
+/// approval generalization.
 struct ConfirmRule {
     name: &'static str,
     re: Regex,

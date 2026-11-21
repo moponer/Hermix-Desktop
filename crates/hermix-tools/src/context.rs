@@ -80,7 +80,7 @@ pub struct ToolCallContext {
     /// Wrapped in `Arc<Mutex>` so `LocalAgentService` can set/clear it
     /// mid-stream (the context is captured at bridge time; the shared
     /// Arc handle allows dynamic updates without re-bridging).
-    pub stdout_cb: Arc<Mutex<Option<Box<dyn Fn(&str) + Send + Sync>>>>,
+    pub stdout_cb: Arc<Mutex<Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>>>,
 
     /// Active `tool_call_id` for the currently running `code_execution`.
     /// Updated per tool-call by the stream loop so the stdout callback

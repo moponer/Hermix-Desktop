@@ -8,7 +8,7 @@
  *      点了会发生什么。
  *
  * 配色跟随全局主题：--night-* 只是语义别名（见 welcome-night.css），
- * 亮色主题下是暖纸面板，Notion 夜下是深色面板，无需各自维护。
+ * 亮色主题下是暖纸面板，深色下是深色面板，无需各自维护。
  */
 import { Sparkles, AppWindow, Workflow, FileText } from "lucide-react";
 

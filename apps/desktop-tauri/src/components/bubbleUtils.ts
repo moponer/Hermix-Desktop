@@ -592,6 +592,16 @@ export function unwrapToolOutput(raw: string): string {
     if (typeof parsed.result === "string") return parsed.result;
     if (typeof parsed.error === "string") return parsed.error;
     if (typeof parsed.output === "string") return parsed.output;
+    // 终端类信封 {stdout, stderr, exit_code?}：直接给人看输出本体，
+    // 否则用户展开就是「一串不知所谓的东西」（2026-11-20 反馈）。
+    if (typeof parsed.stdout === "string") {
+      const err =
+        typeof parsed.stderr === "string" && parsed.stderr.trim()
+          ? `\n${parsed.stderr}`
+          : "";
+      const text = (parsed.stdout + err).trim();
+      if (text) return text;
+    }
     // Fall back to raw if no known field
     return raw;
   } catch {

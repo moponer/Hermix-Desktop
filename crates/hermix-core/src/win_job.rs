@@ -125,8 +125,12 @@ impl JobLimits {
 }
 
 /// 一个绑定的 job。drop 或 [`Self::terminate`] 都会杀掉整棵进程树。
+/// 成功路径应先 [`Self::disarm`]（A5，2026-11-20）：正常退出的命令常留
+/// `start /b` 后台子进程在 job 里，Drop 无条件 terminate 会把它们一并
+/// 掳走，与后台语义矛盾；还带 PID 复用误杀风险。
 pub struct JobGuard {
     job: Handle,
+    disarmed: std::cell::Cell<bool>,
 }
 
 impl JobGuard {
@@ -216,7 +220,7 @@ impl JobGuard {
                 CloseHandle(job);
                 return None;
             }
-            Some(Self { job })
+            Some(Self { job, disarmed: std::cell::Cell::new(false) })
         }
     }
 
@@ -226,11 +230,20 @@ impl JobGuard {
             TerminateJobObject(self.job, 1);
         }
     }
+
+    /// 撤销 Drop 时的自动 terminate（A5）：命令成功退出后调用，
+    /// 让 `start /b` 后台子进程继续活着。显式 [`Self::terminate`]
+    /// 不受影响。
+    pub fn disarm(&self) {
+        self.disarmed.set(true);
+    }
 }
 
 impl Drop for JobGuard {
     fn drop(&mut self) {
-        self.terminate();
+        if !self.disarmed.get() {
+            self.terminate();
+        }
         unsafe {
             CloseHandle(self.job);
         }

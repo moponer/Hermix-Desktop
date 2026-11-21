@@ -155,6 +155,13 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const showScrollToBottomRef = useRef(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  // X1 窗口化（2026-11-20）：长会话只把**末尾** windowSize 行提交给 DOM，
+  // 更早的行点「显示更早的消息」再展开（与服务端历史翻页正交：先翻页
+  // 取数，再窗口化渲染）。新消息始终在窗口末端，流式跟随不受影响。
+  const [windowSize, setWindowSize] = useState(30);
+  // 展开前抓一次 scrollHeight，layout commit 后按高度差平移视口——
+  // 插入的行都在上方，用户正在看的内容原地不动。
+  const preExpandHeightRef = useRef<number | null>(null);
   const scrollPendingRef = useRef(false);
   const lastObservedForceSeqRef = useRef(0);
   const lastScrollHeightRef = useRef(0);
@@ -256,6 +263,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     showScrollToBottomRef.current = false;
     setShowScrollToBottom(false);
     justRestoredRef.current = true;
+    setWindowSize(30); // 换会话重置渲染窗口
   }, [session?.id]);
 
   // 真实输入事件打意图标记。程序化写 scrollTop 不经过这里，
@@ -323,6 +331,16 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     historyAnchorRef.current = { loading, height: el.scrollHeight };
   });
 
+  // X1 窗口展开锚定：同历史前插，展开插入的行全在上方，按高度差平移。
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || preExpandHeightRef.current == null) return;
+    const prevHeight = preExpandHeightRef.current;
+    preExpandHeightRef.current = null;
+    const delta = el.scrollHeight - prevHeight;
+    if (delta > 0) el.scrollTop += delta;
+  }, [windowSize]);
+
   useEffect(() => {
     if (isStreaming) return;
     if (skipAutoBottomOnceRef.current) {
@@ -379,7 +397,27 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               <SkeletonCard lines={3} />
             </div>
           )}
-          {streamRow.map((row, idx) => {
+          {(() => {
+            const totalRows = streamRow.length;
+            const windowStart = Math.max(0, totalRows - windowSize);
+            const rows = windowStart > 0 ? streamRow.slice(windowStart) : streamRow;
+            return (
+              <>
+                {windowStart > 0 && (
+                  <div className="flex justify-center pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        preExpandHeightRef.current = scrollContainerRef.current?.scrollHeight ?? null;
+                        setWindowSize((w) => w + 30);
+                      }}
+                      className="text-xs px-3 py-1 rounded-md bg-bg-secondary text-[color:var(--color-text-secondary)] hover:text-[color:var(--color-text-primary)] hover:bg-bg-hover transition-colors"
+                    >
+                      显示更早的消息（还有 {windowStart} 条）
+                    </button>
+                  </div>
+                )}
+                {rows.map((row, idx) => {
             if (row.kind === "todo") {
               return (
                 <div key={`todo-${row.group.groupId}`} className="todo-anchor">
@@ -414,7 +452,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 />
               );
             }
-            const showHeader = msg.role !== "assistant" || showHeaderFlags[idx];
+            const showHeader = msg.role !== "assistant" || showHeaderFlags[windowStart + idx];
             return (
               <MemoMessageBubble
                 key={msg.id}
@@ -440,7 +478,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 expertCutoffAt={expertCutoffAt}
               />
             );
-          })}
+            })}
+              </>
+            );
+          })()}
 
           {(() => {
             const phase = stream.compactionStatus?.phase;

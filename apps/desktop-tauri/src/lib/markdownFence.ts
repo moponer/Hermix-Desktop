@@ -28,3 +28,31 @@ export function autoCloseUnbalancedFences(content: string): string {
   if (fenceCount % 2 === 1) return content + "\n```";
   return content;
 }
+
+/**
+ * 给**裸围栏**（``` 之后不写语言）补一个 `text` info string。
+ *
+ * 为什么要补：hast 把围栏块和行内 code 都降成 <code>，渲染器只能靠
+ * 「有没有 language-xxx 类」或「内容里有没有换行」区分。裸围栏两者皆无
+ * ——单行内容会被当成行内 code，整段落在一颗药丸底色的 <code> 里，
+ * 既没有代码块外壳的底色，也没有语言标签和复制按钮。用户看到的是
+ * 「项目结构这块不像 markdown 渲染」（2026-11-18 实拍反馈）。
+ *
+ * 只改**开**围栏（收围栏带 info string 是非法写法，不能碰）。
+ */
+export function labelBareFences(content: string): string {
+  const lines = content.split("\n");
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const fence = /^(\s*)(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!fence) continue;
+    if (inFence) {
+      inFence = false;
+      continue;
+    }
+    inFence = true;
+    if (fence[3]!.trim() === "") lines[i] = `${fence[1]}${fence[2]}text`;
+  }
+  return lines.join("\n");
+}

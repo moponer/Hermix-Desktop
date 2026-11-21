@@ -448,6 +448,11 @@ export interface ExecutionTimelineEvent {
   file_path?: string;
   change_type?: "created" | "modified" | "deleted" | "renamed";
   file_summary?: string;
+  /** 权威增删行数（2026-11-20）。只由 `terminal` 差分路径填充——它有命令
+   *  前后的真实内容，给的是真 diff。缺失时前端回落到按入参估算（老会话
+   *  与结构化写工具同款），不会编造 0。 */
+  added?: number;
+  removed?: number;
   /** memory_update-only fields — surfaced inline so the user can see
    *  what the agent is remembering (writes / updates / deletes /
    *  summaries). Mirrors `StreamEvent::MemoryUpdate` in hermix-transport. */

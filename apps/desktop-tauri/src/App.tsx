@@ -30,7 +30,7 @@ import {
   type StreamErrorKind,
   appendToolStep,
   applyReasoningChunk,
-  closeOpenReasoning,
+  closeAllOpenReasoning,
 } from "./app/streamEvents";
 import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
 import type { SubAgentState, SubAgentEventPayload, MemberEventPayload, MemberTicketState } from "./types";
@@ -2741,7 +2741,7 @@ streamPhaseRef.current = null;
               ),
             );
           },
-          onFileChange: ({ toolCallId, filePath, changeType, fileSummary }) => {
+          onFileChange: ({ toolCallId, filePath, changeType, fileSummary, added, removed }) => {
             // Append a `file_change` event to the currently-active
             // assistant message's `execution_timeline`. The chat UI
             // (FileChangeBlock in MessageBubble) reads this timeline
@@ -2755,6 +2755,8 @@ streamPhaseRef.current = null;
               file_path: filePath,
               change_type: changeType,
               file_summary: fileSummary,
+              ...(added != null ? { added } : {}),
+              ...(removed != null ? { removed } : {}),
               created_at: new Date().toISOString(),
             };
             setSessions((prev) => updateSession(prev, sessionId, (s) => {
@@ -3224,7 +3226,7 @@ return {
                 .find((s) => s.id === sessionId)
                 ?.messages.find((m) => m.id === assistantIdAtDone);
               if (finalMsg?.unified_steps && finalMsg.unified_steps.length > 0) {
-                const closed = closeOpenReasoning(finalMsg.unified_steps);
+                const closed = closeAllOpenReasoning(finalMsg.unified_steps);
                 void api.saveUnifiedSteps(sessionId, closed);
                 // 内存里也同步，否则本轮折叠头展开时「思考」行仍按「进行中」
                 // 渲染（active 靠 endedAt 判定），和落库后的表现不一致。

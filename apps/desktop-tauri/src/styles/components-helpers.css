@@ -636,6 +636,22 @@
   color: var(--color-text-faint);
   white-space: nowrap;
 }
+/* 单行内联预览（2026-11-19 用户定调，对齐 CodeBuddy）：收起态的思考内容
+   直接显示在头行里 —— 单行、超出省略，点击整行展开全文。层次读法：
+   图标=这是什么，预览=想了什么，秒数=花了多久，箭头=可展开。 */
+.tl-reasoning-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--text-ui);
+  color: var(--color-text-faint);
+  margin-left: 6px;
+}
+/* 预览在场时秒数贴着它：count 的 auto 左边距把箭头顶到行尾，秒数自己
+   再留 6px 与预览拉开，整行读起来是「图标 标签 预览 … 秒数 箭头」。 */
+.tl-reasoning-count { margin-left: 6px; }
 
 /* 轮次耗时：贴在「工作完成」右边、右对齐到折叠头末端。 */
 .tl-process-elapsed {

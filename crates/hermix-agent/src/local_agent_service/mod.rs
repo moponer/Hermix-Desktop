@@ -1486,15 +1486,23 @@ impl AgentService for LocalAgentService {
         // ToolCallContext (Arc<Mutex> handles), not global registry
         // fields — eliminates cross-session stdout race.
         let code_exec_active_call_id = tool_ctx.active_call_id.clone();
+        let code_exec_active_tool = tool_ctx.active_tool.clone();
         let code_exec_stdout_forwarder = on_chunk.clone();
         let code_exec_timeline_buffer = timeline_buffer.clone();
-        *tool_ctx.stdout_cb.lock().unwrap() = Some(Box::new(
+        *tool_ctx.stdout_cb.lock().unwrap() = Some(std::sync::Arc::new(
             move |line: &str| {
                 let tool_call_id = code_exec_active_call_id
                     .lock()
                     .ok()
                     .and_then(|g| g.clone())
                     .unwrap_or_else(|| "code_execution-unknown".to_string());
+                // 事件 tool 名跟当前执行的工具走（terminal / code_execution …），
+                // 缺省回退 code_execution 保持既有行为。
+                let code_exec_tool_name = code_exec_active_tool
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.clone())
+                    .unwrap_or_else(|| "code_execution".to_string());
                 code_exec_stdout_forwarder(StreamChunk {
                     delta: Some(StreamDelta {
                         content: None,
@@ -1502,7 +1510,7 @@ impl AgentService for LocalAgentService {
                         extra: Some(serde_json::json!({
                             "event": "tool_stdout",
                             "tool_call_id": tool_call_id,
-                            "tool": "code_execution",
+                            "tool": code_exec_tool_name,
                             "content": line,
                         })),
                     }),
@@ -1517,7 +1525,7 @@ impl AgentService for LocalAgentService {
                         &mut buf,
                         ExecutionTimelineEvent {
                             event_type: "tool_stdout".to_string(),
-                            tool: Some("code_execution".to_string()),
+                            tool: Some(code_exec_tool_name.clone()),
                             content: Some(line.to_string()),
                             arguments: None,
                             chunk_index: None,
@@ -1527,6 +1535,8 @@ impl AgentService for LocalAgentService {
                             file_path: None,
                             change_type: None,
                             file_summary: None,
+                            added: None,
+                            removed: None,
                             is_error: None,
                         },
                         timeline_limits::STDOUT_CAP_PER_CALL,
@@ -1651,6 +1661,8 @@ impl AgentService for LocalAgentService {
                         file_path: None,
                         change_type: None,
                         file_summary: None,
+                        added: None,
+                        removed: None,
                         is_error: None,
                     });
                 }
@@ -1723,6 +1735,8 @@ impl AgentService for LocalAgentService {
                                     file_path: None,
                                     change_type: None,
                                     file_summary: None,
+                                    added: None,
+                                    removed: None,
                                     is_error: None,
                                 });
                             }
@@ -1786,6 +1800,11 @@ impl AgentService for LocalAgentService {
                             file_path: Some(file_path.clone()),
                             change_type: Some(change_type.clone()),
                             file_summary: file_summary.clone(),
+                            // 权威增删行数（2026-11-20）：terminal 差分路径给的是
+                            // 命令前后的真 diff；结构化写工具路径不带这两个字段，
+                            // 前端回落到按入参估算。
+                            added: parsed.get("added").and_then(|v| v.as_u64()).map(|n| n as u32),
+                            removed: parsed.get("removed").and_then(|v| v.as_u64()).map(|n| n as u32),
                             is_error: None,
                         });
                     }
@@ -1800,6 +1819,10 @@ impl AgentService for LocalAgentService {
                                 "file_path": file_path,
                                 "change_type": change_type,
                                 "file_summary": file_summary,
+                                // 权威增删行数：只有 terminal 差分路径会带，
+                                // 缺失时前端回落到按入参估算（老会话同款）。
+                                "added": parsed.get("added").and_then(|v| v.as_u64()),
+                                "removed": parsed.get("removed").and_then(|v| v.as_u64()),
                             })),
                         }),
                         finish_reason: None,
@@ -1851,6 +1874,8 @@ impl AgentService for LocalAgentService {
                                     file_path: None,
                                     change_type: None,
                                     file_summary: None,
+                                    added: None,
+                                    removed: None,
                                     is_error: None,
                                 },
                                 timeline_limits::STDOUT_CAP_PER_CALL,
@@ -1925,6 +1950,8 @@ impl AgentService for LocalAgentService {
                         file_path: None,
                         change_type: None,
                         file_summary: None,
+                        added: None,
+                        removed: None,
                         is_error: Some(is_error),
                     });
                 }
@@ -1989,6 +2016,8 @@ impl AgentService for LocalAgentService {
                         file_path: None,
                         change_type: None,
                         file_summary: None,
+                        added: None,
+                        removed: None,
                         is_error: None,
                     });
                 }

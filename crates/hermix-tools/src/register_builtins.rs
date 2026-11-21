@@ -197,6 +197,7 @@ mod tests {
             _w: Option<&str>,
             _bg: bool,
             _pty: bool,
+        _on_output: Option<std::sync::Arc<dyn for<'r> Fn(&'r str) + Send + Sync + 'static>>,
         ) -> Result<CommandOutput, AgentError> {
             Ok(CommandOutput {
                 exit_code: 0,

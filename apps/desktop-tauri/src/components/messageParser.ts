@@ -147,12 +147,21 @@ export interface FileChangeEntry {
   summary?: string;
   timestamp: string;
   /**
-   * 按工具入参估算的增删行数（见 `utils/lineStats.extractLineStats`）。
-   * 匹配不到写操作、或工具不产出行数时是 `undefined` —— 组件据此
-   * **不显示**这一列，而不是显示 0。宁可没有，不要一个假的 0。
+   * 增删行数。两个来源，优先级固定：
+   *
+   * 1. **事件自带的权威计数**（`ev.added` / `ev.removed`）—— 由后端
+   *    workspace 差分算出，是命令前后的**真 diff**（terminal 改文件的路径）。
+   * 2. 回落：按工具入参估算（`utils/lineStats.extractLineStats`），是下界。
+   *
+   * 两者都拿不到时是 `undefined` —— 组件据此**不显示**这一列，而不是
+   * 显示 0。宁可没有，不要一个假的 0。
    */
   added?: number;
   removed?: number;
+  /** `true` = 上面的计数来自后端**真 diff**（terminal 差分路径），
+   *  `false`/缺省 = 按工具入参估算（下界）。tooltip 必须据此说实话 ——
+   *  对一份真 diff 标注「这是估算」同样是误导。 */
+  statsExact?: boolean;
 }
 
 export interface ToolGroup {
@@ -433,6 +442,11 @@ export function extractFileChanges(events?: ExecutionTimelineEvent[]): FileChang
       changeType: (ev.change_type ?? "modified") as FileChangeEntry["changeType"],
       summary: ev.file_summary,
       timestamp: ev.created_at,
+      // 权威计数（terminal 差分路径给真 diff）。下面 statsFor 只在缺失时
+      // 回落到入参估算，所以这里带上就是「有真值用真值」。
+      ...(ev.added != null ? { added: ev.added } : {}),
+      ...(ev.removed != null ? { removed: ev.removed } : {}),
+      ...(ev.added != null || ev.removed != null ? { statsExact: true } : {}),
     });
   }
   // 增删行数：把同一条时间线里**写到同一个文件**的那些写工具调用的行数
@@ -482,7 +496,12 @@ export function extractFileChanges(events?: ExecutionTimelineEvent[]): FileChang
     }
     return hit ? { added, removed } : {};
   };
-  return out.map((c) => ({ ...c, ...statsFor(c.path) }));
+  // 权威计数优先：事件自带计数时**不**用入参估算去覆盖（估算是下界，
+  // 拿它盖住真 diff 只会让数字变小、且方向和事实相反）。
+  return out.map((c) => {
+    if (c.added != null || c.removed != null) return c;
+    return { ...c, ...statsFor(c.path) };
+  });
 }
 
 /** A single memory mutation surfaced inline in the conversation. */

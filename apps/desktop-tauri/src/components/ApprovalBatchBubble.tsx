@@ -368,8 +368,6 @@ export function ApprovalBatchView({
                 : <X className="icon-sm" />}
           </span>
           <span className="approval-summary-tool">{count} 个调用</span>
-          <span className="approval-summary-sep">·</span>
-          <span className="approval-summary-desc">批量决策</span>
           <span className="approval-summary-status">
             {approved
               ? meta.remembered
